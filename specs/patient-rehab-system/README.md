@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | `prd.md` | 草稿 0.2 | 产品需求主文档 |
 | `open-questions.md` | 草稿 0.2 | 待讨论问题和决策记录 |
+| `implementation-plan.md` | 草稿 0.1 | Web 后台 MVP 实施计划 |
 
 ## 建议补充文档
 
@@ -17,7 +18,6 @@
 | `data-model.md` | 核心数据模型 |
 | `api-contract.md` | Web、小程序、设备和算法接口契约 |
 | `game-design.md` | 游戏机制、字段和评分规则 |
-| `implementation-plan.md` | 研发阶段拆分和任务计划 |
 | `changelog.md` | spec 版本变更记录 |
 
 ## 工作方式
