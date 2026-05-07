@@ -29,4 +29,5 @@ urlpatterns = [
     path("api/health", health),
     path("api/auth/", include("motioncare_auth.urls")),
     path("api/me", me),
+    path("api/patients", include("patients.urls")),
 ]

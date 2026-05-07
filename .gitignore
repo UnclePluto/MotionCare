@@ -1,4 +1,13 @@
 .DS_Store
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.venv/
+apps/api/.venv/
+node_modules/
+dist/
+build/
+.DS_Store
 .superpowers/
 .worktrees/
 worktrees/
