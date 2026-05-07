@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | `prd.md` | 草稿 0.2 | 产品需求主文档 |
 | `open-questions.md` | 草稿 0.2 | 待讨论问题和决策记录 |
+| `implementation-plan.md` | 草稿 0.1 | Web 后台 MVP 实施计划 |
+| `changelog.md` | 草稿 0.1 | spec 版本变更记录 |
 
 ## 建议补充文档
 
