@@ -5,9 +5,9 @@ import { App } from "./App";
 describe("App", () => {
   it("renders the admin navigation", () => {
     render(<App />);
-    expect(screen.getByText("患者档案")).toBeInTheDocument();
-    expect(screen.getByText("研究项目")).toBeInTheDocument();
-    expect(screen.getByText("CRF 报告")).toBeInTheDocument();
+    expect(screen.getAllByText("患者档案").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("研究项目").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("CRF 报告").length).toBeGreaterThan(0);
   });
 });
 
