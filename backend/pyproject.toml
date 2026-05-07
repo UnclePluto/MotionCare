@@ -1,0 +1,33 @@
+[project]
+name = "motioncare-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "Django>=5.0,<6.0",
+  "djangorestframework>=3.15,<4.0",
+  "django-cors-headers>=4.3,<5.0",
+  "dj-database-url>=2.2,<3.0",
+  "psycopg[binary]>=3.1,<4.0",
+  "celery>=5.4,<6.0",
+  "redis>=5.0,<6.0",
+  "python-docx>=1.1,<2.0",
+  "python-dotenv>=1.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0",
+  "pytest-django>=4.8,<5.0",
+  "factory-boy>=3.3,<4.0",
+  "ruff>=0.5,<1.0",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["apps", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
