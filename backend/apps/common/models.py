@@ -29,3 +29,4 @@ class UserStampedModel(TimeStampedModel):
     class Meta:
         abstract = True
 
+

@@ -3,6 +3,7 @@ import pytest
 from apps.accounts.models import User
 from apps.patients.models import Patient
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
+from apps.visits.services import ensure_default_visits
 
 
 @pytest.fixture
@@ -38,5 +39,7 @@ def group(db, project):
 
 @pytest.fixture
 def project_patient(db, project, patient, group):
-    return ProjectPatient.objects.create(project=project, patient=patient, group=group)
+    pp = ProjectPatient.objects.create(project=project, patient=patient, group=group)
+    ensure_default_visits(pp)
+    return pp
 
