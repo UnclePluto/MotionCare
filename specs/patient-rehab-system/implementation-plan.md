@@ -4,9 +4,9 @@
 
 **Goal:** Build the first-version hospital Web admin system for patient records, research projects, grouping, visits, prescriptions, manual training records, daily health data, and CRF preview/export.
 
-**Architecture:** Use a Django + Django REST Framework backend as the system of record, PostgreSQL for relational and JSONB data, and a React + TypeScript + Ant Design frontend as a separate SPA. Keep future AI motion recognition out of the first backend process; implement it as a separate FastAPI service called by task or HTTP integration when that phase starts.
+**Architecture:** Use a Django + Django REST Framework backend as the system of record, PostgreSQL for relational and JSONB data, and a React + TypeScript **Ant Design Pro** admin as a separate SPA. For auth, use **Django Session + CSRF**. To keep Session/Cookie simple, route browser traffic through a same-site gateway so the admin calls APIs via `https://admin.<domain>/api/*` (reverse-proxied to Django). Keep future AI motion recognition out of the first backend process; implement it as a separate FastAPI service called by task or HTTP integration when that phase starts.
 
-**Tech Stack:** Python 3.12, Django 5, Django REST Framework, PostgreSQL 16, Redis, Celery, React 18, TypeScript, Vite, Ant Design, Vitest, Playwright, python-docx, LibreOffice for PDF conversion, Docker Compose.
+**Tech Stack:** Python 3.12, Django 5, Django REST Framework, PostgreSQL 16, Redis, Celery, React 18, TypeScript, Vite, **Ant Design Pro**, Vitest, Playwright, python-docx, LibreOffice for PDF conversion, Docker Compose, Nginx (or equivalent reverse proxy).
 
 ---
 
@@ -246,7 +246,6 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "corsheaders",
     "rest_framework",
     "apps.accounts",
     "apps.common",
@@ -260,7 +259,6 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -313,7 +311,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
 }
 
-CORS_ALLOWED_ORIGINS = ["http://localhost:5173"]
+# Note on CORS:
+# - If you adopt the recommended same-site gateway (`/api/*` reverse-proxy), the browser calls are same-origin
+#   and you typically DO NOT need django-cors-headers.
+# - Only enable CORS if you intentionally run frontend and backend as different origins in the browser.
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
@@ -321,6 +322,23 @@ CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "docs/认知衰弱数字疗法研究_CRF表_修订稿.docx",
 )
 CRF_EXPORT_DIR = ROOT_DIR / os.getenv("CRF_EXPORT_DIR", "media/crf_exports")
+```
+
+Add (recommended) dev-time same-site proxy so the frontend can call `/api/*` without CORS:
+
+```ts
+// In frontend/vite.config.ts
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+      },
+    },
+  },
+});
 ```
 
 Create `backend/config/urls.py`:
