@@ -16,7 +16,9 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.http import JsonResponse
-from django.urls import path
+from django.urls import include, path
+
+from motioncare_auth.views import me
 
 
 def health(_request):
@@ -25,4 +27,6 @@ def health(_request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path("api/health", health),
+    path("api/auth/", include("motioncare_auth.urls")),
+    path("api/me", me),
 ]
