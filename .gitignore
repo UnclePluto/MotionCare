@@ -12,3 +12,7 @@ build/
 .worktrees/
 worktrees/
 
+# Local DB + packaging artifacts
+backend/db.sqlite3
+backend/*.egg-info/
+
