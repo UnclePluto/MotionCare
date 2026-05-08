@@ -28,10 +28,12 @@ class PatientViewSet(ModelViewSet):
         if request.method == "GET":
             return Response(PatientBaselineSerializer(baseline).data)
 
+        # PUT 与 PATCH 一律按部分更新处理：CRF 录入是逐节累积的，
+        # 避免 PUT 全量覆盖把已录入的 JSON 节段（demographics 等）误清空。
         serializer = PatientBaselineSerializer(
             baseline,
             data=request.data,
-            partial=(request.method == "PATCH"),
+            partial=True,
         )
         serializer.is_valid(raise_exception=True)
         serializer.save(updated_by=request.user)
