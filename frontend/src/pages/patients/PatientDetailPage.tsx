@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, Descriptions } from "antd";
+import { isAxiosError } from "axios";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -24,8 +25,8 @@ export function PatientDetailPage() {
   const { patientId } = useParams();
   const id = Number(patientId);
 
-  const { data: patient, isLoading, isError } = useQuery({
-    queryKey: ["patient", id],
+  const { data: patient, isLoading, isError, error } = useQuery({
+    queryKey: ["patient", patientId ?? ""],
     queryFn: async () => {
       const r = await apiClient.get<Patient>(`/patients/${id}/`);
       return r.data;
@@ -38,7 +39,12 @@ export function PatientDetailPage() {
   }
 
   if (isError) {
-    return <Alert type="error" message="患者不存在或无权限访问" />;
+    const backendDetail =
+      isAxiosError(error) && typeof (error.response?.data as any)?.detail === "string"
+        ? ((error.response?.data as any).detail as string)
+        : null;
+
+    return <Alert type="error" message={backendDetail ?? "患者不存在或无权限访问"} />;
   }
 
   return (
