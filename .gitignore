@@ -11,6 +11,7 @@ build/
 .superpowers/
 .worktrees/
 worktrees/
+docs/
 
 # Local DB + packaging artifacts
 backend/db.sqlite3
