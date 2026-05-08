@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Patient
+from .models import Patient, PatientBaseline
 
 
 class PatientSerializer(serializers.ModelSerializer):
@@ -19,3 +19,19 @@ class PatientSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id"]
 
+
+class PatientBaselineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PatientBaseline
+        fields = [
+            "id",
+            "patient",
+            "subject_id",
+            "name_initials",
+            "demographics",
+            "surgery_allergy",
+            "comorbidities",
+            "lifestyle",
+            "baseline_medications",
+        ]
+        read_only_fields = ["id", "patient"]
