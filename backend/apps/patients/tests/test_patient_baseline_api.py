@@ -12,6 +12,10 @@ def test_get_patient_baseline_creates_and_returns_empty_demographics(doctor, pat
     assert resp.status_code == 200
     assert resp.data["patient"] == patient.id
     assert resp.data["demographics"] == {}
+    assert resp.data["surgery_allergy"] == {}
+    assert resp.data["comorbidities"] == {}
+    assert resp.data["lifestyle"] == {}
+    assert resp.data["baseline_medications"] == {}
 
 
 @pytest.mark.django_db
@@ -37,3 +41,5 @@ def test_patch_patient_baseline_updates_json_fields(doctor, patient):
     resp2 = client.get(f"/api/patients/{patient.id}/baseline/")
     assert resp2.status_code == 200
     assert resp2.data["subject_id"] == "SUBJ-001"
+    assert resp2.data["demographics"]["education_years"] == 16
+    assert resp2.data["baseline_medications"]["notes"] == "ibuprofen"
