@@ -81,3 +81,22 @@ def test_crf_preview_returns_empty_patient_baseline_when_present_but_all_none(
 
     assert "patient_baseline.受试者编号" in preview["missing_fields"]
     assert "patient_baseline.教育年限" in preview["missing_fields"]
+
+
+@pytest.mark.django_db
+def test_crf_preview_normalizes_non_dict_demographics_to_empty_dict(
+    project_patient, doctor
+):
+    baseline, _ = PatientBaseline.objects.get_or_create(
+        patient=project_patient.patient,
+        defaults={"created_by": doctor, "updated_by": doctor},
+    )
+
+    baseline.subject_id = "S-0001"
+    baseline.demographics = "bad-demographics"
+    project_patient.patient._state.fields_cache["baseline"] = baseline
+
+    preview = build_crf_preview(project_patient)
+
+    assert preview["patient_baseline"]["demographics"] == {}
+    assert "patient_baseline.教育年限" in preview["missing_fields"]

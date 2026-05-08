@@ -1,5 +1,4 @@
-from django.core.exceptions import ObjectDoesNotExist
-
+from apps.patients.models import PatientBaseline
 from apps.visits.models import VisitRecord
 
 
@@ -41,13 +40,17 @@ def build_crf_preview(project_patient) -> dict:
     patient = project_patient.patient
     try:
         baseline = patient.baseline
-    except ObjectDoesNotExist:
+    except PatientBaseline.DoesNotExist:
         baseline = None
 
     baseline_payload = {
         "subject_id": (baseline.subject_id or "") if baseline else "",
         "name_initials": (baseline.name_initials or "") if baseline else "",
-        "demographics": (baseline.demographics or {}) if baseline else {},
+        "demographics": (
+            baseline.demographics
+            if (baseline and isinstance(baseline.demographics, dict))
+            else {}
+        ),
         "surgery_allergy": (baseline.surgery_allergy or {}) if baseline else {},
         "comorbidities": (baseline.comorbidities or {}) if baseline else {},
         "lifestyle": (baseline.lifestyle or {}) if baseline else {},
