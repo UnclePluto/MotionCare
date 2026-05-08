@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -7,14 +7,15 @@ import { dirname, resolve } from "node:path";
 
 import { App } from "./App";
 
-const { mockGet } = vi.hoisted(() => ({
+const { mockGet, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
+  mockPost: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
-    post: vi.fn(),
+    post: (...args: unknown[]) => mockPost(...args),
     interceptors: {
       request: { use: vi.fn(), eject: vi.fn() },
       response: { use: vi.fn(), eject: vi.fn() },
@@ -24,7 +25,14 @@ vi.mock("../api/client", () => ({
 
 describe("App", () => {
   beforeEach(() => {
-    mockGet.mockImplementation((url: string) => {
+    let projectPatientsCallCount = 0;
+
+    mockGet.mockImplementation((url: string, config?: unknown) => {
+      const params =
+        typeof config === "object" && config
+          ? (config as { params?: Record<string, unknown> }).params
+          : undefined;
+
       if (url === "/me/") {
         return Promise.resolve({
           data: {
@@ -35,6 +43,37 @@ describe("App", () => {
             roles: ["doctor"],
             permissions: ["patient.read"],
           },
+        });
+      }
+      if (url === "/studies/projects/1/") {
+        return Promise.resolve({
+          data: {
+            id: 1,
+            name: "研究项目 A",
+            description: "",
+            crf_template_version: "v1",
+            status: "active",
+          },
+        });
+      }
+      if (url === "/studies/project-patients/" && params?.project === 1) {
+        projectPatientsCallCount += 1;
+        if (projectPatientsCallCount === 1) {
+          return Promise.resolve({ data: [] });
+        }
+        return Promise.resolve({
+          data: [
+            {
+              id: 1,
+              patient: 123,
+              patient_name: "张三",
+              patient_phone: "13800000001",
+              group: null,
+              group_name: null,
+              grouping_batch: null,
+              grouping_status: "pending",
+            },
+          ],
         });
       }
       if (url === "/patients/") {
@@ -61,6 +100,10 @@ describe("App", () => {
         });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    mockPost.mockImplementation((url: string) => {
+      return Promise.reject(new Error(`unmocked POST ${url}`));
     });
   });
 
@@ -132,6 +175,47 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
       expect(screen.getByText("13800000101")).toBeInTheDocument();
+    });
+  });
+
+  it("adds a patient to a project from the 项目患者 tab", async () => {
+    window.history.pushState({}, "", "/projects/1");
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/studies/project-patients/") {
+        return Promise.resolve({ data: { id: 1 } });
+      }
+      return Promise.reject(new Error(`unmocked POST ${url}`));
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("研究项目 A")).toBeInTheDocument();
+    });
+
+    screen.getByRole("tab", { name: "项目患者" }).click();
+
+    const addButton = await screen.findByRole("button", { name: "添加患者" });
+    addButton.click();
+
+    const dialog = await screen.findByRole("dialog");
+    const patientSelect = within(dialog).getByRole("combobox");
+    fireEvent.mouseDown(patientSelect);
+    await screen.findByText("张三（13800000001）");
+    screen.getByText("张三（13800000001）").click();
+
+    within(dialog).getByRole("button", { name: /添\s*加/ }).click();
+
+    await waitFor(() => {
+      expect(screen.getByText("张三")).toBeInTheDocument();
     });
   });
 });

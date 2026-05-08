@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { Card, Space, Table } from "antd";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button, Card, Modal, Select, Space, Table, message } from "antd";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -24,7 +25,17 @@ type Props = {
   projectId: number;
 };
 
+type PatientOption = {
+  id: number;
+  name: string;
+  phone: string;
+};
+
 export function ProjectPatientsTab({ projectId }: Props) {
+  const queryClient = useQueryClient();
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
+
   const { data, isLoading } = useQuery({
     queryKey: ["project-patients", projectId],
     queryFn: async () => {
@@ -36,8 +47,85 @@ export function ProjectPatientsTab({ projectId }: Props) {
     },
   });
 
+  const { data: patientCandidates, isLoading: isPatientsLoading } = useQuery({
+    queryKey: ["patients"],
+    queryFn: async () => {
+      const r = await apiClient.get<PatientOption[]>("/patients/");
+      return r.data;
+    },
+    enabled: isAddOpen,
+  });
+
+  const selectOptions = useMemo(
+    () =>
+      (patientCandidates ?? []).map((p) => ({
+        value: p.id,
+        label: `${p.name}（${p.phone}）`,
+      })),
+    [patientCandidates],
+  );
+
+  const addMutation = useMutation({
+    mutationFn: async (patientId: number) => {
+      const r = await apiClient.post("/studies/project-patients/", {
+        project: projectId,
+        patient: patientId,
+      });
+      return r.data;
+    },
+    onSuccess: async () => {
+      setIsAddOpen(false);
+      setSelectedPatientId(null);
+      await queryClient.invalidateQueries({ queryKey: ["project-patients", projectId] });
+    },
+    onError: (e: unknown) => {
+      const detail =
+        typeof e === "object" && e
+          ? (e as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+          : undefined;
+      message.error(typeof detail === "string" && detail ? detail : "添加失败");
+    },
+  });
+
   return (
-    <Card title="项目患者">
+    <Card
+      title="项目患者"
+      extra={
+        <Button
+          type="primary"
+          onClick={() => {
+            setIsAddOpen(true);
+          }}
+        >
+          添加患者
+        </Button>
+      }
+    >
+      <Modal
+        title="添加患者到项目"
+        open={isAddOpen}
+        okText="添加"
+        cancelText="取消"
+        confirmLoading={addMutation.isPending}
+        okButtonProps={{ disabled: !selectedPatientId }}
+        onCancel={() => {
+          setIsAddOpen(false);
+          setSelectedPatientId(null);
+        }}
+        onOk={() => {
+          if (!selectedPatientId) return;
+          addMutation.mutate(selectedPatientId);
+        }}
+      >
+        <Select
+          style={{ width: "100%" }}
+          placeholder="请选择患者"
+          loading={isPatientsLoading}
+          options={selectOptions}
+          value={selectedPatientId ?? undefined}
+          onChange={(v) => setSelectedPatientId(v)}
+        />
+      </Modal>
       <Table<ProjectPatientRow>
         rowKey="id"
         loading={isLoading}
