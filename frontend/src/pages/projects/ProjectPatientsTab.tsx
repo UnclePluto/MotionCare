@@ -14,6 +14,7 @@ type ProjectPatientRow = {
   group_name: string | null;
   grouping_batch: number | null;
   grouping_status: string;
+  visit_ids?: { T0?: number; T1?: number; T2?: number };
 };
 
 const groupingLabel: Record<string, string> = {
@@ -149,8 +150,17 @@ export function ProjectPatientsTab({ projectId }: Props) {
             title: "操作",
             key: "actions",
             render: (_, row) => (
-              <Space>
+              <Space split="·">
                 <Link to={`/crf?projectPatientId=${row.id}`}>CRF</Link>
+                {row.visit_ids?.T0 ? (
+                  <Link to={`/visits/${row.visit_ids.T0}`}>T0</Link>
+                ) : null}
+                {row.visit_ids?.T1 ? (
+                  <Link to={`/visits/${row.visit_ids.T1}`}>T1</Link>
+                ) : null}
+                {row.visit_ids?.T2 ? (
+                  <Link to={`/visits/${row.visit_ids.T2}`}>T2</Link>
+                ) : null}
               </Space>
             ),
           },

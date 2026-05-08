@@ -25,8 +25,6 @@ vi.mock("../api/client", () => ({
 
 describe("App", () => {
   beforeEach(() => {
-    let projectPatientsCallCount = 0;
-
     mockGet.mockImplementation((url: string, config?: unknown) => {
       const params =
         typeof config === "object" && config
@@ -57,10 +55,6 @@ describe("App", () => {
         });
       }
       if (url === "/studies/project-patients/" && params?.project === 1) {
-        projectPatientsCallCount += 1;
-        if (projectPatientsCallCount === 1) {
-          return Promise.resolve({ data: [] });
-        }
         return Promise.resolve({
           data: [
             {
@@ -72,6 +66,7 @@ describe("App", () => {
               group_name: null,
               grouping_batch: null,
               grouping_status: "pending",
+              visit_ids: { T0: 11, T1: 12, T2: 13 },
             },
           ],
         });
@@ -215,7 +210,41 @@ describe("App", () => {
     within(dialog).getByRole("button", { name: /添\s*加/ }).click();
 
     await waitFor(() => {
-      expect(screen.getByText("张三")).toBeInTheDocument();
+      expect(screen.getAllByText("张三").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders T0/T1/T2 links per project patient row", async () => {
+    window.history.pushState({}, "", "/projects/1");
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("研究项目 A")).toBeInTheDocument();
+    });
+    screen.getByRole("tab", { name: "项目患者" }).click();
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "T0" })).toHaveAttribute(
+        "href",
+        "/visits/11",
+      );
+      expect(screen.getByRole("link", { name: "T1" })).toHaveAttribute(
+        "href",
+        "/visits/12",
+      );
+      expect(screen.getByRole("link", { name: "T2" })).toHaveAttribute(
+        "href",
+        "/visits/13",
+      );
     });
   });
 });
