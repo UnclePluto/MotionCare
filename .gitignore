@@ -3,14 +3,22 @@
 **/*.py[cod]
 .pytest_cache/
 .venv/
-apps/api/.venv/
 node_modules/
 dist/
 build/
-.DS_Store
 .superpowers/
 .worktrees/
-worktrees/
+docs/
+
+# Track design/spec docs under docs/superpowers/specs/
+!docs/
+docs/*
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+!docs/superpowers/specs/**
+!docs/superpowers/plans/
+!docs/superpowers/plans/**
 
 # Local DB + packaging artifacts
 backend/db.sqlite3

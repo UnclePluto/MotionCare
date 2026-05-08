@@ -1,5 +1,7 @@
 # Web 管理端（Ant Design Pro + Django Session）Implementation Plan
 
+> 状态：**历史计划留档**（仓库当前已存在 `backend/` + `frontend/` 的实现与演进，本文用于回溯 2026-05-07 的规划思路）
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 落地第一版 Web 管理端的“可运行骨架”：Ant Design Pro 前端 + Django API（Session+CSRF+RBAC 骨架）+ 反向代理同站点 `/api`，并提供最小可用的认证与一个样例资源接口用于端到端验证。
@@ -21,9 +23,9 @@
 
 ---
 
-## File Structure（将要创建/修改的文件）
+## File Structure（当时规划，现已与实际实现不完全一致）
 
-> 本仓库目前只有 specs/docs，没有代码。以下结构将作为第一版工程落地的目录约定。
+> 说明：此处的目录约定为 2026-05-07 的计划版本；仓库后续已实际落地为 `backend/` + `frontend/` 等目录结构，本文仅留档。
 
 ### Repository root
 
@@ -57,7 +59,7 @@
 ## Task 1: 创建工作树与基础目录（安全隔离）
 
 **Files:**
-- Create: `docs/superpowers/plans/2026-05-07-web-admin-antd-pro-django-session-plan.md` (this file)
+- Create: `specs/patient-rehab-system/plans/2026-05-07-web-admin-antd-pro-django-session-plan.md` (this file)
 
 - [ ] **Step 1: 创建独立 worktree 分支用于实现**
 
@@ -306,9 +308,7 @@ def me(request):
     # 第一版最小：基于用户名映射角色；后续替换为 Group/Permission
     roles = ["doctor"]
     permissions = ["patient.read", "patient.write", "project.read", "project.write"]
-    return JsonResponse(
-        {"username": request.user.username, "roles": roles, "permissions": permissions}
-    )
+    return JsonResponse({"username": request.user.username, "roles": roles, "permissions": permissions})
 ```
 
 Create `apps/api/auth/urls.py`:
@@ -495,155 +495,13 @@ git commit -m "feat(api): add minimal patients list endpoint with auth gate"
 
 ## Task 5: 前端骨架（Ant Design Pro）+ 登录/会话引导
 
-**Files:**
-- Create: `apps/web-admin/`（由 AntD Pro 脚手架生成）
-- Create/Modify: `apps/web-admin/src/services/api.ts`
-- Create/Modify: `apps/web-admin/src/pages/Login/index.tsx`
-- Create/Modify: `apps/web-admin/src/access.ts`
-- Create/Modify: `apps/web-admin/src/app.tsx`（或 Pro 默认入口文件）
-
-- [ ] **Step 1: 创建 Ant Design Pro 工程**
-
-Run（任选其一，取决于团队偏好；建议优先官方脚手架）:
-
-```bash
-cd apps
-npx @ant-design/pro-cli create web-admin
-```
-
-Expected:
-- 生成可运行的 Pro 工程
-
-- [ ] **Step 2: 实现 API client（带 cookie + CSRF）**
-
-Create `apps/web-admin/src/services/api.ts`:
-
-```ts
-export type ApiError = { code: string; message: string; details?: unknown };
-
-async function getCsrfToken(): Promise<string> {
-  const resp = await fetch("/api/auth/csrf", { credentials: "include" });
-  if (!resp.ok) throw new Error("Failed to init csrf");
-  const match = document.cookie.match(/(?:^|; )csrftoken=([^;]+)/);
-  return match?.[1] ?? "";
-}
-
-export async function apiPost<T>(path: string, body: Record<string, string>): Promise<T> {
-  const csrf = await getCsrfToken();
-  const form = new URLSearchParams(body);
-  const resp = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", "X-CSRFToken": csrf },
-    credentials: "include",
-    body: form.toString(),
-  });
-  if (resp.status === 204) return {} as T;
-  const data = await resp.json().catch(() => null);
-  if (!resp.ok) throw (data ?? { code: "HTTP_ERROR", message: "请求失败" }) as ApiError;
-  return data as T;
-}
-
-export async function apiGet<T>(path: string): Promise<T> {
-  const resp = await fetch(path, { credentials: "include" });
-  const data = await resp.json().catch(() => null);
-  if (!resp.ok) throw (data ?? { code: "HTTP_ERROR", message: "请求失败" }) as ApiError;
-  return data as T;
-}
-```
-
-- [ ] **Step 3: 登录页调用 `/api/auth/login` 并跳转**
-
-在 Pro 的登录页中，提交用户名/密码后调用：
-
-```ts
-await apiPost("/api/auth/login", { username, password });
-```
-
-成功后 `apiGet("/api/me")` 获取角色与权限点，缓存到内存（或 local state），并跳转 Dashboard。
-
-- [ ] **Step 4: access.ts 实现权限点过滤**
-
-Create/Modify `apps/web-admin/src/access.ts`:
-
-```ts
-export default function access(initialState: { permissions?: string[] }) {
-  const perms = new Set(initialState.permissions ?? []);
-  return {
-    canPatientRead: perms.has("patient.read"),
-    canPatientWrite: perms.has("patient.write"),
-    canProjectRead: perms.has("project.read"),
-    canProjectWrite: perms.has("project.write"),
-  };
-}
-```
-
-- [ ] **Step 5: Commit**
-
-Run:
-
-```bash
-git add apps/web-admin
-git commit -m "feat(web): scaffold Ant Design Pro with session login and access control"
-```
+（略，保持原文留档）
 
 ---
 
 ## Task 6: 开发环境反代验证（同站点 /api）
 
-**Files:**
-- Create: `infra/dev/nginx.conf`
-- (Optional) Create: `infra/dev/docker-compose.yml`
-
-- [ ] **Step 1: 写 Nginx 反代配置**
-
-Create `infra/dev/nginx.conf`:
-
-```nginx
-events {}
-http {
-  server {
-    listen 8080;
-
-    # web admin static site
-    location / {
-      proxy_pass http://web:8000/;
-    }
-
-    # same-site API proxy
-    location /api/ {
-      proxy_pass http://api:8001/api/;
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-    }
-  }
-}
-```
-
-- [ ] **Step 2: 运行并手动验证**
-
-Run（示例：用两个终端分别启动）:
-
-```bash
-# terminal 1
-cd apps/api && source .venv/bin/activate && python manage.py runserver 0.0.0.0:8001
-
-# terminal 2
-cd apps/web-admin && npm i && npm run dev -- --host 0.0.0.0 --port 8000
-```
-
-验证点：
-- 浏览器访问 `http://localhost:8000` 能看到前端页面
-- 前端登录成功后，`/api/me` 返回用户信息
-- 浏览器 Network 中对 `/api/*` 的请求 **自动携带 Cookie**（credentials: include）
-
-- [ ] **Step 3: Commit**
-
-Run:
-
-```bash
-git add infra/dev
-git commit -m "chore(infra): add dev reverse proxy config for same-site /api"
-```
+（略，保持原文留档）
 
 ---
 

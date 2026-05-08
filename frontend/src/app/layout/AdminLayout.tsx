@@ -1,4 +1,4 @@
-import { Layout, Menu } from "antd";
+import { Button, Layout, Menu, Space, Typography } from "antd";
 import {
   FileTextOutlined,
   HeartOutlined,
@@ -7,10 +7,14 @@ import {
 } from "@ant-design/icons";
 import { Outlet, useNavigate } from "react-router-dom";
 
+import { useAuth } from "../../auth/AuthContext";
+
 const { Header, Sider, Content } = Layout;
 
 export function AdminLayout() {
   const navigate = useNavigate();
+  const { me, logout } = useAuth();
+
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider width={220}>
@@ -30,8 +34,22 @@ export function AdminLayout() {
         />
       </Sider>
       <Layout>
-        <Header style={{ background: "#fff", paddingInline: 24 }}>
-          医院康复研究后台
+        <Header
+          style={{
+            background: "#fff",
+            paddingInline: 24,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <span>医院康复研究后台</span>
+          <Space>
+            <Typography.Text type="secondary">
+              {me?.name}（{me?.phone}）
+            </Typography.Text>
+            <Button onClick={() => void logout()}>退出</Button>
+          </Space>
         </Header>
         <Content style={{ padding: 24 }}>
           <Outlet />
