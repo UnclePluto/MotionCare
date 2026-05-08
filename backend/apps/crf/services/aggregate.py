@@ -45,8 +45,8 @@ def build_crf_preview(project_patient) -> dict:
         baseline = None
 
     baseline_payload = {
-        "subject_id": baseline.subject_id if baseline else "",
-        "name_initials": baseline.name_initials if baseline else "",
+        "subject_id": (baseline.subject_id or "") if baseline else "",
+        "name_initials": (baseline.name_initials or "") if baseline else "",
         "demographics": (baseline.demographics or {}) if baseline else {},
         "surgery_allergy": (baseline.surgery_allergy or {}) if baseline else {},
         "comorbidities": (baseline.comorbidities or {}) if baseline else {},
