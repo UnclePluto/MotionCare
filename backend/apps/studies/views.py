@@ -23,6 +23,9 @@ class StudyProjectViewSet(ModelViewSet):
     serializer_class = StudyProjectSerializer
     permission_classes = [IsAdminOrDoctor]
 
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def create_grouping_batch(self, request, pk=None):
@@ -70,11 +73,34 @@ class StudyGroupViewSet(ModelViewSet):
     serializer_class = StudyGroupSerializer
     permission_classes = [IsAdminOrDoctor]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
 
 class ProjectPatientViewSet(ModelViewSet):
     queryset = ProjectPatient.objects.select_related("project", "patient", "group", "grouping_batch").order_by("-id")
     serializer_class = ProjectPatientSerializer
     permission_classes = [IsAdminOrDoctor]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        batch_id = self.request.query_params.get("grouping_batch")
+        if batch_id:
+            qs = qs.filter(grouping_batch_id=batch_id)
+        return qs
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
 
     def perform_update(self, serializer):
         instance: ProjectPatient = self.get_object()
@@ -87,6 +113,13 @@ class GroupingBatchViewSet(ModelViewSet):
     queryset = GroupingBatch.objects.select_related("project", "confirmed_by").order_by("-id")
     serializer_class = GroupingBatchSerializer
     permission_classes = [IsAdminOrDoctor]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        project_id = self.request.query_params.get("project")
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        return qs
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
