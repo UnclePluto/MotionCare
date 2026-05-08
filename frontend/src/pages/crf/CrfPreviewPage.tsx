@@ -136,8 +136,9 @@ export function CrfPreviewPage() {
               {preview.patient_baseline?.subject_id || "—"}
             </Descriptions.Item>
             <Descriptions.Item label="教育年限">
-              {(preview.patient_baseline?.demographics as Record<string, unknown> | undefined)
-                ?.education_years ?? "—"}
+              {typeof preview.patient_baseline?.demographics?.["education_years"] === "number"
+                ? preview.patient_baseline.demographics["education_years"]
+                : "—"}
             </Descriptions.Item>
             <Descriptions.Item label="患者">{preview.patient.name}</Descriptions.Item>
             <Descriptions.Item label="手机号">{preview.patient.phone}</Descriptions.Item>

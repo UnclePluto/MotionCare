@@ -21,6 +21,7 @@ vi.mock("../../api/client", () => ({
 
 describe("CrfPreviewPage", () => {
   beforeEach(() => {
+    mockGet.mockReset();
     mockGet.mockImplementation((url: string) => {
       if (url === "/studies/project-patients/") {
         return Promise.resolve({
@@ -65,8 +66,13 @@ describe("CrfPreviewPage", () => {
       expect(mockGet).toHaveBeenCalledWith("/studies/project-patients/");
     });
 
-    expect(await screen.findByText("S-0001")).toBeInTheDocument();
-    expect(await screen.findByText("9")).toBeInTheDocument();
+    const subjectRow = (await screen.findByText("受试者编号")).closest("tr");
+    expect(subjectRow).toBeTruthy();
+    expect(subjectRow!).toHaveTextContent("S-0001");
+
+    const eduRow = (await screen.findByText("教育年限")).closest("tr");
+    expect(eduRow).toBeTruthy();
+    expect(eduRow!).toHaveTextContent("9");
   });
 });
 
