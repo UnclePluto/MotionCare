@@ -1,6 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 import { App } from "./App";
 
@@ -39,6 +42,18 @@ describe("App", () => {
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
+  });
+
+  it("imports global fullscreen styles from the app entry", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const mainTsx = readFileSync(resolve(here, "../main.tsx"), "utf-8");
+
+    expect(mainTsx).toMatch(/import\s+["']\.\/styles\/global\.css["'];/);
+
+    const globalCss = readFileSync(resolve(here, "../styles/global.css"), "utf-8");
+    expect(globalCss).toContain("margin: 0");
+    expect(globalCss).toMatch(/html\s*,\s*body\s*,\s*#root/);
+    expect(globalCss).toContain("height: 100%");
   });
 
   it("renders the admin navigation", async () => {
