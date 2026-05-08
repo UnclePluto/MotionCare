@@ -3,18 +3,13 @@
 **/*.py[cod]
 .pytest_cache/
 .venv/
-apps/api/.venv/
 node_modules/
 dist/
 build/
-.DS_Store
 .superpowers/
-.worktrees/
-worktrees/
 docs/
 
 # Local DB + packaging artifacts
 backend/db.sqlite3
 backend/*.egg-info/
-apps/api/db.sqlite3
 
