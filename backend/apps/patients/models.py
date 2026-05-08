@@ -36,11 +36,11 @@ class PatientBaseline(UserStampedModel):
     )
 
     subject_id = models.CharField(max_length=64, blank=True, default="")
-    name_initials = models.CharField(max_length=16, blank=True, default="")
+    name_initials = models.CharField(max_length=32, blank=True, default="")
 
-    demographics = models.JSONField(blank=True, null=True, default=dict)
-    surgery_allergy = models.JSONField(blank=True, null=True, default=dict)
-    comorbidities = models.JSONField(blank=True, null=True, default=dict)
-    lifestyle = models.JSONField(blank=True, null=True, default=dict)
-    baseline_medications = models.JSONField(blank=True, null=True, default=dict)
+    demographics = models.JSONField(blank=True, default=dict)
+    surgery_allergy = models.JSONField(blank=True, default=dict)
+    comorbidities = models.JSONField(blank=True, default=dict)
+    lifestyle = models.JSONField(blank=True, default=dict)
+    baseline_medications = models.JSONField(blank=True, default=dict)
 
