@@ -1,5 +1,3 @@
-import pytest
-
 from apps.studies.services.grouping import assign_groups
 
 

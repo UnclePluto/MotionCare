@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Space, Table } from "antd";
+import { Card, Space, Table } from "antd";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
