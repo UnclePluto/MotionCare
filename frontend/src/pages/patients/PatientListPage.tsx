@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Table, message } from "antd";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
@@ -100,9 +101,9 @@ export function PatientListPage() {
           {
             title: "操作",
             key: "actions",
-            render: () => (
+            render: (_: unknown, row) => (
               <Space>
-                <Button type="link">详情</Button>
+                <Link to={`/patients/${row.id}`}>详情</Link>
               </Space>
             ),
           },

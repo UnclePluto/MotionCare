@@ -38,7 +38,18 @@ describe("App", () => {
         });
       }
       if (url === "/patients/") {
-        return Promise.resolve({ data: [] });
+        return Promise.resolve({
+          data: [
+            {
+              id: 123,
+              name: "张三",
+              gender: "male",
+              age: 30,
+              phone: "13800000001",
+              primary_doctor: 1,
+            },
+          ],
+        });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -71,6 +82,29 @@ describe("App", () => {
       expect(screen.getAllByText("患者档案").length).toBeGreaterThan(0);
       expect(screen.getAllByText("研究项目").length).toBeGreaterThan(0);
       expect(screen.getAllByText("CRF 报告").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("navigates to patient detail when clicking details from the patient list", async () => {
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("张三")).toBeInTheDocument();
+    });
+
+    screen.getByText("详情").click();
+
+    await waitFor(() => {
+      expect(screen.getByText("患者详情")).toBeInTheDocument();
     });
   });
 });
