@@ -39,10 +39,15 @@ export function PatientDetailPage() {
   }
 
   if (isError) {
-    const backendDetail =
-      isAxiosError(error) && typeof (error.response?.data as any)?.detail === "string"
-        ? ((error.response?.data as any).detail as string)
-        : null;
+    const backendDetail = (() => {
+      if (!isAxiosError(error)) return null;
+      const data = error.response?.data;
+      if (!data || typeof data !== "object") return null;
+      if ("detail" in data && typeof (data as { detail?: unknown }).detail === "string") {
+        return (data as { detail: string }).detail;
+      }
+      return null;
+    })();
 
     return <Alert type="error" message={backendDetail ?? "患者不存在或无权限访问"} />;
   }

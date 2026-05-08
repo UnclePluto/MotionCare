@@ -121,6 +121,8 @@ export function ProjectPatientsTab({ projectId }: Props) {
           style={{ width: "100%" }}
           placeholder="请选择患者"
           loading={isPatientsLoading}
+          showSearch
+          optionFilterProp="label"
           options={selectOptions}
           value={selectedPatientId ?? undefined}
           onChange={(v) => setSelectedPatientId(v)}
