@@ -18,6 +18,11 @@ import { apiClient } from "../../api/client";
 type CrfPreviewPayload = {
   project_patient_id: number;
   patient: { name: string; gender: string; age: number | null; phone: string };
+  patient_baseline?: {
+    subject_id: string;
+    name_initials: string;
+    demographics: Record<string, unknown>;
+  };
   project: { name: string; crf_template_version: string };
   group: { name: string };
   visits: Record<string, { visit_date: string; status: string; form_data: unknown }>;
@@ -127,6 +132,13 @@ export function CrfPreviewPage() {
         {!activeId && <Typography.Text type="secondary">请先选择项目患者。</Typography.Text>}
         {preview && (
           <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="受试者编号">
+              {preview.patient_baseline?.subject_id || "—"}
+            </Descriptions.Item>
+            <Descriptions.Item label="教育年限">
+              {(preview.patient_baseline?.demographics as Record<string, unknown> | undefined)
+                ?.education_years ?? "—"}
+            </Descriptions.Item>
             <Descriptions.Item label="患者">{preview.patient.name}</Descriptions.Item>
             <Descriptions.Item label="手机号">{preview.patient.phone}</Descriptions.Item>
             <Descriptions.Item label="项目">{preview.project.name}</Descriptions.Item>
