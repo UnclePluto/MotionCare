@@ -101,7 +101,7 @@ describe("App", () => {
       expect(screen.getByText("张三")).toBeInTheDocument();
     });
 
-    screen.getByText("详情").click();
+    screen.getAllByRole("link", { name: "详情" })[0].click();
 
     await waitFor(() => {
       expect(screen.getByText("患者详情")).toBeInTheDocument();
