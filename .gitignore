@@ -9,6 +9,14 @@ build/
 .superpowers/
 docs/
 
+# Track design/spec docs under docs/superpowers/specs/
+!docs/
+docs/*
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+!docs/superpowers/specs/**
+
 # Local DB + packaging artifacts
 backend/db.sqlite3
 backend/*.egg-info/
