@@ -58,7 +58,7 @@ def build_crf_preview(project_patient) -> dict:
         missing_fields.append(REQUIRED_PATIENT_BASELINE_FIELDS["subject_id"])
 
     education_years = baseline_payload["demographics"].get("education_years")
-    if education_years in (None, "", 0):
+    if education_years in (None, ""):
         missing_fields.append(REQUIRED_PATIENT_BASELINE_FIELDS["demographics.education_years"])
 
     return {
