@@ -51,6 +51,15 @@ describe("App", () => {
           ],
         });
       }
+      if (url === "/patients/101/") {
+        return Promise.resolve({
+          data: {
+            id: 101,
+            name: "李四",
+            phone: "13800000101",
+          },
+        });
+      }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
   });
@@ -105,6 +114,24 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getByText("患者详情")).toBeInTheDocument();
+    });
+  });
+
+  it("renders patient name and phone when opening /patients/101", async () => {
+    window.history.pushState({}, "", "/patients/101");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
+      expect(screen.getByText("13800000101")).toBeInTheDocument();
     });
   });
 });
