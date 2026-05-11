@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,19 @@ const { mockGet, mockPost, mockDelete } = vi.hoisted(() => ({
   mockPost: vi.fn(),
   mockDelete: vi.fn(),
 }));
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 vi.mock("../api/client", () => ({
   apiClient: {
@@ -287,6 +300,71 @@ describe("App", () => {
     expect(within(dialog).getByText("当前无法执行该操作")).toBeInTheDocument();
     expect(within(dialog).getByText(/需先到项目中删除或解绑该患者/)).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: /删\s*除/ })).toBeDisabled();
+    expect(mockDelete).not.toHaveBeenCalledWith("/patients/124/");
+  });
+
+  it("ignores stale successful delete checks after switching to another patient", async () => {
+    const baseGet = mockGet.getMockImplementation();
+    const zhangCheck = deferred<{ data: unknown[] }>();
+    const wangCheck = deferred<{ data: unknown[] }>();
+    mockDelete.mockResolvedValue({ data: {} });
+    mockGet.mockImplementation((url: string, config?: unknown) => {
+      if (url === "/studies/project-patients/?patient=123") return zhangCheck.promise;
+      if (url === "/studies/project-patients/?patient=124") return wangCheck.promise;
+      return baseGet?.(url, config) ?? Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+      expect(document.querySelector('tr[data-row-key="124"]')).not.toBeNull();
+    });
+
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    const wangRow = document.querySelector('tr[data-row-key="124"]');
+    fireEvent.click(within(zhangRow).getByRole("button", { name: "删除" }));
+    await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+
+    fireEvent.click(within(wangRow).getByRole("button", { name: "删除" }));
+
+    await act(async () => {
+      zhangCheck.resolve({ data: [] });
+      await zhangCheck.promise;
+    });
+
+    const pendingDialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+    fireEvent.click(within(pendingDialog).getByRole("button", { name: /删\s*除/ }));
+    expect(mockDelete).not.toHaveBeenCalledWith("/patients/124/");
+
+    await act(async () => {
+      wangCheck.resolve({
+        data: [
+          {
+            id: 900,
+            project: 1,
+            patient_name: "王五",
+            group_name: "试验组",
+            grouping_status: "confirmed",
+          },
+        ],
+      });
+      await wangCheck.promise;
+    });
+
+    const blockedDialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+    expect(within(blockedDialog).getByText("当前无法执行该操作")).toBeInTheDocument();
+    expect(within(blockedDialog).getByText(/需先到项目中删除或解绑该患者/)).toBeInTheDocument();
+    expect(within(blockedDialog).getByRole("button", { name: /删\s*除/ })).toBeDisabled();
     expect(mockDelete).not.toHaveBeenCalledWith("/patients/124/");
   });
 

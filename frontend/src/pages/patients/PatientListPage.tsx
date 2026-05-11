@@ -16,7 +16,7 @@ import {
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { isAxiosError } from "axios";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -115,6 +115,8 @@ export function PatientListPage() {
   const [deleteBlockedReason, setDeleteBlockedReason] = useState<string | null>(null);
   const [deleteImpactSummary, setDeleteImpactSummary] = useState<string[]>([]);
   const [deleteCheckLoading, setDeleteCheckLoading] = useState(false);
+  const [deleteReadyPatientId, setDeleteReadyPatientId] = useState<number | null>(null);
+  const deleteCheckRequestIdRef = useRef(0);
   const [form] = Form.useForm<CreatePatientValues>();
   const [editForm] = Form.useForm<EditPatientValues>();
 
@@ -202,6 +204,8 @@ export function PatientListPage() {
       setDeleteTarget(null);
       setDeleteBlockedReason(null);
       setDeleteImpactSummary([]);
+      setDeleteReadyPatientId(null);
+      deleteCheckRequestIdRef.current += 1;
       await qc.invalidateQueries({ queryKey: ["patients"] });
     },
     onError: (err: unknown) => {
@@ -213,24 +217,35 @@ export function PatientListPage() {
     setDeleteTarget(row);
     setDeleteBlockedReason(null);
     setDeleteImpactSummary([]);
+    setDeleteReadyPatientId(null);
     setDeleteCheckLoading(true);
+    const requestId = deleteCheckRequestIdRef.current + 1;
+    deleteCheckRequestIdRef.current = requestId;
+    const isCurrentRequest = () => deleteCheckRequestIdRef.current === requestId;
     try {
       const r = await apiClient.get<unknown[]>(`/studies/project-patients/?patient=${row.id}`);
+      if (!isCurrentRequest()) return;
       const linkedCount = r.data.length;
       if (linkedCount > 0) {
+        setDeleteReadyPatientId(null);
         setDeleteBlockedReason(
           `该患者仍关联 ${linkedCount} 个研究项目，系统禁止物理删除。需先到项目中删除或解绑该患者。`,
         );
         return;
       }
+      setDeleteReadyPatientId(row.id);
       setDeleteImpactSummary([
         "将永久删除该患者档案及本地可恢复副本（若存在），且不可恢复。",
         "当前未检测到研究项目入组关联。",
       ]);
     } catch (err) {
+      if (!isCurrentRequest()) return;
+      setDeleteReadyPatientId(null);
       setDeleteBlockedReason(backendDetail(err) ?? "删除前检查失败，请稍后重试或联系管理员。");
     } finally {
-      setDeleteCheckLoading(false);
+      if (isCurrentRequest()) {
+        setDeleteCheckLoading(false);
+      }
     }
   };
 
@@ -420,9 +435,18 @@ export function PatientListPage() {
           setDeleteTarget(null);
           setDeleteBlockedReason(null);
           setDeleteImpactSummary([]);
+          setDeleteReadyPatientId(null);
+          deleteCheckRequestIdRef.current += 1;
         }}
         onConfirm={() => {
-          if (deleteBlockedReason || deleteCheckLoading) return;
+          if (
+            !deleteTarget ||
+            deleteReadyPatientId !== deleteTarget.id ||
+            deleteBlockedReason ||
+            deleteCheckLoading
+          ) {
+            return;
+          }
           void deleteMutation.mutateAsync();
         }}
       />
