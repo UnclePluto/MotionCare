@@ -271,11 +271,54 @@ describe("App", () => {
     const dialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
     expect(dialog).toHaveTextContent("当前未检测到研究项目入组关联。");
 
+    const patientListGetCountBeforeDelete = mockGet.mock.calls.filter(
+      ([url]) => url === "/patients/",
+    ).length;
+
     fireEvent.click(within(dialog).getByRole("button", { name: /删\s*除/ }));
 
     await waitFor(() => {
       expect(mockDelete).toHaveBeenCalledWith("/patients/123/");
     });
+    await waitFor(() => {
+      expect(mockGet.mock.calls.filter(([url]) => url === "/patients/").length).toBeGreaterThan(
+        patientListGetCountBeforeDelete,
+      );
+    });
+  });
+
+  it("keeps the delete dialog open and shows backend detail when DELETE fails", async () => {
+    mockDelete.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { detail: "后端禁止删除：仍有关联数据" } },
+    });
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+    });
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    fireEvent.click(within(zhangRow).getByRole("button", { name: "删除" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+    expect(dialog).toHaveTextContent("当前未检测到研究项目入组关联。");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /删\s*除/ }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByText("当前无法执行该操作")).toBeInTheDocument();
+      expect(within(dialog).getByText("后端禁止删除：仍有关联数据")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("dialog", { name: "确认删除患者档案？" })).toBeInTheDocument();
   });
 
   it("blocks deleting a patient with project links and does not call DELETE", async () => {

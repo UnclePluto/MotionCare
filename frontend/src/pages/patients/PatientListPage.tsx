@@ -447,7 +447,7 @@ export function PatientListPage() {
           ) {
             return;
           }
-          void deleteMutation.mutateAsync();
+          void deleteMutation.mutateAsync().catch(() => undefined);
         }}
       />
     </Card>
