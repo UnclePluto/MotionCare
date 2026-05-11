@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Form, Input, Modal, Space, Table, message } from "antd";
+import { isAxiosError } from "axios";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -8,8 +9,8 @@ import { apiClient } from "../../api/client";
 type ProjectRow = {
   id: number;
   name: string;
-  crf_template_version: string;
   status: string;
+  patient_count?: number;
 };
 
 const statusLabel: Record<string, string> = {
@@ -17,6 +18,16 @@ const statusLabel: Record<string, string> = {
   active: "进行中",
   archived: "已归档",
 };
+
+function backendDetail(err: unknown): string | null {
+  if (!isAxiosError(err)) return null;
+  const data = err.response?.data;
+  if (!data || typeof data !== "object") return null;
+  if ("detail" in data && typeof (data as { detail?: unknown }).detail === "string") {
+    return (data as { detail: string }).detail;
+  }
+  return null;
+}
 
 export function ProjectListPage() {
   const qc = useQueryClient();
@@ -50,6 +61,28 @@ export function ProjectListPage() {
     onError: () => message.error("创建失败"),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (projectId: number) => {
+      await apiClient.delete(`/studies/projects/${projectId}/`);
+    },
+    onSuccess: async () => {
+      message.success("项目已删除");
+      await qc.invalidateQueries({ queryKey: ["study-projects"] });
+    },
+    onError: (err: unknown) => message.error(backendDetail(err) ?? "删除失败"),
+  });
+
+  const confirmDelete = (row: ProjectRow) => {
+    Modal.confirm({
+      title: `确认删除项目「${row.name}」？`,
+      content: "若项目中仍有患者或存在待确认分组批次，系统将拒绝删除。",
+      okText: "删除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: () => deleteMutation.mutateAsync(row.id),
+    });
+  };
+
   return (
     <Card
       title="研究项目"
@@ -67,11 +100,8 @@ export function ProjectListPage() {
           {
             title: "项目名称",
             dataIndex: "name",
-            render: (text: string, row) => (
-              <Link to={`/projects/${row.id}`}>{text}</Link>
-            ),
+            render: (text: string) => text,
           },
-          { title: "CRF 模板", dataIndex: "crf_template_version" },
           {
             title: "状态",
             dataIndex: "status",
@@ -79,8 +109,20 @@ export function ProjectListPage() {
           },
           {
             title: "患者数",
-            key: "patientCount",
-            render: () => "—",
+            dataIndex: "patient_count",
+            render: (n: number | undefined) => (typeof n === "number" ? n : "—"),
+          },
+          {
+            title: "操作",
+            key: "actions",
+            render: (_: unknown, row) => (
+              <Space>
+                <Link to={`/projects/${row.id}`}>详情</Link>
+                <Button type="link" danger style={{ padding: 0 }} onClick={() => confirmDelete(row)}>
+                  删除
+                </Button>
+              </Space>
+            ),
           },
         ]}
       />

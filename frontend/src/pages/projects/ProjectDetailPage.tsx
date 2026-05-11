@@ -1,12 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, Tabs, Typography } from "antd";
+import { Alert, Button, Card, Drawer, Space, Typography } from "antd";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
-import { GroupingBatchPanel } from "./GroupingBatchPanel";
-import { ProjectCrfTab } from "./ProjectCrfTab";
+import { ProjectGroupingBoard } from "./ProjectGroupingBoard";
 import { ProjectGroupsTab } from "./ProjectGroupsTab";
-import { ProjectPatientsTab } from "./ProjectPatientsTab";
 
 type StudyProject = {
   id: number;
@@ -25,6 +24,7 @@ const statusLabel: Record<string, string> = {
 export function ProjectDetailPage() {
   const { projectId } = useParams();
   const id = Number(projectId);
+  const [configOpen, setConfigOpen] = useState(false);
 
   const { data: project, isLoading, isError } = useQuery({
     queryKey: ["study-project", id],
@@ -44,38 +44,39 @@ export function ProjectDetailPage() {
   }
 
   return (
-    <Card loading={isLoading} title={project ? project.name : "项目详情"}>
+    <Card
+      loading={isLoading}
+      title={project ? project.name : "项目详情"}
+      extra={
+        <Space>
+          <Button type="default" onClick={() => setConfigOpen(true)}>
+            新增分组 / 元数据
+          </Button>
+        </Space>
+      }
+    >
       {project && (
-        <Typography.Paragraph type="secondary">
-          CRF 模板版本：{project.crf_template_version} · 状态：
-          {statusLabel[project.status] ?? project.status}
-          {project.description ? ` · ${project.description}` : ""}
-        </Typography.Paragraph>
+        <>
+          <Typography.Paragraph type="secondary">
+            CRF 模板版本：{project.crf_template_version} · 状态：
+            {statusLabel[project.status] ?? project.status}
+            {project.description ? ` · ${project.description}` : ""}
+          </Typography.Paragraph>
+          <Typography.Paragraph type="secondary">
+            CRF 录入请从「患者详情」对应项目行进入。本页聚焦分组看板与批次确认。
+          </Typography.Paragraph>
+          <ProjectGroupingBoard projectId={id} />
+          <Drawer
+            title="分组配置（元数据）"
+            width={720}
+            open={configOpen}
+            onClose={() => setConfigOpen(false)}
+            destroyOnClose
+          >
+            <ProjectGroupsTab projectId={id} />
+          </Drawer>
+        </>
       )}
-      <Tabs
-        items={[
-          {
-            key: "groups",
-            label: "项目分组",
-            children: <ProjectGroupsTab projectId={id} />,
-          },
-          {
-            key: "patients",
-            label: "项目患者",
-            children: <ProjectPatientsTab projectId={id} />,
-          },
-          {
-            key: "grouping",
-            label: "随机分组",
-            children: <GroupingBatchPanel projectId={id} />,
-          },
-          {
-            key: "crf",
-            label: "CRF 报告",
-            children: <ProjectCrfTab projectId={id} />,
-          },
-        ]}
-      />
     </Card>
   );
 }
