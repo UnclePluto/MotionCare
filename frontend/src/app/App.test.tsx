@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -169,6 +169,10 @@ describe("App", () => {
     });
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("imports global fullscreen styles from the app entry", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const mainTsx = readFileSync(resolve(here, "../main.tsx"), "utf-8");
@@ -222,6 +226,80 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByText("患者详情")).toBeInTheDocument();
     });
+  });
+
+  it("navigates to patient detail when clicking a non-name cell in the patient row", async () => {
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+    });
+
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    fireEvent.click(within(zhangRow).getByText("30"));
+
+    await waitFor(() => {
+      expect(screen.getByText("患者详情")).toBeInTheDocument();
+    });
+  });
+
+  it("does not navigate to patient detail when clicking the patient row edit button", async () => {
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+    });
+
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    fireEvent.click(within(zhangRow).getByRole("button", { name: "编辑" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "编辑患者" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("患者详情")).not.toBeInTheDocument();
+  });
+
+  it("does not navigate to patient detail when clicking the patient row delete button", async () => {
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+    });
+
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    fireEvent.click(within(zhangRow).getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "确认删除患者档案？" })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("患者详情")).not.toBeInTheDocument();
   });
 
   it("renders masked phone numbers and primary doctor names on the patient list", async () => {
@@ -319,6 +397,75 @@ describe("App", () => {
       expect(within(dialog).getByText("后端禁止删除：仍有关联数据")).toBeInTheDocument();
     });
     expect(screen.getByRole("dialog", { name: "确认删除患者档案？" })).toBeInTheDocument();
+  });
+
+  it("keeps a pending DELETE tied to the original patient and blocks canceling or switching target", async () => {
+    const pendingDelete = deferred<{ data: Record<string, never> }>();
+    mockDelete.mockImplementation((url: string) => {
+      if (url === "/patients/123/") return pendingDelete.promise;
+      return Promise.reject(new Error(`unmocked DELETE ${url}`));
+    });
+
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+      expect(document.querySelector('tr[data-row-key="124"]')).not.toBeNull();
+    });
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    const wangRow = document.querySelector('tr[data-row-key="124"]');
+    fireEvent.click(within(zhangRow).getByRole("button", { name: "删除" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+    expect(dialog).toHaveTextContent("当前未检测到研究项目入组关联。");
+
+    const patientListGetCountBeforeDelete = mockGet.mock.calls.filter(
+      ([url]) => url === "/patients/",
+    ).length;
+    const wangDeleteCheckCountBeforePending = mockGet.mock.calls.filter(
+      ([url]) => url === "/studies/project-patients/?patient=124",
+    ).length;
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /删\s*除/ }));
+    await waitFor(() => {
+      expect(mockDelete).toHaveBeenCalledWith("/patients/123/");
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /取\s*消/ }));
+    expect(screen.getByRole("dialog", { name: "确认删除患者档案？" })).toBeInTheDocument();
+
+    fireEvent.click(within(wangRow).getByRole("button", { name: "删除" }));
+    expect(
+      mockGet.mock.calls.filter(([url]) => url === "/studies/project-patients/?patient=124")
+        .length,
+    ).toBe(wangDeleteCheckCountBeforePending);
+    expect(screen.queryByText(/需先到项目中删除或解绑该患者/)).not.toBeInTheDocument();
+
+    await act(async () => {
+      pendingDelete.resolve({ data: {} });
+      await pendingDelete.promise;
+    });
+
+    await waitFor(() => {
+      const activeDeleteDialog = Array.from(document.querySelectorAll(".ant-modal")).find(
+        (element) =>
+          !element.className.includes("ant-zoom-leave") &&
+          element.textContent?.includes("确认删除患者档案？"),
+      );
+      expect(activeDeleteDialog).toBeUndefined();
+    });
+    expect(mockGet.mock.calls.filter(([url]) => url === "/patients/").length).toBeGreaterThan(
+      patientListGetCountBeforeDelete,
+    );
   });
 
   it("blocks deleting a patient with project links and does not call DELETE", async () => {

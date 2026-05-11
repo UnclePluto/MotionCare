@@ -17,7 +17,7 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import { isAxiosError } from "axios";
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
@@ -108,6 +108,7 @@ function maskPhone(phone?: string | null): string {
 
 export function PatientListPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { me } = useAuth();
   const [open, setOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
@@ -116,6 +117,8 @@ export function PatientListPage() {
   const [deleteImpactSummary, setDeleteImpactSummary] = useState<string[]>([]);
   const [deleteCheckLoading, setDeleteCheckLoading] = useState(false);
   const [deleteReadyPatientId, setDeleteReadyPatientId] = useState<number | null>(null);
+  const [deletingPatientId, setDeletingPatientId] = useState<number | null>(null);
+  const deletingPatientIdRef = useRef<number | null>(null);
   const deleteCheckRequestIdRef = useRef(0);
   const [form] = Form.useForm<CreatePatientValues>();
   const [editForm] = Form.useForm<EditPatientValues>();
@@ -195,25 +198,37 @@ export function PatientListPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async () => {
-      if (!deleteTarget) return;
-      await apiClient.delete(`/patients/${deleteTarget.id}/`);
+    mutationFn: async (patientId: number) => {
+      await apiClient.delete(`/patients/${patientId}/`);
     },
-    onSuccess: async () => {
-      message.success("患者档案已删除");
-      setDeleteTarget(null);
-      setDeleteBlockedReason(null);
-      setDeleteImpactSummary([]);
-      setDeleteReadyPatientId(null);
-      deleteCheckRequestIdRef.current += 1;
+    onSuccess: async (_data, patientId) => {
+      if (deletingPatientIdRef.current === patientId) {
+        message.success("患者档案已删除");
+        setDeleteTarget(null);
+        setDeleteBlockedReason(null);
+        setDeleteImpactSummary([]);
+        setDeleteReadyPatientId(null);
+        deleteCheckRequestIdRef.current += 1;
+      }
       await qc.invalidateQueries({ queryKey: ["patients"] });
     },
-    onError: (err: unknown) => {
-      setDeleteBlockedReason(backendDetail(err) ?? "删除失败，请稍后重试或联系管理员。");
+    onError: (err: unknown, patientId) => {
+      if (deletingPatientIdRef.current === patientId) {
+        setDeleteBlockedReason(backendDetail(err) ?? "删除失败，请稍后重试或联系管理员。");
+      }
+    },
+    onSettled: (_data, _error, patientId) => {
+      if (deletingPatientIdRef.current === patientId) {
+        deletingPatientIdRef.current = null;
+        setDeletingPatientId(null);
+      }
     },
   });
 
   const openDeleteModal = async (row: PatientRow) => {
+    if (deleteMutation.isPending || deletingPatientId != null || deletingPatientIdRef.current != null) {
+      return;
+    }
     setDeleteTarget(row);
     setDeleteBlockedReason(null);
     setDeleteImpactSummary([]);
@@ -262,6 +277,10 @@ export function PatientListPage() {
         rowKey="id"
         loading={isLoading}
         dataSource={data ?? []}
+        onRow={(row) => ({
+          onClick: () => navigate(`/patients/${row.id}`),
+          style: { cursor: "pointer" },
+        })}
         columns={[
           {
             title: "姓名",
@@ -284,15 +303,25 @@ export function PatientListPage() {
             title: "操作",
             key: "actions",
             render: (_: unknown, row) => (
-              <Space>
-                <Button type="link" style={{ padding: 0 }} onClick={() => setEditId(row.id)}>
+              <Space onClick={(event) => event.stopPropagation()}>
+                <Button
+                  type="link"
+                  style={{ padding: 0 }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setEditId(row.id);
+                  }}
+                >
                   编辑
                 </Button>
                 <Button
                   danger
                   type="link"
                   style={{ padding: 0 }}
-                  onClick={() => void openDeleteModal(row)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void openDeleteModal(row);
+                  }}
                 >
                   删除
                 </Button>
@@ -432,6 +461,9 @@ export function PatientListPage() {
         blockedReason={deleteBlockedReason}
         confirmLoading={deleteCheckLoading || deleteMutation.isPending}
         onCancel={() => {
+          if (deleteMutation.isPending || deletingPatientId != null || deletingPatientIdRef.current != null) {
+            return;
+          }
           setDeleteTarget(null);
           setDeleteBlockedReason(null);
           setDeleteImpactSummary([]);
@@ -447,7 +479,10 @@ export function PatientListPage() {
           ) {
             return;
           }
-          void deleteMutation.mutateAsync().catch(() => undefined);
+          const patientId = deleteTarget.id;
+          deletingPatientIdRef.current = patientId;
+          setDeletingPatientId(patientId);
+          void deleteMutation.mutateAsync(patientId).catch(() => undefined);
         }}
       />
     </Card>
