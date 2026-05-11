@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Checkbox, Modal, Space, Typography, message } from "antd";
+import { Modal, Select, Space, Table, Typography, message } from "antd";
 import { isAxiosError } from "axios";
 import { useEffect, useMemo, useState } from "react";
 
@@ -7,12 +7,18 @@ import { apiClient } from "../../../api/client";
 
 type StudyProject = { id: number; name: string };
 
+type StudyGroupRow = {
+  id: number;
+  project: number;
+  name: string;
+  is_active: boolean;
+};
+
 type ProjectPatientRow = { project: number };
 
 type EnrollResponse = {
   detail: string;
-  created: { project_id: number; project_patient_id: number }[];
-  skipped_project_ids: number[];
+  created: { project_id: number; group_id: number; project_patient_id: number }[];
 };
 
 type Props = {
@@ -23,16 +29,25 @@ type Props = {
 
 export function EnrollProjectsModal({ open, onClose, patientId }: Props) {
   const qc = useQueryClient();
-  const [selected, setSelected] = useState<number[]>([]);
+  const [groupByProject, setGroupByProject] = useState<Record<number, number | undefined>>({});
 
   useEffect(() => {
-    if (open) setSelected([]);
+    if (open) setGroupByProject({});
   }, [open]);
 
   const { data: projects = [] } = useQuery({
     queryKey: ["study-projects"],
     queryFn: async () => {
       const r = await apiClient.get<StudyProject[]>("/studies/projects/");
+      return r.data;
+    },
+    enabled: open,
+  });
+
+  const { data: allGroups = [] } = useQuery({
+    queryKey: ["study-groups", "all-active"],
+    queryFn: async () => {
+      const r = await apiClient.get<StudyGroupRow[]>("/studies/groups/");
       return r.data;
     },
     enabled: open,
@@ -48,21 +63,33 @@ export function EnrollProjectsModal({ open, onClose, patientId }: Props) {
   });
 
   const enrolledIds = useMemo(() => new Set(links.map((l) => l.project)), [links]);
+  const availableProjects = useMemo(
+    () => projects.filter((p) => !enrolledIds.has(p.id)),
+    [projects, enrolledIds],
+  );
+  const groupsByProject = useMemo(() => {
+    const map: Record<number, StudyGroupRow[]> = {};
+    for (const g of allGroups) {
+      if (!g.is_active) continue;
+      (map[g.project] ||= []).push(g);
+    }
+    return map;
+  }, [allGroups]);
 
   const enrollMutation = useMutation({
-    mutationFn: async (project_ids: number[]) => {
+    mutationFn: async (
+      enrollments: { project_id: number; group_id: number }[],
+    ) => {
       const r = await apiClient.post<EnrollResponse>(`/patients/${patientId}/enroll-projects/`, {
-        project_ids,
+        enrollments,
       });
       return r.data;
     },
     onSuccess: async (data) => {
-      const parts = [data.detail];
-      if (data.created.length) parts.push(`新关联 ${data.created.length} 个项目。`);
-      if (data.skipped_project_ids.length) parts.push(`${data.skipped_project_ids.length} 个已在项目中，已跳过。`);
-      message.success(parts.join(""));
+      message.success(`已确认入组 ${data.created.length} 个项目。`);
       await qc.invalidateQueries({ queryKey: ["project-patients", "patient", patientId] });
       await qc.invalidateQueries({ queryKey: ["patient", String(patientId)] });
+      await qc.invalidateQueries({ queryKey: ["project-patients"] });
       onClose();
     },
     onError: (err: unknown) => {
@@ -71,13 +98,10 @@ export function EnrollProjectsModal({ open, onClose, patientId }: Props) {
         return;
       }
       const d = err.response?.data;
-      if (d && typeof d === "object") {
-        if ("detail" in d && typeof (d as { detail?: unknown }).detail === "string") {
-          message.error((d as { detail: string }).detail);
-          return;
-        }
-        if ("project_ids" in d) {
-          message.error(String((d as { project_ids: unknown }).project_ids));
+      if (d && typeof d === "object" && "detail" in d) {
+        const detail = (d as { detail?: unknown }).detail;
+        if (typeof detail === "string") {
+          message.error(detail);
           return;
         }
       }
@@ -85,40 +109,61 @@ export function EnrollProjectsModal({ open, onClose, patientId }: Props) {
     },
   });
 
-  const options = projects.map((p) => ({
-    label: p.name,
-    value: p.id,
-    disabled: enrolledIds.has(p.id),
-  }));
-
   const handleOk = () => {
-    const project_ids = selected.filter((id) => !enrolledIds.has(id));
-    if (!project_ids.length) {
-      message.warning("请至少选择一个尚未入组的研究项目。");
+    const enrollments = availableProjects
+      .map((p) => ({ project_id: p.id, group_id: groupByProject[p.id] }))
+      .filter((e): e is { project_id: number; group_id: number } => typeof e.group_id === "number");
+    if (!enrollments.length) {
+      message.warning("请至少为一个项目选择分组。");
       return;
     }
-    enrollMutation.mutate(project_ids);
+    enrollMutation.mutate(enrollments);
   };
 
   return (
     <Modal
-      title="加入研究项目"
+      title="直接确认入组到分组"
       open={open}
       onCancel={onClose}
       onOk={handleOk}
+      okText="确认入组"
       confirmLoading={enrollMutation.isPending}
       destroyOnClose
-      width={520}
+      width={640}
     >
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          加入后请到各项目的「项目详情」看板勾选患者并完成「随机分组」，系统会按各组权重（target_ratio）分配实验组。
+          为患者选择项目下的目标分组并确认入组。提交后该分组关系将直接生效，无需再进入项目看板随机。
         </Typography.Paragraph>
-        <Checkbox.Group
-          style={{ display: "flex", flexDirection: "column", gap: 8 }}
-          options={options}
-          value={selected}
-          onChange={(v) => setSelected(v as number[])}
+        <Table<StudyProject>
+          rowKey="id"
+          size="small"
+          dataSource={availableProjects}
+          pagination={false}
+          columns={[
+            { title: "项目名称", dataIndex: "name" },
+            {
+              title: "分组",
+              key: "group",
+              render: (_: unknown, row) => {
+                const opts = (groupsByProject[row.id] ?? []).map((g) => ({
+                  value: g.id,
+                  label: g.name,
+                }));
+                return (
+                  <Select
+                    style={{ width: 200 }}
+                    placeholder="选择分组"
+                    options={opts}
+                    value={groupByProject[row.id]}
+                    onChange={(v) =>
+                      setGroupByProject((prev) => ({ ...prev, [row.id]: v as number | undefined }))
+                    }
+                  />
+                );
+              },
+            },
+          ]}
         />
       </Space>
     </Modal>

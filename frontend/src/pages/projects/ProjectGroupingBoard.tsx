@@ -45,7 +45,6 @@ type ProjectPatientRow = {
   group: number | null;
   grouping_status: string;
 };
-type GroupingBatchRow = { id: number; project: number; status: string };
 
 type Props = {
   projectId: number;
@@ -82,19 +81,16 @@ function DroppableGroupBody({ groupId, children }: { groupId: number; children: 
 function DraggablePpCard({
   row,
   patientById,
-  batchPending,
   onRequestUnbind,
 }: {
   row: ProjectPatientRow;
   patientById: Record<number, PatientOption>;
-  batchPending: boolean;
   onRequestUnbind: (row: ProjectPatientRow) => void;
 }) {
   const confirmed = row.grouping_status === "confirmed";
-  const disabled = !batchPending || confirmed;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `pp-${row.id}`,
-    disabled,
+    disabled: confirmed,
   });
   const style: CSSProperties = {
     transform: CSS.Translate.toString(transform),
@@ -104,25 +100,27 @@ function DraggablePpCard({
   const p = patientById[row.patient];
   return (
     <div ref={setNodeRef} style={style}>
-      <Card size="small" style={{ opacity: confirmed ? 0.72 : 1 }}>
+      <Card size="small" style={{ opacity: confirmed ? 0.6 : 1 }}>
         <Space direction="vertical" size={4} style={{ width: "100%" }}>
           <Space align="start" style={{ width: "100%", justifyContent: "space-between" }}>
             <Typography.Text strong>{row.patient_name}</Typography.Text>
-            <Button
-              type="text"
-              size="small"
-              icon={<HolderOutlined />}
-              disabled={disabled}
-              {...listeners}
-              {...attributes}
-              aria-label="拖拽调整分组"
-            />
+            <Space>
+              <Tag color={confirmed ? "default" : "blue"}>
+                {confirmed ? "已确认" : "待确认"}
+              </Tag>
+              <Button
+                type="text"
+                size="small"
+                icon={<HolderOutlined />}
+                disabled={confirmed}
+                {...listeners}
+                {...attributes}
+                aria-label="拖拽调整分组"
+              />
+            </Space>
           </Space>
           <Typography.Text type="secondary">
             {(p && genderLabel[p.gender]) ?? "—"} · 尾号 {phoneTail(row.patient_phone)}
-          </Typography.Text>
-          <Typography.Text type="secondary">
-            状态：{row.grouping_status === "pending" ? "待确认" : row.grouping_status === "confirmed" ? "已确认" : row.grouping_status}
           </Typography.Text>
           <Link to={`/patients/${row.patient}`}>患者详情</Link>
           {confirmed && (
@@ -140,7 +138,6 @@ export function ProjectGroupingBoard({ projectId }: Props) {
   const qc = useQueryClient();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const [poolSelected, setPoolSelected] = useState<number[]>([]);
-  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
   const [draftGroupByPp, setDraftGroupByPp] = useState<Record<number, number>>({});
   const [percentByGroupId, setPercentByGroupId] = useState<Record<number, number>>({});
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<StudyGroupRow | null>(null);
@@ -174,57 +171,18 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     },
   });
 
-  const { data: pendingBatches } = useQuery({
-    queryKey: ["grouping-batches", projectId],
-    queryFn: async () => {
-      const r = await apiClient.get<GroupingBatchRow[]>("/studies/grouping-batches/", {
-        params: { project: projectId },
-      });
-      return r.data.filter((b) => b.status === "pending");
-    },
-  });
+  const columnSource = useMemo(
+    () => (projectPatients ?? []).filter((r) => r.group != null),
+    [projectPatients],
+  );
 
   useEffect(() => {
-    if (!pendingBatches?.length) {
-      setActiveBatchId(null);
-      return;
-    }
-    const latest = [...pendingBatches].sort((a, b) => b.id - a.id)[0];
-    setActiveBatchId((prev) => {
-      if (prev != null && pendingBatches.some((b) => b.id === prev)) return prev;
-      return latest.id;
-    });
-  }, [pendingBatches]);
-
-  const { data: batchMembers } = useQuery({
-    queryKey: ["project-patients", projectId, "batch", activeBatchId],
-    queryFn: async () => {
-      const r = await apiClient.get<ProjectPatientRow[]>("/studies/project-patients/", {
-        params: { project: projectId, grouping_batch: activeBatchId },
-      });
-      return r.data;
-    },
-    enabled: !!activeBatchId,
-  });
-
-  const batchPending =
-    !!activeBatchId && Boolean(pendingBatches?.some((b) => b.id === activeBatchId));
-
-  const columnSource = useMemo(() => {
-    if (batchPending && batchMembers && batchMembers.length > 0) {
-      return batchMembers;
-    }
-    return (projectPatients ?? []).filter((r) => r.group != null);
-  }, [batchPending, batchMembers, projectPatients]);
-
-  useEffect(() => {
-    if (!batchPending || !batchMembers?.length) return;
     const next: Record<number, number> = {};
-    for (const row of batchMembers) {
+    for (const row of projectPatients ?? []) {
       if (row.group != null) next[row.id] = row.group;
     }
     setDraftGroupByPp(next);
-  }, [batchMembers, batchPending]);
+  }, [projectPatients]);
 
   const patientById = useMemo(
     () => Object.fromEntries((patients ?? []).map((p) => [p.id, p])) as Record<number, PatientOption>,
@@ -244,6 +202,11 @@ export function ProjectGroupingBoard({ projectId }: Props) {
   const activeGroups = useMemo(
     () => [...(groups ?? []).filter((g) => g.is_active)].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
     [groups],
+  );
+
+  const hasPending = useMemo(
+    () => (projectPatients ?? []).some((r) => r.grouping_status === "pending"),
+    [projectPatients],
   );
 
   useEffect(() => {
@@ -267,51 +230,51 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     });
   }, [activeGroups]);
 
-  const createBatchMutation = useMutation({
+  const randomizeMutation = useMutation({
     mutationFn: async () => {
       const resp = await apiClient.post<{
-        batch_id: number;
         assignments: { project_patient_id: number; group_id: number }[];
-      }>(`/studies/projects/${projectId}/create_grouping_batch/`, {
-        patient_ids: poolSelected,
+      }>(`/studies/projects/${projectId}/randomize/`, {
+        pool_patient_ids: poolSelected,
         seed: Date.now(),
       });
       return resp.data;
     },
     onSuccess: async (data) => {
       message.success("已生成随机分组草案");
-      setActiveBatchId(data.batch_id);
       const map: Record<number, number> = {};
       for (const a of data.assignments) {
         map[a.project_patient_id] = a.group_id;
       }
-      setDraftGroupByPp(map);
+      setDraftGroupByPp((prev) => ({ ...prev, ...map }));
       setPoolSelected([]);
-      await qc.invalidateQueries({ queryKey: ["grouping-batches", projectId] });
       await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
+      await qc.invalidateQueries({ queryKey: ["patients"] });
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
       message.error(err.response?.data?.detail ?? "随机分组失败，请检查分组配置与勾选患者。");
     },
   });
 
-  const discardDraftMutation = useMutation({
+  const resetPendingMutation = useMutation({
     mutationFn: async () => {
-      if (!activeBatchId) return;
-      await apiClient.post(`/studies/projects/${projectId}/discard-grouping-draft/`, {
-        batch_id: activeBatchId,
-      });
+      await apiClient.post(`/studies/projects/${projectId}/reset-pending/`);
     },
     onSuccess: async () => {
-      message.success("已放弃当前分组草案");
-      setActiveBatchId(null);
-      setDraftGroupByPp({});
-      await qc.invalidateQueries({ queryKey: ["grouping-batches", projectId] });
+      message.success("已撤销当前所有未确认分组");
+      setDraftGroupByPp((prev) => {
+        const next: Record<number, number> = {};
+        for (const row of projectPatients ?? []) {
+          if (row.grouping_status === "confirmed" && row.group != null) {
+            next[row.id] = row.group;
+          }
+        }
+        return { ...prev, ...next };
+      });
       await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
-      await qc.invalidateQueries({ queryKey: ["patients"] });
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
-      message.error(err.response?.data?.detail ?? "取消失败");
+      message.error(err.response?.data?.detail ?? "撤销失败");
     },
   });
 
@@ -331,28 +294,12 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     },
   });
 
-  const confirmMutation = useMutation({
+  const confirmGroupingMutation = useMutation({
     mutationFn: async () => {
-      if (!activeBatchId || !batchMembers?.length) return;
-      const missing: number[] = [];
-      const assignments: { project_patient_id: number; group_id: number }[] = [];
-      for (const row of batchMembers) {
-        const groupId = draftGroupByPp[row.id] ?? row.group ?? null;
-        if (groupId == null) missing.push(row.id);
-        else assignments.push({ project_patient_id: row.id, group_id: groupId });
-      }
-      if (missing.length) {
-        message.error("部分患者缺少分组，请刷新页面或重新生成分组草案后再确认。");
-        throw new Error("missing group for confirm");
-      }
-      await apiClient.post(`/studies/grouping-batches/${activeBatchId}/confirm/`, {
-        assignments,
-      });
+      await apiClient.post(`/studies/projects/${projectId}/confirm-grouping/`);
     },
     onSuccess: async () => {
       message.success("分组已确认");
-      setActiveBatchId(null);
-      await qc.invalidateQueries({ queryKey: ["grouping-batches", projectId] });
       await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
       await qc.invalidateQueries({ queryKey: ["patients"] });
     },
@@ -420,7 +367,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     setDeleteGroupTarget(g);
   };
 
-  const countPatientsInGroupDraft = (groupId: number) =>
+  const countPatientsInGroup = (groupId: number) =>
     (columnSource ?? []).filter((row) => (draftGroupByPp[row.id] ?? row.group) === groupId).length;
 
   const onDraftGroupChange = (ppId: number, groupId: number) => {
@@ -430,7 +377,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
 
   const handleDragEnd = (e: DragEndEvent) => {
     const { active, over } = e;
-    if (!over || !batchPending) return;
+    if (!over) return;
     const aid = String(active.id);
     if (!aid.startsWith("pp-")) return;
     const ppId = Number(aid.slice(3));
@@ -461,33 +408,33 @@ export function ProjectGroupingBoard({ projectId }: Props) {
           <Button size="small" onClick={applyPercents} loading={patchGroupRatioMutation.isPending}>
             应用占比到权重
           </Button>
-          {batchPending ? (
-            <Typography.Text type="secondary">当前有待确认分组草案，可拖拽列内卡片调整后确认或取消。</Typography.Text>
+          {hasPending ? (
+            <Typography.Text type="secondary">当前存在未确认分组，可拖拽调整后「确认分组」或「撤销未确认」。</Typography.Text>
           ) : (
-            <Typography.Text type="secondary">暂无待确认草案；请在患者池勾选患者后使用「随机分组」。</Typography.Text>
+            <Typography.Text type="secondary">所有分组均已确认；如需新增可在患者池中勾选患者并「随机分组」。</Typography.Text>
           )}
           <Button
             danger
-            disabled={!batchPending || !activeBatchId}
-            loading={discardDraftMutation.isPending}
-            onClick={() => discardDraftMutation.mutate()}
+            disabled={!hasPending}
+            loading={resetPendingMutation.isPending}
+            onClick={() => resetPendingMutation.mutate()}
           >
-            取消随机
+            撤销未确认
           </Button>
           <Button
             type="primary"
-            disabled={!activeBatchId || !batchPending || !batchMembers?.length}
-            loading={confirmMutation.isPending}
-            onClick={() => confirmMutation.mutate()}
+            disabled={!hasPending}
+            loading={confirmGroupingMutation.isPending}
+            onClick={() => confirmGroupingMutation.mutate()}
           >
             确认分组
           </Button>
         </Space>
       </Card>
 
-      <Card title="患者池（尚未加入本项目）" size="small">
+      <Card title="患者池（全部患者）" size="small">
         <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          勾选患者后点击「随机分组」生成待确认草案；列内卡片可拖拽到其它列以调整草案分组（已确认的记录不可拖拽）。
+          勾选下方患者后点击「随机分组」即可参与本项目的随机；项目内未确认的患者也会一同重新随机。已分组到本项目的患者不出现在池中（删除后会重新出现）。
         </Typography.Paragraph>
         <Checkbox.Group
           style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
@@ -505,9 +452,9 @@ export function ProjectGroupingBoard({ projectId }: Props) {
         <Button
           type="primary"
           style={{ marginTop: 12 }}
-          disabled={!poolSelected.length || !activeGroups.length}
-          loading={createBatchMutation.isPending}
-          onClick={() => createBatchMutation.mutate()}
+          disabled={(!poolSelected.length && !hasPending) || !activeGroups.length}
+          loading={randomizeMutation.isPending}
+          onClick={() => randomizeMutation.mutate()}
         >
           随机分组
         </Button>
@@ -554,13 +501,12 @@ export function ProjectGroupingBoard({ projectId }: Props) {
             >
               <DroppableGroupBody groupId={g.id}>
                 {(columnSource ?? [])
-                  .filter((row) => (batchPending ? draftGroupByPp[row.id] ?? row.group : row.group) === g.id)
+                  .filter((row) => (draftGroupByPp[row.id] ?? row.group) === g.id)
                   .map((row) => (
                     <DraggablePpCard
                       key={row.id}
                       row={row}
                       patientById={patientById}
-                      batchPending={!!batchPending}
                       onRequestUnbind={(r) => setUnbindTarget(r)}
                     />
                   ))}
@@ -578,7 +524,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
           deleteGroupTarget
             ? [
                 `将请求删除分组「${deleteGroupTarget.name}」及其列配置。`,
-                `当前列内（含草案）约有 ${countPatientsInGroupDraft(deleteGroupTarget.id)} 名患者卡片显示在本组；若后端仍有关联或草案约束，删除将被拒绝。`,
+                `当前列内约有 ${countPatientsInGroup(deleteGroupTarget.id)} 名患者卡片；若后端仍有关联，删除将被拒绝。`,
               ]
             : []
         }
@@ -598,6 +544,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
           "将删除该患者在本项目下的入组关系（ProjectPatient），且不可从本入口恢复。",
           "若已存在与本项目、该入组关系相关的 CRF 访视或导出记录，将按服务端策略作废或清理；关联处方将标记为已终止。",
           "医生端默认列表将不再展示上述已终止处方。",
+          "移除后该患者会重新出现在「患者池」，需要时可勾选再次参与随机。",
         ]}
         confirmLoading={unbindMutation.isPending}
         onCancel={() => setUnbindTarget(null)}

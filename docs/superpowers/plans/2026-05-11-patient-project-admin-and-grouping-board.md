@@ -1,5 +1,7 @@
 # 患者 / 项目 / 分组看板实现计划
 
+> **状态：已过时 / SUPERSEDED**（2026-05-11）：用户验收反馈后已彻底删除"批次"概念。后续以 `docs/superpowers/plans/2026-05-11-drop-batch-concept.md` 为准。本文件仅作历史留档。
+
 > **修订：** 2026-05-11 按 `writing-plans` 规范对齐最新 spec（停用二次确认、无批次 UI、解绑与 CRF/处方、全局确认 Modal、Task 9–10）。执行请用 **executing-plans**（或 subagent-driven-development），勿用 executing-plans「生成」文档。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

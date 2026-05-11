@@ -6,7 +6,7 @@
 
 ## 1. 背景与目标
 
-第一版目标是让医院医生在 Web 后台完成研究数据闭环：患者档案、项目与分组、随机分组批次、T0/T1/T2 访视、版本化处方、训练记录代录入、健康日数据、CRF 预览与 DOCX/PDF 导出。
+第一版目标是让医院医生在 Web 后台完成研究数据闭环：患者档案、项目与分组、按比例随机入组、T0/T1/T2 访视、版本化处方、训练记录代录入、健康日数据、CRF 预览与 DOCX/PDF 导出。
 
 本设计稿聚焦“整体架构与边界”，要求：
 
@@ -90,8 +90,7 @@
 - `Patient`：全局基础档案
 - `Project`：研究项目（绑定 CRF 模板版本、访视计划）
 - `Group`：项目分组（配置比例）
-- `ProjectPatient`：患者加入项目后的承载关系（项目内分组、访视、处方、训练、CRF 均挂在此维度）
-- `RandomizationBatch`：分组批次（支持后续新患者继续入组）
+- `ProjectPatient`：患者-项目-分组的承载关系（只有"确认入组"才会形成绑定；项目内分组、访视、处方、训练、CRF 均挂在此维度）
 - `Visit`：T0/T1/T2（draft/done）
 - `Prescription`：版本化处方（同一时刻唯一生效）
 - `TrainingRecord`：训练记录（仅允许基于当前生效处方录入）
@@ -115,12 +114,17 @@
   - `GET/POST /api/project-patients/{id}/prescriptions`
   - `GET/POST /api/project-patients/{id}/training-records`
 
-### 5.3 流程型动作接口（匹配“批次/锁定”语义）
+### 5.3 流程型动作接口（项目粒度，已删除批次概念）
 
-- 创建分组批次并入组：`POST /api/projects/{id}/randomization-batches`（body：`patientIds`）
-- 生成草案：`POST /api/randomization-batches/{id}/generate`（也可创建时自动生成）
-- 调整草案：`PATCH /api/randomization-batches/{id}/assignments`
-- 确认锁定：`POST /api/randomization-batches/{id}/confirm`
+- 随机分组：`POST /api/studies/projects/{id}/randomize/`（body：`pool_patient_ids`、`seed?`）
+  - 语义：池里勾选的患者 + 项目里所有未确认的 ProjectPatient 一起重新随机；已确认者保持不变。
+- 撤销未确认：`POST /api/studies/projects/{id}/reset-pending/`
+  - 语义：项目内所有 pending 的 group 置空，confirmed 不动。
+- 确认分组：`POST /api/studies/projects/{id}/confirm-grouping/`
+  - 语义：项目内所有 pending 一次性确认；缺组 / 无 pending 返回 400。
+- 单次拖拽：`PATCH /api/studies/project-patients/{id}/`（body：`group`），仅 pending 允许。
+- 解绑（已确认者唯一退出方式）：`POST /api/studies/project-patients/{id}/unbind/`（终止处方、清 CRF 导出、删除 ProjectPatient）。
+- 患者详情快捷入组：`POST /api/patients/{id}/enroll-projects/`（body：`enrollments: [{project_id, group_id}, ...]`），跳过随机直接落 confirmed。
 
 ### 5.4 CRF 聚合接口
 
@@ -135,7 +139,7 @@
   - 401：未登录（前端跳登录/提示）
   - 403：无权限（前端 403 页/提示）
 - 参数/字段校验：400 返回字段级错误，便于 ProForm/ProTable 直接展示
-- 业务冲突：409（例如批次已 confirm 仍尝试调整 assignments）
+- 业务冲突：400（例如对已 confirmed 的 ProjectPatient 直接 PATCH `group` 会被忽略；解绑非 confirmed 也会 400）
 
 ## 7. 风险与后续演进
 

@@ -67,16 +67,36 @@ describe("App", () => {
           ],
         });
       }
-      if (url === "/studies/grouping-batches/" && params?.project === 1) {
-        return Promise.resolve({ data: [] });
-      }
       if (url === "/studies/project-patients/") {
         const p = params ?? {};
         if (p.patient === 101 || p.patient === 123) {
           return Promise.resolve({ data: [] });
         }
         if (p.project === 1) {
-          return Promise.resolve({ data: [] });
+          return Promise.resolve({
+            data: [
+              {
+                id: 9001,
+                project: 1,
+                patient: 201,
+                patient_name: "已确认患者",
+                patient_phone: "13800000201",
+                group: 10,
+                group_name: "试验组",
+                grouping_status: "confirmed",
+              },
+              {
+                id: 9002,
+                project: 1,
+                patient: 202,
+                patient_name: "待确认患者",
+                patient_phone: "13800000202",
+                group: 11,
+                group_name: "对照组",
+                grouping_status: "pending",
+              },
+            ],
+          });
         }
       }
       if (url === "/patients/") {
@@ -88,6 +108,22 @@ describe("App", () => {
               gender: "male",
               age: 30,
               phone: "13800000001",
+              primary_doctor: 1,
+            },
+            {
+              id: 201,
+              name: "已确认患者",
+              gender: "male",
+              age: 60,
+              phone: "13800000201",
+              primary_doctor: 1,
+            },
+            {
+              id: 202,
+              name: "待确认患者",
+              gender: "female",
+              age: 65,
+              phone: "13800000202",
               primary_doctor: 1,
             },
           ],
@@ -204,8 +240,11 @@ describe("App", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("研究项目 A")).toBeInTheDocument();
-      expect(screen.getByText("患者池（尚未加入本项目）")).toBeInTheDocument();
+      expect(screen.getAllByText("研究项目 A").length).toBeGreaterThan(0);
+      expect(screen.getByText(/患者池/)).toBeInTheDocument();
+      expect(screen.getAllByText("已确认患者").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("待确认患者").length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/张三/).length).toBeGreaterThan(0);
     });
   });
 });

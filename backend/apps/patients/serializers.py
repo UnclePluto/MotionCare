@@ -3,11 +3,13 @@ from rest_framework import serializers
 from .models import Patient
 
 
+class EnrollmentItemSerializer(serializers.Serializer):
+    project_id = serializers.IntegerField(min_value=1)
+    group_id = serializers.IntegerField(min_value=1)
+
+
 class EnrollProjectsSerializer(serializers.Serializer):
-    project_ids = serializers.ListField(
-        child=serializers.IntegerField(min_value=1),
-        allow_empty=False,
-    )
+    enrollments = EnrollmentItemSerializer(many=True, allow_empty=False)
 
 
 class PatientSerializer(serializers.ModelSerializer):

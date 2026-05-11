@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.db import models
 
 from apps.common.models import UserStampedModel
@@ -35,25 +34,6 @@ class StudyGroup(UserStampedModel):
         ordering = ["project_id", "sort_order", "id"]
 
 
-class GroupingBatch(UserStampedModel):
-    class Status(models.TextChoices):
-        PENDING = "pending", "待确认"
-        CONFIRMED = "confirmed", "已确认"
-
-    project = models.ForeignKey(
-        StudyProject, on_delete=models.CASCADE, related_name="grouping_batches"
-    )
-    status = models.CharField("状态", max_length=20, choices=Status.choices, default=Status.PENDING)
-    confirmed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="confirmed_grouping_batches",
-    )
-    confirmed_at = models.DateTimeField("确认时间", null=True, blank=True)
-
-
 class ProjectPatient(UserStampedModel):
     class GroupingStatus(models.TextChoices):
         PENDING = "pending", "待确认"
@@ -66,13 +46,6 @@ class ProjectPatient(UserStampedModel):
         "patients.Patient", on_delete=models.CASCADE, related_name="project_links"
     )
     group = models.ForeignKey(StudyGroup, null=True, blank=True, on_delete=models.PROTECT)
-    grouping_batch = models.ForeignKey(
-        GroupingBatch,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="project_patients",
-    )
     enrolled_at = models.DateTimeField("入组时间", auto_now_add=True)
     grouping_status = models.CharField(
         "分组状态",

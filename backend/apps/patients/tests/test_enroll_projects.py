@@ -5,37 +5,58 @@ from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 
 
 @pytest.mark.django_db
-def test_enroll_projects_creates_links(doctor, patient, project):
+def test_enroll_projects_confirms_into_chosen_group(doctor, patient, project):
+    g1 = StudyGroup.objects.create(project=project, name="A", target_ratio=1)
     p2 = StudyProject.objects.create(name="第二项研究", created_by=doctor)
+    g2 = StudyGroup.objects.create(project=p2, name="B", target_ratio=1)
     client = APIClient()
     client.force_authenticate(user=doctor)
     r = client.post(
         f"/api/patients/{patient.id}/enroll-projects/",
-        {"project_ids": [project.id, p2.id]},
+        {
+            "enrollments": [
+                {"project_id": project.id, "group_id": g1.id},
+                {"project_id": p2.id, "group_id": g2.id},
+            ]
+        },
         format="json",
     )
-    assert r.status_code == 200
+    assert r.status_code == 200, r.data
     assert len(r.data["created"]) == 2
-    assert r.data["skipped_project_ids"] == []
-    assert ProjectPatient.objects.filter(patient=patient, project=project).exists()
-    assert ProjectPatient.objects.filter(patient=patient, project=p2).exists()
-    assert "detail" in r.data
+    pp1 = ProjectPatient.objects.get(project=project, patient=patient)
+    pp2 = ProjectPatient.objects.get(project=p2, patient=patient)
+    assert pp1.group_id == g1.id
+    assert pp1.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
+    assert pp2.group_id == g2.id
+    assert pp2.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
 
 
 @pytest.mark.django_db
-def test_enroll_projects_idempotent_skip(doctor, patient, project):
-    g = StudyGroup.objects.create(project=project, name="G", target_ratio=1)
+def test_enroll_projects_rejects_existing_link(doctor, patient, project):
+    g = StudyGroup.objects.create(project=project, name="A", target_ratio=1)
     ProjectPatient.objects.create(project=project, patient=patient, group=g)
     client = APIClient()
     client.force_authenticate(user=doctor)
     r = client.post(
         f"/api/patients/{patient.id}/enroll-projects/",
-        {"project_ids": [project.id]},
+        {"enrollments": [{"project_id": project.id, "group_id": g.id}]},
         format="json",
     )
-    assert r.status_code == 200
-    assert r.data["created"] == []
-    assert r.data["skipped_project_ids"] == [project.id]
+    assert r.status_code == 400
+
+
+@pytest.mark.django_db
+def test_enroll_projects_rejects_group_not_in_project(doctor, patient, project):
+    other = StudyProject.objects.create(name="他项目", created_by=doctor)
+    g_other = StudyGroup.objects.create(project=other, name="X", target_ratio=1)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+    r = client.post(
+        f"/api/patients/{patient.id}/enroll-projects/",
+        {"enrollments": [{"project_id": project.id, "group_id": g_other.id}]},
+        format="json",
+    )
+    assert r.status_code == 400
 
 
 @pytest.mark.django_db
@@ -44,7 +65,19 @@ def test_enroll_projects_rejects_unknown_project(doctor, patient):
     client.force_authenticate(user=doctor)
     r = client.post(
         f"/api/patients/{patient.id}/enroll-projects/",
-        {"project_ids": [999999]},
+        {"enrollments": [{"project_id": 999999, "group_id": 1}]},
+        format="json",
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.django_db
+def test_enroll_projects_rejects_unknown_group(doctor, patient, project):
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+    r = client.post(
+        f"/api/patients/{patient.id}/enroll-projects/",
+        {"enrollments": [{"project_id": project.id, "group_id": 999999}]},
         format="json",
     )
     assert r.status_code == 400

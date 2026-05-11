@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import GroupingBatch, ProjectPatient, StudyGroup, StudyProject
+from .models import ProjectPatient, StudyGroup, StudyProject
 
 
 class StudyProjectSerializer(serializers.ModelSerializer):
@@ -35,19 +35,6 @@ class StudyGroupSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
-class GroupingBatchSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = GroupingBatch
-        fields = [
-            "id",
-            "project",
-            "status",
-            "confirmed_by",
-            "confirmed_at",
-        ]
-        read_only_fields = ["id", "confirmed_by", "confirmed_at"]
-
-
 class ProjectPatientSerializer(serializers.ModelSerializer):
     patient_name = serializers.CharField(source="patient.name", read_only=True)
     patient_phone = serializers.CharField(source="patient.phone", read_only=True)
@@ -63,7 +50,6 @@ class ProjectPatientSerializer(serializers.ModelSerializer):
             "patient_phone",
             "group",
             "group_name",
-            "grouping_batch",
             "enrolled_at",
             "grouping_status",
         ]
