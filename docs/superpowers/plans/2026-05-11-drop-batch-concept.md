@@ -2,7 +2,7 @@
 
 日期：2026-05-11  
 分支：feat/drop-batch-concept（已合并 main）  
-基线：main @ fa686e5（以 `git log -1 --oneline` 为准）  
+基线：main @ 241fc51（文档/测试收口提交；drop-batch 代码合入见 `fa686e5`）  
 状态：**已落地**；文档/测试收口见 `docs/superpowers/plans/2026-05-11-post-drop-batch-consolidation-execution-plan.md`
 
 ---

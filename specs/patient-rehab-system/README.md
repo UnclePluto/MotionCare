@@ -10,7 +10,7 @@
 | `open-questions.md` | 草稿 0.2 | 待讨论问题和决策记录 |
 | `architecture/2026-05-07-web-admin-architecture-antd-pro-design.md` | 已确认 | Web 后台整体架构与边界 |
 | `plans/2026-05-07-web-admin-antd-pro-django-session-plan.md` | 历史留档 | Web 后台 MVP 实施计划（早期规划版本） |
-| `changelog.md` | 草稿 0.1 | spec 版本变更记录 |
+| `changelog.md` | 见文件内版本（当前含 **0.4**） | spec 版本变更记录 |
 
 ## 建议补充文档
 
