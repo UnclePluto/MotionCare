@@ -11,6 +11,10 @@ class EnrollProjectsSerializer(serializers.Serializer):
 
 
 class PatientSerializer(serializers.ModelSerializer):
+    primary_doctor_name = serializers.CharField(
+        source="primary_doctor.name", read_only=True, allow_null=True
+    )
+
     class Meta:
         model = Patient
         fields = [
@@ -21,8 +25,8 @@ class PatientSerializer(serializers.ModelSerializer):
             "age",
             "phone",
             "primary_doctor",
+            "primary_doctor_name",
             "symptom_note",
             "is_active",
         ]
-        read_only_fields = ["id"]
-
+        read_only_fields = ["id", "primary_doctor_name"]
