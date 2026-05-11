@@ -23,4 +23,8 @@ describe("ratiosToTargetRatios", () => {
   it("handles unequal gcd case", () => {
     expect(ratiosToTargetRatios([33, 33, 34])).toEqual([33, 33, 34]);
   });
+
+  it("rejects zeros (would otherwise gcd to wrong weights)", () => {
+    expect(() => ratiosToTargetRatios([0, 50, 50])).toThrow(/positive integer/);
+  });
 });

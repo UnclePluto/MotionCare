@@ -286,10 +286,17 @@ export function ProjectGroupingBoard({ projectId }: Props) {
   const confirmMutation = useMutation({
     mutationFn: async () => {
       if (!activeBatchId || !batchMembers?.length) return;
-      const assignments = batchMembers.map((row) => ({
-        project_patient_id: row.id,
-        group_id: draftGroupByPp[row.id] ?? row.group ?? groups?.[0]?.id,
-      }));
+      const missing: number[] = [];
+      const assignments: { project_patient_id: number; group_id: number }[] = [];
+      for (const row of batchMembers) {
+        const groupId = draftGroupByPp[row.id] ?? row.group ?? null;
+        if (groupId == null) missing.push(row.id);
+        else assignments.push({ project_patient_id: row.id, group_id: groupId });
+      }
+      if (missing.length) {
+        message.error("部分患者缺少分组，请刷新页面或重新生成分组草案后再确认。");
+        throw new Error("missing group for confirm");
+      }
       await apiClient.post(`/studies/grouping-batches/${activeBatchId}/confirm/`, {
         assignments,
       });
@@ -350,6 +357,10 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     const sum = pcts.reduce((a, b) => a + b, 0);
     if (sum !== 100) {
       message.warning("各列占比合计须为 100。");
+      return;
+    }
+    if (pcts.some((p) => p <= 0)) {
+      message.error("每列占比须为大于 0 的整数（合计 100）；请勿使用 0%。");
       return;
     }
     const weights = ratiosToTargetRatios(pcts);

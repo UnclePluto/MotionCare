@@ -37,11 +37,15 @@ export function targetRatiosToDisplayPercents(ratios: number[]): number[] {
 }
 
 /**
- * 将用户输入的整数百分比（合计应为 100）换算为最小正整数权重，便于写回 `target_ratio`。
+ * 将用户输入的整数百分比（合计应为 100，且每项须 > 0）换算为最小正整数权重，便于写回 `target_ratio`。
+ * 若含 0，与 `gcdMany` 组合会产生错误比例（例如 [0,50,50] → [1,1,1]），故显式拒绝。
  */
 export function ratiosToTargetRatios(pcts: number[]): number[] {
   if (!pcts.length) return [];
   const cleaned = pcts.map((p) => Math.max(0, Math.round(p)));
+  if (cleaned.some((p) => p <= 0)) {
+    throw new Error("ratiosToTargetRatios: each percent must be a positive integer");
+  }
   const g = gcdMany(cleaned);
   return cleaned.map((p) => Math.max(1, Math.round(p / g)));
 }

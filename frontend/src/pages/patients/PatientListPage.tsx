@@ -64,9 +64,32 @@ function backendDetail(err: unknown): string | null {
   if (!isAxiosError(err)) return null;
   const data = err.response?.data;
   if (!data || typeof data !== "object") return null;
-  if ("detail" in data && typeof (data as { detail?: unknown }).detail === "string") {
-    return (data as { detail: string }).detail;
+  const rec = data as Record<string, unknown>;
+  const detail = rec.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object" && "msg" in (item as object)) {
+        return String((item as { msg: unknown }).msg);
+      }
+      try {
+        return JSON.stringify(item);
+      } catch {
+        return String(item);
+      }
+    });
+    const joined = parts.filter(Boolean).join("；");
+    if (joined) return joined;
   }
+  const fieldParts = Object.entries(rec)
+    .filter(([k]) => k !== "detail")
+    .map(([k, v]) => {
+      if (Array.isArray(v)) return `${k}: ${v.map(String).join(", ")}`;
+      if (typeof v === "string") return `${k}: ${v}`;
+      return `${k}: ${JSON.stringify(v)}`;
+    });
+  if (fieldParts.length) return fieldParts.join("；");
   return null;
 }
 
