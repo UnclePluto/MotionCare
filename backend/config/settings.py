@@ -11,6 +11,10 @@ load_dotenv(ROOT_DIR / ".env")
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-dev-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    "DJANGO_CSRF_TRUSTED_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+).split(",")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -94,4 +98,3 @@ CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "docs/认知衰弱数字疗法研究_CRF表_修订稿.docx",
 )
 CRF_EXPORT_DIR = ROOT_DIR / os.getenv("CRF_EXPORT_DIR", "media/crf_exports")
-
