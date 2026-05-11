@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -25,8 +25,6 @@ vi.mock("../api/client", () => ({
 
 describe("App", () => {
   beforeEach(() => {
-    let projectPatientsCallCount = 0;
-
     mockGet.mockImplementation((url: string, config?: unknown) => {
       const params =
         typeof config === "object" && config
@@ -45,6 +43,11 @@ describe("App", () => {
           },
         });
       }
+      if (url === "/studies/projects/") {
+        return Promise.resolve({
+          data: [{ id: 1, name: "研究项目 A" }],
+        });
+      }
       if (url === "/studies/projects/1/") {
         return Promise.resolve({
           data: {
@@ -56,25 +59,25 @@ describe("App", () => {
           },
         });
       }
-      if (url === "/studies/project-patients/" && params?.project === 1) {
-        projectPatientsCallCount += 1;
-        if (projectPatientsCallCount === 1) {
-          return Promise.resolve({ data: [] });
-        }
+      if (url === "/studies/groups/" && params?.project === 1) {
         return Promise.resolve({
           data: [
-            {
-              id: 1,
-              patient: 123,
-              patient_name: "张三",
-              patient_phone: "13800000001",
-              group: null,
-              group_name: null,
-              grouping_batch: null,
-              grouping_status: "pending",
-            },
+            { id: 10, name: "试验组", target_ratio: 1, sort_order: 0, is_active: true },
+            { id: 11, name: "对照组", target_ratio: 1, sort_order: 1, is_active: true },
           ],
         });
+      }
+      if (url === "/studies/grouping-batches/" && params?.project === 1) {
+        return Promise.resolve({ data: [] });
+      }
+      if (url === "/studies/project-patients/") {
+        const p = params ?? {};
+        if (p.patient === 101 || p.patient === 123) {
+          return Promise.resolve({ data: [] });
+        }
+        if (p.project === 1) {
+          return Promise.resolve({ data: [] });
+        }
       }
       if (url === "/patients/") {
         return Promise.resolve({
@@ -88,6 +91,16 @@ describe("App", () => {
               primary_doctor: 1,
             },
           ],
+        });
+      }
+      if (url === "/patients/123/") {
+        return Promise.resolve({
+          data: {
+            id: 123,
+            name: "张三",
+            gender: "male",
+            phone: "13800000001",
+          },
         });
       }
       if (url === "/patients/101/") {
@@ -174,19 +187,12 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
-      expect(screen.getByText("13800000101")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("13800000101")).toBeInTheDocument();
     });
   });
 
-  it("adds a patient to a project from the 项目患者 tab", async () => {
+  it("renders project grouping board when opening /projects/1", async () => {
     window.history.pushState({}, "", "/projects/1");
-    mockPost.mockImplementation((url: string) => {
-      if (url === "/studies/project-patients/") {
-        return Promise.resolve({ data: { id: 1 } });
-      }
-      return Promise.reject(new Error(`unmocked POST ${url}`));
-    });
-
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -199,23 +205,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getByText("研究项目 A")).toBeInTheDocument();
-    });
-
-    screen.getByRole("tab", { name: "项目患者" }).click();
-
-    const addButton = await screen.findByRole("button", { name: "添加患者" });
-    addButton.click();
-
-    const dialog = await screen.findByRole("dialog");
-    const patientSelect = within(dialog).getByRole("combobox");
-    fireEvent.mouseDown(patientSelect);
-    await screen.findByText("张三（13800000001）");
-    screen.getByText("张三（13800000001）").click();
-
-    within(dialog).getByRole("button", { name: /添\s*加/ }).click();
-
-    await waitFor(() => {
-      expect(screen.getByText("张三")).toBeInTheDocument();
+      expect(screen.getByText(/患者池/)).toBeInTheDocument();
     });
   });
 });
