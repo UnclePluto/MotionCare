@@ -63,7 +63,7 @@ export function ProjectDetailPage() {
             {project.description ? ` · ${project.description}` : ""}
           </Typography.Paragraph>
           <Typography.Paragraph type="secondary">
-            CRF 录入请从「患者详情」对应项目行进入。本页聚焦分组看板与批次确认。
+            CRF 录入请从「患者详情」对应项目行进入。本页聚焦分组看板与随机草案确认。
           </Typography.Paragraph>
           <ProjectGroupingBoard projectId={id} />
           <Drawer

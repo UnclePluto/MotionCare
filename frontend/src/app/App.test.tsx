@@ -205,7 +205,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getByText("研究项目 A")).toBeInTheDocument();
-      expect(screen.getByText(/患者池/)).toBeInTheDocument();
+      expect(screen.getByText("患者池（尚未加入本项目）")).toBeInTheDocument();
     });
   });
 });

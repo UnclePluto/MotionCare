@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { DestructiveActionModal } from "../components/DestructiveActionModal";
 
 type ProjectRow = {
   id: number;
@@ -33,6 +34,8 @@ export function ProjectListPage() {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<{ name: string; description?: string }>();
+  const [deleteTarget, setDeleteTarget] = useState<ProjectRow | null>(null);
+  const [deleteApiBlocked, setDeleteApiBlocked] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["study-projects"],
@@ -67,21 +70,26 @@ export function ProjectListPage() {
     },
     onSuccess: async () => {
       message.success("项目已删除");
+      setDeleteTarget(null);
+      setDeleteApiBlocked(null);
       await qc.invalidateQueries({ queryKey: ["study-projects"] });
     },
-    onError: (err: unknown) => message.error(backendDetail(err) ?? "删除失败"),
+    onError: (err: unknown) => {
+      setDeleteApiBlocked(backendDetail(err) ?? "删除失败，请稍后重试。");
+    },
   });
 
-  const confirmDelete = (row: ProjectRow) => {
-    Modal.confirm({
-      title: `确认删除项目「${row.name}」？`,
-      content: "若项目中仍有患者或存在待确认分组批次，系统将拒绝删除。",
-      okText: "删除",
-      okType: "danger",
-      cancelText: "取消",
-      onOk: () => deleteMutation.mutateAsync(row.id),
-    });
+  const openDeleteModal = (row: ProjectRow) => {
+    setDeleteApiBlocked(null);
+    setDeleteTarget(row);
   };
+
+  const deleteClientBlocked =
+    deleteTarget &&
+    typeof deleteTarget.patient_count === "number" &&
+    deleteTarget.patient_count > 0
+      ? `该项目仍有 ${deleteTarget.patient_count} 名入组患者，系统禁止删除。请先在项目详情分组看板将患者解绑。`
+      : null;
 
   return (
     <Card
@@ -118,7 +126,7 @@ export function ProjectListPage() {
             render: (_: unknown, row) => (
               <Space>
                 <Link to={`/projects/${row.id}`}>详情</Link>
-                <Button type="link" danger style={{ padding: 0 }} onClick={() => confirmDelete(row)}>
+                <Button type="link" danger style={{ padding: 0 }} onClick={() => openDeleteModal(row)}>
                   删除
                 </Button>
               </Space>
@@ -154,6 +162,33 @@ export function ProjectListPage() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <DestructiveActionModal
+        open={deleteTarget != null}
+        title={deleteTarget ? `确认删除研究项目「${deleteTarget.name}」？` : "确认删除？"}
+        okText="删除"
+        impactSummary={
+          deleteTarget
+            ? [
+                `将请求永久删除研究项目「${deleteTarget.name}」及其在项目维度的配置数据（以服务端实际级联为准）。`,
+                typeof deleteTarget.patient_count === "number"
+                  ? `当前列表显示该项目下共有 ${deleteTarget.patient_count} 名入组患者；若有任意入组关系，系统将拒绝删除。`
+                  : "若仍存在患者入组关系，系统将拒绝删除。",
+                "若存在尚未确认的分组草案（待确认工作集），系统将拒绝删除；请先在项目详情看板处理。",
+              ]
+            : []
+        }
+        blockedReason={deleteClientBlocked ?? deleteApiBlocked}
+        confirmLoading={deleteMutation.isPending}
+        onCancel={() => {
+          setDeleteTarget(null);
+          setDeleteApiBlocked(null);
+        }}
+        onConfirm={() => {
+          if (!deleteTarget || deleteClientBlocked) return;
+          void deleteMutation.mutateAsync(deleteTarget.id);
+        }}
+      />
     </Card>
   );
 }

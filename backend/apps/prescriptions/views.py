@@ -33,6 +33,10 @@ class PrescriptionViewSet(ModelViewSet):
     serializer_class = PrescriptionSerializer
     permission_classes = [IsAdminOrDoctor]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs.exclude(status=Prescription.Status.TERMINATED)
+
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def activate(self, request, pk=None):

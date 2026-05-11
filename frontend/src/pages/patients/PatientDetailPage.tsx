@@ -8,11 +8,11 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
   Select,
   Space,
-  Switch,
   Table,
+  Tag,
+  Typography,
   message,
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { DestructiveActionModal } from "../components/DestructiveActionModal";
 import { EnrollProjectsModal } from "./components/EnrollProjectsModal";
 
 type Patient = {
@@ -52,7 +53,6 @@ type PatientFormValues = {
   age?: number | null;
   phone: string;
   symptom_note?: string;
-  is_active: boolean;
 };
 
 const groupingStatusLabel: Record<string, string> = {
@@ -82,6 +82,9 @@ export function PatientDetailPage() {
   const id = Number(patientId);
   const [form] = Form.useForm<PatientFormValues>();
   const [enrollOpen, setEnrollOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
+  const [deleteBlockedReason, setDeleteBlockedReason] = useState<string | null>(null);
 
   const { data: patient, isLoading, isError, error } = useQuery({
     queryKey: ["patient", patientId ?? ""],
@@ -124,7 +127,6 @@ export function PatientDetailPage() {
       age: patient.age ?? undefined,
       phone: patient.phone,
       symptom_note: patient.symptom_note ?? "",
-      is_active: patient.is_active !== false,
     });
   }, [patient, form]);
 
@@ -137,7 +139,7 @@ export function PatientDetailPage() {
         age: values.age ?? null,
         phone: values.phone.trim(),
         symptom_note: (values.symptom_note ?? "").trim(),
-        is_active: values.is_active,
+        is_active: patient?.is_active !== false,
       });
     },
     onSuccess: async () => {
@@ -154,22 +156,62 @@ export function PatientDetailPage() {
     },
     onSuccess: async () => {
       message.success("患者档案已删除");
+      setDeleteModalOpen(false);
+      setDeleteBlockedReason(null);
       await qc.invalidateQueries({ queryKey: ["patients"] });
       navigate("/patients");
     },
-    onError: (err) => message.error(backendDetail(err) ?? "删除失败"),
+    onError: (err) => {
+      const d = backendDetail(err);
+      setDeleteBlockedReason(d ?? "删除失败，请稍后重试或联系管理员。");
+    },
   });
 
-  const confirmDelete = () => {
-    Modal.confirm({
-      title: "确认删除患者档案？",
-      content: "若患者仍关联研究项目，系统将拒绝删除，可改用下方「停用档案」。",
-      okText: "删除",
-      okType: "danger",
-      cancelText: "取消",
-      onOk: () => deleteMutation.mutateAsync(),
-    });
+  const deactivateMutation = useMutation({
+    mutationFn: async () => {
+      await apiClient.patch(`/patients/${id}/`, { is_active: false });
+    },
+    onSuccess: async () => {
+      message.success("档案已停用");
+      setDeactivateModalOpen(false);
+      await qc.invalidateQueries({ queryKey: ["patient", String(id)] });
+      await qc.invalidateQueries({ queryKey: ["patients"] });
+    },
+    onError: (err) => message.error(backendDetail(err) ?? "停用失败"),
+  });
+
+  const enableMutation = useMutation({
+    mutationFn: async () => {
+      await apiClient.patch(`/patients/${id}/`, { is_active: true });
+    },
+    onSuccess: async () => {
+      message.success("档案已重新启用");
+      await qc.invalidateQueries({ queryKey: ["patient", String(id)] });
+      await qc.invalidateQueries({ queryKey: ["patients"] });
+    },
+    onError: (err) => message.error(backendDetail(err) ?? "启用失败"),
+  });
+
+  const openDeleteModal = () => {
+    setDeleteBlockedReason(null);
+    setDeleteModalOpen(true);
   };
+
+  const patientActive = patient?.is_active !== false;
+  const deleteImpactBlocked =
+    projectPatients.length > 0
+      ? `该患者仍关联 ${projectPatients.length} 个研究项目，系统禁止物理删除。请先在各项目看板「解绑」或改用「停用档案」。关联项目：${projectPatients
+          .map((r) => projectNameById[r.project] ?? `项目 #${r.project}`)
+          .join("、")}`
+      : null;
+
+  const deleteImpactSummary =
+    projectPatients.length === 0
+      ? [
+          "将永久删除该患者档案及本地可恢复副本（若存在），且不可恢复。",
+          "当前未检测到研究项目入组关联。",
+        ]
+      : [];
 
   if (!Number.isFinite(id)) {
     return <Alert type="error" message="无效的患者 ID" />;
@@ -185,9 +227,16 @@ export function PatientDetailPage() {
       loading={isLoading}
       title={patient ? patient.name : "患者详情"}
       extra={
-        <Space>
+        <Space wrap>
           <Button onClick={() => setEnrollOpen(true)}>加入研究项目</Button>
-          <Button danger onClick={confirmDelete} loading={deleteMutation.isPending}>
+          {patientActive ? (
+            <Button onClick={() => setDeactivateModalOpen(true)}>停用档案</Button>
+          ) : (
+            <Button type="primary" onClick={() => enableMutation.mutate()} loading={enableMutation.isPending}>
+              重新启用档案
+            </Button>
+          )}
+          <Button danger onClick={openDeleteModal}>
             删除档案
           </Button>
         </Space>
@@ -225,8 +274,13 @@ export function PatientDetailPage() {
             <Form.Item label="备注" name="symptom_note">
               <Input.TextArea rows={3} />
             </Form.Item>
-            <Form.Item label="档案启用" name="is_active" valuePropName="checked">
-              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            <Form.Item label="档案状态">
+              <Space>
+                <Tag color={patientActive ? "green" : "default"}>{patientActive ? "启用" : "已停用"}</Tag>
+                <Typography.Text type="secondary">
+                  停用或重新启用请使用右上角按钮；停用须二次确认并说明影响。
+                </Typography.Text>
+              </Space>
             </Form.Item>
             <Form.Item>
               <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>
@@ -276,6 +330,37 @@ export function PatientDetailPage() {
           />
 
           <EnrollProjectsModal open={enrollOpen} onClose={() => setEnrollOpen(false)} patientId={id} />
+
+          <DestructiveActionModal
+            open={deleteModalOpen}
+            title="确认删除患者档案？"
+            okText="删除"
+            impactSummary={deleteImpactSummary}
+            blockedReason={deleteImpactBlocked ?? deleteBlockedReason}
+            confirmLoading={deleteMutation.isPending}
+            onCancel={() => {
+              setDeleteModalOpen(false);
+              setDeleteBlockedReason(null);
+            }}
+            onConfirm={() => {
+              if (deleteImpactBlocked) return;
+              void deleteMutation.mutateAsync();
+            }}
+          />
+
+          <DestructiveActionModal
+            open={deactivateModalOpen}
+            title="确认停用患者档案？"
+            okText="停用"
+            impactSummary={[
+              "患者列表等默认视图将隐藏该档案（仍可通过管理端筛选或搜索策略查看，以实际列表逻辑为准）。",
+              "停用期间不可再通过本系统为该患者执行「加入研究项目」等依赖启用档案的操作。",
+              "已存在的研究项目入组、处方与训练记录不会被本操作自动删除；若需退出项目请在各项目看板解绑。",
+            ]}
+            confirmLoading={deactivateMutation.isPending}
+            onCancel={() => setDeactivateModalOpen(false)}
+            onConfirm={() => void deactivateMutation.mutateAsync()}
+          />
         </>
       )}
     </Card>

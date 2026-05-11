@@ -9,8 +9,9 @@ import {
   Modal,
   Select,
   Space,
-  Switch,
   Table,
+  Tag,
+  Typography,
   message,
 } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
@@ -57,7 +58,6 @@ type EditPatientValues = {
   age?: number | null;
   phone: string;
   symptom_note?: string;
-  is_active: boolean;
 };
 
 function backendDetail(err: unknown): string | null {
@@ -127,7 +127,6 @@ export function PatientListPage() {
       age: editingPatient.age ?? undefined,
       phone: editingPatient.phone,
       symptom_note: editingPatient.symptom_note ?? "",
-      is_active: editingPatient.is_active !== false,
     });
   }, [editingPatient, editForm, editId]);
 
@@ -164,7 +163,7 @@ export function PatientListPage() {
         age: values.age ?? null,
         phone: values.phone.trim(),
         symptom_note: (values.symptom_note ?? "").trim(),
-        is_active: values.is_active,
+        is_active: editingPatient?.is_active !== false,
       });
     },
     onSuccess: async () => {
@@ -312,8 +311,15 @@ export function PatientListPage() {
             <Form.Item label="备注" name="symptom_note">
               <Input.TextArea rows={2} />
             </Form.Item>
-            <Form.Item label="档案启用" name="is_active" valuePropName="checked">
-              <Switch checkedChildren="启用" unCheckedChildren="停用" />
+            <Form.Item label="档案状态">
+              <Space direction="vertical" size={0}>
+                <Tag color={editingPatient?.is_active !== false ? "green" : "default"}>
+                  {editingPatient?.is_active !== false ? "启用" : "已停用"}
+                </Tag>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  停用或删除请在患者详情页操作（须二次确认）。
+                </Typography.Text>
+              </Space>
             </Form.Item>
             <Form.Item>
               <Space>

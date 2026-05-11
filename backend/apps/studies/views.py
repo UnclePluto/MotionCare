@@ -9,6 +9,7 @@ from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 from apps.studies.services.grouping import assign_groups
+from apps.studies.services.unbind_project_patient import unbind_project_patient
 from apps.visits.services import ensure_default_visits
 
 from .models import GroupingBatch, ProjectPatient, StudyGroup, StudyProject
@@ -82,6 +83,30 @@ class StudyProjectViewSet(ModelViewSet):
             }
         )
 
+    @action(detail=True, methods=["post"], url_path="discard-grouping-draft")
+    @transaction.atomic
+    def discard_grouping_draft(self, request, pk=None):
+        project = self.get_object()
+        batch_id = request.data.get("batch_id")
+        qs = GroupingBatch.objects.filter(project=project, status=GroupingBatch.Status.PENDING)
+        if batch_id is not None:
+            try:
+                bid = int(batch_id)
+            except (TypeError, ValueError):
+                return Response({"detail": "batch_id 格式错误"}, status=status.HTTP_400_BAD_REQUEST)
+            batch = qs.filter(pk=bid).first()
+        else:
+            batch = qs.order_by("-id").first()
+        if not batch:
+            return Response({"detail": "没有待确认的分组草案可取消。"}, status=status.HTTP_400_BAD_REQUEST)
+        ProjectPatient.objects.filter(grouping_batch=batch).update(
+            group=None,
+            grouping_batch=None,
+            grouping_status=ProjectPatient.GroupingStatus.PENDING,
+        )
+        batch.delete()
+        return Response({"detail": "已放弃当前分组草案。"})
+
 
 class StudyGroupViewSet(ModelViewSet):
     queryset = StudyGroup.objects.select_related("project").order_by("-id")
@@ -126,6 +151,17 @@ class ProjectPatientViewSet(ModelViewSet):
             serializer.validated_data.pop("group", None)
         return super().perform_update(serializer)
 
+    @action(detail=True, methods=["post"], url_path="unbind")
+    @transaction.atomic
+    def unbind(self, request, pk=None):
+        pp = self.get_object()
+        unbind_project_patient(project_patient=pp)
+        return Response(
+            {
+                "detail": "已从本项目移除；关联处方已终止，CRF 导出记录已清理；访视等业务数据已随入组关系解除。"
+            }
+        )
+
 
 class GroupingBatchViewSet(ModelViewSet):
     queryset = GroupingBatch.objects.select_related("project", "confirmed_by").order_by("-id")
@@ -152,7 +188,9 @@ class GroupingBatchViewSet(ModelViewSet):
 
         pp_by_id = {
             pp.id: pp
-            for pp in ProjectPatient.objects.select_for_update().filter(grouping_batch=batch).select_related("group")
+            for pp in ProjectPatient.objects.select_for_update(of=("self",)).filter(
+                grouping_batch=batch
+            )
         }
 
         for item in assignments:
