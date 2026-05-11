@@ -103,6 +103,9 @@ class ProjectPatientViewSet(ModelViewSet):
         project_id = self.request.query_params.get("project")
         if project_id:
             qs = qs.filter(project_id=project_id)
+        patient_id = self.request.query_params.get("patient")
+        if patient_id:
+            qs = qs.filter(patient_id=patient_id)
         batch_id = self.request.query_params.get("grouping_batch")
         if batch_id:
             qs = qs.filter(grouping_batch_id=batch_id)
