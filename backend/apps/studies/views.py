@@ -2,6 +2,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -25,6 +26,14 @@ class StudyProjectViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        project = self.get_object()
+        if ProjectPatient.objects.filter(project=project).exists():
+            raise ValidationError({"detail": "项目中仍有患者，无法删除。"})
+        if GroupingBatch.objects.filter(project=project, status=GroupingBatch.Status.PENDING).exists():
+            raise ValidationError({"detail": "存在待确认的分组批次，无法删除。"})
+        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
