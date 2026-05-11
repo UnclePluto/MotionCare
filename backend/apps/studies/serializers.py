@@ -4,6 +4,8 @@ from .models import GroupingBatch, ProjectPatient, StudyGroup, StudyProject
 
 
 class StudyProjectSerializer(serializers.ModelSerializer):
+    patient_count = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = StudyProject
         fields = [
@@ -13,8 +15,9 @@ class StudyProjectSerializer(serializers.ModelSerializer):
             "crf_template_version",
             "visit_plan",
             "status",
+            "patient_count",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "patient_count"]
 
 
 class StudyGroupSerializer(serializers.ModelSerializer):

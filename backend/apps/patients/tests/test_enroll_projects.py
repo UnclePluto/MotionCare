@@ -51,6 +51,19 @@ def test_enroll_projects_rejects_unknown_project(doctor, patient):
 
 
 @pytest.mark.django_db
+def test_study_project_list_includes_patient_count(doctor, patient, project):
+    g = StudyGroup.objects.create(project=project, name="G", target_ratio=1)
+    ProjectPatient.objects.create(project=project, patient=patient, group=g)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+    r = client.get("/api/studies/projects/")
+    assert r.status_code == 200
+    rows = r.data if isinstance(r.data, list) else r.data.get("results", [])
+    row = next(x for x in rows if x["id"] == project.id)
+    assert row["patient_count"] == 1
+
+
+@pytest.mark.django_db
 def test_project_patients_filter_by_patient(doctor, patient, project):
     g = StudyGroup.objects.create(project=project, name="G", target_ratio=1)
     ProjectPatient.objects.create(project=project, patient=patient, group=g)

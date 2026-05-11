@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.db.models import Count
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
@@ -20,9 +21,14 @@ from .serializers import (
 
 
 class StudyProjectViewSet(ModelViewSet):
-    queryset = StudyProject.objects.order_by("-id")
+    queryset = StudyProject.objects.all()
     serializer_class = StudyProjectSerializer
     permission_classes = [IsAdminOrDoctor]
+
+    def get_queryset(self):
+        return StudyProject.objects.annotate(patient_count=Count("project_patients", distinct=True)).order_by(
+            "-id"
+        )
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
