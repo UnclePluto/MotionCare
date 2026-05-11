@@ -1,9 +1,9 @@
 # 删除批次概念，重构随机/确认/池语义
 
 日期：2026-05-11  
-分支：feat/drop-batch-concept  
-基线：main @ c10e506  
-状态：草案
+分支：feat/drop-batch-concept（已合并 main）  
+基线：main @ fa686e5（以 `git log -1 --oneline` 为准）  
+状态：**已落地**；文档/测试收口见 `docs/superpowers/plans/2026-05-11-post-drop-batch-consolidation-execution-plan.md`
 
 ---
 
@@ -180,11 +180,11 @@
 
 ## 4. 验收准则
 
-- [ ] 后端 pytest 全绿（含新增 randomize/reset-pending/confirm-grouping/enroll-projects 测试）。
-- [ ] 前端 vitest 全绿（含新增 ProjectGroupingBoard + EnrollProjectsModal 测试）。
-- [ ] 代码库内**无** `GroupingBatch` / `grouping_batch` / `grouping-batches` / `create_grouping_batch` / `discard-grouping-draft` 任何引用。
-- [ ] 前端 `ProjectGroupingBoard` 行为符合用户描述的 5 点反馈。
-- [ ] `enroll-projects` API 改为「直接确认入组」并通过测试。
+- [x] 后端 pytest 全绿（含 randomize/reset-pending/confirm-grouping/enroll-projects 测试）。*证据：`cd backend && pytest -q` → 0 failures。*
+- [x] 前端 vitest 全绿（含 `EnrollProjectsModal` 与 `ProjectGroupingBoard` 测试）。*证据：`cd frontend && npm run test` → 0 failed（执行 consolidation 计划后应 ≥12 tests）。*
+- [x] 应用代码（排除 `**/migrations/**`）内**无** `GroupingBatch` / `grouping_batch` / `grouping-batches` / `create_grouping_batch` / `discard-grouping-draft`。*证据：`rg` 仅命中 migrations。*
+- [x] 前端 `ProjectGroupingBoard` 行为符合用户描述的 5 点反馈（池过滤、随机 API、撤销/确认、已确认置灰/标签、解绑入口）。*以代码审查 + 本文件阶段 B 为准。*
+- [x] `enroll-projects` API 为「直接确认入组」`enrollments` 并通过测试。*见 `apps/patients/tests/test_enroll_projects.py` + `EnrollProjectsModal.test.tsx`。*
 
 ---
 
