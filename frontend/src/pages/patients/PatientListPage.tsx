@@ -21,6 +21,7 @@ import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
+import { DestructiveActionModal } from "../components/DestructiveActionModal";
 
 type PatientRow = {
   id: number;
@@ -29,6 +30,7 @@ type PatientRow = {
   age: number | null;
   phone: string;
   primary_doctor: number | null;
+  primary_doctor_name?: string | null;
 };
 
 type PatientDetail = PatientRow & {
@@ -93,11 +95,26 @@ function backendDetail(err: unknown): string | null {
   return null;
 }
 
+function maskPhone(phone?: string | null): string {
+  if (!phone) return "—";
+  if (phone.length >= 7) {
+    return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+  }
+  if (phone.length <= 2) {
+    return "*".repeat(phone.length);
+  }
+  return `${phone[0]}${"*".repeat(phone.length - 2)}${phone[phone.length - 1]}`;
+}
+
 export function PatientListPage() {
   const qc = useQueryClient();
   const { me } = useAuth();
   const [open, setOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PatientRow | null>(null);
+  const [deleteBlockedReason, setDeleteBlockedReason] = useState<string | null>(null);
+  const [deleteImpactSummary, setDeleteImpactSummary] = useState<string[]>([]);
+  const [deleteCheckLoading, setDeleteCheckLoading] = useState(false);
   const [form] = Form.useForm<CreatePatientValues>();
   const [editForm] = Form.useForm<EditPatientValues>();
 
@@ -175,6 +192,48 @@ export function PatientListPage() {
     onError: (err: unknown) => message.error(backendDetail(err) ?? "保存失败"),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!deleteTarget) return;
+      await apiClient.delete(`/patients/${deleteTarget.id}/`);
+    },
+    onSuccess: async () => {
+      message.success("患者档案已删除");
+      setDeleteTarget(null);
+      setDeleteBlockedReason(null);
+      setDeleteImpactSummary([]);
+      await qc.invalidateQueries({ queryKey: ["patients"] });
+    },
+    onError: (err: unknown) => {
+      setDeleteBlockedReason(backendDetail(err) ?? "删除失败，请稍后重试或联系管理员。");
+    },
+  });
+
+  const openDeleteModal = async (row: PatientRow) => {
+    setDeleteTarget(row);
+    setDeleteBlockedReason(null);
+    setDeleteImpactSummary([]);
+    setDeleteCheckLoading(true);
+    try {
+      const r = await apiClient.get<unknown[]>(`/studies/project-patients/?patient=${row.id}`);
+      const linkedCount = r.data.length;
+      if (linkedCount > 0) {
+        setDeleteBlockedReason(
+          `该患者仍关联 ${linkedCount} 个研究项目，系统禁止物理删除。需先到项目中删除或解绑该患者。`,
+        );
+        return;
+      }
+      setDeleteImpactSummary([
+        "将永久删除该患者档案及本地可恢复副本（若存在），且不可恢复。",
+        "当前未检测到研究项目入组关联。",
+      ]);
+    } catch (err) {
+      setDeleteBlockedReason(backendDetail(err) ?? "删除前检查失败，请稍后重试或联系管理员。");
+    } finally {
+      setDeleteCheckLoading(false);
+    }
+  };
+
   return (
     <Card
       title="患者档案"
@@ -189,18 +248,22 @@ export function PatientListPage() {
         loading={isLoading}
         dataSource={data ?? []}
         columns={[
-          { title: "姓名", dataIndex: "name" },
+          {
+            title: "姓名",
+            dataIndex: "name",
+            render: (name: string, row) => <Link to={`/patients/${row.id}`}>{name}</Link>,
+          },
           {
             title: "性别",
             dataIndex: "gender",
             render: (v: string) => genderLabel[v] ?? v,
           },
           { title: "年龄", dataIndex: "age" },
-          { title: "手机号", dataIndex: "phone" },
+          { title: "手机号", dataIndex: "phone", render: (phone: string) => maskPhone(phone) },
           {
-            title: "主治医生 ID",
-            dataIndex: "primary_doctor",
-            render: (pid: number | null) => pid ?? "—",
+            title: "主治医生",
+            dataIndex: "primary_doctor_name",
+            render: (name: string | null | undefined) => name || "—",
           },
           {
             title: "操作",
@@ -210,7 +273,14 @@ export function PatientListPage() {
                 <Button type="link" style={{ padding: 0 }} onClick={() => setEditId(row.id)}>
                   编辑
                 </Button>
-                <Link to={`/patients/${row.id}`}>详情</Link>
+                <Button
+                  danger
+                  type="link"
+                  style={{ padding: 0 }}
+                  onClick={() => void openDeleteModal(row)}
+                >
+                  删除
+                </Button>
               </Space>
             ),
           },
@@ -339,6 +409,23 @@ export function PatientListPage() {
           </Form>
         )}
       </Modal>
+      <DestructiveActionModal
+        open={deleteTarget != null}
+        title="确认删除患者档案？"
+        okText="删除"
+        impactSummary={deleteImpactSummary}
+        blockedReason={deleteBlockedReason}
+        confirmLoading={deleteCheckLoading || deleteMutation.isPending}
+        onCancel={() => {
+          setDeleteTarget(null);
+          setDeleteBlockedReason(null);
+          setDeleteImpactSummary([]);
+        }}
+        onConfirm={() => {
+          if (deleteBlockedReason || deleteCheckLoading) return;
+          void deleteMutation.mutateAsync();
+        }}
+      />
     </Card>
   );
 }

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -7,15 +7,17 @@ import { dirname, resolve } from "node:path";
 
 import { App } from "./App";
 
-const { mockGet, mockPost } = vi.hoisted(() => ({
+const { mockGet, mockPost, mockDelete } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPost: vi.fn(),
+  mockDelete: vi.fn(),
 }));
 
 vi.mock("../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
     post: (...args: unknown[]) => mockPost(...args),
+    delete: (...args: unknown[]) => mockDelete(...args),
     interceptors: {
       request: { use: vi.fn(), eject: vi.fn() },
       response: { use: vi.fn(), eject: vi.fn() },
@@ -25,6 +27,10 @@ vi.mock("../api/client", () => ({
 
 describe("App", () => {
   beforeEach(() => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    mockDelete.mockReset();
+
     mockGet.mockImplementation((url: string, config?: unknown) => {
       const params =
         typeof config === "object" && config
@@ -79,6 +85,22 @@ describe("App", () => {
           return Promise.resolve({ data: [] });
         }
       }
+      if (url === "/studies/project-patients/?patient=123") {
+        return Promise.resolve({ data: [] });
+      }
+      if (url === "/studies/project-patients/?patient=124") {
+        return Promise.resolve({
+          data: [
+            {
+              id: 900,
+              project: 1,
+              patient_name: "王五",
+              group_name: "试验组",
+              grouping_status: "confirmed",
+            },
+          ],
+        });
+      }
       if (url === "/patients/") {
         return Promise.resolve({
           data: [
@@ -89,6 +111,16 @@ describe("App", () => {
               age: 30,
               phone: "13800000001",
               primary_doctor: 1,
+              primary_doctor_name: "测试医生",
+            },
+            {
+              id: 124,
+              name: "王五",
+              gender: "female",
+              age: 68,
+              phone: "13900000002",
+              primary_doctor: null,
+              primary_doctor_name: null,
             },
           ],
         });
@@ -117,6 +149,10 @@ describe("App", () => {
 
     mockPost.mockImplementation((url: string) => {
       return Promise.reject(new Error(`unmocked POST ${url}`));
+    });
+
+    mockDelete.mockImplementation((url: string) => {
+      return Promise.reject(new Error(`unmocked DELETE ${url}`));
     });
   });
 
@@ -150,7 +186,7 @@ describe("App", () => {
     });
   });
 
-  it("navigates to patient detail when clicking details from the patient list", async () => {
+  it("navigates to patient detail when clicking the patient name from the patient list", async () => {
     window.history.pushState({}, "", "/patients");
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -166,11 +202,92 @@ describe("App", () => {
       expect(screen.getByText("张三")).toBeInTheDocument();
     });
 
-    screen.getAllByRole("link", { name: "详情" })[0].click();
+    expect(screen.queryByRole("link", { name: "详情" })).not.toBeInTheDocument();
+
+    screen.getByRole("link", { name: "张三" }).click();
 
     await waitFor(() => {
       expect(screen.getByText("患者详情")).toBeInTheDocument();
     });
+  });
+
+  it("renders masked phone numbers and primary doctor names on the patient list", async () => {
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("138****0001")).toBeInTheDocument();
+      expect(screen.queryByText("13800000001")).not.toBeInTheDocument();
+      expect(screen.getByText("测试医生")).toBeInTheDocument();
+      expect(screen.getByText("主治医生")).toBeInTheDocument();
+      expect(screen.queryByText("主治医生 ID")).not.toBeInTheDocument();
+    });
+
+    const wangRow = document.querySelector('tr[data-row-key="124"]');
+    expect(wangRow).not.toBeNull();
+    expect(within(wangRow).getByText("—")).toBeInTheDocument();
+  });
+
+  it("allows deleting a patient without project links after confirmation", async () => {
+    mockDelete.mockResolvedValue({ data: {} });
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="123"]')).not.toBeNull();
+    });
+    const zhangRow = document.querySelector('tr[data-row-key="123"]');
+    fireEvent.click(within(zhangRow).getByRole("button", { name: "删除" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+    expect(dialog).toHaveTextContent("当前未检测到研究项目入组关联。");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /删\s*除/ }));
+
+    await waitFor(() => {
+      expect(mockDelete).toHaveBeenCalledWith("/patients/123/");
+    });
+  });
+
+  it("blocks deleting a patient with project links and does not call DELETE", async () => {
+    window.history.pushState({}, "", "/patients");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('tr[data-row-key="124"]')).not.toBeNull();
+    });
+    const wangRow = document.querySelector('tr[data-row-key="124"]');
+    fireEvent.click(within(wangRow).getByRole("button", { name: "删除" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认删除患者档案？" });
+    expect(within(dialog).getByText("当前无法执行该操作")).toBeInTheDocument();
+    expect(within(dialog).getByText(/需先到项目中删除或解绑该患者/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /删\s*除/ })).toBeDisabled();
+    expect(mockDelete).not.toHaveBeenCalledWith("/patients/124/");
   });
 
   it("renders patient name and phone when opening /patients/101", async () => {
