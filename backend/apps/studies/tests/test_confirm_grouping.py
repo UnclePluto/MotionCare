@@ -2,55 +2,96 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.patients.models import Patient
-from apps.studies.models import ProjectPatient, StudyGroup
+from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
+
+
+def _client(user):
+    client = APIClient()
+    client.force_authenticate(user=user)
+    return client
+
+
+def _patient(doctor, name="患者乙", phone="13900000222"):
+    return Patient.objects.create(name=name, phone=phone, primary_doctor=doctor)
 
 
 @pytest.mark.django_db
-def test_confirm_grouping_marks_all_pending_as_confirmed(doctor, project, patient):
-    g = StudyGroup.objects.create(project=project, name="A", target_ratio=1)
-    pp1 = ProjectPatient.objects.create(
-        project=project,
-        patient=patient,
-        group=g,
-        grouping_status=ProjectPatient.GroupingStatus.PENDING,
-    )
-    other = Patient.objects.create(name="乙", phone="13900000222", primary_doctor=doctor)
-    pp2 = ProjectPatient.objects.create(
-        project=project,
-        patient=other,
-        group=g,
-        grouping_status=ProjectPatient.GroupingStatus.PENDING,
-    )
+def test_confirm_grouping_creates_project_patients_from_assignments(doctor, project):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
+    p1 = _patient(doctor, "甲", "13900000001")
+    p2 = _patient(doctor, "乙", "13900000002")
 
-    client = APIClient()
-    client.force_authenticate(user=doctor)
-    r = client.post(f"/api/studies/projects/{project.id}/confirm-grouping/", {}, format="json")
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {"assignments": [{"patient_id": p1.id, "group_id": g1.id}, {"patient_id": p2.id, "group_id": g2.id}]},
+        format="json",
+    )
 
     assert r.status_code == 200, r.data
     assert r.data["confirmed"] == 2
-    pp1.refresh_from_db()
-    pp2.refresh_from_db()
-    assert pp1.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
-    assert pp2.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
+    assert ProjectPatient.objects.filter(project=project).count() == 2
+    assert ProjectPatient.objects.get(project=project, patient=p1).group_id == g1.id
+    assert ProjectPatient.objects.get(project=project, patient=p2).group_id == g2.id
 
 
 @pytest.mark.django_db
-def test_confirm_grouping_rejects_pending_without_group(doctor, project, patient):
-    ProjectPatient.objects.create(
-        project=project,
-        patient=patient,
-        group=None,
-        grouping_status=ProjectPatient.GroupingStatus.PENDING,
+def test_confirm_grouping_rejects_patient_already_in_project(doctor, project, patient):
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    ProjectPatient.objects.create(project=project, patient=patient, group=group)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {"assignments": [{"patient_id": patient.id, "group_id": group.id}]},
+        format="json",
     )
-    client = APIClient()
-    client.force_authenticate(user=doctor)
-    r = client.post(f"/api/studies/projects/{project.id}/confirm-grouping/", {}, format="json")
+
     assert r.status_code == 400
+    assert "已确认入组" in str(r.data)
+    assert ProjectPatient.objects.filter(project=project, patient=patient).count() == 1
 
 
 @pytest.mark.django_db
-def test_confirm_grouping_returns_400_when_no_pending(doctor, project):
-    client = APIClient()
-    client.force_authenticate(user=doctor)
-    r = client.post(f"/api/studies/projects/{project.id}/confirm-grouping/", {}, format="json")
+def test_confirm_grouping_rejects_group_from_other_project(doctor, project, patient):
+    other = StudyProject.objects.create(name="其他项目", created_by=doctor)
+    other_group = StudyGroup.objects.create(project=other, name="其他组", target_ratio=1)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {"assignments": [{"patient_id": patient.id, "group_id": other_group.id}]},
+        format="json",
+    )
+
     assert r.status_code == 400
+    assert "分组不属于当前项目" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_inactive_group(doctor, project, patient):
+    group = StudyGroup.objects.create(project=project, name="停用组", target_ratio=1, is_active=False)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {"assignments": [{"patient_id": patient.id, "group_id": group.id}]},
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "分组已停用" in str(r.data)
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_duplicate_patient_in_payload(doctor, project, patient):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {"assignments": [{"patient_id": patient.id, "group_id": g1.id}, {"patient_id": patient.id, "group_id": g2.id}]},
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "重复患者" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
