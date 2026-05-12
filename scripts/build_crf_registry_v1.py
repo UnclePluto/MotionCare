@@ -16,6 +16,48 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "specs/patient-rehab-system/crf/registry.v1.json"
 
+TABLE_TITLES = {
+    "#T0": "筛选与受试者标识",
+    "#T8": "人口学信息",
+    "#T9": "手术史与过敏史",
+    "#T10": "合并症、既往史与家族史",
+    "#T11": "生活方式",
+    "#T12": "合并用药",
+}
+BASELINE_SECTION_ORDER = ["#T0", "#T8", "#T9", "#T10", "#T11", "#T12"]
+
+DISEASES: list[tuple[str, str]] = [
+    ("cm_coronary", "冠心病"),
+    ("cm_stroke", "脑卒中"),
+    ("cm_hypertension", "高血压"),
+    ("cm_diabetes", "糖尿病"),
+    ("cm_hyperlipidemia", "高脂血症"),
+    ("cm_gout", "痛风/高尿酸血症"),
+    ("cm_copd", "慢性阻塞性肺疾病（COPD）"),
+    ("cm_asthma", "支气管哮喘"),
+    ("cm_kidney_stone", "肾结石"),
+    ("cm_ckd", "慢性肾脏病"),
+    ("cm_anemia", "贫血"),
+    ("cm_osteo", "骨关节炎/骨质疏松"),
+    ("cm_mood", "抑郁/焦虑"),
+    ("cm_other", "其他"),
+]
+
+MED_CATS: list[tuple[str, str]] = [
+    ("med_antihypertensive", "降压药"),
+    ("med_antidiabetic", "降糖药"),
+    ("med_lipid", "降脂药"),
+    ("med_inhaler", "支气管舒张剂/激素类吸入剂"),
+    ("med_antiplatelet", "抗血小板/抗凝药"),
+    ("med_cardiac", "心脏相关药物"),
+    ("med_sedative", "镇静催眠药"),
+    ("med_psych", "抗抑郁/抗焦虑药"),
+    ("med_cognitive", "抗痴呆/改善认知药物"),
+    ("med_bone", "骨质疏松/钙剂/维生素D"),
+    ("med_pain", "止痛/抗炎/尿酸异常药物"),
+    ("med_other_long", "其他长期药物"),
+]
+
 
 def field(
     field_id: str,
@@ -29,6 +71,8 @@ def field(
     options: list[str] | None = None,
     hint: str | None = None,
     doc_table_index: int | None = None,
+    other_remark_storage: str | None = None,
+    other_remark_widget: str | None = None,
 ) -> dict:
     d: dict = {
         "field_id": field_id,
@@ -45,7 +89,89 @@ def field(
         d["hint"] = hint
     if doc_table_index is not None:
         d["doc_table_index"] = doc_table_index
+    if other_remark_storage is not None:
+        d["other_remark_storage"] = other_remark_storage
+    if other_remark_widget is not None:
+        d["other_remark_widget"] = other_remark_widget
     return d
+
+
+def baseline_table_layout() -> dict:
+    """与 _docx_table_dump TABLE 9–13 对齐；TABLE 9 前两行字段在 #T0，#T8 从年龄起。"""
+    t8_order = [
+        "dm_age_years",
+        "dm_birth_date",
+        "dm_gender",
+        "dm_marital",
+        "dm_address",
+        "dm_ethnicity",
+        "dm_insurance",
+        "dm_education_level",
+        "dm_education_years",
+        "dm_children",
+        "dm_caregiver",
+        "dm_phone",
+        "dm_income_band",
+        "dm_income_afford",
+        "dm_self_health",
+    ]
+    t8_rows = [{"cells": [{"field_id": fid, "colspan": 2}]} for fid in t8_order]
+
+    t10_rows: list[dict] = []
+    for fid, _zh in DISEASES:
+        t10_rows.append(
+            {
+                "cells": [
+                    {"field_id": f"{fid}_family"},
+                    {"field_id": f"{fid}_personal"},
+                    {"field_id": f"{fid}_diagnosed_at"},
+                ]
+            }
+        )
+    t10_rows.append({"cells": [{"field_id": "cm_gout_attack_1m", "colspan": 2}]})
+    t10_rows.append({"cells": [{"field_id": "cm_other_history", "colspan": 2}]})
+
+    t11_ids = [
+        "ls_smoking",
+        "ls_smoking_detail",
+        "ls_drinking",
+        "ls_drinking_detail",
+        "ls_exercise",
+        "ls_ipaq",
+    ]
+    t11_rows = [{"cells": [{"field_id": fid, "colspan": 2}]} for fid in t11_ids]
+
+    t12_rows: list[dict] = []
+    for slug, _zh in MED_CATS:
+        t12_rows.append(
+            {
+                "cells": [
+                    {"field_id": f"{slug}_uses"},
+                    {"field_id": f"{slug}_detail"},
+                ]
+            }
+        )
+    t12_rows.append({"cells": [{"field_id": "med_count_regular", "colspan": 2}]})
+
+    return {
+        "#T0": {
+            "rows": [
+                {"cells": [{"field_id": "pb_subject_id"}, {"field_id": "pb_name_initials"}]},
+            ]
+        },
+        "#T8": {"rows": t8_rows},
+        "#T9": {
+            "rows": [
+                {"cells": [{"field_id": "sa_has_surgery", "colspan": 2}]},
+                {"cells": [{"field_id": "sa_surgeries_note", "colspan": 2}]},
+                {"cells": [{"field_id": "sa_has_allergy", "colspan": 2}]},
+                {"cells": [{"field_id": "sa_allergies_note", "colspan": 2}]},
+            ]
+        },
+        "#T10": {"rows": t10_rows},
+        "#T11": {"rows": t11_rows},
+        "#T12": {"rows": t12_rows},
+    }
 
 
 def main() -> None:
@@ -95,6 +221,8 @@ def main() -> None:
             "patient_baseline.demographics.marital_status",
             options=["已婚", "未婚", "离异", "丧偶", "其他"],
             doc_table_index=9,
+            other_remark_storage="patient_baseline.demographics.marital_status_other_remark",
+            other_remark_widget="text",
         ),
         field("dm_address", "#T8", "居住地址", "textarea", "patient_baseline.demographics.address", doc_table_index=9),
         field(
@@ -105,6 +233,8 @@ def main() -> None:
             "patient_baseline.demographics.ethnicity",
             options=["汉族", "黎族", "苗族", "其他"],
             doc_table_index=9,
+            other_remark_storage="patient_baseline.demographics.ethnicity_other_remark",
+            other_remark_widget="text",
         ),
         field(
             "dm_insurance",
@@ -114,6 +244,8 @@ def main() -> None:
             "patient_baseline.demographics.insurance_type",
             options=["城镇职工医保", "城乡居民医保/新农合", "公费医疗", "商业保险", "自费", "其他"],
             doc_table_index=9,
+            other_remark_storage="patient_baseline.demographics.insurance_type_other_remark",
+            other_remark_widget="text",
         ),
         field(
             "dm_education_level",
@@ -218,23 +350,7 @@ def main() -> None:
     ]
 
     # --- #T10 既往病史与家族史（TABLE 11 疾病行）---
-    diseases = [
-        ("cm_coronary", "冠心病"),
-        ("cm_stroke", "脑卒中"),
-        ("cm_hypertension", "高血压"),
-        ("cm_diabetes", "糖尿病"),
-        ("cm_hyperlipidemia", "高脂血症"),
-        ("cm_gout", "痛风/高尿酸血症"),
-        ("cm_copd", "慢性阻塞性肺疾病（COPD）"),
-        ("cm_asthma", "支气管哮喘"),
-        ("cm_kidney_stone", "肾结石"),
-        ("cm_ckd", "慢性肾脏病"),
-        ("cm_anemia", "贫血"),
-        ("cm_osteo", "骨关节炎/骨质疏松"),
-        ("cm_mood", "抑郁/焦虑"),
-        ("cm_other", "其他"),
-    ]
-    for fid, zh in diseases:
+    for fid, zh in DISEASES:
         fields.append(
             field(
                 fid + "_family",
@@ -262,7 +378,7 @@ def main() -> None:
                 fid + "_diagnosed_at",
                 "#T10",
                 f"{zh} 确诊时间",
-                "text",
+                "date",
                 f"patient_baseline.comorbidities.{fid}.diagnosed_at",
                 doc_table_index=11,
             )
@@ -316,21 +432,7 @@ def main() -> None:
     fields.append(field("ls_ipaq", "#T11", "过去7天活动与静坐", "textarea", "patient_baseline.lifestyle.ipaq_note", doc_table_index=12))
 
     # --- #T12 基线用药（TABLE 13 按类别）---
-    med_cats = [
-        ("med_antihypertensive", "降压药"),
-        ("med_antidiabetic", "降糖药"),
-        ("med_lipid", "降脂药"),
-        ("med_inhaler", "支气管舒张剂/激素类吸入剂"),
-        ("med_antiplatelet", "抗血小板/抗凝药"),
-        ("med_cardiac", "心脏相关药物"),
-        ("med_sedative", "镇静催眠药"),
-        ("med_psych", "抗抑郁/抗焦虑药"),
-        ("med_cognitive", "抗痴呆/改善认知药物"),
-        ("med_bone", "骨质疏松/钙剂/维生素D"),
-        ("med_pain", "止痛/抗炎/尿酸异常药物"),
-        ("med_other_long", "其他长期药物"),
-    ]
-    for slug, zh in med_cats:
+    for slug, zh in MED_CATS:
         fields.append(
             field(
                 slug + "_uses",
@@ -716,6 +818,9 @@ def main() -> None:
         "template_id": "cognitive_frailty_digital_therapy_crf",
         "template_revision": "1.1（修订稿 2026-04-28）",
         "source_docx": "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",
+        "table_titles": TABLE_TITLES,
+        "baseline_section_order": BASELINE_SECTION_ORDER,
+        "baseline_table_layout": baseline_table_layout(),
         "fields": fields,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)

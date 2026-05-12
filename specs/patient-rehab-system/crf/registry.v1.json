@@ -10,6 +10,576 @@
     "#T11": "生活方式",
     "#T12": "合并用药"
   },
+  "baseline_section_order": [
+    "#T0",
+    "#T8",
+    "#T9",
+    "#T10",
+    "#T11",
+    "#T12"
+  ],
+  "baseline_table_layout": {
+    "#T0": {
+      "rows": [
+        {
+          "cells": [
+            {
+              "field_id": "pb_subject_id"
+            },
+            {
+              "field_id": "pb_name_initials"
+            }
+          ]
+        }
+      ]
+    },
+    "#T8": {
+      "rows": [
+        {
+          "cells": [
+            {
+              "field_id": "dm_age_years",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_birth_date",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_gender",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_marital",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_address",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_ethnicity",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_insurance",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_education_level",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_education_years",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_children",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_caregiver",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_phone",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_income_band",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_income_afford",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "dm_self_health",
+              "colspan": 2
+            }
+          ]
+        }
+      ]
+    },
+    "#T9": {
+      "rows": [
+        {
+          "cells": [
+            {
+              "field_id": "sa_has_surgery",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "sa_surgeries_note",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "sa_has_allergy",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "sa_allergies_note",
+              "colspan": 2
+            }
+          ]
+        }
+      ]
+    },
+    "#T10": {
+      "rows": [
+        {
+          "cells": [
+            {
+              "field_id": "cm_coronary_family"
+            },
+            {
+              "field_id": "cm_coronary_personal"
+            },
+            {
+              "field_id": "cm_coronary_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_stroke_family"
+            },
+            {
+              "field_id": "cm_stroke_personal"
+            },
+            {
+              "field_id": "cm_stroke_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_hypertension_family"
+            },
+            {
+              "field_id": "cm_hypertension_personal"
+            },
+            {
+              "field_id": "cm_hypertension_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_diabetes_family"
+            },
+            {
+              "field_id": "cm_diabetes_personal"
+            },
+            {
+              "field_id": "cm_diabetes_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_hyperlipidemia_family"
+            },
+            {
+              "field_id": "cm_hyperlipidemia_personal"
+            },
+            {
+              "field_id": "cm_hyperlipidemia_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_gout_family"
+            },
+            {
+              "field_id": "cm_gout_personal"
+            },
+            {
+              "field_id": "cm_gout_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_copd_family"
+            },
+            {
+              "field_id": "cm_copd_personal"
+            },
+            {
+              "field_id": "cm_copd_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_asthma_family"
+            },
+            {
+              "field_id": "cm_asthma_personal"
+            },
+            {
+              "field_id": "cm_asthma_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_kidney_stone_family"
+            },
+            {
+              "field_id": "cm_kidney_stone_personal"
+            },
+            {
+              "field_id": "cm_kidney_stone_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_ckd_family"
+            },
+            {
+              "field_id": "cm_ckd_personal"
+            },
+            {
+              "field_id": "cm_ckd_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_anemia_family"
+            },
+            {
+              "field_id": "cm_anemia_personal"
+            },
+            {
+              "field_id": "cm_anemia_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_osteo_family"
+            },
+            {
+              "field_id": "cm_osteo_personal"
+            },
+            {
+              "field_id": "cm_osteo_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_mood_family"
+            },
+            {
+              "field_id": "cm_mood_personal"
+            },
+            {
+              "field_id": "cm_mood_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_other_family"
+            },
+            {
+              "field_id": "cm_other_personal"
+            },
+            {
+              "field_id": "cm_other_diagnosed_at"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_gout_attack_1m",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "cm_other_history",
+              "colspan": 2
+            }
+          ]
+        }
+      ]
+    },
+    "#T11": {
+      "rows": [
+        {
+          "cells": [
+            {
+              "field_id": "ls_smoking",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "ls_smoking_detail",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "ls_drinking",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "ls_drinking_detail",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "ls_exercise",
+              "colspan": 2
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "ls_ipaq",
+              "colspan": 2
+            }
+          ]
+        }
+      ]
+    },
+    "#T12": {
+      "rows": [
+        {
+          "cells": [
+            {
+              "field_id": "med_antihypertensive_uses"
+            },
+            {
+              "field_id": "med_antihypertensive_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_antidiabetic_uses"
+            },
+            {
+              "field_id": "med_antidiabetic_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_lipid_uses"
+            },
+            {
+              "field_id": "med_lipid_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_inhaler_uses"
+            },
+            {
+              "field_id": "med_inhaler_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_antiplatelet_uses"
+            },
+            {
+              "field_id": "med_antiplatelet_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_cardiac_uses"
+            },
+            {
+              "field_id": "med_cardiac_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_sedative_uses"
+            },
+            {
+              "field_id": "med_sedative_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_psych_uses"
+            },
+            {
+              "field_id": "med_psych_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_cognitive_uses"
+            },
+            {
+              "field_id": "med_cognitive_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_bone_uses"
+            },
+            {
+              "field_id": "med_bone_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_pain_uses"
+            },
+            {
+              "field_id": "med_pain_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_other_long_uses"
+            },
+            {
+              "field_id": "med_other_long_detail"
+            }
+          ]
+        },
+        {
+          "cells": [
+            {
+              "field_id": "med_count_regular",
+              "colspan": 2
+            }
+          ]
+        }
+      ]
+    }
+  },
   "fields": [
     {
       "field_id": "pb_subject_id",
@@ -80,9 +650,9 @@
         "丧偶",
         "其他"
       ],
+      "doc_table_index": 9,
       "other_remark_storage": "patient_baseline.demographics.marital_status_other_remark",
-      "other_remark_widget": "text",
-      "doc_table_index": 9
+      "other_remark_widget": "text"
     },
     {
       "field_id": "dm_address",
@@ -108,9 +678,9 @@
         "苗族",
         "其他"
       ],
+      "doc_table_index": 9,
       "other_remark_storage": "patient_baseline.demographics.ethnicity_other_remark",
-      "other_remark_widget": "text",
-      "doc_table_index": 9
+      "other_remark_widget": "text"
     },
     {
       "field_id": "dm_insurance",
@@ -128,9 +698,9 @@
         "自费",
         "其他"
       ],
+      "doc_table_index": 9,
       "other_remark_storage": "patient_baseline.demographics.insurance_type_other_remark",
-      "other_remark_widget": "text",
-      "doc_table_index": 9
+      "other_remark_widget": "text"
     },
     {
       "field_id": "dm_education_level",
@@ -324,7 +894,7 @@
       "field_id": "cm_coronary_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "冠心病 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_coronary.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -364,7 +934,7 @@
       "field_id": "cm_stroke_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "脑卒中 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_stroke.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -404,7 +974,7 @@
       "field_id": "cm_hypertension_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "高血压 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_hypertension.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -444,7 +1014,7 @@
       "field_id": "cm_diabetes_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "糖尿病 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_diabetes.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -484,7 +1054,7 @@
       "field_id": "cm_hyperlipidemia_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "高脂血症 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_hyperlipidemia.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -524,7 +1094,7 @@
       "field_id": "cm_gout_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "痛风/高尿酸血症 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_gout.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -564,7 +1134,7 @@
       "field_id": "cm_copd_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "慢性阻塞性肺疾病（COPD） 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_copd.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -604,7 +1174,7 @@
       "field_id": "cm_asthma_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "支气管哮喘 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_asthma.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -644,7 +1214,7 @@
       "field_id": "cm_kidney_stone_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "肾结石 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_kidney_stone.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -684,7 +1254,7 @@
       "field_id": "cm_ckd_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "慢性肾脏病 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_ckd.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -724,7 +1294,7 @@
       "field_id": "cm_anemia_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "贫血 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_anemia.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -764,7 +1334,7 @@
       "field_id": "cm_osteo_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "骨关节炎/骨质疏松 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_osteo.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -804,7 +1374,7 @@
       "field_id": "cm_mood_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "抑郁/焦虑 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_mood.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
@@ -844,7 +1414,7 @@
       "field_id": "cm_other_diagnosed_at",
       "table_ref": "#T10",
       "label_zh": "其他 确诊时间",
-      "widget": "text",
+      "widget": "date",
       "storage": "patient_baseline.comorbidities.cm_other.diagnosed_at",
       "required_for_complete": false,
       "visit_types": null,
