@@ -76,6 +76,7 @@ def test_confirm_grouping_rejects_invalid_assignment_payload_structure(
     )
 
     assert r.status_code == 400
+    assert "assignments" in r.data
     assert not ProjectPatient.objects.filter(project=project).exists()
 
 
@@ -221,6 +222,7 @@ def test_confirm_grouping_rejects_payload_atomically_when_one_assignment_invalid
     )
 
     assert r.status_code == 400
+    assert "以下分组不存在" in str(r.data)
     assert not ProjectPatient.objects.filter(project=project).exists()
 
 
