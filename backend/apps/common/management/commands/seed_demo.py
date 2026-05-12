@@ -32,7 +32,7 @@ class Command(BaseCommand):
         project_patient, _ = ProjectPatient.objects.get_or_create(
             project=project,
             patient=patient,
-            defaults={"group": group, "grouping_status": ProjectPatient.GroupingStatus.CONFIRMED},
+            defaults={"group": group},
         )
         ensure_default_visits(project_patient)
 
@@ -54,4 +54,3 @@ class Command(BaseCommand):
         activate_prescription(prescription)
 
         self.stdout.write(self.style.SUCCESS("Demo data created. Doctor: 13800000000 / pass123456"))
-

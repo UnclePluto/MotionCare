@@ -80,7 +80,6 @@ class PatientViewSet(ModelViewSet):
                 project_id=item["project_id"],
                 patient=patient,
                 group_id=item["group_id"],
-                grouping_status=ProjectPatient.GroupingStatus.CONFIRMED,
                 created_by=request.user,
             )
             ensure_default_visits(pp)
@@ -99,4 +98,3 @@ class PatientViewSet(ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
-

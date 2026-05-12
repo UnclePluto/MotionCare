@@ -26,9 +26,7 @@ def test_enroll_projects_confirms_into_chosen_group(doctor, patient, project):
     pp1 = ProjectPatient.objects.get(project=project, patient=patient)
     pp2 = ProjectPatient.objects.get(project=p2, patient=patient)
     assert pp1.group_id == g1.id
-    assert pp1.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
     assert pp2.group_id == g2.id
-    assert pp2.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
 
 
 @pytest.mark.django_db
