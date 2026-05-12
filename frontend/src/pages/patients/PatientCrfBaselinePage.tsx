@@ -1,5 +1,5 @@
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Collapse, Form, Grid, Space, message } from "antd";
+import { Alert, Button, Card, Collapse, Form, Space, message } from "antd";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import { isAxiosError } from "axios";
@@ -7,8 +7,9 @@ import { useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { BaselineLayoutTable } from "../../crf/BaselineLayoutTable";
+import { orderBaselineTableEntries } from "../../crf/baselineSectionOrder";
 import { mergePatientIntoBaselineApiPayload } from "../../crf/baselinePrefill";
-import { renderBaselineRegistryField } from "../../crf/renderBaselineRegistryFields";
 import { baselineToFormValues } from "../../crf/renderRegistryFields";
 import type { CrfRegistry, RegistryField } from "../../crf/types";
 import registryJson from "../../crf/registry.v1.json";
@@ -52,7 +53,6 @@ export function PatientCrfBaselinePage() {
   const { patientId } = useParams();
   const id = Number(patientId);
   const [form] = Form.useForm();
-  const screens = Grid.useBreakpoint();
 
   const baselineFields = useMemo(
     () =>
@@ -70,8 +70,22 @@ export function PatientCrfBaselinePage() {
     for (const arr of m.values()) {
       arr.sort((a, b) => (a.doc_table_index ?? 0) - (b.doc_table_index ?? 0));
     }
-    return Array.from(m.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return Array.from(m.entries());
   }, [baselineFields]);
+
+  const fieldById = useMemo(() => {
+    const map = new Map<string, RegistryField>();
+    for (const f of registry.fields as RegistryField[]) {
+      map.set(f.field_id, f);
+    }
+    return map;
+  }, []);
+
+  const orderedSections = useMemo(
+    () => orderBaselineTableEntries(fieldsByTable, registry.baseline_section_order),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- registry 为构建期 JSON；显式列出 baseline_section_order 与计划一致
+    [fieldsByTable, registry.baseline_section_order],
+  );
 
   const queries = useQueries({
     queries: [
@@ -137,10 +151,6 @@ export function PatientCrfBaselinePage() {
     onError: (err) => message.error(backendDetail(err) ?? "保存失败"),
   });
 
-  const gridTemplateColumns = screens.xl
-    ? "1fr 1fr"
-    : "repeat(auto-fit, minmax(min(100%, 360px), 1fr))";
-
   if (!Number.isFinite(id)) {
     return <Alert type="error" message="无效的患者 ID" />;
   }
@@ -166,23 +176,20 @@ export function PatientCrfBaselinePage() {
         style={{ maxWidth: 1120 }}
       >
         <Collapse
-          defaultActiveKey={fieldsByTable.map(([k]) => k).slice(0, 3)}
-          items={fieldsByTable.map(([tableRef, fields]) => {
+          defaultActiveKey={orderedSections.map(([k]) => k).slice(0, 3)}
+          items={orderedSections.map(([tableRef]) => {
             const title = registry.table_titles?.[tableRef] ?? tableRef;
+            const layout = registry.baseline_table_layout?.[tableRef];
             return {
               key: tableRef,
               label: title,
-              children: (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns,
-                    columnGap: 24,
-                    rowGap: 0,
-                  }}
-                >
-                  {fields.map((f) => renderBaselineRegistryField(f))}
-                </div>
+              children: layout ? (
+                <BaselineLayoutTable block={layout} fieldById={fieldById} />
+              ) : (
+                <Alert
+                  type="error"
+                  message={`未配置表 ${tableRef} 的 baseline_table_layout，无法按表格渲染`}
+                />
               ),
             };
           })}

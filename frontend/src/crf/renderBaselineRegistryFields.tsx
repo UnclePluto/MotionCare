@@ -88,9 +88,9 @@ function BaselineSingleChoiceField({
   return (
     <Fragment>
       <Form.Item name={name} label={label} {...fid}>
-        <Radio.Group>
+        <Radio.Group style={{ display: "flex", flexWrap: "wrap", gap: "8px 16px" }}>
           {field.options!.map((o) => (
-            <Radio key={o} value={o} style={{ display: "block", lineHeight: 2 }}>
+            <Radio key={o} value={o} style={{ lineHeight: 2 }}>
               {o}
             </Radio>
           ))}

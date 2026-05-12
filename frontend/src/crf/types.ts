@@ -13,10 +13,27 @@ export type RegistryField = {
   other_remark_widget?: "text" | "textarea";
 };
 
+export type BaselineLayoutCell = {
+  field_id?: string;
+  blank?: boolean;
+  colspan?: number;
+  rowspan?: number;
+};
+
+export type BaselineLayoutRow = {
+  cells: BaselineLayoutCell[];
+};
+
+export type BaselineTableLayoutBlock = {
+  rows: BaselineLayoutRow[];
+};
+
 export type CrfRegistry = {
   template_id: string;
   template_revision: string;
   source_docx: string;
   table_titles?: Record<string, string>;
   fields: RegistryField[];
+  baseline_section_order?: string[];
+  baseline_table_layout?: Record<string, BaselineTableLayoutBlock>;
 };
