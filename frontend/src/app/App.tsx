@@ -6,6 +6,7 @@ import { LoginPage } from "../pages/auth/LoginPage";
 import { AdminLayout } from "./layout/AdminLayout";
 import { PatientListPage } from "../pages/patients/PatientListPage";
 import { PatientDetailPage } from "../pages/patients/PatientDetailPage";
+import { PatientEditPage } from "../pages/patients/PatientEditPage";
 import { ProjectDetailPage } from "../pages/projects/ProjectDetailPage";
 import { ProjectListPage } from "../pages/projects/ProjectListPage";
 import { VisitFormPage } from "../pages/visits/VisitFormPage";
@@ -22,6 +23,7 @@ export function App() {
           <Route element={<RequireAuth />}>
             <Route element={<AdminLayout />}>
               <Route path="/patients" element={<PatientListPage />} />
+              <Route path="/patients/:patientId/edit" element={<PatientEditPage />} />
               <Route path="/patients/:patientId" element={<PatientDetailPage />} />
               <Route path="/projects" element={<ProjectListPage />} />
               <Route path="/projects/:projectId" element={<ProjectDetailPage />} />

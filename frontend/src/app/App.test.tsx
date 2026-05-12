@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -109,6 +109,7 @@ describe("App", () => {
               age: 30,
               phone: "13800000001",
               primary_doctor: 1,
+              primary_doctor_name: "测试医生",
             },
             {
               id: 201,
@@ -117,6 +118,7 @@ describe("App", () => {
               age: 60,
               phone: "13800000201",
               primary_doctor: 1,
+              primary_doctor_name: "测试医生",
             },
             {
               id: 202,
@@ -125,6 +127,7 @@ describe("App", () => {
               age: 65,
               phone: "13800000202",
               primary_doctor: 1,
+              primary_doctor_name: "测试医生",
             },
           ],
         });
@@ -136,6 +139,10 @@ describe("App", () => {
             name: "张三",
             gender: "male",
             phone: "13800000001",
+            birth_date: null,
+            primary_doctor_name: "测试医生",
+            symptom_note: "",
+            is_active: true,
           },
         });
       }
@@ -145,6 +152,11 @@ describe("App", () => {
             id: 101,
             name: "李四",
             phone: "13800000101",
+            gender: "female",
+            birth_date: null,
+            primary_doctor_name: "测试医生",
+            symptom_note: "",
+            is_active: true,
           },
         });
       }
@@ -186,7 +198,7 @@ describe("App", () => {
     });
   });
 
-  it("navigates to patient detail when clicking details from the patient list", async () => {
+  it("navigates to patient detail when clicking a list row", async () => {
     window.history.pushState({}, "", "/patients");
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -202,10 +214,12 @@ describe("App", () => {
       expect(screen.getByText("张三")).toBeInTheDocument();
     });
 
-    screen.getAllByRole("link", { name: "详情" })[0].click();
+    const row = screen.getByText("张三").closest("tr");
+    expect(row).toBeTruthy();
+    fireEvent.click(row!);
 
     await waitFor(() => {
-      expect(screen.getByText("患者详情")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "编辑档案" })).toBeInTheDocument();
     });
   });
 
@@ -223,7 +237,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
-      expect(screen.getByDisplayValue("13800000101")).toBeInTheDocument();
+      expect(screen.getByText("13800000101")).toBeInTheDocument();
     });
   });
 

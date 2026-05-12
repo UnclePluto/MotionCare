@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
   Card,
-  DatePicker,
   Form,
   Input,
   InputNumber,
@@ -10,17 +9,17 @@ import {
   Select,
   Space,
   Table,
-  Tag,
-  Typography,
   message,
 } from "antd";
-import dayjs, { type Dayjs } from "dayjs";
 import { isAxiosError } from "axios";
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
+import { DestructiveActionModal } from "../components/DestructiveActionModal";
+import { maskPhoneForList } from "./phoneMask";
+import { buildPatientDeleteModalCopy } from "./patientDeleteModalCopy";
 
 type PatientRow = {
   id: number;
@@ -29,13 +28,18 @@ type PatientRow = {
   age: number | null;
   phone: string;
   primary_doctor: number | null;
+  primary_doctor_name?: string | null;
 };
 
-type PatientDetail = PatientRow & {
-  birth_date?: string | null;
-  symptom_note?: string | null;
-  is_active?: boolean;
+type ProjectPatientRow = {
+  id: number;
+  project: number;
+  patient_name: string;
+  group_name: string | null;
+  grouping_status: string;
 };
+
+type StudyProject = { id: number; name: string };
 
 const genderLabel: Record<string, string> = {
   male: "男",
@@ -46,15 +50,6 @@ const genderLabel: Record<string, string> = {
 type CreatePatientValues = {
   name: string;
   gender: "male" | "female" | "unknown";
-  age?: number | null;
-  phone: string;
-  symptom_note?: string;
-};
-
-type EditPatientValues = {
-  name: string;
-  gender: "male" | "female" | "unknown";
-  birth_date?: Dayjs | null;
   age?: number | null;
   phone: string;
   symptom_note?: string;
@@ -95,11 +90,12 @@ function backendDetail(err: unknown): string | null {
 
 export function PatientListPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const { me } = useAuth();
   const [open, setOpen] = useState(false);
-  const [editId, setEditId] = useState<number | null>(null);
   const [form] = Form.useForm<CreatePatientValues>();
-  const [editForm] = Form.useForm<EditPatientValues>();
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+  const [deleteBlockedReason, setDeleteBlockedReason] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["patients"],
@@ -109,26 +105,35 @@ export function PatientListPage() {
     },
   });
 
-  const { data: editingPatient, isLoading: editLoading } = useQuery({
-    queryKey: ["patient", editId],
+  const { data: deleteProjectPatients = [] } = useQuery({
+    queryKey: ["project-patients", "for-delete", deleteTargetId ?? ""],
     queryFn: async () => {
-      const r = await apiClient.get<PatientDetail>(`/patients/${editId}/`);
+      const r = await apiClient.get<ProjectPatientRow[]>(
+        `/studies/project-patients/?patient=${deleteTargetId}`,
+      );
       return r.data;
     },
-    enabled: editId != null,
+    enabled: deleteTargetId != null,
   });
 
-  useEffect(() => {
-    if (!editingPatient || editId == null) return;
-    editForm.setFieldsValue({
-      name: editingPatient.name,
-      gender: (editingPatient.gender as EditPatientValues["gender"]) ?? "unknown",
-      birth_date: editingPatient.birth_date ? dayjs(editingPatient.birth_date) : undefined,
-      age: editingPatient.age ?? undefined,
-      phone: editingPatient.phone,
-      symptom_note: editingPatient.symptom_note ?? "",
-    });
-  }, [editingPatient, editForm, editId]);
+  const { data: deleteProjects = [] } = useQuery({
+    queryKey: ["study-projects", "for-delete", deleteTargetId ?? ""],
+    queryFn: async () => {
+      const r = await apiClient.get<StudyProject[]>("/studies/projects/");
+      return r.data;
+    },
+    enabled: deleteTargetId != null,
+  });
+
+  const deleteProjectNameById = useMemo(
+    () => Object.fromEntries(deleteProjects.map((p) => [p.id, p.name])) as Record<number, string>,
+    [deleteProjects],
+  );
+
+  const deleteCopy = useMemo(
+    () => buildPatientDeleteModalCopy(deleteProjectPatients, deleteProjectNameById),
+    [deleteProjectPatients, deleteProjectNameById],
+  );
 
   const createMutation = useMutation({
     mutationFn: async (values: CreatePatientValues) => {
@@ -153,27 +158,27 @@ export function PatientListPage() {
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: async (values: EditPatientValues) => {
-      if (editId == null) return;
-      await apiClient.patch(`/patients/${editId}/`, {
-        name: values.name.trim(),
-        gender: values.gender,
-        birth_date: values.birth_date ? values.birth_date.format("YYYY-MM-DD") : null,
-        age: values.age ?? null,
-        phone: values.phone.trim(),
-        symptom_note: (values.symptom_note ?? "").trim(),
-        is_active: editingPatient?.is_active !== false,
-      });
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (deleteTargetId == null) return;
+      await apiClient.delete(`/patients/${deleteTargetId}/`);
     },
     onSuccess: async () => {
-      message.success("已保存");
-      setEditId(null);
-      editForm.resetFields();
+      message.success("患者档案已删除");
+      setDeleteTargetId(null);
+      setDeleteBlockedReason(null);
       await qc.invalidateQueries({ queryKey: ["patients"] });
     },
-    onError: (err: unknown) => message.error(backendDetail(err) ?? "保存失败"),
+    onError: (err: unknown) => {
+      const d = backendDetail(err);
+      setDeleteBlockedReason(d ?? "删除失败，请稍后重试或联系管理员。");
+    },
   });
+
+  const openDeleteFor = (rowId: number) => {
+    setDeleteBlockedReason(null);
+    setDeleteTargetId(rowId);
+  };
 
   return (
     <Card
@@ -188,6 +193,10 @@ export function PatientListPage() {
         rowKey="id"
         loading={isLoading}
         dataSource={data ?? []}
+        onRow={(record) => ({
+          onClick: () => navigate(`/patients/${record.id}`),
+          style: { cursor: "pointer" },
+        })}
         columns={[
           { title: "姓名", dataIndex: "name" },
           {
@@ -196,26 +205,65 @@ export function PatientListPage() {
             render: (v: string) => genderLabel[v] ?? v,
           },
           { title: "年龄", dataIndex: "age" },
-          { title: "手机号", dataIndex: "phone" },
           {
-            title: "主治医生 ID",
-            dataIndex: "primary_doctor",
-            render: (pid: number | null) => pid ?? "—",
+            title: "手机号",
+            dataIndex: "phone",
+            render: (v: string) => maskPhoneForList(v ?? ""),
+          },
+          {
+            title: "主治医生",
+            dataIndex: "primary_doctor_name",
+            render: (_: unknown, row) => row.primary_doctor_name ?? "—",
           },
           {
             title: "操作",
             key: "actions",
             render: (_: unknown, row) => (
               <Space>
-                <Button type="link" style={{ padding: 0 }} onClick={() => setEditId(row.id)}>
+                <Button
+                  type="link"
+                  style={{ padding: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigate(`/patients/${row.id}/edit`);
+                  }}
+                >
                   编辑
                 </Button>
-                <Link to={`/patients/${row.id}`}>详情</Link>
+                <Button
+                  type="link"
+                  danger
+                  style={{ padding: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openDeleteFor(row.id);
+                  }}
+                >
+                  删除
+                </Button>
               </Space>
             ),
           },
         ]}
       />
+
+      <DestructiveActionModal
+        open={deleteTargetId != null}
+        title="确认删除患者档案？"
+        okText="删除"
+        impactSummary={deleteCopy.summary}
+        blockedReason={deleteCopy.blocked ?? deleteBlockedReason}
+        confirmLoading={deleteMutation.isPending}
+        onCancel={() => {
+          setDeleteTargetId(null);
+          setDeleteBlockedReason(null);
+        }}
+        onConfirm={() => {
+          if (deleteCopy.blocked) return;
+          void deleteMutation.mutateAsync();
+        }}
+      />
+
       <Modal
         title="新建患者"
         open={open}
@@ -267,77 +315,6 @@ export function PatientListPage() {
             </Space>
           </Form.Item>
         </Form>
-      </Modal>
-
-      <Modal
-        title="编辑患者"
-        open={editId != null}
-        onCancel={() => {
-          setEditId(null);
-          editForm.resetFields();
-        }}
-        footer={null}
-        destroyOnClose
-      >
-        {editLoading && !editingPatient ? (
-          <div>加载中…</div>
-        ) : (
-          <Form<EditPatientValues>
-            form={editForm}
-            layout="vertical"
-            onFinish={(v) => updateMutation.mutate(v)}
-          >
-            <Form.Item label="姓名" name="name" rules={[{ required: true, message: "请输入姓名" }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item label="性别" name="gender" rules={[{ required: true }]}>
-              <Select
-                options={[
-                  { value: "male", label: "男" },
-                  { value: "female", label: "女" },
-                  { value: "unknown", label: "未知" },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item label="出生日期" name="birth_date">
-              <DatePicker style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item label="年龄" name="age">
-              <InputNumber min={0} max={130} style={{ width: "100%" }} />
-            </Form.Item>
-            <Form.Item label="手机号" name="phone" rules={[{ required: true, message: "请输入手机号" }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item label="备注" name="symptom_note">
-              <Input.TextArea rows={2} />
-            </Form.Item>
-            <Form.Item label="档案状态">
-              <Space direction="vertical" size={0}>
-                <Tag color={editingPatient?.is_active !== false ? "green" : "default"}>
-                  {editingPatient?.is_active !== false ? "启用" : "已停用"}
-                </Tag>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  停用或删除请在患者详情页操作（须二次确认）。
-                </Typography.Text>
-              </Space>
-            </Form.Item>
-            <Form.Item>
-              <Space>
-                <Button type="primary" htmlType="submit" loading={updateMutation.isPending}>
-                  保存
-                </Button>
-                <Button
-                  onClick={() => {
-                    setEditId(null);
-                    editForm.resetFields();
-                  }}
-                >
-                  取消
-                </Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        )}
       </Modal>
     </Card>
   );
