@@ -59,6 +59,16 @@ describe("App", () => {
           },
         });
       }
+      if (url === "/visits/") {
+        return Promise.resolve({
+          data: {
+            count: 0,
+            next: null,
+            previous: null,
+            results: [],
+          },
+        });
+      }
       if (url === "/studies/groups/" && params?.project === 1) {
         return Promise.resolve({
           data: [
@@ -159,6 +169,19 @@ describe("App", () => {
           },
         });
       }
+      if (url === "/patients/101/baseline/") {
+        return Promise.resolve({
+          data: {
+            subject_id: "",
+            name_initials: "",
+            demographics: {},
+            surgery_allergy: {},
+            comorbidities: {},
+            lifestyle: {},
+            baseline_medications: {},
+          },
+        });
+      }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
 
@@ -192,6 +215,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("患者档案").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("研究录入").length).toBeGreaterThan(0);
       expect(screen.getAllByText("研究项目").length).toBeGreaterThan(0);
       expect(screen.getAllByText("CRF 报告").length).toBeGreaterThan(0);
     });
@@ -283,6 +307,23 @@ describe("App", () => {
       expect(screen.getByRole("link", { name: "T0" })).toHaveAttribute("href", "/visits/11");
       expect(screen.getByRole("link", { name: "T1" })).toHaveAttribute("href", "/visits/12");
       expect(screen.getByRole("link", { name: "T2" })).toHaveAttribute("href", "/visits/13");
+    });
+  });
+
+  it("opens research entry page from route", async () => {
+    window.history.pushState({}, "", "/research-entry");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("访视类型")).toBeInTheDocument();
     });
   });
 });

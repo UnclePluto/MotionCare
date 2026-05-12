@@ -187,6 +187,7 @@ export function PatientDetailPage() {
           <Button type="primary" onClick={() => navigate(`/patients/${id}/edit`)}>
             编辑档案
           </Button>
+          <Button onClick={() => navigate(`/patients/${id}/crf-baseline`)}>CRF 基线录入</Button>
           <Button onClick={() => setEnrollOpen(true)}>加入研究项目</Button>
           {patientActive ? (
             <Button onClick={() => setDeactivateModalOpen(true)}>停用档案</Button>

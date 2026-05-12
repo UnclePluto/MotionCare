@@ -12,10 +12,18 @@ import {
   Typography,
   message,
 } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import {
+  buildVisitExtensionInitial,
+  deepDiffPatch,
+  deepMergeRecords,
+  groupVisitExtensionFields,
+  registryVisitExtensionFields,
+} from "../../crf/registryVisitExtensions";
+import { renderVisitRegistryField } from "../../crf/renderRegistryFields";
 
 type Assessments = {
   sppb?: {
@@ -39,6 +47,7 @@ type VisitDetail = {
   form_data: {
     assessments: Assessments;
     computed_assessments: Assessments;
+    crf?: Record<string, unknown>;
   };
 };
 
@@ -170,6 +179,8 @@ export function VisitFormPage() {
   const { visitId } = useParams<{ visitId: string }>();
   const id = Number(visitId);
   const qc = useQueryClient();
+  const [extForm] = Form.useForm();
+  const extInitialRef = useRef<Record<string, unknown>>({});
   const [initial, setInitial] = useState<FormState>(EMPTY_FORM);
   const [current, setCurrent] = useState<FormState>(EMPTY_FORM);
   const [computedFlags, setComputedFlags] = useState<
@@ -185,6 +196,16 @@ export function VisitFormPage() {
     enabled: !!id,
   });
 
+  const extensionFields = useMemo(
+    () => (visit ? registryVisitExtensionFields(visit.visit_type) : []),
+    [visit],
+  );
+
+  const extensionGroups = useMemo(
+    () => groupVisitExtensionFields(extensionFields),
+    [extensionFields],
+  );
+
   useEffect(() => {
     if (!visit) return;
     const { state, computedFlags: flags } = buildInitialForm(visit);
@@ -193,11 +214,47 @@ export function VisitFormPage() {
     setComputedFlags(flags);
   }, [visit]);
 
+  useEffect(() => {
+    if (!visit) return;
+    if (extensionFields.length === 0) {
+      extInitialRef.current = {};
+      extForm.resetFields();
+      return;
+    }
+    const fd = visit.form_data as unknown as Record<string, unknown>;
+    const initialExt = buildVisitExtensionInitial(fd, extensionFields);
+    extInitialRef.current = JSON.parse(JSON.stringify(initialExt)) as Record<string, unknown>;
+    extForm.setFieldsValue(initialExt);
+  }, [visit, extensionFields, extForm]);
+
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const body = diffPatch(initial, current);
-      if (!body.form_data) return null;
-      const r = await apiClient.patch(`/visits/${id}/`, body);
+      const basePatch = diffPatch(initial, current);
+      const baseFd = basePatch.form_data as Record<string, unknown> | undefined;
+
+      const extDiffRaw =
+        extensionFields.length > 0
+          ? deepDiffPatch(extInitialRef.current, extForm.getFieldsValue(true))
+          : undefined;
+      const extDiff = extDiffRaw as Record<string, unknown> | undefined;
+
+      const form_data: Record<string, unknown> = {};
+
+      const mergedAssessments = deepMergeRecords(
+        baseFd?.assessments as Record<string, unknown> | undefined,
+        extDiff?.assessments as Record<string, unknown> | undefined,
+      );
+      if (mergedAssessments && Object.keys(mergedAssessments).length > 0) {
+        form_data.assessments = mergedAssessments;
+      }
+
+      const extCrf = extDiff?.crf as Record<string, unknown> | undefined;
+      if (extCrf && typeof extCrf === "object" && Object.keys(extCrf).length > 0) {
+        form_data.crf = extCrf;
+      }
+
+      if (Object.keys(form_data).length === 0) return null;
+      const r = await apiClient.patch(`/visits/${id}/`, { form_data });
       return r.data;
     },
     onSuccess: async (data) => {
@@ -265,7 +322,7 @@ export function VisitFormPage() {
             />
           )}
 
-          <Form layout="vertical">
+          <div>
             <Card type="inner" title="SPPB" style={{ marginBottom: 12 }}>
               <Space wrap size="middle" align="end">
                 <Form.Item label="平衡">
@@ -352,6 +409,24 @@ export function VisitFormPage() {
               </Space>
             </Card>
 
+            {extensionFields.length > 0 && (
+              <Form
+                form={extForm}
+                layout="vertical"
+                disabled={visit.status === "completed"}
+              >
+                {extensionGroups.map((g) => (
+                  <Card key={g.key} type="inner" title={g.label} style={{ marginBottom: 12 }}>
+                    {g.fields.map((f) =>
+                      renderVisitRegistryField(f, {
+                        disabled: visit.status === "completed",
+                      }),
+                    )}
+                  </Card>
+                ))}
+              </Form>
+            )}
+
             <Space>
               <Button
                 type="primary"
@@ -373,7 +448,7 @@ export function VisitFormPage() {
                 保存只会发送改动字段；状态切换走独立 PATCH。
               </Typography.Text>
             </Space>
-          </Form>
+          </div>
         </Space>
       )}
     </Card>

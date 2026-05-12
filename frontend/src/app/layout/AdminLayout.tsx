@@ -1,6 +1,7 @@
 import { Button, Layout, Menu, Space, Typography } from "antd";
 import {
   FileTextOutlined,
+  FormOutlined,
   HeartOutlined,
   ProjectOutlined,
   TeamOutlined,
@@ -27,6 +28,7 @@ export function AdminLayout() {
           onClick={(item) => navigate(item.key)}
           items={[
             { key: "/patients", icon: <TeamOutlined />, label: "患者档案" },
+            { key: "/research-entry", icon: <FormOutlined />, label: "研究录入" },
             { key: "/projects", icon: <ProjectOutlined />, label: "研究项目" },
             { key: "/training", icon: <HeartOutlined />, label: "训练记录" },
             { key: "/crf", icon: <FileTextOutlined />, label: "CRF 报告" },

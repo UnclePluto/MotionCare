@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "sync-crf-registry": "node scripts/sync-crf-registry.mjs",
+    "prebuild": "npm run sync-crf-registry",
     "build": "tsc && vite build",
     "test": "vitest run",
     "lint": "eslint src --ext ts,tsx"

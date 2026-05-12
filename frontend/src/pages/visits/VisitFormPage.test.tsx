@@ -148,5 +148,37 @@ describe("VisitFormPage", () => {
       expect(mockPatch).toHaveBeenCalledWith("/visits/14/", { status: "completed" });
     });
   });
+
+  it("save sends nested form_data.crf when CRF extension field changes", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: 20,
+        project_patient: 1,
+        visit_type: "T0",
+        status: "draft",
+        visit_date: null,
+        form_data: {
+          assessments: {},
+          computed_assessments: {},
+          crf: {},
+        },
+      },
+    });
+
+    const r = renderAt(20);
+
+    const platform = await screen.findByLabelText("平台账号/编号");
+    fireEvent.change(platform, { target: { value: "PID-99" } });
+
+    const saveBtn = r.container.querySelector('button[aria-label="保存"]');
+    expect(saveBtn).toBeTruthy();
+    fireEvent.click(saveBtn as Element);
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledTimes(1);
+    });
+    const [, body] = mockPatch.mock.calls[0] as [string, { form_data: { crf?: { adherence?: { platform_id?: string } } } }];
+    expect(body.form_data.crf?.adherence?.platform_id).toBe("PID-99");
+  });
 });
 

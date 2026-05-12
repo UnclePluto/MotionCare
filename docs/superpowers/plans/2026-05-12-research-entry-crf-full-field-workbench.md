@@ -1,5 +1,7 @@
 # 研究录入工作台 + CRF 全量字段（registry）实施计划
 
+执行记录（2026-05-12, cursor）：Task 12–15 已在分支 `feat/research-entry-crf-workbench` 落地；验证：`frontend` vitest / lint / build 与 `backend` pytest 通过；合并前请本地 `git commit`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: 使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务顺序实施。步骤使用 `- [ ]` 勾选追踪。
 
 **Goal:** 以仓库内唯一真源 `docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx` 为基准，建立 `registry` 并在前后端贯通校验与录入；新增侧栏「研究录入」与 `/research-entry` 访视工作列表；修复访视 `form_data` PATCH 仅合并 `assessments` 的缺陷；将 CRF 预览 `missing_fields` 改为与 registry 同源。
