@@ -10,6 +10,33 @@ from .models import VisitRecord
 
 logger = logging.getLogger(__name__)
 
+
+class VisitRecordListSerializer(serializers.ModelSerializer):
+    """列表用：嵌套患者/项目展示字段，不含 form_data。"""
+
+    patient_id = serializers.IntegerField(source="project_patient.patient_id", read_only=True)
+    patient_name = serializers.CharField(source="project_patient.patient.name", read_only=True)
+    patient_phone = serializers.CharField(source="project_patient.patient.phone", read_only=True)
+    project_id = serializers.IntegerField(source="project_patient.project_id", read_only=True)
+    project_name = serializers.CharField(source="project_patient.project.name", read_only=True)
+
+    class Meta:
+        model = VisitRecord
+        fields = [
+            "id",
+            "project_patient",
+            "visit_type",
+            "status",
+            "visit_date",
+            "patient_id",
+            "patient_name",
+            "patient_phone",
+            "project_id",
+            "project_name",
+        ]
+        read_only_fields = fields
+
+
 CLIENT_WRITABLE_FORM_DATA_KEYS = ("assessments", "crf")
 
 
