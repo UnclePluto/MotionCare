@@ -39,14 +39,12 @@ type StudyProject = { id: number; name: string };
 type ProjectPatientRow = {
   id: number;
   project: number;
+  patient: number;
   patient_name: string;
+  patient_phone: string;
+  group: number | null;
   group_name: string | null;
-  grouping_status: string;
-};
-
-const groupingStatusLabel: Record<string, string> = {
-  pending: "待确认",
-  confirmed: "已确认",
+  enrolled_at: string;
 };
 
 const genderLabel: Record<string, string> = {
@@ -247,11 +245,6 @@ export function PatientDetailPage() {
                 title: "分组",
                 dataIndex: "group_name",
                 render: (v: string | null) => v ?? "—",
-              },
-              {
-                title: "分组状态",
-                dataIndex: "grouping_status",
-                render: (v: string) => groupingStatusLabel[v] ?? v,
               },
               {
                 title: "操作",

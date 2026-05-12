@@ -1,18 +1,21 @@
+from collections import Counter
+
+from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import MethodNotAllowed, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
-from apps.studies.services.grouping import assign_groups
 from apps.studies.services.unbind_project_patient import unbind_project_patient
 from apps.visits.services import ensure_default_visits
 
 from .models import ProjectPatient, StudyGroup, StudyProject
 from .serializers import (
+    ConfirmGroupingSerializer,
     ProjectPatientSerializer,
     StudyGroupSerializer,
     StudyProjectSerializer,
@@ -38,113 +41,104 @@ class StudyProjectViewSet(ModelViewSet):
             raise ValidationError({"detail": "项目中仍有患者，无法删除。"})
         return super().destroy(request, *args, **kwargs)
 
-    @action(detail=True, methods=["post"], url_path="reset-pending")
-    @transaction.atomic
-    def reset_pending(self, request, pk=None):
-        project = self.get_object()
-        affected = ProjectPatient.objects.filter(
-            project=project,
-            grouping_status=ProjectPatient.GroupingStatus.PENDING,
-        ).update(group=None)
-        return Response({"affected": affected})
-
-    @action(detail=True, methods=["post"], url_path="randomize")
-    @transaction.atomic
-    def randomize(self, request, pk=None):
-        from apps.patients.models import Patient
-
-        project = self.get_object()
-        raw_pool = request.data.get("pool_patient_ids", [])
-        if not isinstance(raw_pool, list):
-            return Response({"detail": "pool_patient_ids 必须是列表"}, status=status.HTTP_400_BAD_REQUEST)
-        try:
-            pool_ids = [int(x) for x in raw_pool]
-        except (TypeError, ValueError):
-            return Response({"detail": "pool_patient_ids 含非法 id"}, status=status.HTTP_400_BAD_REQUEST)
-
-        groups_qs = StudyGroup.objects.filter(project=project, is_active=True).order_by("sort_order", "id")
-        if not groups_qs.exists():
-            return Response(
-                {"detail": "项目没有启用分组，不能随机分组"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if pool_ids:
-            existing_ids = set(Patient.objects.filter(pk__in=pool_ids).values_list("pk", flat=True))
-            missing = [pid for pid in pool_ids if pid not in existing_ids]
-            if missing:
-                return Response(
-                    {"detail": f"以下患者不存在: {sorted(missing)}"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        confirmed_patient_ids = set(
-            ProjectPatient.objects.filter(
-                project=project,
-                grouping_status=ProjectPatient.GroupingStatus.CONFIRMED,
-            ).values_list("patient_id", flat=True)
-        )
-        eligible_pool_ids = [pid for pid in pool_ids if pid not in confirmed_patient_ids]
-        for pid in eligible_pool_ids:
-            ProjectPatient.objects.get_or_create(
-                project=project,
-                patient_id=pid,
-                defaults={
-                    "created_by": request.user,
-                    "grouping_status": ProjectPatient.GroupingStatus.PENDING,
-                },
-            )
-
-        pending_pps = list(
-            ProjectPatient.objects.filter(
-                project=project,
-                grouping_status=ProjectPatient.GroupingStatus.PENDING,
-            ).select_for_update(of=("self",))
-        )
-        if not pending_pps:
-            return Response(
-                {"detail": "没有可参与随机的患者；请勾选患者池中的患者或保留至少一名未确认患者。"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        groups = [{"id": g.id, "ratio": g.target_ratio} for g in groups_qs]
-        patient_ids_for_random = [pp.patient_id for pp in pending_pps]
-        assignments_by_patient = assign_groups(
-            patient_ids=patient_ids_for_random,
-            groups=groups,
-            seed=request.data.get("seed"),
-        )
-
-        result_assignments: list[dict[str, int]] = []
-        for pp in pending_pps:
-            pp.group_id = assignments_by_patient.get(pp.patient_id)
-            pp.grouping_status = ProjectPatient.GroupingStatus.PENDING
-            pp.save(update_fields=["group", "grouping_status", "updated_at"])
-            ensure_default_visits(pp)
-            result_assignments.append({"project_patient_id": pp.id, "group_id": pp.group_id})
-
-        return Response({"assignments": result_assignments})
-
     @action(detail=True, methods=["post"], url_path="confirm-grouping")
     @transaction.atomic
     def confirm_grouping(self, request, pk=None):
+        from apps.patients.models import Patient
+
         project = self.get_object()
-        pending_qs = ProjectPatient.objects.filter(
-            project=project,
-            grouping_status=ProjectPatient.GroupingStatus.PENDING,
+        project = StudyProject.objects.select_for_update(of=("self",)).get(pk=project.pk)
+        serializer = ConfirmGroupingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        assignments = serializer.validated_data["assignments"]
+        patient_ids = [assignment["patient_id"] for assignment in assignments]
+        duplicate_patient_ids = sorted(
+            patient_id for patient_id, count in Counter(patient_ids).items() if count > 1
         )
-        if not pending_qs.exists():
+        if duplicate_patient_ids:
             return Response(
-                {"detail": "项目内没有可确认的患者。"},
+                {"detail": f"重复患者: {duplicate_patient_ids}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if pending_qs.filter(group__isnull=True).exists():
+
+        group_ids = [assignment["group_id"] for assignment in assignments]
+
+        existing_patient_ids = set(
+            Patient.objects.filter(pk__in=patient_ids).values_list("pk", flat=True)
+        )
+        missing_patient_ids = sorted(set(patient_ids) - existing_patient_ids)
+        if missing_patient_ids:
             return Response(
-                {"detail": "存在未分配分组的待确认患者，请先随机分组。"},
+                {"detail": f"以下患者不存在: {missing_patient_ids}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        confirmed = pending_qs.update(grouping_status=ProjectPatient.GroupingStatus.CONFIRMED)
-        return Response({"confirmed": confirmed})
+
+        groups = StudyGroup.objects.select_for_update(of=("self",)).filter(pk__in=group_ids)
+        groups_by_id = {group.id: group for group in groups}
+        missing_group_ids = sorted(set(group_ids) - set(groups_by_id))
+        if missing_group_ids:
+            return Response(
+                {"detail": f"以下分组不存在: {missing_group_ids}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        other_project_group_ids = sorted(
+            group_id for group_id, group in groups_by_id.items() if group.project_id != project.id
+        )
+        if other_project_group_ids:
+            return Response(
+                {"detail": f"分组不属于当前项目: {other_project_group_ids}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        inactive_group_ids = sorted(
+            group_id for group_id, group in groups_by_id.items() if not group.is_active
+        )
+        if inactive_group_ids:
+            return Response(
+                {"detail": f"分组已停用: {inactive_group_ids}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        enrolled_patient_ids = set(
+            ProjectPatient.objects.select_for_update(of=("self",))
+            .filter(project=project, patient_id__in=patient_ids)
+            .values_list("patient_id", flat=True)
+        )
+        if enrolled_patient_ids:
+            return Response(
+                {"detail": f"已确认入组: {sorted(enrolled_patient_ids)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        created = []
+        try:
+            for assignment in assignments:
+                project_patient = ProjectPatient.objects.create(
+                    project=project,
+                    patient_id=assignment["patient_id"],
+                    group_id=assignment["group_id"],
+                    created_by=request.user,
+                )
+                ensure_default_visits(project_patient)
+                created.append(project_patient)
+        except IntegrityError as exc:
+            raise ValidationError({"detail": "已确认入组，请刷新后重试。"}) from exc
+
+        return Response(
+            {
+                "confirmed": len(created),
+                "created": [
+                    {
+                        "project_patient_id": project_patient.id,
+                        "patient_id": project_patient.patient_id,
+                        "group_id": project_patient.group_id,
+                    }
+                    for project_patient in created
+                ],
+            }
+        )
 
 
 class StudyGroupViewSet(ModelViewSet):
@@ -178,14 +172,14 @@ class ProjectPatientViewSet(ModelViewSet):
             qs = qs.filter(patient_id=patient_id)
         return qs
 
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+    def create(self, request, *args, **kwargs):
+        raise MethodNotAllowed("POST", detail="请通过项目确认分组接口创建入组关系。")
 
-    def perform_update(self, serializer):
-        instance: ProjectPatient = self.get_object()
-        if instance.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED:
-            serializer.validated_data.pop("group", None)
-        return super().perform_update(serializer)
+    def update(self, request, *args, **kwargs):
+        raise MethodNotAllowed("PUT", detail="入组关系不可直接修改，请先解绑后重新确认入组。")
+
+    def partial_update(self, request, *args, **kwargs):
+        raise MethodNotAllowed("PATCH", detail="入组关系不可直接修改，请先解绑后重新确认入组。")
 
     @action(detail=True, methods=["post"], url_path="unbind")
     @transaction.atomic
@@ -197,4 +191,3 @@ class ProjectPatientViewSet(ModelViewSet):
                 "detail": "已从本项目移除；关联处方已终止，CRF 导出记录已清理；访视等业务数据已随入组关系解除。"
             }
         )
-

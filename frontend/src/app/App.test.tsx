@@ -79,21 +79,19 @@ describe("App", () => {
                 id: 9001,
                 project: 1,
                 patient: 201,
-                patient_name: "已确认患者",
+                patient_name: "项目患者甲",
                 patient_phone: "13800000201",
                 group: 10,
                 group_name: "试验组",
-                grouping_status: "confirmed",
               },
               {
                 id: 9002,
                 project: 1,
                 patient: 202,
-                patient_name: "待确认患者",
+                patient_name: "项目患者乙",
                 patient_phone: "13800000202",
                 group: 11,
                 group_name: "对照组",
-                grouping_status: "pending",
               },
             ],
           });
@@ -113,7 +111,7 @@ describe("App", () => {
             },
             {
               id: 201,
-              name: "已确认患者",
+              name: "项目患者甲",
               gender: "male",
               age: 60,
               phone: "13800000201",
@@ -122,7 +120,7 @@ describe("App", () => {
             },
             {
               id: 202,
-              name: "待确认患者",
+              name: "项目患者乙",
               gender: "female",
               age: 65,
               phone: "13800000202",
@@ -255,9 +253,9 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("研究项目 A").length).toBeGreaterThan(0);
-      expect(screen.getByText(/患者池/)).toBeInTheDocument();
-      expect(screen.getAllByText("已确认患者").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("待确认患者").length).toBeGreaterThan(0);
+      expect(screen.getByText(/全量患者/)).toBeInTheDocument();
+      expect(screen.getAllByText("项目患者甲").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("项目患者乙").length).toBeGreaterThan(0);
       expect(screen.getAllByText(/张三/).length).toBeGreaterThan(0);
     });
   });

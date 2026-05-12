@@ -35,6 +35,15 @@ class StudyGroupSerializer(serializers.ModelSerializer):
         read_only_fields = ["id"]
 
 
+class ConfirmGroupingAssignmentSerializer(serializers.Serializer):
+    patient_id = serializers.IntegerField(min_value=1)
+    group_id = serializers.IntegerField(min_value=1)
+
+
+class ConfirmGroupingSerializer(serializers.Serializer):
+    assignments = ConfirmGroupingAssignmentSerializer(many=True, allow_empty=False)
+
+
 class ProjectPatientSerializer(serializers.ModelSerializer):
     patient_name = serializers.CharField(source="patient.name", read_only=True)
     patient_phone = serializers.CharField(source="patient.phone", read_only=True)
@@ -51,10 +60,8 @@ class ProjectPatientSerializer(serializers.ModelSerializer):
             "group",
             "group_name",
             "enrolled_at",
-            "grouping_status",
         ]
         read_only_fields = ["id", "enrolled_at", "patient_name", "patient_phone", "group_name"]
 
     def get_group_name(self, obj: ProjectPatient) -> str | None:
         return obj.group.name if obj.group_id else None
-

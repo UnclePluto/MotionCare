@@ -1,15 +1,3 @@
-import { HolderOutlined } from "@ant-design/icons";
-import {
-  DndContext,
-  type DragEndEvent,
-  PointerSensor,
-  closestCorners,
-  useDraggable,
-  useDroppable,
-  useSensor,
-  useSensors,
-} from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
@@ -21,13 +9,12 @@ import {
   Typography,
   message,
 } from "antd";
-import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { DestructiveActionModal } from "../components/DestructiveActionModal";
-import { ratiosToTargetRatios, targetRatiosToDisplayPercents } from "./groupingBoardUtils";
+import { assignPatientsToGroups, ratiosToTargetRatios, targetRatiosToDisplayPercents } from "./groupingBoardUtils";
 
 type PatientOption = { id: number; name: string; phone: string; gender: string };
 type StudyGroupRow = {
@@ -43,8 +30,8 @@ type ProjectPatientRow = {
   patient_name: string;
   patient_phone: string;
   group: number | null;
-  grouping_status: string;
 };
+type LocalAssignmentRow = { patientId: number; groupId: number };
 
 type Props = {
   projectId: number;
@@ -61,24 +48,7 @@ function phoneTail(phone: string): string {
   return d.length <= 4 ? d : d.slice(-4);
 }
 
-function DroppableGroupBody({ groupId, children }: { groupId: number; children: ReactNode }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `col-${groupId}` });
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        minHeight: 80,
-        borderRadius: 6,
-        padding: 4,
-        background: isOver ? "rgba(22, 119, 255, 0.06)" : undefined,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function DraggablePpCard({
+function ConfirmedPatientCard({
   row,
   patientById,
   onRequestUnbind,
@@ -87,47 +57,59 @@ function DraggablePpCard({
   patientById: Record<number, PatientOption>;
   onRequestUnbind: (row: ProjectPatientRow) => void;
 }) {
-  const confirmed = row.grouping_status === "confirmed";
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: `pp-${row.id}`,
-    disabled: confirmed,
-  });
-  const style: CSSProperties = {
-    transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.75 : 1,
-    marginBottom: 8,
-  };
   const p = patientById[row.patient];
   return (
-    <div ref={setNodeRef} style={style}>
-      <Card size="small" style={{ opacity: confirmed ? 0.6 : 1 }}>
+    <div style={{ marginBottom: 8 }}>
+      <Card size="small" style={{ opacity: 0.6 }}>
         <Space direction="vertical" size={4} style={{ width: "100%" }}>
           <Space align="start" style={{ width: "100%", justifyContent: "space-between" }}>
             <Typography.Text strong>{row.patient_name}</Typography.Text>
-            <Space>
-              <Tag color={confirmed ? "default" : "blue"}>
-                {confirmed ? "已确认" : "待确认"}
-              </Tag>
-              <Button
-                type="text"
-                size="small"
-                icon={<HolderOutlined />}
-                disabled={confirmed}
-                {...listeners}
-                {...attributes}
-                aria-label="拖拽调整分组"
-              />
-            </Space>
+            <Tag>已确认</Tag>
           </Space>
           <Typography.Text type="secondary">
             {(p && genderLabel[p.gender]) ?? "—"} · 尾号 {phoneTail(row.patient_phone)}
           </Typography.Text>
           <Link to={`/patients/${row.patient}`}>患者详情</Link>
-          {confirmed && (
-            <Button type="link" danger size="small" style={{ padding: 0 }} onClick={() => onRequestUnbind(row)}>
-              从本项目移除
-            </Button>
-          )}
+          <Button type="link" danger size="small" style={{ padding: 0 }} onClick={() => onRequestUnbind(row)}>
+            从本项目移除
+          </Button>
+        </Space>
+      </Card>
+    </div>
+  );
+}
+
+function LocalAssignmentCard({
+  assignment,
+  patientById,
+  onRemove,
+}: {
+  assignment: LocalAssignmentRow;
+  patientById: Record<number, PatientOption>;
+  onRemove: (patientId: number) => void;
+}) {
+  const p = patientById[assignment.patientId];
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <Card size="small">
+        <Space direction="vertical" size={4} style={{ width: "100%" }}>
+          <Space align="start" style={{ width: "100%", justifyContent: "space-between" }}>
+            <Typography.Text strong>{p?.name ?? `患者 ${assignment.patientId}`}</Typography.Text>
+            <Tag color="blue">本次随机</Tag>
+          </Space>
+          <Typography.Text type="secondary">
+            {(p && genderLabel[p.gender]) ?? "—"} · 尾号 {phoneTail(p?.phone ?? "")}
+          </Typography.Text>
+          <Link to={`/patients/${assignment.patientId}`}>患者详情</Link>
+          <Button
+            type="link"
+            danger
+            size="small"
+            style={{ padding: 0 }}
+            onClick={() => onRemove(assignment.patientId)}
+          >
+            从本次结果移除
+          </Button>
         </Space>
       </Card>
     </div>
@@ -136,12 +118,16 @@ function DraggablePpCard({
 
 export function ProjectGroupingBoard({ projectId }: Props) {
   const qc = useQueryClient();
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const [poolSelected, setPoolSelected] = useState<number[]>([]);
-  const [draftGroupByPp, setDraftGroupByPp] = useState<Record<number, number>>({});
+  const [localAssignments, setLocalAssignments] = useState<LocalAssignmentRow[]>([]);
   const [percentByGroupId, setPercentByGroupId] = useState<Record<number, number>>({});
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<StudyGroupRow | null>(null);
   const [unbindTarget, setUnbindTarget] = useState<ProjectPatientRow | null>(null);
+
+  useEffect(() => {
+    setLocalAssignments([]);
+    setPoolSelected([]);
+  }, [projectId]);
 
   const { data: patients } = useQuery({
     queryKey: ["patients"],
@@ -171,32 +157,14 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     },
   });
 
-  const columnSource = useMemo(
-    () => (projectPatients ?? []).filter((r) => r.group != null),
-    [projectPatients],
-  );
-
-  useEffect(() => {
-    const next: Record<number, number> = {};
-    for (const row of projectPatients ?? []) {
-      if (row.group != null) next[row.id] = row.group;
-    }
-    setDraftGroupByPp(next);
-  }, [projectPatients]);
-
   const patientById = useMemo(
     () => Object.fromEntries((patients ?? []).map((p) => [p.id, p])) as Record<number, PatientOption>,
     [patients],
   );
 
-  const enrolledPatientIds = useMemo(
+  const confirmedPatientIds = useMemo(
     () => new Set((projectPatients ?? []).map((pp) => pp.patient)),
     [projectPatients],
-  );
-
-  const poolPatients = useMemo(
-    () => (patients ?? []).filter((p) => !enrolledPatientIds.has(p.id)),
-    [patients, enrolledPatientIds],
   );
 
   const activeGroups = useMemo(
@@ -204,10 +172,16 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     [groups],
   );
 
-  const hasPending = useMemo(
-    () => (projectPatients ?? []).some((r) => r.grouping_status === "pending"),
-    [projectPatients],
-  );
+  const visibleGroups = useMemo(() => {
+    const referencedGroupIds = new Set(
+      (projectPatients ?? [])
+        .map((row) => row.group)
+        .filter((groupId): groupId is number => groupId != null),
+    );
+    return [...(groups ?? [])]
+      .filter((g) => g.is_active || referencedGroupIds.has(g.id))
+      .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+  }, [groups, projectPatients]);
 
   useEffect(() => {
     if (!activeGroups.length) return;
@@ -230,54 +204,6 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     });
   }, [activeGroups]);
 
-  const randomizeMutation = useMutation({
-    mutationFn: async () => {
-      const resp = await apiClient.post<{
-        assignments: { project_patient_id: number; group_id: number }[];
-      }>(`/studies/projects/${projectId}/randomize/`, {
-        pool_patient_ids: poolSelected,
-        seed: Date.now(),
-      });
-      return resp.data;
-    },
-    onSuccess: async (data) => {
-      message.success("已生成随机分组草案");
-      const map: Record<number, number> = {};
-      for (const a of data.assignments) {
-        map[a.project_patient_id] = a.group_id;
-      }
-      setDraftGroupByPp((prev) => ({ ...prev, ...map }));
-      setPoolSelected([]);
-      await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
-      await qc.invalidateQueries({ queryKey: ["patients"] });
-    },
-    onError: (err: { response?: { data?: { detail?: string } } }) => {
-      message.error(err.response?.data?.detail ?? "随机分组失败，请检查分组配置与勾选患者。");
-    },
-  });
-
-  const resetPendingMutation = useMutation({
-    mutationFn: async () => {
-      await apiClient.post(`/studies/projects/${projectId}/reset-pending/`);
-    },
-    onSuccess: async () => {
-      message.success("已撤销当前所有未确认分组");
-      setDraftGroupByPp((prev) => {
-        const next: Record<number, number> = {};
-        for (const row of projectPatients ?? []) {
-          if (row.grouping_status === "confirmed" && row.group != null) {
-            next[row.id] = row.group;
-          }
-        }
-        return { ...prev, ...next };
-      });
-      await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
-    },
-    onError: (err: { response?: { data?: { detail?: string } } }) => {
-      message.error(err.response?.data?.detail ?? "撤销失败");
-    },
-  });
-
   const unbindMutation = useMutation({
     mutationFn: async (ppId: number) => {
       await apiClient.post(`/studies/project-patients/${ppId}/unbind/`);
@@ -296,15 +222,25 @@ export function ProjectGroupingBoard({ projectId }: Props) {
 
   const confirmGroupingMutation = useMutation({
     mutationFn: async () => {
-      await apiClient.post(`/studies/projects/${projectId}/confirm-grouping/`);
+      await apiClient.post(`/studies/projects/${projectId}/confirm-grouping/`, {
+        assignments: localAssignments.map((a) => ({ patient_id: a.patientId, group_id: a.groupId })),
+      });
     },
     onSuccess: async () => {
       message.success("分组已确认");
+      setLocalAssignments([]);
+      setPoolSelected([]);
       await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
       await qc.invalidateQueries({ queryKey: ["patients"] });
+      await qc.invalidateQueries({ queryKey: ["study-projects"] });
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
       message.error(err.response?.data?.detail ?? "确认失败");
+      setLocalAssignments([]);
+      setPoolSelected([]);
+      void qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
+      void qc.invalidateQueries({ queryKey: ["study-groups", projectId] });
+      void qc.invalidateQueries({ queryKey: ["patients"] });
     },
   });
 
@@ -335,18 +271,6 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     },
   });
 
-  const patchPpGroupMutation = useMutation({
-    mutationFn: async ({ ppId, groupId }: { ppId: number; groupId: number }) => {
-      await apiClient.patch(`/studies/project-patients/${ppId}/`, { group: groupId });
-    },
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
-    },
-    onError: (err: { response?: { data?: { detail?: string } } }) => {
-      message.error(err.response?.data?.detail ?? "更新分组失败");
-    },
-  });
-
   const applyPercents = () => {
     const ordered = activeGroups;
     const pcts = ordered.map((g) => percentByGroupId[g.id] ?? 0);
@@ -368,38 +292,24 @@ export function ProjectGroupingBoard({ projectId }: Props) {
   };
 
   const countPatientsInGroup = (groupId: number) =>
-    (columnSource ?? []).filter((row) => (draftGroupByPp[row.id] ?? row.group) === groupId).length;
+    (projectPatients ?? []).filter((row) => row.group === groupId).length +
+    localAssignments.filter((a) => a.groupId === groupId).length;
 
-  const onDraftGroupChange = (ppId: number, groupId: number) => {
-    setDraftGroupByPp((prev) => ({ ...prev, [ppId]: groupId }));
-    patchPpGroupMutation.mutate({ ppId, groupId });
-  };
-
-  const handleDragEnd = (e: DragEndEvent) => {
-    const { active, over } = e;
-    if (!over) return;
-    const aid = String(active.id);
-    if (!aid.startsWith("pp-")) return;
-    const ppId = Number(aid.slice(3));
-    const row = columnSource?.find((r) => r.id === ppId);
-    if (!row || row.grouping_status === "confirmed") return;
-
-    let targetGroupId: number | null = null;
-    const oid = String(over.id);
-    if (oid.startsWith("col-")) {
-      targetGroupId = Number(oid.slice(4));
-    } else if (oid.startsWith("pp-")) {
-      const otherId = Number(oid.slice(3));
-      const other = columnSource?.find((r) => r.id === otherId);
-      if (other) {
-        targetGroupId = draftGroupByPp[other.id] ?? other.group ?? null;
-      }
+  const runLocalRandomize = () => {
+    const eligibleIds = poolSelected.filter((id) => !confirmedPatientIds.has(id));
+    if (!eligibleIds.length) {
+      message.warning("请先选择至少一名未确认入组患者。");
+      return;
     }
-    if (targetGroupId == null) return;
-    const current = draftGroupByPp[row.id] ?? row.group ?? undefined;
-    if (current === targetGroupId) return;
-    onDraftGroupChange(ppId, targetGroupId);
+    try {
+      setLocalAssignments(assignPatientsToGroups(eligibleIds, activeGroups, Date.now()));
+      message.success("已生成本次随机分组");
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "随机分组失败");
+    }
   };
+
+  const hasEligibleSelection = poolSelected.some((id) => !confirmedPatientIds.has(id));
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
@@ -408,22 +318,12 @@ export function ProjectGroupingBoard({ projectId }: Props) {
           <Button size="small" onClick={applyPercents} loading={patchGroupRatioMutation.isPending}>
             应用占比到权重
           </Button>
-          {hasPending ? (
-            <Typography.Text type="secondary">当前存在未确认分组，可拖拽调整后「确认分组」或「撤销未确认」。</Typography.Text>
-          ) : (
-            <Typography.Text type="secondary">所有分组均已确认；如需新增可在患者池中勾选患者并「随机分组」。</Typography.Text>
-          )}
-          <Button
-            danger
-            disabled={!hasPending}
-            loading={resetPendingMutation.isPending}
-            onClick={() => resetPendingMutation.mutate()}
-          >
-            撤销未确认
-          </Button>
+          <Typography.Text type="secondary">
+            当前随机结果仅保存在本页面；刷新或切换项目会丢弃，点击「确认分组」后才正式入组。
+          </Typography.Text>
           <Button
             type="primary"
-            disabled={!hasPending}
+            disabled={!localAssignments.length}
             loading={confirmGroupingMutation.isPending}
             onClick={() => confirmGroupingMutation.mutate()}
           >
@@ -432,89 +332,110 @@ export function ProjectGroupingBoard({ projectId }: Props) {
         </Space>
       </Card>
 
-      <Card title="患者池（全部患者）" size="small">
+      <Card title={patients ? "全量患者" : "加载患者"} size="small">
         <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          勾选下方患者后点击「随机分组」即可参与本项目的随机；项目内未确认的患者也会一同重新随机。已分组到本项目的患者不出现在池中（删除后会重新出现）。
+          勾选未确认入组患者后点击「随机分组」会生成本次页面内临时结果；确认前不会写入后端。
         </Typography.Paragraph>
-        <Checkbox.Group
-          style={{ display: "flex", flexWrap: "wrap", gap: 8 }}
-          value={poolSelected}
-          onChange={(v) => setPoolSelected(v as number[])}
-        >
-          {poolPatients.map((p) => (
-            <Checkbox key={p.id} value={p.id}>
+        <Space wrap size={[8, 8]}>
+          {(patients ?? []).map((p) => (
+            <Checkbox
+              key={p.id}
+              checked={poolSelected.includes(p.id)}
+              disabled={confirmedPatientIds.has(p.id)}
+              aria-label={`选择患者 ${p.name}`}
+              onChange={(e) =>
+                setPoolSelected((prev) =>
+                  e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id),
+                )
+              }
+            >
               <Tag>
                 {p.name} · {genderLabel[p.gender] ?? p.gender} · 尾号 {phoneTail(p.phone)}
+                {confirmedPatientIds.has(p.id) ? " · 已确认" : ""}
               </Tag>
             </Checkbox>
           ))}
-        </Checkbox.Group>
+        </Space>
         <Button
           type="primary"
           style={{ marginTop: 12 }}
-          disabled={(!poolSelected.length && !hasPending) || !activeGroups.length}
-          loading={randomizeMutation.isPending}
-          onClick={() => randomizeMutation.mutate()}
+          disabled={!hasEligibleSelection || !activeGroups.length}
+          onClick={runLocalRandomize}
         >
           随机分组
         </Button>
       </Card>
 
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
-        <div style={{ display: "flex", gap: 12, overflowX: "auto", alignItems: "flex-start" }}>
-          {activeGroups.map((g) => (
-            <Card
-              key={g.id}
-              size="small"
-              style={{ minWidth: 240, flex: "0 0 auto" }}
-              title={
-                <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                  <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                    <Typography.Text strong>{g.name}</Typography.Text>
-                    <Button
-                      type="text"
-                      danger
-                      size="small"
-                      onClick={() => openDeleteGroupModal(g)}
-                      loading={deleteGroupMutation.isPending}
-                    >
-                      −
-                    </Button>
-                  </Space>
+      <div style={{ display: "flex", gap: 12, overflowX: "auto", alignItems: "flex-start" }}>
+        {visibleGroups.map((g) => (
+          <Card
+            key={g.id}
+            size="small"
+            style={{ minWidth: 240, flex: "0 0 auto" }}
+            title={
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                <Space style={{ width: "100%", justifyContent: "space-between" }}>
                   <Space>
-                    <Typography.Text type="secondary">占比 %</Typography.Text>
-                    <InputNumber
-                      min={0}
-                      max={100}
-                      size="small"
-                      value={percentByGroupId[g.id]}
-                      onChange={(v) =>
-                        setPercentByGroupId((prev) => ({
-                          ...prev,
-                          [g.id]: typeof v === "number" ? v : 0,
-                        }))
-                      }
-                    />
+                    <Typography.Text strong>{g.name}</Typography.Text>
+                    {!g.is_active ? <Tag>已停用</Tag> : null}
                   </Space>
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    onClick={() => openDeleteGroupModal(g)}
+                    loading={deleteGroupMutation.isPending}
+                    disabled={!g.is_active}
+                  >
+                    −
+                  </Button>
                 </Space>
-              }
-            >
-              <DroppableGroupBody groupId={g.id}>
-                {(columnSource ?? [])
-                  .filter((row) => (draftGroupByPp[row.id] ?? row.group) === g.id)
-                  .map((row) => (
-                    <DraggablePpCard
-                      key={row.id}
-                      row={row}
-                      patientById={patientById}
-                      onRequestUnbind={(r) => setUnbindTarget(r)}
-                    />
-                  ))}
-              </DroppableGroupBody>
-            </Card>
-          ))}
-        </div>
-      </DndContext>
+                <Space>
+                  <Typography.Text type="secondary">占比 %</Typography.Text>
+                  <InputNumber
+                    min={0}
+                    max={100}
+                    size="small"
+                    value={percentByGroupId[g.id]}
+                    disabled={!g.is_active}
+                    onChange={(v) =>
+                      setPercentByGroupId((prev) => ({
+                        ...prev,
+                        [g.id]: typeof v === "number" ? v : 0,
+                      }))
+                    }
+                  />
+                </Space>
+              </Space>
+            }
+          >
+            <div style={{ minHeight: 80, borderRadius: 6, padding: 4 }}>
+              {(projectPatients ?? [])
+                .filter((row) => row.group === g.id)
+                .map((row) => (
+                  <ConfirmedPatientCard
+                    key={row.id}
+                    row={row}
+                    patientById={patientById}
+                    onRequestUnbind={(r) => setUnbindTarget(r)}
+                  />
+                ))}
+              {localAssignments
+                .filter((a) => a.groupId === g.id)
+                .map((assignment) => (
+                  <LocalAssignmentCard
+                    key={assignment.patientId}
+                    assignment={assignment}
+                    patientById={patientById}
+                    onRemove={(patientId) =>
+                      setLocalAssignments((prev) => prev.filter((a) => a.patientId !== patientId))
+                    }
+                  />
+                ))}
+            </div>
+          </Card>
+        ))}
+      </div>
 
       <DestructiveActionModal
         open={deleteGroupTarget != null}
@@ -544,7 +465,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
           "将删除该患者在本项目下的入组关系（ProjectPatient），且不可从本入口恢复。",
           "若已存在与本项目、该入组关系相关的 CRF 访视或导出记录，将按服务端策略作废或清理；关联处方将标记为已终止。",
           "医生端默认列表将不再展示上述已终止处方。",
-          "移除后该患者会重新出现在「患者池」，需要时可勾选再次参与随机。",
+          "移除后该患者会重新出现在「全量患者」，需要时可勾选再次参与随机。",
         ]}
         confirmLoading={unbindMutation.isPending}
         onCancel={() => setUnbindTarget(null)}

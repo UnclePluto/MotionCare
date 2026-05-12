@@ -174,7 +174,7 @@ export function ProjectListPage() {
                 typeof deleteTarget.patient_count === "number"
                   ? `当前列表显示该项目下共有 ${deleteTarget.patient_count} 名入组患者；若有任意入组关系，系统将拒绝删除。`
                   : "若仍存在患者入组关系，系统将拒绝删除。",
-                "若存在尚未确认的分组草案（待确认工作集），系统将拒绝删除；请先在项目详情看板处理。",
+                "请先在项目详情分组看板移除已确认入组患者，再删除项目。",
               ]
             : []
         }

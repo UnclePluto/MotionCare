@@ -35,10 +35,6 @@ class StudyGroup(UserStampedModel):
 
 
 class ProjectPatient(UserStampedModel):
-    class GroupingStatus(models.TextChoices):
-        PENDING = "pending", "待确认"
-        CONFIRMED = "confirmed", "已确认"
-
     project = models.ForeignKey(
         StudyProject, on_delete=models.CASCADE, related_name="project_patients"
     )
@@ -47,13 +43,6 @@ class ProjectPatient(UserStampedModel):
     )
     group = models.ForeignKey(StudyGroup, null=True, blank=True, on_delete=models.PROTECT)
     enrolled_at = models.DateTimeField("入组时间", auto_now_add=True)
-    grouping_status = models.CharField(
-        "分组状态",
-        max_length=20,
-        choices=GroupingStatus.choices,
-        default=GroupingStatus.PENDING,
-    )
 
     class Meta:
         unique_together = [("project", "patient")]
-

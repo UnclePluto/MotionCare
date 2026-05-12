@@ -26,9 +26,7 @@ def test_enroll_projects_confirms_into_chosen_group(doctor, patient, project):
     pp1 = ProjectPatient.objects.get(project=project, patient=patient)
     pp2 = ProjectPatient.objects.get(project=p2, patient=patient)
     assert pp1.group_id == g1.id
-    assert pp1.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
     assert pp2.group_id == g2.id
-    assert pp2.grouping_status == ProjectPatient.GroupingStatus.CONFIRMED
 
 
 @pytest.mark.django_db
@@ -57,6 +55,28 @@ def test_enroll_projects_rejects_group_not_in_project(doctor, patient, project):
         format="json",
     )
     assert r.status_code == 400
+
+
+@pytest.mark.django_db
+def test_enroll_projects_rejects_inactive_group(doctor, patient, project):
+    group = StudyGroup.objects.create(
+        project=project,
+        name="停用组",
+        target_ratio=1,
+        is_active=False,
+    )
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    r = client.post(
+        f"/api/patients/{patient.id}/enroll-projects/",
+        {"enrollments": [{"project_id": project.id, "group_id": group.id}]},
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "分组已停用" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
 
 
 @pytest.mark.django_db
