@@ -2,7 +2,7 @@
 > 日期：2026-05-12  
 > 范围：患者 CRF 基线录入页（`/patients/:id/crf-baseline`）的预填、单选控件、「其他」备注、响应式双列、章节标题展示；**不含**访视表单内 CRF 的同类改造。  
 > 关联：`docs/superpowers/specs/2026-05-12-research-entry-crf-full-field-workbench-design.md`、`specs/patient-rehab-system/crf/registry.v1.json`  
-> 实施基线 commit：be8bfd6+（含本 plan 改动；正式入库后请改为实际提交短 SHA）
+> 实施基线 commit：e37d8a4
 
 ---
 
