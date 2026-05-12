@@ -102,3 +102,36 @@
 ## 9. 后续步骤
 
 实施前由本 spec 派生 `docs/superpowers/plans/` 下 implementation plan（`writing-plans` 工作流）；实施完成后在本文件头部补充「实施基线 commit」短 SHA。
+
+## 10. 基线 docx 强一致布局（registry 契约）
+
+本节约定 `registry.v1.json`（或由 `scripts/build_crf_registry_v1.py` 再生成之等价物）根级 **`baseline_section_order`** 与 **`baseline_table_layout`**，使基线页 `/patients/:patientId/crf-baseline` 的**节顺序与 Word 修订稿表格顺序一致**，并以 **HTML `<table>` + 布局元数据双轨**还原 docx 行、列与合并单元格。字段语义仍以 `fields[]` 为真源；布局只描述**排版与占位**，不新增校验路径替代 `fields` 遍历。
+
+### 10.1 `baseline_section_order`
+
+- **类型**：`string[]`，元素为基线涉及的 **`table_ref`**（与 `fields[].table_ref` 同一套字符串，如 `"#T8"`）。
+- **顺序（固定）**：须与修订稿中表格**出现顺序**一致，显式为：
+
+  `"#T0"` → `"#T8"` → `"#T9"` → `"#T10"` → `"#T11"` → `"#T12"`。
+
+- **禁止**：对 `table_ref` 使用 **`localeCompare`、字典序 `sort()`、或其它基于字符串排序** 来推导节顺序。原因：默认字符串比较下 `"#T10"` 会排在 `"#T8"` 之前，与修订稿物理顺序不符；**唯一允许**的顺序来源是上述**显式数组**（或与之逐字等价、由生成脚本写死的常量），前端/工具链不得「自动排序」替代。
+
+### 10.2 `baseline_table_layout`
+
+- **类型**：`Record<table_ref, { rows: BaselineLayoutRow[] }>`，其中 `BaselineLayoutRow = { cells: BaselineLayoutCell[] }`。
+- **分块**：每个键为单个 `table_ref`（如 `"#T8"`），对应修订稿中该表的一块布局。
+- **`rows[]`**：`rows` 中**每一项对应 docx 该表中的一行**（自上而下与修订稿一致）。
+- **`cells[]`**：每一行内 **`cells` 顺序为从左到右**，与 Word 表格列顺序一致。
+- **`field_id`**：若单元格承载 registry 字段，则填写 **`fields[]` 中已有的 `field_id`**，且须与 **`scripts/build_crf_registry_v1.py`** 中 `field(...)` 的第一个参数（`field_id`）**逐字一致**；布局中出现的 `field_id` 须在 `fields` 中存在，避免手改 JSON 与脚本生成漂移。
+- **`blank: true`**：表示该单元格**仅占位**（如视觉上空格、合并表结构），**不绑定**任何 `field_id`，不参与字段录入；不得用虚构 `field_id` 表示空白。
+- **`colspan` / `rowspan`**：当且仅当 Word 中该格为**横向/纵向合并单元格**时填写非缺省值（缺省语义为 `1`）；前端渲染为 **`<td colSpan={colspan} rowSpan={rowspan}>`**（React 中 DOM 属性名 `colSpan`、`rowSpan`），与浏览器表格模型一致。
+- **宽字段**：若某 docx 行在视觉上为「单项目占满行宽」，可通过 **`colspan`** 或「第二列 `blank: true`」等方式与修订稿视觉对齐；具体取值以 `_docx_table_dump.txt` 与修订稿对照为准，但须在生成脚本中**显式写出**，不得依赖排序推断。
+
+### 10.3 B 类日期（单日 `patient_baseline.*`）
+
+- 凡 **label 与 docx 明确为「年/月/日」「日期」等单日语义**，且 **`storage` 落在 `patient_baseline.*` 并表示单个日历日** 的字段，registry 中 **`widget` 必须为 `"date"`**。
+- **取值格式**：`YYYY-MM-DD`（与现有 `dm_birth_date` 等一致）；前端使用 **DatePicker**（或等价日期控件），不得用纯文本框录入非结构化日期字符串作为主路径。
+
+### 10.4 访视（范围外重申）
+
+- **访视** CRF 表单（`/visits/:visitId` 等）**不在本期**引入 `baseline_section_order` / `baseline_table_layout` 或同类「docx 强一致表格」改造；本节契约**仅约束基线**相关 `table_ref` 与基线页渲染。访视侧继续沿用既有 registry 渲染与布局策略，直至单独 spec 约定。
