@@ -151,3 +151,22 @@ def test_put_baseline_does_not_clear_unspecified_fields(doctor, patient):
     assert get_resp.data["subject_id"] == "SUBJ-002"
     assert get_resp.data["demographics"] == {"education_years": 16}
     assert get_resp.data["baseline_medications"] == {"notes": "ibuprofen"}
+
+
+@pytest.mark.django_db
+def test_patch_patient_baseline_invalid_gender_returns_400(doctor, patient):
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    client.get(f"/api/patients/{patient.id}/baseline/")
+    resp = client.patch(
+        f"/api/patients/{patient.id}/baseline/",
+        data={"demographics": {"gender": "not_an_option"}},
+        format="json",
+    )
+
+    assert resp.status_code == 400
+    assert "demographics.gender" in resp.data
+    detail = resp.data["demographics.gender"]
+    assert isinstance(detail, (list, str))
+    assert "不在可选项" in (detail[0] if isinstance(detail, list) else detail)

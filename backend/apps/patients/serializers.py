@@ -2,7 +2,21 @@ import datetime
 
 from rest_framework import serializers
 
+from apps.crf.registry_validate import validate_patient_baseline_payload
+
 from .models import Patient, PatientBaseline
+
+_BASELINE_REGISTRY_FIELD_NAMES = frozenset(
+    {
+        "subject_id",
+        "name_initials",
+        "demographics",
+        "surgery_allergy",
+        "comorbidities",
+        "lifestyle",
+        "baseline_medications",
+    }
+)
 
 
 class EnrollmentItemSerializer(serializers.Serializer):
@@ -72,3 +86,13 @@ class PatientBaselineSerializer(serializers.ModelSerializer):
             "baseline_medications",
         ]
         read_only_fields = ["id", "patient"]
+
+    def validate(self, attrs: dict) -> dict:
+        attrs = super().validate(attrs)
+        payload = {k: attrs[k] for k in attrs if k in _BASELINE_REGISTRY_FIELD_NAMES}
+        if not payload:
+            return attrs
+        errors = validate_patient_baseline_payload(payload)
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
