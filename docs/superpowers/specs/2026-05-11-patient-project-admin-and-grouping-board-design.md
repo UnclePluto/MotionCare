@@ -1,5 +1,7 @@
 # 患者档案、研究项目与分组看板（管理端）设计
 
+> 2026-05-12 更新：分组随机与绑定语义以 `docs/superpowers/specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` 为准；本文中 pending、草案或池过滤相关描述已过时。
+
 日期：2026-05-11  
 范围：MotionCare 管理端（Django REST + React/Ant Design），聚焦患者域、研究项目列表/详情、分组看板与**分组确认**流程的交互与规则（**产品侧不暴露「批次」概念**，见下文「分组与随机」）。  
 **已选交付策略**：纵向按域切片（患者 → 项目列表 → 项目详情看板），看板切片启动前对关键接口做一轮轻量契约对齐。
