@@ -240,6 +240,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
       setPoolSelected([]);
       void qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
       void qc.invalidateQueries({ queryKey: ["study-groups", projectId] });
+      void qc.invalidateQueries({ queryKey: ["patients"] });
     },
   });
 

@@ -175,12 +175,11 @@ class ProjectPatientViewSet(ModelViewSet):
     def create(self, request, *args, **kwargs):
         raise MethodNotAllowed("POST", detail="请通过项目确认分组接口创建入组关系。")
 
-    def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+    def update(self, request, *args, **kwargs):
+        raise MethodNotAllowed("PUT", detail="入组关系不可直接修改，请先解绑后重新确认入组。")
 
-    def perform_update(self, serializer):
-        serializer.validated_data.pop("group", None)
-        return super().perform_update(serializer)
+    def partial_update(self, request, *args, **kwargs):
+        raise MethodNotAllowed("PATCH", detail="入组关系不可直接修改，请先解绑后重新确认入组。")
 
     @action(detail=True, methods=["post"], url_path="unbind")
     @transaction.atomic

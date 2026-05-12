@@ -121,9 +121,10 @@ def test_project_patient_direct_create_is_rejected(doctor, project, patient):
 
 
 @pytest.mark.django_db
-def test_project_patient_patch_cannot_change_group(doctor, project, patient):
+def test_project_patient_update_is_rejected(doctor, project, patient):
     original_group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
     requested_group = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
+    requested_patient = _patient(doctor, "丙", "13900000003")
     project_patient = ProjectPatient.objects.create(
         project=project,
         patient=patient,
@@ -132,13 +133,14 @@ def test_project_patient_patch_cannot_change_group(doctor, project, patient):
 
     r = _client(doctor).patch(
         f"/api/studies/project-patients/{project_patient.id}/",
-        {"group": requested_group.id},
+        {"group": requested_group.id, "patient": requested_patient.id},
         format="json",
     )
 
-    assert r.status_code in {200, 405}
+    assert r.status_code == 405
     project_patient.refresh_from_db()
     assert project_patient.group_id == original_group.id
+    assert project_patient.patient_id == patient.id
 
 
 @pytest.mark.django_db
