@@ -90,6 +90,62 @@ describe("ProjectGroupingBoard", () => {
     expect(within(experimentGroup as HTMLElement).getByText("已确认")).toBeInTheDocument();
   });
 
+  it("停用分组内已有已确认患者时仍渲染该分组列", async () => {
+    mockGet.mockImplementation((url: string, config?: unknown) => {
+      const params =
+        typeof config === "object" && config
+          ? (config as { params?: Record<string, unknown> }).params
+          : undefined;
+
+      if (url === "/patients/") {
+        return Promise.resolve({
+          data: [
+            { id: 1, name: "未入组甲", gender: "male", phone: "13900000001" },
+            { id: 202, name: "已确认丁", gender: "female", phone: "13900000202" },
+          ],
+        });
+      }
+      if (url === "/studies/groups/" && params?.project === 1) {
+        return Promise.resolve({
+          data: [
+            { id: 10, name: "试验组", target_ratio: 1, sort_order: 0, is_active: true },
+            { id: 12, name: "已停用组", target_ratio: 1, sort_order: 2, is_active: false },
+          ],
+        });
+      }
+      if (url === "/studies/project-patients/" && params?.project === 1) {
+        return Promise.resolve({
+          data: [
+            {
+              id: 9002,
+              project: 1,
+              patient: 202,
+              patient_name: "已确认丁",
+              patient_phone: "13900000202",
+              group: 12,
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <ProjectGroupingBoard projectId={1} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("已停用组")).toBeInTheDocument());
+    const inactiveGroup = screen.getByText("已停用组").closest(".ant-card");
+    expect(inactiveGroup).toBeTruthy();
+    expect(within(inactiveGroup as HTMLElement).getByText("已确认丁")).toBeInTheDocument();
+    expect(within(inactiveGroup as HTMLElement).getByText("已确认")).toBeInTheDocument();
+  });
+
   it("随机只生成本地临时结果，不调用后端 randomize", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(

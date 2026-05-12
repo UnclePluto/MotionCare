@@ -172,6 +172,17 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     [groups],
   );
 
+  const visibleGroups = useMemo(() => {
+    const referencedGroupIds = new Set(
+      (projectPatients ?? [])
+        .map((row) => row.group)
+        .filter((groupId): groupId is number => groupId != null),
+    );
+    return [...(groups ?? [])]
+      .filter((g) => g.is_active || referencedGroupIds.has(g.id))
+      .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+  }, [groups, projectPatients]);
+
   useEffect(() => {
     if (!activeGroups.length) return;
     const ratios = activeGroups.map((g) => g.target_ratio);
@@ -355,7 +366,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
       </Card>
 
       <div style={{ display: "flex", gap: 12, overflowX: "auto", alignItems: "flex-start" }}>
-        {activeGroups.map((g) => (
+        {visibleGroups.map((g) => (
           <Card
             key={g.id}
             size="small"
@@ -363,13 +374,17 @@ export function ProjectGroupingBoard({ projectId }: Props) {
             title={
               <Space direction="vertical" size={4} style={{ width: "100%" }}>
                 <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                  <Typography.Text strong>{g.name}</Typography.Text>
+                  <Space>
+                    <Typography.Text strong>{g.name}</Typography.Text>
+                    {!g.is_active ? <Tag>已停用</Tag> : null}
+                  </Space>
                   <Button
                     type="text"
                     danger
                     size="small"
                     onClick={() => openDeleteGroupModal(g)}
                     loading={deleteGroupMutation.isPending}
+                    disabled={!g.is_active}
                   >
                     −
                   </Button>
@@ -381,6 +396,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
                     max={100}
                     size="small"
                     value={percentByGroupId[g.id]}
+                    disabled={!g.is_active}
                     onChange={(v) =>
                       setPercentByGroupId((prev) => ({
                         ...prev,
