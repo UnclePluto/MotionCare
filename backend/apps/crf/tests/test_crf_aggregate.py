@@ -62,7 +62,7 @@ def test_crf_preview_returns_empty_patient_baseline_when_absent(project_patient)
     assert preview["patient_baseline"]["demographics"] == {}
 
     assert "patient_baseline.受试者编号" in preview["missing_fields"]
-    assert "patient_baseline.教育年限" in preview["missing_fields"]
+    assert "patient_baseline.教育年限（年）" in preview["missing_fields"]
 
 
 @pytest.mark.django_db
@@ -74,7 +74,7 @@ def test_crf_preview_reports_missing_patient_baseline_fields(project_patient, do
 
     preview = build_crf_preview(project_patient)
     assert "patient_baseline.受试者编号" in preview["missing_fields"]
-    assert "patient_baseline.教育年限" in preview["missing_fields"]
+    assert "patient_baseline.教育年限（年）" in preview["missing_fields"]
 
     baseline.subject_id = "S-0001"
     baseline.demographics = {"education_years": 9}
@@ -83,7 +83,7 @@ def test_crf_preview_reports_missing_patient_baseline_fields(project_patient, do
 
     preview2 = build_crf_preview(project_patient)
     assert "patient_baseline.受试者编号" not in preview2["missing_fields"]
-    assert "patient_baseline.教育年限" not in preview2["missing_fields"]
+    assert "patient_baseline.教育年限（年）" not in preview2["missing_fields"]
 
 
 @pytest.mark.django_db
@@ -117,7 +117,7 @@ def test_crf_preview_returns_empty_patient_baseline_when_present_but_all_none(
     }
 
     assert "patient_baseline.受试者编号" in preview["missing_fields"]
-    assert "patient_baseline.教育年限" in preview["missing_fields"]
+    assert "patient_baseline.教育年限（年）" in preview["missing_fields"]
 
 
 @pytest.mark.django_db
@@ -136,4 +136,4 @@ def test_crf_preview_normalizes_non_dict_demographics_to_empty_dict(
     preview = build_crf_preview(project_patient)
 
     assert preview["patient_baseline"]["demographics"] == {}
-    assert "patient_baseline.教育年限" in preview["missing_fields"]
+    assert "patient_baseline.教育年限（年）" in preview["missing_fields"]

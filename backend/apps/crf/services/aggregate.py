@@ -1,25 +1,13 @@
+from __future__ import annotations
+
+from typing import Any
+
+from apps.crf.registry_loader import load_crf_registry
 from apps.patients.models import PatientBaseline
 from apps.visits.models import VisitRecord
 
 
-REQUIRED_VISIT_FIELDS = {
-    "T0": ["visit_date"],
-    "T1": ["visit_date"],
-    "T2": ["visit_date"],
-}
-
-REQUIRED_PATIENT_BASELINE_FIELDS = {
-    "subject_id": "patient_baseline.受试者编号",
-    "demographics.education_years": "patient_baseline.教育年限",
-}
-
-REQUIRED_VISIT_ASSESSMENT_FIELDS: list[tuple[str, str]] = [
-    ("assessments.sppb.total", "SPPB总分"),
-    ("assessments.moca.total", "MoCA总分"),
-]
-
-
-def _get_nested(d, path: str):
+def _get_nested(d: Any, path: str) -> Any:
     cur = d
     for part in path.split("."):
         if not isinstance(cur, dict):
@@ -28,7 +16,7 @@ def _get_nested(d, path: str):
     return cur
 
 
-def _is_missing(value) -> bool:
+def _is_missing(value: Any) -> bool:
     if value is None:
         return True
     if isinstance(value, str) and value == "":
@@ -38,15 +26,36 @@ def _is_missing(value) -> bool:
     return False
 
 
+def _patient_baseline_storage_value(baseline_payload: dict, storage: str) -> Any:
+    path = storage.removeprefix("patient_baseline.")
+    cur: Any = baseline_payload
+    for part in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _visit_storage_value(visit: VisitRecord | None, storage: str) -> Any:
+    if visit is None:
+        return None
+    if storage == "visit.visit_date":
+        return visit.visit_date
+    if storage.startswith("visit.form_data."):
+        rel = storage.removeprefix("visit.form_data.")
+        return _get_nested(visit.form_data or {}, rel)
+    return None
+
+
 def build_crf_preview(project_patient) -> dict:
     visits = {
-        visit.visit_type: visit
-        for visit in VisitRecord.objects.filter(project_patient=project_patient)
+        v.visit_type: v
+        for v in VisitRecord.objects.filter(project_patient=project_patient)
     }
     missing_fields: list[str] = []
     visit_payload: dict[str, dict] = {}
 
-    for visit_type, fields in REQUIRED_VISIT_FIELDS.items():
+    for visit_type in ("T0", "T1", "T2"):
         visit = visits.get(visit_type)
         if not visit:
             missing_fields.append(f"{visit_type}.访视记录")
@@ -57,15 +66,6 @@ def build_crf_preview(project_patient) -> dict:
             "status": visit.status,
             "form_data": visit.form_data,
         }
-        for field in fields:
-            if not getattr(visit, field):
-                missing_fields.append(f"{visit_type}.访视日期")
-
-        form_data = visit.form_data or {}
-        for path, label in REQUIRED_VISIT_ASSESSMENT_FIELDS:
-            v = _get_nested(form_data, path)
-            if _is_missing(v):
-                missing_fields.append(f"{visit_type}.{label}")
 
     patient = project_patient.patient
     try:
@@ -87,12 +87,34 @@ def build_crf_preview(project_patient) -> dict:
         "baseline_medications": (baseline.baseline_medications or {}) if baseline else {},
     }
 
-    if not baseline_payload["subject_id"]:
-        missing_fields.append(REQUIRED_PATIENT_BASELINE_FIELDS["subject_id"])
+    reg = load_crf_registry()
+    for field in reg.get("fields", []):
+        if not field.get("required_for_complete"):
+            continue
+        storage = field.get("storage")
+        if not isinstance(storage, str):
+            continue
+        label_zh = field.get("label_zh") or field.get("field_id") or storage
+        visit_types = field.get("visit_types")
 
-    education_years = baseline_payload["demographics"].get("education_years")
-    if education_years in (None, ""):
-        missing_fields.append(REQUIRED_PATIENT_BASELINE_FIELDS["demographics.education_years"])
+        if storage.startswith("patient_baseline."):
+            v = _patient_baseline_storage_value(baseline_payload, storage)
+            if _is_missing(v):
+                missing_fields.append(f"patient_baseline.{label_zh}")
+            continue
+
+        if storage == "visit.visit_date" or storage.startswith("visit.form_data."):
+            vts = visit_types if isinstance(visit_types, list) and visit_types else []
+            for vt in vts:
+                visit = visits.get(vt)
+                if visit is None:
+                    continue
+                v = _visit_storage_value(visit, storage)
+                if _is_missing(v):
+                    missing_fields.append(f"{vt}.{label_zh}")
+            continue
+
+    missing_fields = list(dict.fromkeys(missing_fields))
 
     return {
         "project_patient_id": project_patient.id,
