@@ -58,6 +58,28 @@ def test_enroll_projects_rejects_group_not_in_project(doctor, patient, project):
 
 
 @pytest.mark.django_db
+def test_enroll_projects_rejects_inactive_group(doctor, patient, project):
+    group = StudyGroup.objects.create(
+        project=project,
+        name="停用组",
+        target_ratio=1,
+        is_active=False,
+    )
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    r = client.post(
+        f"/api/patients/{patient.id}/enroll-projects/",
+        {"enrollments": [{"project_id": project.id, "group_id": group.id}]},
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "分组已停用" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
 def test_enroll_projects_rejects_unknown_project(doctor, patient):
     client = APIClient()
     client.force_authenticate(user=doctor)

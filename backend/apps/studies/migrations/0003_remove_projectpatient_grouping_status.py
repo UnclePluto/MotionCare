@@ -3,6 +3,12 @@
 from django.db import migrations
 
 
+def delete_unconfirmed_project_patients(apps, schema_editor):
+    ProjectPatient = apps.get_model("studies", "ProjectPatient")
+    ProjectPatient.objects.exclude(grouping_status="confirmed").delete()
+    ProjectPatient.objects.filter(group_id__isnull=True).delete()
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -10,6 +16,10 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(
+            delete_unconfirmed_project_patients,
+            migrations.RunPython.noop,
+        ),
         migrations.RemoveField(
             model_name='projectpatient',
             name='grouping_status',

@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import Count
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import MethodNotAllowed, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -171,6 +171,9 @@ class ProjectPatientViewSet(ModelViewSet):
         if patient_id:
             qs = qs.filter(patient_id=patient_id)
         return qs
+
+    def create(self, request, *args, **kwargs):
+        raise MethodNotAllowed("POST", detail="请通过项目确认分组接口创建入组关系。")
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

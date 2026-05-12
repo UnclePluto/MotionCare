@@ -107,6 +107,41 @@ def test_confirm_grouping_creates_project_patients_from_assignments(doctor, proj
 
 
 @pytest.mark.django_db
+def test_project_patient_direct_create_is_rejected(doctor, project, patient):
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+
+    r = _client(doctor).post(
+        "/api/studies/project-patients/",
+        {"project": project.id, "patient": patient.id, "group": group.id},
+        format="json",
+    )
+
+    assert r.status_code in {400, 405}
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
+def test_project_patient_patch_cannot_change_group(doctor, project, patient):
+    original_group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    requested_group = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
+    project_patient = ProjectPatient.objects.create(
+        project=project,
+        patient=patient,
+        group=original_group,
+    )
+
+    r = _client(doctor).patch(
+        f"/api/studies/project-patients/{project_patient.id}/",
+        {"group": requested_group.id},
+        format="json",
+    )
+
+    assert r.status_code in {200, 405}
+    project_patient.refresh_from_db()
+    assert project_patient.group_id == original_group.id
+
+
+@pytest.mark.django_db
 def test_confirm_grouping_rejects_patient_already_in_project(doctor, project, patient):
     group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
     ProjectPatient.objects.create(project=project, patient=patient, group=group)

@@ -51,18 +51,21 @@ class PatientViewSet(ModelViewSet):
             raise ValidationError({"detail": f"以下项目不存在: {missing_projects}"})
 
         existing_groups = {
-            g.id: g.project_id
-            for g in StudyGroup.objects.filter(pk__in=group_ids)
+            group.id: group
+            for group in StudyGroup.objects.filter(pk__in=group_ids)
         }
         missing_groups = sorted(group_ids - existing_groups.keys())
         if missing_groups:
             raise ValidationError({"detail": f"以下分组不存在: {missing_groups}"})
 
         for item in enrollments:
-            if existing_groups[item["group_id"]] != item["project_id"]:
+            group = existing_groups[item["group_id"]]
+            if group.project_id != item["project_id"]:
                 raise ValidationError(
                     {"detail": f"分组 {item['group_id']} 不属于项目 {item['project_id']}"}
                 )
+            if not group.is_active:
+                raise ValidationError({"detail": f"分组已停用: {item['group_id']}"})
 
         already_linked = list(
             ProjectPatient.objects.filter(
