@@ -27,3 +27,20 @@ class Patient(UserStampedModel):
     def __str__(self) -> str:
         return f"{self.name}（{self.phone}）"
 
+
+class PatientBaseline(UserStampedModel):
+    patient = models.OneToOneField(
+        "patients.Patient",
+        on_delete=models.CASCADE,
+        related_name="baseline",
+    )
+
+    subject_id = models.CharField(max_length=64, blank=True, default="")
+    name_initials = models.CharField(max_length=32, blank=True, default="")
+
+    demographics = models.JSONField(blank=True, default=dict)
+    surgery_allergy = models.JSONField(blank=True, default=dict)
+    comorbidities = models.JSONField(blank=True, default=dict)
+    lifestyle = models.JSONField(blank=True, default=dict)
+    baseline_medications = models.JSONField(blank=True, default=dict)
+

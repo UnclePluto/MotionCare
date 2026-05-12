@@ -9,8 +9,12 @@ from apps.common.permissions import IsAdminOrDoctor
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 from apps.visits.services import ensure_default_visits
 
-from .models import Patient
-from .serializers import EnrollProjectsSerializer, PatientSerializer
+from .models import Patient, PatientBaseline
+from .serializers import (
+    EnrollProjectsSerializer,
+    PatientBaselineSerializer,
+    PatientSerializer,
+)
 
 
 class PatientViewSet(ModelViewSet):
@@ -101,3 +105,25 @@ class PatientViewSet(ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+    @action(detail=True, methods=["get", "put", "patch"], url_path="baseline")
+    def baseline(self, request, pk=None):
+        patient = self.get_object()
+        baseline, _created = PatientBaseline.objects.get_or_create(
+            patient=patient,
+            defaults={"created_by": request.user, "updated_by": request.user},
+        )
+
+        if request.method == "GET":
+            return Response(PatientBaselineSerializer(baseline).data)
+
+        # PUT 与 PATCH 一律按部分更新处理：CRF 录入是逐节累积的，
+        # 避免 PUT 全量覆盖把已录入的 JSON 节段（demographics 等）误清空。
+        serializer = PatientBaselineSerializer(
+            baseline,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        return Response(serializer.data)

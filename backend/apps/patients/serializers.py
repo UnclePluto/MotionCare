@@ -2,7 +2,7 @@ import datetime
 
 from rest_framework import serializers
 
-from .models import Patient
+from .models import Patient, PatientBaseline
 
 
 class EnrollmentItemSerializer(serializers.Serializer):
@@ -56,3 +56,19 @@ class PatientSerializer(serializers.ModelSerializer):
             attrs["age"] = self._age_from_birth(bd)
         return attrs
 
+
+class PatientBaselineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PatientBaseline
+        fields = [
+            "id",
+            "patient",
+            "subject_id",
+            "name_initials",
+            "demographics",
+            "surgery_allergy",
+            "comorbidities",
+            "lifestyle",
+            "baseline_medications",
+        ]
+        read_only_fields = ["id", "patient"]
