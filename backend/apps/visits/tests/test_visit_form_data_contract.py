@@ -85,6 +85,62 @@ def test_patch_assessments_deep_merge(doctor, project_patient):
 
 
 @pytest.mark.django_db
+def test_patch_crf_merges_without_dropping_assessments(doctor, project_patient):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    resp = client.patch(
+        f"/api/visits/{visit.id}/",
+        {"form_data": {"assessments": {"sppb": {"total": 9}}}},
+        format="json",
+    )
+    assert resp.status_code == 200
+
+    resp = client.patch(
+        f"/api/visits/{visit.id}/",
+        {"form_data": {"crf": {"adherence": {"platform_id": "P1"}}}},
+        format="json",
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(f"/api/visits/{visit.id}/")
+    assert resp.status_code == 200
+    form_data = resp.json()["form_data"]
+    assert form_data["assessments"]["sppb"]["total"] == 9
+    assert form_data["crf"]["adherence"]["platform_id"] == "P1"
+
+
+@pytest.mark.django_db
+def test_patch_assessments_merges_without_dropping_crf(doctor, project_patient):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    resp = client.patch(
+        f"/api/visits/{visit.id}/",
+        {"form_data": {"crf": {"adherence": {"platform_id": "P1"}}}},
+        format="json",
+    )
+    assert resp.status_code == 200
+
+    resp = client.patch(
+        f"/api/visits/{visit.id}/",
+        {"form_data": {"assessments": {"sppb": {"total": 9}}}},
+        format="json",
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(f"/api/visits/{visit.id}/")
+    assert resp.status_code == 200
+    form_data = resp.json()["form_data"]
+    assert form_data["crf"]["adherence"]["platform_id"] == "P1"
+    assert form_data["assessments"]["sppb"]["total"] == 9
+
+
+@pytest.mark.django_db
 def test_invalid_known_field_type_returns_400_with_path(doctor, project_patient):
     visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
 

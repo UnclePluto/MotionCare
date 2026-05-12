@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Tuple
 
+from apps.crf.registry_validate import validate_visit_form_data_patch
 from rest_framework import serializers
 
 from .models import VisitRecord
+
+logger = logging.getLogger(__name__)
+
+CLIENT_WRITABLE_FORM_DATA_KEYS = ("assessments", "crf")
 
 
 def _deep_merge(base: Any, patch: Any) -> Any:
@@ -138,6 +144,11 @@ class VisitRecordSerializer(serializers.ModelSerializer):
             if not ok:
                 errors[path] = msg
 
+        instance = getattr(self, "instance", None)
+        if instance is not None and any(key in incoming for key in CLIENT_WRITABLE_FORM_DATA_KEYS):
+            registry_errors = validate_visit_form_data_patch(incoming, instance.visit_type)
+            errors.update(registry_errors)
+
         if errors:
             # Make field path visible at top-level, per contract requirement.
             raise serializers.ValidationError(errors)
@@ -159,12 +170,22 @@ class VisitRecordSerializer(serializers.ModelSerializer):
 
         # External computed_assessments is always ignored. Keep current value.
         merged = dict(current)
-        if isinstance(incoming, dict) and "assessments" in incoming:
-            incoming_assessments = incoming.get("assessments")
-            if not isinstance(incoming_assessments, dict):
-                # Should have been caught by validate(), but keep defensive.
-                raise serializers.ValidationError({"assessments": "必须是对象(object)"})
-            merged["assessments"] = _deep_merge(current.get("assessments", {}), incoming_assessments)
+        if isinstance(incoming, dict):
+            for key in CLIENT_WRITABLE_FORM_DATA_KEYS:
+                if key not in incoming:
+                    continue
+                incoming_value = incoming.get(key)
+                if not isinstance(incoming_value, dict):
+                    # Should have been caught by validate(), but keep defensive.
+                    raise serializers.ValidationError({key: "必须是对象(object)"})
+                current_value = current.get(key, {})
+                if not isinstance(current_value, dict):
+                    current_value = {}
+                merged[key] = _deep_merge(current_value, incoming_value)
+
+            unknown_keys = set(incoming) - set(CLIENT_WRITABLE_FORM_DATA_KEYS)
+            if unknown_keys:
+                logger.warning("Ignored unknown visit form_data keys: %s", sorted(unknown_keys))
 
         instance.form_data = _normalize_stored_form_data(merged)
         return super().update(instance, validated_data)
