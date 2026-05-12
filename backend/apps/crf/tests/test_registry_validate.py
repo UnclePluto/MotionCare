@@ -21,6 +21,54 @@ def test_validate_patient_baseline_bad_type():
     assert "demographics.education_years" in errors
 
 
+def test_other_requires_remark_when_required(monkeypatch):
+    fake = {
+        "fields": [
+            {
+                "field_id": "t",
+                "widget": "single_choice",
+                "storage": "patient_baseline.demographics.ethnicity",
+                "options": ["汉族", "其他"],
+                "required_for_complete": True,
+                "other_remark_storage": "patient_baseline.demographics.ethnicity_other_remark",
+            }
+        ]
+    }
+
+    def _load():
+        return fake
+
+    monkeypatch.setattr("apps.crf.registry_validate.load_crf_registry", _load)
+    errors = validate_patient_baseline_payload(
+        {"demographics": {"ethnicity": "其他", "ethnicity_other_remark": ""}}
+    )
+    assert "demographics.ethnicity_other_remark" in errors
+
+
+def test_other_remark_ok_when_filled(monkeypatch):
+    fake = {
+        "fields": [
+            {
+                "field_id": "t",
+                "widget": "single_choice",
+                "storage": "patient_baseline.demographics.ethnicity",
+                "options": ["汉族", "其他"],
+                "required_for_complete": True,
+                "other_remark_storage": "patient_baseline.demographics.ethnicity_other_remark",
+            }
+        ]
+    }
+
+    monkeypatch.setattr(
+        "apps.crf.registry_validate.load_crf_registry",
+        lambda: fake,
+    )
+    errors = validate_patient_baseline_payload(
+        {"demographics": {"ethnicity": "其他", "ethnicity_other_remark": "说明文字"}}
+    )
+    assert "demographics.ethnicity_other_remark" not in errors
+
+
 @pytest.mark.django_db
 def test_validate_visit_frailty_invalid_enum():
     errors = validate_visit_form_data_patch(

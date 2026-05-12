@@ -2,6 +2,14 @@
   "template_id": "cognitive_frailty_digital_therapy_crf",
   "template_revision": "1.1（修订稿 2026-04-28）",
   "source_docx": "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",
+  "table_titles": {
+    "#T0": "筛选与受试者标识",
+    "#T8": "人口学信息",
+    "#T9": "手术史与过敏史",
+    "#T10": "合并症、既往史与家族史",
+    "#T11": "生活方式",
+    "#T12": "合并用药"
+  },
   "fields": [
     {
       "field_id": "pb_subject_id",
@@ -72,6 +80,8 @@
         "丧偶",
         "其他"
       ],
+      "other_remark_storage": "patient_baseline.demographics.marital_status_other_remark",
+      "other_remark_widget": "text",
       "doc_table_index": 9
     },
     {
@@ -98,6 +108,8 @@
         "苗族",
         "其他"
       ],
+      "other_remark_storage": "patient_baseline.demographics.ethnicity_other_remark",
+      "other_remark_widget": "text",
       "doc_table_index": 9
     },
     {
@@ -116,6 +128,8 @@
         "自费",
         "其他"
       ],
+      "other_remark_storage": "patient_baseline.demographics.insurance_type_other_remark",
+      "other_remark_widget": "text",
       "doc_table_index": 9
     },
     {

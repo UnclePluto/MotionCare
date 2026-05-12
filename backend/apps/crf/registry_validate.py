@@ -35,6 +35,7 @@ def validate_patient_baseline_payload(data: dict) -> dict[str, str]:
         if error:
             errors[path] = error
 
+    errors.update(_validate_other_remarks(reg, data))
     return errors
 
 
@@ -66,6 +67,34 @@ def validate_visit_form_data_patch(form_data_patch: dict, visit_type: str) -> di
             errors[path] = error
 
     return errors
+
+
+def _validate_other_remarks(reg: Mapping[str, Any], data: Mapping[str, Any]) -> dict[str, str]:
+    """当主选项为「其他」且 registry 要求完整时，校验备注必填；校验备注类型为文本。"""
+    out: dict[str, str] = {}
+    for field in reg.get("fields", []):
+        storage = field.get("storage")
+        other_storage = field.get("other_remark_storage")
+        if not isinstance(storage, str) or not storage.startswith("patient_baseline."):
+            continue
+        if not isinstance(other_storage, str) or not other_storage.startswith("patient_baseline."):
+            continue
+
+        parent_parts = storage.removeprefix("patient_baseline.").split(".")
+        remark_parts = other_storage.removeprefix("patient_baseline.").split(".")
+
+        present_parent, parent_val = _get_submitted_value(data, parent_parts)
+        present_r, remark_val = _get_submitted_value(data, remark_parts)
+        remark_key = ".".join(remark_parts)
+
+        if present_parent and parent_val == "其他":
+            if field.get("required_for_complete") and (not present_r or _is_blank(remark_val)):
+                out[remark_key] = "选择「其他」时必须填写备注"
+
+        if present_r and not _is_blank(remark_val) and not isinstance(remark_val, str):
+            out[remark_key] = "必须是文本"
+
+    return out
 
 
 def _get_submitted_value(data: Mapping[str, Any], parts: list[str]) -> tuple[bool, Any]:

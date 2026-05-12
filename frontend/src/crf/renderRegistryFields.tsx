@@ -3,7 +3,6 @@ import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import type { ReactNode } from "react";
 
-import { baselineStorageToFormName } from "./baselineFormPaths";
 import type { RegistryField } from "./types";
 import { visitRegistryStorageToFormName } from "./visitFormPaths";
 
@@ -83,12 +82,6 @@ function widgetFormItem(
       <Input disabled={opts.disabled} />
     </Form.Item>
   );
-}
-
-export function renderBaselineRegistryField(field: RegistryField): ReactNode {
-  const name = baselineStorageToFormName(field.storage);
-  if (!name) return null;
-  return widgetFormItem(field, name, {});
 }
 
 export function renderVisitRegistryField(field: RegistryField, opts: RenderOpts = {}): ReactNode {

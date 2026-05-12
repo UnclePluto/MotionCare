@@ -9,11 +9,14 @@ export type RegistryField = {
   options?: string[];
   hint?: string;
   doc_table_index?: number;
+  other_remark_storage?: string;
+  other_remark_widget?: "text" | "textarea";
 };
 
 export type CrfRegistry = {
   template_id: string;
   template_revision: string;
   source_docx: string;
+  table_titles?: Record<string, string>;
   fields: RegistryField[];
 };

@@ -89,10 +89,17 @@ class PatientBaselineSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: dict) -> dict:
         attrs = super().validate(attrs)
-        payload = {k: attrs[k] for k in attrs if k in _BASELINE_REGISTRY_FIELD_NAMES}
-        if not payload:
+        if not any(k in attrs for k in _BASELINE_REGISTRY_FIELD_NAMES):
             return attrs
-        errors = validate_patient_baseline_payload(payload)
+        inst = self.instance
+        full: dict = {}
+        for k in _BASELINE_REGISTRY_FIELD_NAMES:
+            if inst is not None:
+                full[k] = getattr(inst, k)
+        for k in _BASELINE_REGISTRY_FIELD_NAMES:
+            if k in attrs:
+                full[k] = attrs[k]
+        errors = validate_patient_baseline_payload(full)
         if errors:
             raise serializers.ValidationError(errors)
         return attrs

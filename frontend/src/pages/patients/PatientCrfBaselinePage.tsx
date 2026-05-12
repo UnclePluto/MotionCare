@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Collapse, Form, Space, message } from "antd";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { Alert, Button, Card, Collapse, Form, Grid, Space, message } from "antd";
 import type { Dayjs } from "dayjs";
 import dayjs from "dayjs";
 import { isAxiosError } from "axios";
@@ -7,13 +7,22 @@ import { useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
-import { baselineToFormValues, renderBaselineRegistryField } from "../../crf/renderRegistryFields";
+import { mergePatientIntoBaselineApiPayload } from "../../crf/baselinePrefill";
+import { renderBaselineRegistryField } from "../../crf/renderBaselineRegistryFields";
+import { baselineToFormValues } from "../../crf/renderRegistryFields";
 import type { CrfRegistry, RegistryField } from "../../crf/types";
 import registryJson from "../../crf/registry.v1.json";
 
 const registry = registryJson as CrfRegistry;
 
 type BaselinePayload = Record<string, unknown>;
+
+type PatientPrefill = {
+  name: string;
+  gender?: string | null;
+  birth_date?: string | null;
+  age?: number | null;
+};
 
 function backendDetail(err: unknown): string | null {
   if (!isAxiosError(err)) return null;
@@ -43,6 +52,7 @@ export function PatientCrfBaselinePage() {
   const { patientId } = useParams();
   const id = Number(patientId);
   const [form] = Form.useForm();
+  const screens = Grid.useBreakpoint();
 
   const baselineFields = useMemo(
     () =>
@@ -63,19 +73,47 @@ export function PatientCrfBaselinePage() {
     return Array.from(m.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [baselineFields]);
 
-  const { data: baseline, isLoading, isError, error } = useQuery({
-    queryKey: ["patient-baseline", patientId ?? ""],
-    queryFn: async () => {
-      const r = await apiClient.get<BaselinePayload>(`/patients/${id}/baseline/`);
-      return r.data;
-    },
-    enabled: Number.isFinite(id),
+  const queries = useQueries({
+    queries: [
+      {
+        queryKey: ["patient", String(id)],
+        queryFn: async () => {
+          const r = await apiClient.get<PatientPrefill>(`/patients/${id}/`);
+          return r.data;
+        },
+        enabled: Number.isFinite(id),
+      },
+      {
+        queryKey: ["patient-baseline", String(id)],
+        queryFn: async () => {
+          const r = await apiClient.get<BaselinePayload>(`/patients/${id}/baseline/`);
+          return r.data;
+        },
+        enabled: Number.isFinite(id),
+      },
+    ],
   });
 
+  const patient = queries[0].data;
+  const baseline = queries[1].data;
+  const isLoading = queries.some((q) => q.isLoading);
+  const failed = queries.find((q) => q.isError);
+  const isError = Boolean(failed);
+  const error = failed?.error;
+
   useEffect(() => {
-    if (!baseline) return;
-    form.setFieldsValue(baselineToFormValues(baseline));
-  }, [baseline, form]);
+    if (!patient || !baseline) return;
+    const merged = mergePatientIntoBaselineApiPayload(
+      {
+        name: patient.name ?? "",
+        gender: patient.gender ?? "",
+        birth_date: patient.birth_date ?? null,
+        age: patient.age ?? null,
+      },
+      baseline as Record<string, unknown>,
+    );
+    form.setFieldsValue(baselineToFormValues(merged));
+  }, [patient, baseline, form]);
 
   const saveMutation = useMutation({
     mutationFn: async (values: Record<string, unknown>) => {
@@ -99,6 +137,10 @@ export function PatientCrfBaselinePage() {
     onError: (err) => message.error(backendDetail(err) ?? "保存失败"),
   });
 
+  const gridTemplateColumns = screens.xl
+    ? "1fr 1fr"
+    : "repeat(auto-fit, minmax(min(100%, 360px), 1fr))";
+
   if (!Number.isFinite(id)) {
     return <Alert type="error" message="无效的患者 ID" />;
   }
@@ -121,15 +163,29 @@ export function PatientCrfBaselinePage() {
         form={form}
         layout="vertical"
         onFinish={(v) => saveMutation.mutate(v as Record<string, unknown>)}
-        style={{ maxWidth: 880 }}
+        style={{ maxWidth: 1120 }}
       >
         <Collapse
           defaultActiveKey={fieldsByTable.map(([k]) => k).slice(0, 3)}
-          items={fieldsByTable.map(([tableRef, fields]) => ({
-            key: tableRef,
-            label: tableRef,
-            children: <>{fields.map((f) => renderBaselineRegistryField(f))}</>,
-          }))}
+          items={fieldsByTable.map(([tableRef, fields]) => {
+            const title = registry.table_titles?.[tableRef] ?? tableRef;
+            return {
+              key: tableRef,
+              label: title,
+              children: (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns,
+                    columnGap: 24,
+                    rowGap: 0,
+                  }}
+                >
+                  {fields.map((f) => renderBaselineRegistryField(f))}
+                </div>
+              ),
+            };
+          })}
         />
         <Form.Item style={{ marginTop: 16 }}>
           <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>
