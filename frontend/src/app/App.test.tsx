@@ -83,7 +83,6 @@ describe("App", () => {
                 patient_phone: "13800000201",
                 group: 10,
                 group_name: "试验组",
-                grouping_status: "confirmed",
               },
               {
                 id: 9002,
@@ -93,7 +92,6 @@ describe("App", () => {
                 patient_phone: "13800000202",
                 group: 11,
                 group_name: "对照组",
-                grouping_status: "pending",
               },
             ],
           });
@@ -241,7 +239,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("研究项目 A").length).toBeGreaterThan(0);
-      expect(screen.getByText(/患者池/)).toBeInTheDocument();
+      expect(screen.getByText(/全量患者/)).toBeInTheDocument();
       expect(screen.getAllByText("已确认患者").length).toBeGreaterThan(0);
       expect(screen.getAllByText("待确认患者").length).toBeGreaterThan(0);
       expect(screen.getAllByText(/张三/).length).toBeGreaterThan(0);
