@@ -1,5 +1,10 @@
 # Frontend Fullscreen + Create Actions Implementation Plan
 
+> **状态：approved → implementing**（计划已批准，部分任务正在落地中）
+> **日期：** 2026-05-08
+> **关联 spec：** `docs/superpowers/specs/2026-05-08-frontend-fullscreen-and-create-actions-design.md`
+> **跨工具协作：** 修改本文件前请阅读仓库根 `AGENTS.md` §2。勾选 `- [x]` 时同时在文件顶部"执行记录"区注明 commit short-sha 和工具名（cursor / codex）。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 修复页面默认留白（满屏），并补齐“患者档案/研究项目”的关键新增动作闭环：患者详情可访问、项目患者可添加。

@@ -13,8 +13,10 @@ docs/
 # Track design/spec docs under docs/superpowers/specs/
 !docs/
 docs/*
+!docs/development.md
 !docs/superpowers/
 docs/superpowers/*
+!docs/superpowers/README.md
 !docs/superpowers/specs/
 !docs/superpowers/specs/**
 !docs/superpowers/plans/

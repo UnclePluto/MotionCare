@@ -1,5 +1,11 @@
 # 前端临时随机与确认入组绑定 Implementation Plan
 
+> **状态：approved → implementing**（计划已批准，正在执行；本计划会**删除后端 randomize / reset-pending / pending 状态字段**，请勿回滚）
+> **日期：** 2026-05-12
+> **关联 spec：** `docs/superpowers/specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md`
+> **跨工具协作：** 修改本文件前请阅读仓库根 `AGENTS.md` §2。勾选 `- [x]` 时同时在文件顶部"执行记录"区注明 commit short-sha 和工具名（cursor / codex）。
+> **不可回退：** 本计划完成后，"批次"概念、"pending 状态字段"在产品中永久消失。若工作区看到 `grouping_status`、`pending`、`randomize` 等代码残留，那是 bug，请清理。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将项目分组改为“前端临时随机、确认时才创建已确认入组绑定”，彻底移除 pending、草案、批次式关系。

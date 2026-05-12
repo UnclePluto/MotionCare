@@ -1,5 +1,10 @@
 # CRF Patient Baseline + Mapping (Phase 1) Implementation Plan
 
+> **状态：approved → implementing**（计划已批准，部分任务正在落地中）
+> **日期：** 2026-05-08
+> **关联 spec：** `docs/superpowers/specs/2026-05-08-crf-core-patient-fields-mapping-design.md`
+> **跨工具协作：** 修改本文件前请阅读仓库根 `AGENTS.md` §2。勾选 `- [x]` 时同时在文件顶部"执行记录"区注明 commit short-sha 和工具名（cursor / codex）。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 以 `docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx` 为真源，在一期（只保留最新值）落地“患者基线（人口学/病史/用药等）”的数据结构与接口，并把这些字段接入 CRF 预览缺失提示与导出记录闭环。
@@ -569,7 +574,7 @@ git commit -m "feat(frontend): show CRF patient baseline summary"
 
 ---
 
-## Self-Review（计划自检）
+## Self-Review(计划自检)
 
 - 覆盖性：计划覆盖“患者基线字段存储 + API + CRF 聚合与缺失提示 + 前端预览展示（最小集）”。
 - 无占位：每个 Task 给出明确文件路径、测试代码、执行命令与期望结果。
