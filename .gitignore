@@ -22,6 +22,13 @@ docs/superpowers/*
 !docs/superpowers/plans/
 !docs/superpowers/plans/**
 
+# 本地工具链与临时图（不参与版本）
+.cursor/
+diagrams/
+
+# 对客户报价用草稿，不纳入仓库
+specs/patient-rehab-system/feature-list-for-client-quote.md
+
 # Local DB + packaging artifacts
 backend/db.sqlite3
 backend/*.egg-info/
