@@ -24,6 +24,7 @@ def delete_unconfirmed_project_patients(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    atomic = False
 
     dependencies = [
         ('studies', '0002_remove_projectpatient_grouping_batch_and_more'),
