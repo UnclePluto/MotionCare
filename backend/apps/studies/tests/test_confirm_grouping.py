@@ -21,6 +21,65 @@ def _missing_id(model):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "payload_factory",
+    [
+        pytest.param(lambda patient, group: {}, id="missing_assignments"),
+        pytest.param(lambda patient, group: {"assignments": "bad"}, id="assignments_not_list"),
+        pytest.param(lambda patient, group: {"assignments": []}, id="empty_assignments"),
+        pytest.param(
+            lambda patient, group: {
+                "assignments": [
+                    {"patient_id": patient.id},
+                ]
+            },
+            id="missing_group_id",
+        ),
+        pytest.param(
+            lambda patient, group: {
+                "assignments": [
+                    {"group_id": group.id},
+                ]
+            },
+            id="missing_patient_id",
+        ),
+        pytest.param(
+            lambda patient, group: {
+                "assignments": [
+                    {"patient_id": "bad", "group_id": group.id},
+                ]
+            },
+            id="patient_id_not_integer",
+        ),
+        pytest.param(
+            lambda patient, group: {
+                "assignments": [
+                    {"patient_id": patient.id, "group_id": "bad"},
+                ]
+            },
+            id="group_id_not_integer",
+        ),
+    ],
+)
+def test_confirm_grouping_rejects_invalid_assignment_payload_structure(
+    doctor,
+    project,
+    patient,
+    payload_factory,
+):
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        payload_factory(patient, group),
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert not ProjectPatient.objects.filter(project=project).exists()
+
+
+@pytest.mark.django_db
 def test_confirm_grouping_creates_project_patients_from_assignments(doctor, project):
     g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
     g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
@@ -120,7 +179,7 @@ def test_confirm_grouping_rejects_unknown_patient(doctor, project):
     )
 
     assert r.status_code == 400
-    assert "患者不存在" in str(r.data) or "以下患者不存在" in str(r.data)
+    assert "以下患者不存在" in str(r.data)
     assert not ProjectPatient.objects.filter(project=project).exists()
 
 
@@ -139,7 +198,7 @@ def test_confirm_grouping_rejects_unknown_group(doctor, project, patient):
     )
 
     assert r.status_code == 400
-    assert "分组不存在" in str(r.data) or "以下分组不存在" in str(r.data)
+    assert "以下分组不存在" in str(r.data)
     assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
 
 
