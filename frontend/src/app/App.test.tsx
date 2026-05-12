@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -83,6 +83,7 @@ describe("App", () => {
                 patient_phone: "13800000201",
                 group: 10,
                 group_name: "试验组",
+                visit_ids: { T0: 11, T1: 12, T2: 13 },
               },
               {
                 id: 9002,
@@ -257,6 +258,31 @@ describe("App", () => {
       expect(screen.getAllByText("项目患者甲").length).toBeGreaterThan(0);
       expect(screen.getAllByText("项目患者乙").length).toBeGreaterThan(0);
       expect(screen.getAllByText(/张三/).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders T0/T1/T2 visit links on 项目患者 tab", async () => {
+    window.history.pushState({}, "", "/projects/1");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("研究项目 A")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "项目患者" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "T0" })).toHaveAttribute("href", "/visits/11");
+      expect(screen.getByRole("link", { name: "T1" })).toHaveAttribute("href", "/visits/12");
+      expect(screen.getByRole("link", { name: "T2" })).toHaveAttribute("href", "/visits/13");
     });
   });
 });

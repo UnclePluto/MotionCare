@@ -48,6 +48,7 @@ class ProjectPatientSerializer(serializers.ModelSerializer):
     patient_name = serializers.CharField(source="patient.name", read_only=True)
     patient_phone = serializers.CharField(source="patient.phone", read_only=True)
     group_name = serializers.SerializerMethodField()
+    visit_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = ProjectPatient
@@ -60,8 +61,24 @@ class ProjectPatientSerializer(serializers.ModelSerializer):
             "group",
             "group_name",
             "enrolled_at",
+            "visit_ids",
         ]
-        read_only_fields = ["id", "enrolled_at", "patient_name", "patient_phone", "group_name"]
+        read_only_fields = [
+            "id",
+            "enrolled_at",
+            "patient_name",
+            "patient_phone",
+            "group_name",
+            "visit_ids",
+        ]
 
     def get_group_name(self, obj: ProjectPatient) -> str | None:
         return obj.group.name if obj.group_id else None
+
+    def get_visit_ids(self, obj: ProjectPatient) -> dict[str, int]:
+        from apps.visits.models import VisitRecord
+
+        ids: dict[str, int] = {}
+        for v in VisitRecord.objects.filter(project_patient=obj).only("id", "visit_type"):
+            ids[v.visit_type] = v.id
+        return ids

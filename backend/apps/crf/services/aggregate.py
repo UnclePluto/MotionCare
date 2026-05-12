@@ -13,6 +13,30 @@ REQUIRED_PATIENT_BASELINE_FIELDS = {
     "demographics.education_years": "patient_baseline.教育年限",
 }
 
+REQUIRED_VISIT_ASSESSMENT_FIELDS: list[tuple[str, str]] = [
+    ("assessments.sppb.total", "SPPB总分"),
+    ("assessments.moca.total", "MoCA总分"),
+]
+
+
+def _get_nested(d, path: str):
+    cur = d
+    for part in path.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value == "":
+        return True
+    if isinstance(value, (list, dict)) and len(value) == 0:
+        return True
+    return False
+
 
 def build_crf_preview(project_patient) -> dict:
     visits = {
@@ -36,6 +60,12 @@ def build_crf_preview(project_patient) -> dict:
         for field in fields:
             if not getattr(visit, field):
                 missing_fields.append(f"{visit_type}.访视日期")
+
+        form_data = visit.form_data or {}
+        for path, label in REQUIRED_VISIT_ASSESSMENT_FIELDS:
+            v = _get_nested(form_data, path)
+            if _is_missing(v):
+                missing_fields.append(f"{visit_type}.{label}")
 
     patient = project_patient.patient
     try:
@@ -83,4 +113,3 @@ def build_crf_preview(project_patient) -> dict:
         "visits": visit_payload,
         "missing_fields": missing_fields,
     }
-
