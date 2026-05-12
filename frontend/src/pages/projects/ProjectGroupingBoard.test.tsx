@@ -80,8 +80,12 @@ describe("ProjectGroupingBoard", () => {
     expect(within(patientSelection as HTMLElement).getByText(/未入组甲/)).toBeInTheDocument();
     expect(within(patientSelection as HTMLElement).getByText(/未入组乙/)).toBeInTheDocument();
     expect(within(patientSelection as HTMLElement).getByText(/已确认丙/)).toBeInTheDocument();
-    expect(screen.getAllByText("已确认").length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/选择患者 已确认丙/)).toBeDisabled();
+
+    const experimentGroup = screen.getByText("试验组").closest(".ant-card");
+    expect(experimentGroup).toBeTruthy();
+    expect(within(experimentGroup as HTMLElement).getByText("已确认丙")).toBeInTheDocument();
+    expect(within(experimentGroup as HTMLElement).getByText("已确认")).toBeInTheDocument();
   });
 
   it("随机只生成本地临时结果，不调用后端 randomize", async () => {
@@ -99,7 +103,7 @@ describe("ProjectGroupingBoard", () => {
     fireEvent.click(screen.getByRole("button", { name: "随机分组" }));
 
     await waitFor(() => expect(screen.getByText("本次随机")).toBeInTheDocument());
-    expect(mockPost).not.toHaveBeenCalledWith("/studies/projects/1/randomize/", expect.anything());
+    expect(mockPost.mock.calls.map((call) => call[0])).not.toContain("/studies/projects/1/randomize/");
   });
 
   it("确认分组提交本地 assignments 并刷新", async () => {
