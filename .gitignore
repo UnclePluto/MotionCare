@@ -29,6 +29,9 @@ diagrams/
 # 对客户报价用草稿，不纳入仓库
 specs/patient-rehab-system/feature-list-for-client-quote.md
 
+# CRF docx 表格导出对照（本地生成）
+specs/patient-rehab-system/crf/_docx_table_dump.txt
+
 # Local DB + packaging artifacts
 backend/db.sqlite3
 backend/*.egg-info/
