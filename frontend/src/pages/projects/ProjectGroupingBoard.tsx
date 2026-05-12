@@ -124,6 +124,11 @@ export function ProjectGroupingBoard({ projectId }: Props) {
   const [deleteGroupTarget, setDeleteGroupTarget] = useState<StudyGroupRow | null>(null);
   const [unbindTarget, setUnbindTarget] = useState<ProjectPatientRow | null>(null);
 
+  useEffect(() => {
+    setLocalAssignments([]);
+    setPoolSelected([]);
+  }, [projectId]);
+
   const { data: patients } = useQuery({
     queryKey: ["patients"],
     queryFn: async () => {
@@ -220,6 +225,8 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     },
     onError: (err: { response?: { data?: { detail?: string } } }) => {
       message.error(err.response?.data?.detail ?? "确认失败");
+      setLocalAssignments([]);
+      setPoolSelected([]);
       void qc.invalidateQueries({ queryKey: ["project-patients", projectId] });
       void qc.invalidateQueries({ queryKey: ["study-groups", projectId] });
     },
@@ -441,7 +448,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
           "将删除该患者在本项目下的入组关系（ProjectPatient），且不可从本入口恢复。",
           "若已存在与本项目、该入组关系相关的 CRF 访视或导出记录，将按服务端策略作废或清理；关联处方将标记为已终止。",
           "医生端默认列表将不再展示上述已终止处方。",
-          "移除后该患者会重新出现在「患者池」，需要时可勾选再次参与随机。",
+          "移除后该患者会重新出现在「全量患者」，需要时可勾选再次参与随机。",
         ]}
         confirmLoading={unbindMutation.isPending}
         onCancel={() => setUnbindTarget(null)}

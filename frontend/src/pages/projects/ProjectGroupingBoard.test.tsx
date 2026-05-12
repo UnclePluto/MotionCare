@@ -76,8 +76,8 @@ describe("ProjectGroupingBoard", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText(/全量患者|患者选择/)).toBeInTheDocument());
-    const patientSelection = screen.getByText(/全量患者|患者选择/).closest(".ant-card");
+    await waitFor(() => expect(screen.getByText("全量患者")).toBeInTheDocument());
+    const patientSelection = screen.getByText("全量患者").closest(".ant-card");
     expect(patientSelection).toBeTruthy();
     expect(within(patientSelection as HTMLElement).getByText(/未入组甲/)).toBeInTheDocument();
     expect(within(patientSelection as HTMLElement).getByText(/未入组乙/)).toBeInTheDocument();
@@ -134,5 +134,27 @@ describe("ProjectGroupingBoard", () => {
     expect(payload.assignments).toHaveLength(1);
     expect(payload.assignments[0].patient_id).toBe(1);
     expect([10, 11]).toContain(payload.assignments[0].group_id);
+  });
+
+  it("确认失败后清空本次随机结果", async () => {
+    mockPost.mockRejectedValueOnce({ response: { data: { detail: "患者已在其他项目入组" } } });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <ProjectGroupingBoard projectId={1} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/未入组甲/)).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText(/选择患者 未入组甲/));
+    fireEvent.click(screen.getByRole("button", { name: "随机分组" }));
+    await waitFor(() => expect(screen.getByText("本次随机")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "确认分组" }));
+
+    await waitFor(() => expect(screen.queryByText("本次随机")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /确认分组/ })).toBeDisabled();
   });
 });
