@@ -15,6 +15,11 @@ def _patient(doctor, name="患者乙", phone="13900000222"):
     return Patient.objects.create(name=name, phone=phone, primary_doctor=doctor)
 
 
+def _missing_id(model):
+    current_max_id = model.objects.order_by("-id").values_list("id", flat=True).first() or 0
+    return current_max_id + 1000
+
+
 @pytest.mark.django_db
 def test_confirm_grouping_creates_project_patients_from_assignments(doctor, project):
     g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
@@ -24,7 +29,12 @@ def test_confirm_grouping_creates_project_patients_from_assignments(doctor, proj
 
     r = _client(doctor).post(
         f"/api/studies/projects/{project.id}/confirm-grouping/",
-        {"assignments": [{"patient_id": p1.id, "group_id": g1.id}, {"patient_id": p2.id, "group_id": g2.id}]},
+        {
+            "assignments": [
+                {"patient_id": p1.id, "group_id": g1.id},
+                {"patient_id": p2.id, "group_id": g2.id},
+            ]
+        },
         format="json",
     )
 
@@ -42,7 +52,11 @@ def test_confirm_grouping_rejects_patient_already_in_project(doctor, project, pa
 
     r = _client(doctor).post(
         f"/api/studies/projects/{project.id}/confirm-grouping/",
-        {"assignments": [{"patient_id": patient.id, "group_id": group.id}]},
+        {
+            "assignments": [
+                {"patient_id": patient.id, "group_id": group.id},
+            ]
+        },
         format="json",
     )
 
@@ -58,7 +72,11 @@ def test_confirm_grouping_rejects_group_from_other_project(doctor, project, pati
 
     r = _client(doctor).post(
         f"/api/studies/projects/{project.id}/confirm-grouping/",
-        {"assignments": [{"patient_id": patient.id, "group_id": other_group.id}]},
+        {
+            "assignments": [
+                {"patient_id": patient.id, "group_id": other_group.id},
+            ]
+        },
         format="json",
     )
 
@@ -73,12 +91,78 @@ def test_confirm_grouping_rejects_inactive_group(doctor, project, patient):
 
     r = _client(doctor).post(
         f"/api/studies/projects/{project.id}/confirm-grouping/",
-        {"assignments": [{"patient_id": patient.id, "group_id": group.id}]},
+        {
+            "assignments": [
+                {"patient_id": patient.id, "group_id": group.id},
+            ]
+        },
         format="json",
     )
 
     assert r.status_code == 400
     assert "分组已停用" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_unknown_patient(doctor, project):
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    missing_patient_id = _missing_id(Patient)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "assignments": [
+                {"patient_id": missing_patient_id, "group_id": group.id},
+            ]
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "患者不存在" in str(r.data) or "以下患者不存在" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_unknown_group(doctor, project, patient):
+    missing_group_id = _missing_id(StudyGroup)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "assignments": [
+                {"patient_id": patient.id, "group_id": missing_group_id},
+            ]
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "分组不存在" in str(r.data) or "以下分组不存在" in str(r.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_payload_atomically_when_one_assignment_invalid(doctor, project):
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    p1 = _patient(doctor, "甲", "13900000001")
+    p2 = _patient(doctor, "乙", "13900000002")
+    missing_group_id = _missing_id(StudyGroup)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "assignments": [
+                {"patient_id": p1.id, "group_id": group.id},
+                {"patient_id": p2.id, "group_id": missing_group_id},
+            ]
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert not ProjectPatient.objects.filter(project=project).exists()
 
 
 @pytest.mark.django_db
@@ -88,7 +172,12 @@ def test_confirm_grouping_rejects_duplicate_patient_in_payload(doctor, project, 
 
     r = _client(doctor).post(
         f"/api/studies/projects/{project.id}/confirm-grouping/",
-        {"assignments": [{"patient_id": patient.id, "group_id": g1.id}, {"patient_id": patient.id, "group_id": g2.id}]},
+        {
+            "assignments": [
+                {"patient_id": patient.id, "group_id": g1.id},
+                {"patient_id": patient.id, "group_id": g2.id},
+            ]
+        },
         format="json",
     )
 
