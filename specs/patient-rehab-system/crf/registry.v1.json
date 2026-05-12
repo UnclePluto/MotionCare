@@ -1,0 +1,2352 @@
+{
+  "template_id": "cognitive_frailty_digital_therapy_crf",
+  "template_revision": "1.1（修订稿 2026-04-28）",
+  "source_docx": "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",
+  "fields": [
+    {
+      "field_id": "pb_subject_id",
+      "table_ref": "#T0",
+      "label_zh": "受试者编号",
+      "widget": "text",
+      "storage": "patient_baseline.subject_id",
+      "required_for_complete": true,
+      "visit_types": null,
+      "doc_table_index": 1
+    },
+    {
+      "field_id": "pb_name_initials",
+      "table_ref": "#T0",
+      "label_zh": "受试者姓名缩写",
+      "widget": "text",
+      "storage": "patient_baseline.name_initials",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 1
+    },
+    {
+      "field_id": "dm_age_years",
+      "table_ref": "#T8",
+      "label_zh": "年龄（周岁）",
+      "widget": "number",
+      "storage": "patient_baseline.demographics.age_years",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_birth_date",
+      "table_ref": "#T8",
+      "label_zh": "出生日期",
+      "widget": "date",
+      "storage": "patient_baseline.demographics.birth_date",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_gender",
+      "table_ref": "#T8",
+      "label_zh": "性别",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.gender",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "男",
+        "女"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_marital",
+      "table_ref": "#T8",
+      "label_zh": "婚姻状况",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.marital_status",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "已婚",
+        "未婚",
+        "离异",
+        "丧偶",
+        "其他"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_address",
+      "table_ref": "#T8",
+      "label_zh": "居住地址",
+      "widget": "textarea",
+      "storage": "patient_baseline.demographics.address",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_ethnicity",
+      "table_ref": "#T8",
+      "label_zh": "民族",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.ethnicity",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "汉族",
+        "黎族",
+        "苗族",
+        "其他"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_insurance",
+      "table_ref": "#T8",
+      "label_zh": "医保类型",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.insurance_type",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "城镇职工医保",
+        "城乡居民医保/新农合",
+        "公费医疗",
+        "商业保险",
+        "自费",
+        "其他"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_education_level",
+      "table_ref": "#T8",
+      "label_zh": "文化水平",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.education_level",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "无受教育经历",
+        "小学",
+        "初中",
+        "高中/中专",
+        "大专/本科",
+        "研究生及以上"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_education_years",
+      "table_ref": "#T8",
+      "label_zh": "教育年限（年）",
+      "widget": "number",
+      "storage": "patient_baseline.demographics.education_years",
+      "required_for_complete": true,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_children",
+      "table_ref": "#T8",
+      "label_zh": "子女情况",
+      "widget": "text",
+      "storage": "patient_baseline.demographics.children_note",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_caregiver",
+      "table_ref": "#T8",
+      "label_zh": "主要照护者",
+      "widget": "text",
+      "storage": "patient_baseline.demographics.caregiver",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_phone",
+      "table_ref": "#T8",
+      "label_zh": "联系电话",
+      "widget": "text",
+      "storage": "patient_baseline.demographics.contact_phones",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_income_band",
+      "table_ref": "#T8",
+      "label_zh": "个人收入水平",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.income_band",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "<1000元/月",
+        "1000-<2000元/月",
+        "2000-<5000元/月",
+        "5000-<10000元/月",
+        "≥10000元/月",
+        "拒答/不详"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_income_afford",
+      "table_ref": "#T8",
+      "label_zh": "当前收入是否能维持日常开支",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.income_afford",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "足够",
+        "刚好",
+        "不够",
+        "很不够",
+        "不详"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "dm_self_health",
+      "table_ref": "#T8",
+      "label_zh": "自我健康评价",
+      "widget": "single_choice",
+      "storage": "patient_baseline.demographics.self_health",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "很好",
+        "好",
+        "一般",
+        "差",
+        "很差"
+      ],
+      "doc_table_index": 9
+    },
+    {
+      "field_id": "sa_has_surgery",
+      "table_ref": "#T9",
+      "label_zh": "是否有手术史",
+      "widget": "single_choice",
+      "storage": "patient_baseline.surgery_allergy.has_surgery",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 10
+    },
+    {
+      "field_id": "sa_surgeries_note",
+      "table_ref": "#T9",
+      "label_zh": "手术史明细（名称/日期/医院）",
+      "widget": "textarea",
+      "storage": "patient_baseline.surgery_allergy.surgeries_note",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 10
+    },
+    {
+      "field_id": "sa_has_allergy",
+      "table_ref": "#T9",
+      "label_zh": "是否有过敏史",
+      "widget": "single_choice",
+      "storage": "patient_baseline.surgery_allergy.has_allergy",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 10
+    },
+    {
+      "field_id": "sa_allergies_note",
+      "table_ref": "#T9",
+      "label_zh": "过敏史明细",
+      "widget": "textarea",
+      "storage": "patient_baseline.surgery_allergy.allergies_note",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 10
+    },
+    {
+      "field_id": "cm_coronary_family",
+      "table_ref": "#T10",
+      "label_zh": "冠心病（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_coronary.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_coronary_personal",
+      "table_ref": "#T10",
+      "label_zh": "冠心病（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_coronary.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_coronary_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "冠心病 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_coronary.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_stroke_family",
+      "table_ref": "#T10",
+      "label_zh": "脑卒中（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_stroke.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_stroke_personal",
+      "table_ref": "#T10",
+      "label_zh": "脑卒中（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_stroke.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_stroke_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "脑卒中 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_stroke.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_hypertension_family",
+      "table_ref": "#T10",
+      "label_zh": "高血压（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_hypertension.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_hypertension_personal",
+      "table_ref": "#T10",
+      "label_zh": "高血压（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_hypertension.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_hypertension_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "高血压 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_hypertension.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_diabetes_family",
+      "table_ref": "#T10",
+      "label_zh": "糖尿病（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_diabetes.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_diabetes_personal",
+      "table_ref": "#T10",
+      "label_zh": "糖尿病（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_diabetes.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_diabetes_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "糖尿病 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_diabetes.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_hyperlipidemia_family",
+      "table_ref": "#T10",
+      "label_zh": "高脂血症（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_hyperlipidemia.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_hyperlipidemia_personal",
+      "table_ref": "#T10",
+      "label_zh": "高脂血症（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_hyperlipidemia.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_hyperlipidemia_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "高脂血症 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_hyperlipidemia.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_gout_family",
+      "table_ref": "#T10",
+      "label_zh": "痛风/高尿酸血症（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_gout.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_gout_personal",
+      "table_ref": "#T10",
+      "label_zh": "痛风/高尿酸血症（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_gout.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_gout_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "痛风/高尿酸血症 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_gout.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_copd_family",
+      "table_ref": "#T10",
+      "label_zh": "慢性阻塞性肺疾病（COPD）（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_copd.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_copd_personal",
+      "table_ref": "#T10",
+      "label_zh": "慢性阻塞性肺疾病（COPD）（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_copd.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_copd_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "慢性阻塞性肺疾病（COPD） 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_copd.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_asthma_family",
+      "table_ref": "#T10",
+      "label_zh": "支气管哮喘（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_asthma.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_asthma_personal",
+      "table_ref": "#T10",
+      "label_zh": "支气管哮喘（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_asthma.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_asthma_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "支气管哮喘 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_asthma.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_kidney_stone_family",
+      "table_ref": "#T10",
+      "label_zh": "肾结石（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_kidney_stone.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_kidney_stone_personal",
+      "table_ref": "#T10",
+      "label_zh": "肾结石（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_kidney_stone.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_kidney_stone_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "肾结石 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_kidney_stone.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_ckd_family",
+      "table_ref": "#T10",
+      "label_zh": "慢性肾脏病（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_ckd.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_ckd_personal",
+      "table_ref": "#T10",
+      "label_zh": "慢性肾脏病（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_ckd.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_ckd_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "慢性肾脏病 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_ckd.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_anemia_family",
+      "table_ref": "#T10",
+      "label_zh": "贫血（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_anemia.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_anemia_personal",
+      "table_ref": "#T10",
+      "label_zh": "贫血（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_anemia.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_anemia_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "贫血 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_anemia.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_osteo_family",
+      "table_ref": "#T10",
+      "label_zh": "骨关节炎/骨质疏松（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_osteo.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_osteo_personal",
+      "table_ref": "#T10",
+      "label_zh": "骨关节炎/骨质疏松（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_osteo.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_osteo_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "骨关节炎/骨质疏松 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_osteo.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_mood_family",
+      "table_ref": "#T10",
+      "label_zh": "抑郁/焦虑（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_mood.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_mood_personal",
+      "table_ref": "#T10",
+      "label_zh": "抑郁/焦虑（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_mood.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_mood_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "抑郁/焦虑 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_mood.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_other_family",
+      "table_ref": "#T10",
+      "label_zh": "其他（家族史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_other.family",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_other_personal",
+      "table_ref": "#T10",
+      "label_zh": "其他（个人疾病史）",
+      "widget": "single_choice",
+      "storage": "patient_baseline.comorbidities.cm_other.personal",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "不详",
+        "否",
+        "是"
+      ],
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_other_diagnosed_at",
+      "table_ref": "#T10",
+      "label_zh": "其他 确诊时间",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.cm_other.diagnosed_at",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_gout_attack_1m",
+      "table_ref": "#T10",
+      "label_zh": "近1个月内是否急性痛风发作",
+      "widget": "text",
+      "storage": "patient_baseline.comorbidities.gout_attack_1m",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "cm_other_history",
+      "table_ref": "#T10",
+      "label_zh": "其他重要病史补充",
+      "widget": "textarea",
+      "storage": "patient_baseline.comorbidities.other_history",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 11
+    },
+    {
+      "field_id": "ls_smoking",
+      "table_ref": "#T11",
+      "label_zh": "吸烟状态",
+      "widget": "single_choice",
+      "storage": "patient_baseline.lifestyle.smoking_status",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "从不吸烟",
+        "已戒烟",
+        "目前吸烟"
+      ],
+      "doc_table_index": 12
+    },
+    {
+      "field_id": "ls_smoking_detail",
+      "table_ref": "#T11",
+      "label_zh": "吸烟详情",
+      "widget": "textarea",
+      "storage": "patient_baseline.lifestyle.smoking_detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 12
+    },
+    {
+      "field_id": "ls_drinking",
+      "table_ref": "#T11",
+      "label_zh": "饮酒状态",
+      "widget": "single_choice",
+      "storage": "patient_baseline.lifestyle.drinking_status",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "从不饮酒",
+        "已戒酒",
+        "目前饮酒"
+      ],
+      "doc_table_index": 12
+    },
+    {
+      "field_id": "ls_drinking_detail",
+      "table_ref": "#T11",
+      "label_zh": "饮酒详情",
+      "widget": "textarea",
+      "storage": "patient_baseline.lifestyle.drinking_detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 12
+    },
+    {
+      "field_id": "ls_exercise",
+      "table_ref": "#T11",
+      "label_zh": "规律体育运动",
+      "widget": "textarea",
+      "storage": "patient_baseline.lifestyle.exercise",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 12
+    },
+    {
+      "field_id": "ls_ipaq",
+      "table_ref": "#T11",
+      "label_zh": "过去7天活动与静坐",
+      "widget": "textarea",
+      "storage": "patient_baseline.lifestyle.ipaq_note",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 12
+    },
+    {
+      "field_id": "med_antihypertensive_uses",
+      "table_ref": "#T12",
+      "label_zh": "降压药是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_antihypertensive.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_antihypertensive_detail",
+      "table_ref": "#T12",
+      "label_zh": "降压药药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_antihypertensive.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_antidiabetic_uses",
+      "table_ref": "#T12",
+      "label_zh": "降糖药是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_antidiabetic.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_antidiabetic_detail",
+      "table_ref": "#T12",
+      "label_zh": "降糖药药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_antidiabetic.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_lipid_uses",
+      "table_ref": "#T12",
+      "label_zh": "降脂药是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_lipid.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_lipid_detail",
+      "table_ref": "#T12",
+      "label_zh": "降脂药药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_lipid.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_inhaler_uses",
+      "table_ref": "#T12",
+      "label_zh": "支气管舒张剂/激素类吸入剂是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_inhaler.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_inhaler_detail",
+      "table_ref": "#T12",
+      "label_zh": "支气管舒张剂/激素类吸入剂药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_inhaler.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_antiplatelet_uses",
+      "table_ref": "#T12",
+      "label_zh": "抗血小板/抗凝药是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_antiplatelet.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_antiplatelet_detail",
+      "table_ref": "#T12",
+      "label_zh": "抗血小板/抗凝药药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_antiplatelet.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_cardiac_uses",
+      "table_ref": "#T12",
+      "label_zh": "心脏相关药物是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_cardiac.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_cardiac_detail",
+      "table_ref": "#T12",
+      "label_zh": "心脏相关药物药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_cardiac.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_sedative_uses",
+      "table_ref": "#T12",
+      "label_zh": "镇静催眠药是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_sedative.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_sedative_detail",
+      "table_ref": "#T12",
+      "label_zh": "镇静催眠药药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_sedative.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_psych_uses",
+      "table_ref": "#T12",
+      "label_zh": "抗抑郁/抗焦虑药是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_psych.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_psych_detail",
+      "table_ref": "#T12",
+      "label_zh": "抗抑郁/抗焦虑药药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_psych.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_cognitive_uses",
+      "table_ref": "#T12",
+      "label_zh": "抗痴呆/改善认知药物是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_cognitive.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_cognitive_detail",
+      "table_ref": "#T12",
+      "label_zh": "抗痴呆/改善认知药物药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_cognitive.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_bone_uses",
+      "table_ref": "#T12",
+      "label_zh": "骨质疏松/钙剂/维生素D是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_bone.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_bone_detail",
+      "table_ref": "#T12",
+      "label_zh": "骨质疏松/钙剂/维生素D药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_bone.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_pain_uses",
+      "table_ref": "#T12",
+      "label_zh": "止痛/抗炎/尿酸异常药物是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_pain.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_pain_detail",
+      "table_ref": "#T12",
+      "label_zh": "止痛/抗炎/尿酸异常药物药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_pain.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_other_long_uses",
+      "table_ref": "#T12",
+      "label_zh": "其他长期药物是否服用",
+      "widget": "single_choice",
+      "storage": "patient_baseline.baseline_medications.med_other_long.uses",
+      "required_for_complete": false,
+      "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_other_long_detail",
+      "table_ref": "#T12",
+      "label_zh": "其他长期药物药物种类或名称",
+      "widget": "textarea",
+      "storage": "patient_baseline.baseline_medications.med_other_long.detail",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "med_count_regular",
+      "table_ref": "#T12",
+      "label_zh": "常用药物数量（近1-2个月规律服用）",
+      "widget": "number",
+      "storage": "patient_baseline.baseline_medications.regular_count",
+      "required_for_complete": false,
+      "visit_types": null,
+      "doc_table_index": 13
+    },
+    {
+      "field_id": "as_T0_sppb_balance",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 平衡得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.balance",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_sppb_gait",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 步速得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.gait",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_sppb_chair",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 坐立得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.chair_stand",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_sppb_total",
+      "table_ref": "#T13",
+      "label_zh": "SPPB总分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.total",
+      "required_for_complete": true,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_tug",
+      "table_ref": "#T13",
+      "label_zh": "TUG（秒）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.tug_seconds",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_grip",
+      "table_ref": "#T13",
+      "label_zh": "握力最大值（kg）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.grip_strength_kg",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_frailty",
+      "table_ref": "#T13",
+      "label_zh": "衰弱判定",
+      "widget": "single_choice",
+      "storage": "visit.form_data.assessments.frailty",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "options": [
+        "robust",
+        "pre_frail",
+        "frail"
+      ],
+      "hint": "存储为 robust/pre_frail/frail，与后端现有一致",
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_physical_free_text",
+      "table_ref": "#T13",
+      "label_zh": "身体机能评估（原文长字段：围度/分项描述等）",
+      "widget": "textarea",
+      "storage": "visit.form_data.assessments.physical_free_text",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T0_moca_visuospatial",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 视空间与执行功能（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.visuospatial",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_naming",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 命名（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.naming",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_attention",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 注意（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.attention",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_language",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 语言（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.language",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_abstraction",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 抽象（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.abstraction",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_delayed_recall",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 延迟回忆（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.delayed_recall",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_orientation",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 定向（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.orientation",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_education_bonus",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 教育修正加分（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.education_bonus",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_total",
+      "table_ref": "#T14",
+      "label_zh": "MoCA总分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.total",
+      "required_for_complete": true,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T0_moca_leq22",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 是否≤22分",
+      "widget": "single_choice",
+      "storage": "visit.form_data.assessments.moca.leq22",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T1_sppb_balance",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 平衡得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.balance",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 18
+    },
+    {
+      "field_id": "as_T1_sppb_gait",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 步速得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.gait",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_sppb_chair",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 坐立得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.chair_stand",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_sppb_total",
+      "table_ref": "#T13",
+      "label_zh": "SPPB总分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.total",
+      "required_for_complete": true,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_tug",
+      "table_ref": "#T13",
+      "label_zh": "TUG（秒）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.tug_seconds",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_grip",
+      "table_ref": "#T13",
+      "label_zh": "握力最大值（kg）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.grip_strength_kg",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_frailty",
+      "table_ref": "#T13",
+      "label_zh": "衰弱判定",
+      "widget": "single_choice",
+      "storage": "visit.form_data.assessments.frailty",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "options": [
+        "robust",
+        "pre_frail",
+        "frail"
+      ],
+      "hint": "存储为 robust/pre_frail/frail，与后端现有一致",
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_physical_free_text",
+      "table_ref": "#T13",
+      "label_zh": "身体机能评估（原文长字段：围度/分项描述等）",
+      "widget": "textarea",
+      "storage": "visit.form_data.assessments.physical_free_text",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T1_moca_visuospatial",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 视空间与执行功能（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.visuospatial",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_naming",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 命名（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.naming",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_attention",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 注意（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.attention",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_language",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 语言（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.language",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_abstraction",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 抽象（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.abstraction",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_delayed_recall",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 延迟回忆（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.delayed_recall",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_orientation",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 定向（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.orientation",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_education_bonus",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 教育修正加分（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.education_bonus",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 19
+    },
+    {
+      "field_id": "as_T1_moca_total",
+      "table_ref": "#T14",
+      "label_zh": "MoCA总分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.total",
+      "required_for_complete": true,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T1_moca_leq22",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 是否≤22分",
+      "widget": "single_choice",
+      "storage": "visit.form_data.assessments.moca.leq22",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T2_sppb_balance",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 平衡得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.balance",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 25
+    },
+    {
+      "field_id": "as_T2_sppb_gait",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 步速得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.gait",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_sppb_chair",
+      "table_ref": "#T13",
+      "label_zh": "SPPB 坐立得分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.chair_stand",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_sppb_total",
+      "table_ref": "#T13",
+      "label_zh": "SPPB总分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.sppb.total",
+      "required_for_complete": true,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_tug",
+      "table_ref": "#T13",
+      "label_zh": "TUG（秒）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.tug_seconds",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_grip",
+      "table_ref": "#T13",
+      "label_zh": "握力最大值（kg）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.grip_strength_kg",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_frailty",
+      "table_ref": "#T13",
+      "label_zh": "衰弱判定",
+      "widget": "single_choice",
+      "storage": "visit.form_data.assessments.frailty",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "options": [
+        "robust",
+        "pre_frail",
+        "frail"
+      ],
+      "hint": "存储为 robust/pre_frail/frail，与后端现有一致",
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_physical_free_text",
+      "table_ref": "#T13",
+      "label_zh": "身体机能评估（原文长字段：围度/分项描述等）",
+      "widget": "textarea",
+      "storage": "visit.form_data.assessments.physical_free_text",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 14
+    },
+    {
+      "field_id": "as_T2_moca_visuospatial",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 视空间与执行功能（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.visuospatial",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_naming",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 命名（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.naming",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_attention",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 注意（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.attention",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_language",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 语言（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.language",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_abstraction",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 抽象（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.abstraction",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_delayed_recall",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 延迟回忆（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.delayed_recall",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_orientation",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 定向（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.orientation",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_education_bonus",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 教育修正加分（原始分）",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.subscores.education_bonus",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 26
+    },
+    {
+      "field_id": "as_T2_moca_total",
+      "table_ref": "#T14",
+      "label_zh": "MoCA总分",
+      "widget": "number",
+      "storage": "visit.form_data.assessments.moca.total",
+      "required_for_complete": true,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "as_T2_moca_leq22",
+      "table_ref": "#T14",
+      "label_zh": "MoCA 是否≤22分",
+      "widget": "single_choice",
+      "storage": "visit.form_data.assessments.moca.leq22",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "options": [
+        "否",
+        "是"
+      ],
+      "doc_table_index": 15
+    },
+    {
+      "field_id": "vd_T0_visit_date",
+      "table_ref": "#T3",
+      "label_zh": "访视日期",
+      "widget": "date",
+      "storage": "visit.visit_date",
+      "required_for_complete": true,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 4
+    },
+    {
+      "field_id": "vd_T1_visit_date",
+      "table_ref": "#T3",
+      "label_zh": "访视日期",
+      "widget": "date",
+      "storage": "visit.visit_date",
+      "required_for_complete": true,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 4
+    },
+    {
+      "field_id": "vd_T2_visit_date",
+      "table_ref": "#T3",
+      "label_zh": "访视日期",
+      "widget": "date",
+      "storage": "visit.visit_date",
+      "required_for_complete": true,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 4
+    },
+    {
+      "field_id": "scr_t0_visit_meta",
+      "table_ref": "#T4",
+      "label_zh": "T0 访视信息（周数/时间窗/评估者等，原文）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.screening.visit_meta",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 4
+    },
+    {
+      "field_id": "scr_t0_icf",
+      "table_ref": "#T5",
+      "label_zh": "知情同意签署信息（原文）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.screening.icf",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 5
+    },
+    {
+      "field_id": "scr_t0_inclusion",
+      "table_ref": "#T6",
+      "label_zh": "纳入标准判定（原文）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.screening.inclusion",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 6
+    },
+    {
+      "field_id": "scr_t0_exclusion",
+      "table_ref": "#T7",
+      "label_zh": "排除标准判定（原文）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.screening.exclusion",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 7
+    },
+    {
+      "field_id": "scr_t0_enrollment",
+      "table_ref": "#筛选结论",
+      "label_zh": "筛选结论（入选/筛选失败等，原文）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.screening.enrollment",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 8
+    },
+    {
+      "field_id": "adh_T0_accept_continue",
+      "table_ref": "#T16",
+      "label_zh": "是否接受/继续数字疗法干预",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.accept_continue",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T0_platform_id",
+      "table_ref": "#T16",
+      "label_zh": "平台账号/编号",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.platform_id",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T0_planned",
+      "table_ref": "#T16",
+      "label_zh": "计划训练/使用次数与时长",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.planned",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T0_actual",
+      "table_ref": "#T16",
+      "label_zh": "实际完成次数与时长",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.actual",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T0_completion_rate",
+      "table_ref": "#T16",
+      "label_zh": "完成率（%）",
+      "widget": "number",
+      "storage": "visit.form_data.crf.adherence.completion_rate",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T0_incomplete_reason",
+      "table_ref": "#T16",
+      "label_zh": "主要未完成原因",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.adherence.incomplete_reason",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T0_investigator_action",
+      "table_ref": "#T16",
+      "label_zh": "研究者处理",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.investigator_action",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_accept_continue",
+      "table_ref": "#T16",
+      "label_zh": "是否接受/继续数字疗法干预",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.accept_continue",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_platform_id",
+      "table_ref": "#T16",
+      "label_zh": "平台账号/编号",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.platform_id",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_planned",
+      "table_ref": "#T16",
+      "label_zh": "计划训练/使用次数与时长",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.planned",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_actual",
+      "table_ref": "#T16",
+      "label_zh": "实际完成次数与时长",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.actual",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_completion_rate",
+      "table_ref": "#T16",
+      "label_zh": "完成率（%）",
+      "widget": "number",
+      "storage": "visit.form_data.crf.adherence.completion_rate",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_incomplete_reason",
+      "table_ref": "#T16",
+      "label_zh": "主要未完成原因",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.adherence.incomplete_reason",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T1_investigator_action",
+      "table_ref": "#T16",
+      "label_zh": "研究者处理",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.investigator_action",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 17
+    },
+    {
+      "field_id": "adh_T2_accept_continue",
+      "table_ref": "#T23",
+      "label_zh": "是否接受/继续数字疗法干预",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.accept_continue",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "adh_T2_platform_id",
+      "table_ref": "#T23",
+      "label_zh": "平台账号/编号",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.platform_id",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "adh_T2_planned",
+      "table_ref": "#T23",
+      "label_zh": "计划训练/使用次数与时长",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.planned",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "adh_T2_actual",
+      "table_ref": "#T23",
+      "label_zh": "实际完成次数与时长",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.actual",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "adh_T2_completion_rate",
+      "table_ref": "#T23",
+      "label_zh": "完成率（%）",
+      "widget": "number",
+      "storage": "visit.form_data.crf.adherence.completion_rate",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "adh_T2_incomplete_reason",
+      "table_ref": "#T23",
+      "label_zh": "主要未完成原因",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.adherence.incomplete_reason",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "adh_T2_investigator_action",
+      "table_ref": "#T23",
+      "label_zh": "研究者处理",
+      "widget": "text",
+      "storage": "visit.form_data.crf.adherence.investigator_action",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 24
+    },
+    {
+      "field_id": "sat_T1_matrix_note",
+      "table_ref": "#T19",
+      "label_zh": "数字疗法平台满意度（条目与总分，原文记录）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.satisfaction.matrix_note",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 20
+    },
+    {
+      "field_id": "sat_T2_matrix_note",
+      "table_ref": "#T26",
+      "label_zh": "数字疗法平台满意度（条目与总分，原文记录）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.satisfaction.matrix_note",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 27
+    },
+    {
+      "field_id": "crf_med_change_note_t1",
+      "table_ref": "#T20",
+      "label_zh": "合并用药变化（T1）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.medication_change.note",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 21
+    },
+    {
+      "field_id": "crf_med_change_note_t2",
+      "table_ref": "#T27",
+      "label_zh": "合并用药变化（T2）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.medication_change.note",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 28
+    },
+    {
+      "field_id": "crf_ae_note_t1",
+      "table_ref": "#T21",
+      "label_zh": "不良事件（T1）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.adverse_events.note",
+      "required_for_complete": false,
+      "visit_types": [
+        "T1"
+      ],
+      "doc_table_index": 22
+    },
+    {
+      "field_id": "crf_ae_note_t2",
+      "table_ref": "#T28",
+      "label_zh": "不良事件（T2）",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.adverse_events.note",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 29
+    },
+    {
+      "field_id": "crf_completion",
+      "table_ref": "#T29",
+      "label_zh": "完成/退出记录",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.completion",
+      "required_for_complete": false,
+      "visit_types": [
+        "T2"
+      ],
+      "doc_table_index": 30
+    },
+    {
+      "field_id": "crf_qc",
+      "table_ref": "#T30",
+      "label_zh": "质控核查",
+      "widget": "textarea",
+      "storage": "visit.form_data.crf.qc",
+      "required_for_complete": false,
+      "visit_types": [
+        "T0",
+        "T1",
+        "T2"
+      ],
+      "doc_table_index": 31
+    }
+  ]
+}
