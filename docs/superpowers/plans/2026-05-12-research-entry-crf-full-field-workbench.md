@@ -1,6 +1,6 @@
 # 研究录入工作台 + CRF 全量字段（registry）实施计划
 
-执行记录（2026-05-12, cursor）：Task 12–15 已在分支 `feat/research-entry-crf-workbench` 落地；验证：`frontend` vitest / lint / build 与 `backend` pytest 通过；合并前请本地 `git commit`。
+执行记录（2026-05-12, cursor）：Task 12–15 已落地于 commit `3af5143`；验证：`frontend` vitest / build 与 `backend` pytest 通过。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: 使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务顺序实施。步骤使用 `- [ ]` 勾选追踪。
 
