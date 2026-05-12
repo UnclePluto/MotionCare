@@ -64,6 +64,31 @@ function seededRandom(seed: number) {
   };
 }
 
+function shufflePatientIds(patientIds: number[], random: () => number): number[] {
+  const shuffled = [...patientIds];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+function calculateGroupCounts(totalPatients: number, groups: RandomGroupInput[]): number[] {
+  const totalRatio = groups.reduce((sum, g) => sum + g.target_ratio, 0);
+  const exact = groups.map((g) => (totalPatients * g.target_ratio) / totalRatio);
+  const counts = exact.map((value) => Math.floor(value));
+  const remainder = totalPatients - counts.reduce((sum, count) => sum + count, 0);
+  const order = exact
+    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+
+  for (let i = 0; i < remainder; i++) {
+    counts[order[i].index] += 1;
+  }
+
+  return counts;
+}
+
 export function assignPatientsToGroups(
   patientIds: number[],
   groups: RandomGroupInput[],
@@ -73,22 +98,17 @@ export function assignPatientsToGroups(
   if (groups.some((g) => g.target_ratio <= 0)) throw new Error("分组比例必须大于 0");
 
   const random = seededRandom(seed);
-  const shuffled = [...patientIds].sort(() => random() - 0.5);
-  const totalRatio = groups.reduce((sum, g) => sum + g.target_ratio, 0);
-  let remaining = shuffled.length;
+  const shuffled = shufflePatientIds(patientIds, random);
+  const counts = calculateGroupCounts(shuffled.length, groups);
   let cursor = 0;
   const result: LocalAssignment[] = [];
 
   groups.forEach((group, index) => {
-    const count =
-      index === groups.length - 1
-        ? remaining
-        : Math.min(remaining, Math.round((shuffled.length * group.target_ratio) / totalRatio));
+    const count = counts[index];
     for (const patientId of shuffled.slice(cursor, cursor + count)) {
       result.push({ patientId, groupId: group.id });
     }
     cursor += count;
-    remaining -= count;
   });
 
   return result;
