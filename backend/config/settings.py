@@ -95,6 +95,6 @@ CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "CRF_TEMPLATE_PATH",
-    "docs/认知衰弱数字疗法研究_CRF表_修订稿.docx",
+    "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",
 )
 CRF_EXPORT_DIR = ROOT_DIR / os.getenv("CRF_EXPORT_DIR", "media/crf_exports")
