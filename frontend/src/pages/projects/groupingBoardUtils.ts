@@ -49,3 +49,47 @@ export function ratiosToTargetRatios(pcts: number[]): number[] {
   const g = gcdMany(cleaned);
   return cleaned.map((p) => Math.max(1, Math.round(p / g)));
 }
+
+export type RandomGroupInput = { id: number; target_ratio: number };
+export type LocalAssignment = { patientId: number; groupId: number };
+
+function seededRandom(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6d2b79f5;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function assignPatientsToGroups(
+  patientIds: number[],
+  groups: RandomGroupInput[],
+  seed = Date.now(),
+): LocalAssignment[] {
+  if (!groups.length) throw new Error("没有启用分组，不能随机分组");
+  if (groups.some((g) => g.target_ratio <= 0)) throw new Error("分组比例必须大于 0");
+
+  const random = seededRandom(seed);
+  const shuffled = [...patientIds].sort(() => random() - 0.5);
+  const totalRatio = groups.reduce((sum, g) => sum + g.target_ratio, 0);
+  let remaining = shuffled.length;
+  let cursor = 0;
+  const result: LocalAssignment[] = [];
+
+  groups.forEach((group, index) => {
+    const count =
+      index === groups.length - 1
+        ? remaining
+        : Math.min(remaining, Math.round((shuffled.length * group.target_ratio) / totalRatio));
+    for (const patientId of shuffled.slice(cursor, cursor + count)) {
+      result.push({ patientId, groupId: group.id });
+    }
+    cursor += count;
+    remaining -= count;
+  });
+
+  return result;
+}
