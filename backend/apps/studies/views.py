@@ -1,3 +1,6 @@
+from collections import Counter
+
+from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count
 from rest_framework import status
@@ -44,13 +47,14 @@ class StudyProjectViewSet(ModelViewSet):
         from apps.patients.models import Patient
 
         project = self.get_object()
+        project = StudyProject.objects.select_for_update(of=("self",)).get(pk=project.pk)
         serializer = ConfirmGroupingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         assignments = serializer.validated_data["assignments"]
         patient_ids = [assignment["patient_id"] for assignment in assignments]
         duplicate_patient_ids = sorted(
-            patient_id for patient_id in set(patient_ids) if patient_ids.count(patient_id) > 1
+            patient_id for patient_id, count in Counter(patient_ids).items() if count > 1
         )
         if duplicate_patient_ids:
             return Response(
@@ -70,7 +74,8 @@ class StudyProjectViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        groups_by_id = StudyGroup.objects.in_bulk(group_ids)
+        groups = StudyGroup.objects.select_for_update(of=("self",)).filter(pk__in=group_ids)
+        groups_by_id = {group.id: group for group in groups}
         missing_group_ids = sorted(set(group_ids) - set(groups_by_id))
         if missing_group_ids:
             return Response(
@@ -108,15 +113,18 @@ class StudyProjectViewSet(ModelViewSet):
             )
 
         created = []
-        for assignment in assignments:
-            project_patient = ProjectPatient.objects.create(
-                project=project,
-                patient_id=assignment["patient_id"],
-                group_id=assignment["group_id"],
-                created_by=request.user,
-            )
-            ensure_default_visits(project_patient)
-            created.append(project_patient)
+        try:
+            for assignment in assignments:
+                project_patient = ProjectPatient.objects.create(
+                    project=project,
+                    patient_id=assignment["patient_id"],
+                    group_id=assignment["group_id"],
+                    created_by=request.user,
+                )
+                ensure_default_visits(project_patient)
+                created.append(project_patient)
+        except IntegrityError as exc:
+            raise ValidationError({"detail": "已确认入组，请刷新后重试。"}) from exc
 
         return Response(
             {

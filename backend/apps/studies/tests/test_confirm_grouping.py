@@ -1,4 +1,5 @@
 import pytest
+from django.db import IntegrityError
 from rest_framework.test import APIClient
 
 from apps.patients.models import Patient
@@ -245,3 +246,28 @@ def test_confirm_grouping_rejects_duplicate_patient_in_payload(doctor, project, 
     assert r.status_code == 400
     assert "重复患者" in str(r.data)
     assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_converts_integrity_error_to_validation_error(
+    doctor, project, patient, monkeypatch
+):
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+
+    def raise_integrity_error(*args, **kwargs):
+        raise IntegrityError("duplicate project patient")
+
+    monkeypatch.setattr(ProjectPatient.objects, "create", raise_integrity_error)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "assignments": [
+                {"patient_id": patient.id, "group_id": group.id},
+            ]
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "已确认入组" in str(r.data)
