@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { Button, Card, Input, Select, Space, Table, Tag } from "antd";
-import dayjs from "dayjs";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -25,6 +24,25 @@ type ProjectPatientRow = {
 };
 
 const VISIT_TYPES: VisitType[] = ["T0", "T1", "T2"];
+
+function patientSearchParams(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+
+  const normalizedPhone = trimmed.replace(/[\s-]+/g, "");
+  if (/^\d+$/.test(normalizedPhone)) return { patient_phone: normalizedPhone };
+
+  return { patient_name: trimmed };
+}
+
+function formatEnrolledAt(value: string | null | undefined) {
+  if (!value) return "—";
+
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if (!match) return value;
+
+  return `${match[1]} ${match[2]}`;
+}
 
 function statusTag(summary: VisitSummary | undefined) {
   if (!summary) return <Tag color="red">访视未生成</Tag>;
@@ -52,7 +70,7 @@ export function ResearchEntryPage() {
   const queryParams = useMemo(() => {
     const p: Record<string, string | number> = {};
     if (projectId) p.project = projectId;
-    if (patientNameQuery.trim()) p.patient_name = patientNameQuery.trim();
+    Object.assign(p, patientSearchParams(patientNameQuery));
     return p;
   }, [projectId, patientNameQuery]);
 
@@ -114,7 +132,7 @@ export function ResearchEntryPage() {
           {
             title: "入组时间",
             dataIndex: "enrolled_at",
-            render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
+            render: (v: string | null | undefined) => formatEnrolledAt(v),
           },
           {
             title: "T0 / T1 / T2",

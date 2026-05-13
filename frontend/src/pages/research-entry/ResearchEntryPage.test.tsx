@@ -64,7 +64,7 @@ describe("ResearchEntryPage", () => {
               patient_phone: "13800000201",
               group: 20,
               group_name: "对照组",
-              enrolled_at: "2026-05-13T10:00:00+08:00",
+              enrolled_at: "2026-05-13T10:00:00-04:00",
               visit_ids: { T0: 21, T1: 22, T2: 23 },
               visit_summaries: {
                 T0: { id: 21, status: "draft", visit_date: null },
@@ -89,6 +89,7 @@ describe("ResearchEntryPage", () => {
     expect(screen.getAllByText("同名患者").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("入组时间")).toBeInTheDocument();
     expect(screen.getByText("2026-05-12 10:00")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-13 10:00")).toBeInTheDocument();
     expect(screen.queryByText("访视类型")).not.toBeInTheDocument();
   });
 
@@ -115,6 +116,25 @@ describe("ResearchEntryPage", () => {
       expect(mockGet).toHaveBeenCalledWith(
         "/studies/project-patients/",
         expect.objectContaining({ params: expect.objectContaining({ patient_name: "同名" }) }),
+      );
+    });
+  });
+
+  it("passes phone-like patient filter as patient_phone only", async () => {
+    renderPage();
+
+    await screen.findByText("研究项目 A");
+    fireEvent.change(screen.getByPlaceholderText("患者姓名或手机号"), { target: { value: "13800000201" } });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+
+    await waitFor(() => {
+      const phoneCall = mockGet.mock.calls.find(([url, config]) => {
+        const params = (config as { params?: Record<string, unknown> } | undefined)?.params;
+        return url === "/studies/project-patients/" && params?.patient_phone === "13800000201";
+      });
+      expect(phoneCall).toBeTruthy();
+      expect((phoneCall?.[1] as { params?: Record<string, unknown> } | undefined)?.params).not.toHaveProperty(
+        "patient_name",
       );
     });
   });
