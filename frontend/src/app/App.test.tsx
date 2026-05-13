@@ -82,6 +82,30 @@ describe("App", () => {
       }
       if (url === "/studies/project-patients/") {
         const p = params ?? {};
+        if (p.patient === 201) {
+          return Promise.resolve({
+            data: [
+              {
+                id: 9001,
+                project: 1,
+                project_name: "研究项目 A",
+                project_status: "active",
+                patient: 201,
+                patient_name: "项目患者甲",
+                patient_phone: "13800000201",
+                group: 10,
+                group_name: "试验组",
+                enrolled_at: "2026-05-12T10:00:00+08:00",
+                visit_ids: { T0: 11, T1: 12, T2: 13 },
+                visit_summaries: {
+                  T0: { id: 11, status: "completed", visit_date: "2026-05-12" },
+                  T1: { id: 12, status: "draft", visit_date: null },
+                  T2: { id: 13, status: "draft", visit_date: null },
+                },
+              },
+            ],
+          });
+        }
         if (p.patient === 101 || p.patient === 123) {
           return Promise.resolve({ data: [] });
         }
@@ -188,6 +212,20 @@ describe("App", () => {
           },
         });
       }
+      if (url === "/patients/201/") {
+        return Promise.resolve({
+          data: {
+            id: 201,
+            name: "项目患者甲",
+            gender: "male",
+            phone: "13800000201",
+            birth_date: null,
+            primary_doctor_name: "测试医生",
+            symptom_note: "",
+            is_active: true,
+          },
+        });
+      }
       if (url === "/patients/101/baseline/") {
         return Promise.resolve({
           data: {
@@ -285,6 +323,31 @@ describe("App", () => {
       expect(screen.getAllByText("李四").length).toBeGreaterThan(0);
       expect(screen.getByText("13800000101")).toBeInTheDocument();
     });
+  });
+
+  it("patient detail uses baseline资料 and project research-entry without CRF link", async () => {
+    window.history.pushState({}, "", "/patients/201");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "基线资料" })).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "研究录入" })).toHaveAttribute(
+        "href",
+        "/research-entry/project-patients/9001",
+      );
+    });
+    expect(screen.queryByRole("link", { name: "打开 CRF" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/CRF 基线/)).not.toBeInTheDocument();
   });
 
   it("renders project detail as grouping board only", async () => {

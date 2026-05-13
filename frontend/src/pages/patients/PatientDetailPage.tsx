@@ -90,7 +90,9 @@ export function PatientDetailPage() {
   const { data: projectPatients = [], isLoading: ppLoading } = useQuery({
     queryKey: ["project-patients", "patient", id],
     queryFn: async () => {
-      const r = await apiClient.get<ProjectPatientRow[]>(`/studies/project-patients/?patient=${id}`);
+      const r = await apiClient.get<ProjectPatientRow[]>("/studies/project-patients/", {
+        params: { patient: id },
+      });
       return r.data;
     },
     enabled: Number.isFinite(id),
@@ -187,7 +189,7 @@ export function PatientDetailPage() {
           <Button type="primary" onClick={() => navigate(`/patients/${id}/edit`)}>
             编辑档案
           </Button>
-          <Button onClick={() => navigate(`/patients/${id}/crf-baseline`)}>CRF 基线录入</Button>
+          <Button onClick={() => navigate(`/patients/${id}/crf-baseline`)}>基线资料</Button>
           <Button onClick={() => setEnrollOpen(true)}>加入研究项目</Button>
           {patientActive ? (
             <Button onClick={() => setDeactivateModalOpen(true)}>停用档案</Button>
@@ -251,18 +253,10 @@ export function PatientDetailPage() {
                 title: "操作",
                 key: "crf",
                 render: (_: unknown, row) => (
-                  <Link to={`/crf?projectPatientId=${row.id}`}>打开 CRF</Link>
+                  <Link to={`/research-entry/project-patients/${row.id}`}>研究录入</Link>
                 ),
               },
             ]}
-          />
-
-          <Alert
-            style={{ marginTop: 16 }}
-            type="info"
-            showIcon
-            message="随访与访视"
-            description="后续版本将在此关联访视计划与 CRF 随访入口；本期请从上方「打开 CRF」进入录入。"
           />
 
           <EnrollProjectsModal open={enrollOpen} onClose={() => setEnrollOpen(false)} patientId={id} />

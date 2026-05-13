@@ -96,6 +96,8 @@ function ConfirmedPatientCard({
           </Typography.Text>
           <span className="patient-card-actions">
             <Link to={`/patients/${row.patient}`}>详情</Link>
+            <Link to={`/research-entry/project-patients/${row.id}`}>研究录入</Link>
+            <Link to={`/crf?projectPatientId=${row.id}`}>打开 CRF</Link>
             {readOnly ? null : (
               <Button type="link" danger size="small" style={{ padding: 0 }} onClick={() => onRequestUnbind(row)}>
                 解绑

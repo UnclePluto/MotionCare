@@ -171,7 +171,7 @@ export function PatientCrfBaselinePage() {
   return (
     <Card
       loading={isLoading}
-      title="患者 CRF 基线信息"
+      title="患者基础基线资料"
       extra={
         <Space>
           <Button onClick={() => navigate(`/patients/${id}`)}>返回详情</Button>
