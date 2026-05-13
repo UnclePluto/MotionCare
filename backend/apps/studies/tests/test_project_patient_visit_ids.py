@@ -24,3 +24,39 @@ def test_project_patient_serializer_exposes_visit_ids(auth_client, project_patie
     for vt in ("T0", "T1", "T2"):
         assert visit_ids[vt] == VisitRecord.objects.get(project_patient=project_patient, visit_type=vt).id
 
+
+@pytest.mark.django_db
+def test_project_patient_serializer_exposes_visit_summaries(auth_client, project_patient):
+    t0 = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    t0.status = VisitRecord.Status.COMPLETED
+    t0.visit_date = "2026-05-14"
+    t0.save(update_fields=["status", "visit_date"])
+
+    r = auth_client.get(f"/api/studies/project-patients/?project={project_patient.project_id}")
+
+    assert r.status_code == 200, r.content
+    rows = r.data if isinstance(r.data, list) else r.data["results"]
+    row = rows[0]
+    assert row["project_name"] == project_patient.project.name
+    assert row["project_status"] == project_patient.project.status
+    assert row["visit_summaries"]["T0"] == {
+        "id": t0.id,
+        "status": VisitRecord.Status.COMPLETED,
+        "visit_date": "2026-05-14",
+    }
+    assert row["visit_summaries"]["T1"]["status"] == VisitRecord.Status.DRAFT
+    assert row["visit_summaries"]["T2"]["status"] == VisitRecord.Status.DRAFT
+
+
+@pytest.mark.django_db
+def test_project_patient_list_filters_patient_name_and_phone(auth_client, project_patient):
+    by_name = auth_client.get("/api/studies/project-patients/", {"patient_name": "患者甲"})
+    by_phone = auth_client.get("/api/studies/project-patients/", {"patient_phone": "13900001111"})
+    no_match = auth_client.get("/api/studies/project-patients/", {"patient_name": "不存在"})
+
+    assert by_name.status_code == 200, by_name.content
+    assert by_phone.status_code == 200, by_phone.content
+    assert no_match.status_code == 200, no_match.content
+    assert [row["id"] for row in by_name.data] == [project_patient.id]
+    assert [row["id"] for row in by_phone.data] == [project_patient.id]
+    assert no_match.data == []

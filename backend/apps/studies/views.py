@@ -2,7 +2,7 @@ from collections import Counter
 
 from django.db import IntegrityError
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Prefetch
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, ValidationError
@@ -16,6 +16,7 @@ from apps.studies.project_status import (
     ensure_project_open,
 )
 from apps.studies.services.unbind_project_patient import unbind_project_patient
+from apps.visits.models import VisitRecord
 from apps.visits.services import ensure_default_visits
 
 from .models import ProjectPatient, StudyGroup, StudyProject
@@ -250,7 +251,14 @@ class StudyGroupViewSet(ModelViewSet):
 
 
 class ProjectPatientViewSet(ModelViewSet):
-    queryset = ProjectPatient.objects.select_related("project", "patient", "group").order_by("-id")
+    queryset = ProjectPatient.objects.select_related("project", "patient", "group").prefetch_related(
+        Prefetch(
+            "visits",
+            queryset=VisitRecord.objects.only(
+                "id", "project_patient_id", "visit_type", "status", "visit_date"
+            ),
+        )
+    ).order_by("-id")
     serializer_class = ProjectPatientSerializer
     permission_classes = [IsAdminOrDoctor]
 
@@ -262,6 +270,12 @@ class ProjectPatientViewSet(ModelViewSet):
         patient_id = self.request.query_params.get("patient")
         if patient_id:
             qs = qs.filter(patient_id=patient_id)
+        patient_name = self.request.query_params.get("patient_name")
+        if patient_name:
+            qs = qs.filter(patient__name__icontains=patient_name)
+        patient_phone = self.request.query_params.get("patient_phone")
+        if patient_phone:
+            qs = qs.filter(patient__phone__icontains=patient_phone)
         return qs
 
     def create(self, request, *args, **kwargs):
