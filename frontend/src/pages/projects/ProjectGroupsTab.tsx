@@ -17,9 +17,10 @@ type StudyGroupRow = {
 type Props = {
   projectId: number;
   onGroupCreated?: () => void;
+  readOnly?: boolean;
 };
 
-export function ProjectGroupsTab({ projectId, onGroupCreated }: Props) {
+export function ProjectGroupsTab({ projectId, onGroupCreated, readOnly = false }: Props) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<{ name: string }>();
@@ -58,7 +59,7 @@ export function ProjectGroupsTab({ projectId, onGroupCreated }: Props) {
     <Card
       title="分组配置"
       extra={
-        <Button type="primary" onClick={() => setOpen(true)}>
+        <Button type="primary" disabled={readOnly} onClick={() => setOpen(true)}>
           新建分组
         </Button>
       }
@@ -90,18 +91,21 @@ export function ProjectGroupsTab({ projectId, onGroupCreated }: Props) {
           form={form}
           layout="vertical"
           initialValues={{}}
-          onFinish={(v) => createMutation.mutate(v)}
+          onFinish={(v) => {
+            if (readOnly) return;
+            createMutation.mutate(v);
+          }}
         >
           <Form.Item
             label="分组名称"
             name="name"
             rules={[{ required: true, message: "请输入名称" }]}
           >
-            <Input placeholder="例如：干预组" />
+            <Input placeholder="例如：干预组" disabled={readOnly} />
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit" loading={createMutation.isPending}>
+              <Button type="primary" htmlType="submit" loading={createMutation.isPending} disabled={readOnly}>
                 保存
               </Button>
               <Button onClick={() => setOpen(false)}>取消</Button>

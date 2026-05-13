@@ -3,6 +3,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
+from apps.studies.project_status import ensure_project_open
 
 from .filters import VisitRecordFilter
 from .models import VisitRecord
@@ -35,3 +36,10 @@ class VisitRecordViewSet(ModelViewSet):
         if self.action == "list":
             return VisitRecordListSerializer
         return VisitRecordSerializer
+
+    def perform_update(self, serializer):
+        visit = self.get_object()
+        ensure_project_open(visit.project_patient.project)
+        target_project_patient = serializer.validated_data.get("project_patient", visit.project_patient)
+        ensure_project_open(target_project_patient.project)
+        serializer.save()

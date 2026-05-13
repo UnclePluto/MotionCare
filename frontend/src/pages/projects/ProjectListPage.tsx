@@ -10,14 +10,14 @@ import { DestructiveActionModal } from "../components/DestructiveActionModal";
 type ProjectRow = {
   id: number;
   name: string;
-  status: string;
+  status: "draft" | "active" | "archived";
   patient_count?: number;
 };
 
-const statusLabel: Record<string, string> = {
+const statusLabel: Record<ProjectRow["status"], string> = {
   draft: "草稿",
   active: "进行中",
-  archived: "已归档",
+  archived: "已完结",
 };
 
 function backendDetail(err: unknown): string | null {
@@ -113,7 +113,7 @@ export function ProjectListPage() {
           {
             title: "状态",
             dataIndex: "status",
-            render: (v: string) => statusLabel[v] ?? v,
+            render: (v: ProjectRow["status"]) => statusLabel[v] ?? v,
           },
           {
             title: "患者数",

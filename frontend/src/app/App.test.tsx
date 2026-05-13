@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -25,6 +25,9 @@ vi.mock("../api/client", () => ({
 
 describe("App", () => {
   beforeEach(() => {
+    window.history.pushState({}, "", "/");
+    mockGet.mockReset();
+    mockPost.mockReset();
     mockGet.mockImplementation((url: string, config?: unknown) => {
       const params =
         typeof config === "object" && config
@@ -190,6 +193,10 @@ describe("App", () => {
     });
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("imports global fullscreen styles from the app entry", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const mainTsx = readFileSync(resolve(here, "../main.tsx"), "utf-8");
@@ -285,8 +292,13 @@ describe("App", () => {
     });
 
     expect(screen.getByRole("button", { name: "新增分组" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "随机分组" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认分组" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "项目完结" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "新增分组 / 元数据" })).not.toBeInTheDocument();
     expect(screen.queryByText(/勾选未确认入组患者后点击/)).not.toBeInTheDocument();
+    const removedDraftNotice = ["占比与本轮随机结果", "仅在确认后保存。"].join("");
+    expect(screen.queryByText(removedDraftNotice)).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "分组看板" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "项目患者" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "添加患者" })).not.toBeInTheDocument();
@@ -294,6 +306,39 @@ describe("App", () => {
     expect(screen.queryByText(/CRF 录入请从/)).not.toBeInTheDocument();
     expect(screen.queryByText(/访视评估/)).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "详情" }).length).toBeGreaterThan(0);
+  });
+
+  it("在项目详情页确认项目完结", async () => {
+    window.history.pushState({}, "", "/projects/1");
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/studies/projects/1/complete/") {
+        return Promise.resolve({ data: { id: 1, status: "archived" } });
+      }
+      return Promise.reject(new Error(`unmocked POST ${url}`));
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "项目完结" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "项目完结" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认完结" }));
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/studies/projects/1/complete/"));
+    await waitFor(() => expect(screen.getByText("已完结")).toBeInTheDocument());
+
+    expect(screen.getByRole("button", { name: "随机分组" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认分组" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新增分组" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "项目完结" })).toBeDisabled();
+    expect(screen.getByLabelText(/选择患者 张三/)).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "解绑" })).not.toBeInTheDocument();
   });
 
   it("opens research entry page from route", async () => {

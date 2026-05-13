@@ -72,4 +72,39 @@ describe("EnrollProjectsModal", () => {
       enrollments: [{ project_id: 1, group_id: 10 }],
     });
   });
+
+  it("does not show archived projects", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/studies/projects/") {
+        return Promise.resolve({
+          data: [
+            { id: 1, name: "进行中项目", status: "active" },
+            { id: 2, name: "已完结项目", status: "archived" },
+          ],
+        });
+      }
+      if (url.startsWith("/studies/project-patients/?patient=")) {
+        return Promise.resolve({ data: [] });
+      }
+      if (url === "/studies/groups/") {
+        return Promise.resolve({
+          data: [
+            { id: 10, project: 1, name: "干预组", is_active: true },
+            { id: 20, project: 2, name: "对照组", is_active: true },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={qc}>
+        <EnrollProjectsModal open onClose={vi.fn()} patientId={42} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("进行中项目")).toBeInTheDocument();
+    expect(screen.queryByText("已完结项目")).not.toBeInTheDocument();
+  });
 });

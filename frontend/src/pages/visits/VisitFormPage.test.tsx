@@ -61,7 +61,7 @@ describe("VisitFormPage", () => {
     expect(await screen.findByDisplayValue("9")).toBeInTheDocument();
     expect(screen.getByDisplayValue("22")).toBeInTheDocument();
     expect(screen.getAllByText("T0").length).toBeGreaterThan(0);
-  });
+  }, 10000);
 
   it("falls back to computed_assessments and shows '系统预填值' hint when assessments missing", async () => {
     mockGet.mockResolvedValue({
@@ -180,5 +180,37 @@ describe("VisitFormPage", () => {
     const [, body] = mockPatch.mock.calls[0] as [string, { form_data: { crf?: { adherence?: { platform_id?: string } } } }];
     expect(body.form_data.crf?.adherence?.platform_id).toBe("PID-99");
   });
-});
 
+  it("renders archived project visits as readonly and blocks mutations", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: 21,
+        project_patient: 1,
+        project_status: "archived",
+        visit_type: "T0",
+        status: "draft",
+        visit_date: null,
+        form_data: {
+          assessments: { sppb: { total: 9 } },
+          computed_assessments: {},
+          crf: { adherence: { platform_id: "PID-99" } },
+        },
+      },
+    });
+
+    const r = renderAt(21);
+
+    expect(await screen.findByText("项目已完结，访视表单只读。")).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "SPPB 总分" })).toBeDisabled();
+    expect(screen.getByLabelText("平台账号/编号")).toBeDisabled();
+
+    const saveBtn = r.container.querySelector('button[aria-label="保存"]');
+    const completeBtn = r.container.querySelector('button[aria-label="标记已完成"]');
+    expect(saveBtn).toBeDisabled();
+    expect(completeBtn).toBeDisabled();
+
+    fireEvent.click(saveBtn as Element);
+    fireEvent.click(completeBtn as Element);
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
+});

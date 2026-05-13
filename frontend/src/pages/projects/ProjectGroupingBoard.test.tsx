@@ -1,9 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
-import { ProjectGroupingBoard } from "./ProjectGroupingBoard";
+import {
+  ProjectGroupingBoard,
+  type ProjectGroupingBoardActionState,
+  type ProjectGroupingBoardHandle,
+} from "./ProjectGroupingBoard";
 
 const { mockGet, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
@@ -37,6 +42,52 @@ const dropRawPatientIdToGroup = (rawPatientId: string, groupId: number) => {
   fireEvent.dragOver(screen.getByTestId(`group-drop-${groupId}`), { dataTransfer });
   fireEvent.drop(screen.getByTestId(`group-drop-${groupId}`), { dataTransfer });
 };
+
+function ProjectGroupingBoardHarness({
+  projectId,
+  groupRevision = 0,
+  readOnly = false,
+}: {
+  projectId: number;
+  groupRevision?: number;
+  readOnly?: boolean;
+}) {
+  const boardRef = useRef<ProjectGroupingBoardHandle>(null);
+  const [actionState, setActionState] = useState<ProjectGroupingBoardActionState>({
+    hasActiveGroups: false,
+    hasEligibleSelection: false,
+    confirmLoading: false,
+  });
+
+  return (
+    <>
+      <button
+        type="button"
+        disabled={readOnly}
+        data-has-active-groups={String(actionState.hasActiveGroups)}
+        data-has-eligible-selection={String(actionState.hasEligibleSelection)}
+        onClick={() => boardRef.current?.randomize()}
+      >
+        随机分组
+      </button>
+      <button
+        type="button"
+        disabled={readOnly}
+        aria-busy={actionState.confirmLoading}
+        onClick={() => boardRef.current?.confirm()}
+      >
+        确认分组
+      </button>
+      <ProjectGroupingBoard
+        ref={boardRef}
+        projectId={projectId}
+        groupRevision={groupRevision}
+        readOnly={readOnly}
+        onActionStateChange={setActionState}
+      />
+    </>
+  );
+}
 
 vi.mock("../../api/client", () => ({
   apiClient: {
@@ -99,7 +150,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -162,7 +213,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -179,7 +230,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -197,7 +248,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -213,7 +264,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -257,7 +308,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -286,7 +337,7 @@ describe("ProjectGroupingBoard", () => {
     const { rerender } = render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} groupRevision={0} />
+          <ProjectGroupingBoardHarness projectId={1} groupRevision={0} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -302,7 +353,7 @@ describe("ProjectGroupingBoard", () => {
     rerender(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} groupRevision={1} />
+          <ProjectGroupingBoardHarness projectId={1} groupRevision={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -318,7 +369,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -336,7 +387,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -366,7 +417,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -431,7 +482,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -457,7 +508,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -487,7 +538,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -503,6 +554,25 @@ describe("ProjectGroupingBoard", () => {
     expect(within(groupCard).getByRole("button", { name: "解绑" })).toBeInTheDocument();
   });
 
+  it("只读模式禁用分组操作并隐藏破坏性入口", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <ProjectGroupingBoardHarness projectId={1} readOnly />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/未入组甲/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "随机分组" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认分组" })).toBeDisabled();
+    expect(screen.getByLabelText(/选择患者 未入组甲/)).toBeDisabled();
+    expect(screen.getByLabelText("试验组占比")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "删除试验组" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "解绑" })).not.toBeInTheDocument();
+  });
+
   it("确认分组提交本地 assignments 并刷新", async () => {
     mockPost.mockResolvedValueOnce({
       data: { confirmed: 1, created: [{ project_patient_id: 9010, patient_id: 1, group_id: 10 }] },
@@ -511,7 +581,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -568,7 +638,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -601,7 +671,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -625,7 +695,7 @@ describe("ProjectGroupingBoard", () => {
     render(
       <MemoryRouter>
         <QueryClientProvider client={qc}>
-          <ProjectGroupingBoard projectId={1} />
+          <ProjectGroupingBoardHarness projectId={1} />
         </QueryClientProvider>
       </MemoryRouter>,
     );

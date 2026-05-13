@@ -145,11 +145,18 @@ def _validate_known_assessment_types(assessments: Dict[str, Any]) -> Tuple[bool,
 
 
 class VisitRecordSerializer(serializers.ModelSerializer):
+    project_id = serializers.IntegerField(source="project_patient.project_id", read_only=True)
+    project_name = serializers.CharField(source="project_patient.project.name", read_only=True)
+    project_status = serializers.CharField(source="project_patient.project.status", read_only=True)
+
     class Meta:
         model = VisitRecord
         fields = [
             "id",
             "project_patient",
+            "project_id",
+            "project_name",
+            "project_status",
             "visit_type",
             "status",
             "visit_date",
@@ -216,4 +223,3 @@ class VisitRecordSerializer(serializers.ModelSerializer):
 
         instance.form_data = _normalize_stored_form_data(merged)
         return super().update(instance, validated_data)
-

@@ -9,7 +9,7 @@ import {
   Typography,
   message,
 } from "antd";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { Link } from "react-router-dom";
 
@@ -41,9 +41,23 @@ type LocalAssignmentRow = { patientId: number; groupId: number };
 
 const PATIENT_DRAG_MIME = "application/x-motioncare-patient-id";
 
+export type ProjectGroupingBoardHandle = {
+  randomize: () => void;
+  confirm: () => void;
+  clearDraft: () => void;
+};
+
+export type ProjectGroupingBoardActionState = {
+  hasActiveGroups: boolean;
+  hasEligibleSelection: boolean;
+  confirmLoading: boolean;
+};
+
 type Props = {
   projectId: number;
   groupRevision?: number;
+  readOnly?: boolean;
+  onActionStateChange?: (state: ProjectGroupingBoardActionState) => void;
 };
 
 const genderLabel: Record<string, string> = {
@@ -61,10 +75,12 @@ function ConfirmedPatientCard({
   row,
   patientById,
   onRequestUnbind,
+  readOnly = false,
 }: {
   row: ProjectPatientRow;
   patientById: Record<number, PatientOption>;
   onRequestUnbind: (row: ProjectPatientRow) => void;
+  readOnly?: boolean;
 }) {
   const p = patientById[row.patient];
   return (
@@ -80,9 +96,11 @@ function ConfirmedPatientCard({
           </Typography.Text>
           <span className="patient-card-actions">
             <Link to={`/patients/${row.patient}`}>详情</Link>
-            <Button type="link" danger size="small" style={{ padding: 0 }} onClick={() => onRequestUnbind(row)}>
-              解绑
-            </Button>
+            {readOnly ? null : (
+              <Button type="link" danger size="small" style={{ padding: 0 }} onClick={() => onRequestUnbind(row)}>
+                解绑
+              </Button>
+            )}
           </span>
         </div>
       </Card>
@@ -95,19 +113,21 @@ function LocalAssignmentCard({
   patientById,
   onRemove,
   onDragStart,
+  readOnly = false,
 }: {
   assignment: LocalAssignmentRow;
   patientById: Record<number, PatientOption>;
   onRemove: (patientId: number) => void;
   onDragStart: (patientId: number, event: DragEvent<HTMLDivElement>) => void;
+  readOnly?: boolean;
 }) {
   const p = patientById[assignment.patientId];
   return (
     <div
       data-testid={`local-assignment-${assignment.patientId}`}
-      draggable
-      onDragStart={(event) => onDragStart(assignment.patientId, event)}
-      style={{ marginBottom: 8, cursor: "grab" }}
+      draggable={!readOnly}
+      onDragStart={readOnly ? undefined : (event) => onDragStart(assignment.patientId, event)}
+      style={{ marginBottom: 8, cursor: readOnly ? "default" : "grab" }}
     >
       <Card size="small" styles={{ body: { padding: 10 } }}>
         <div className="patient-card-line">
@@ -120,15 +140,17 @@ function LocalAssignmentCard({
           </Typography.Text>
           <span className="patient-card-actions">
             <Link to={`/patients/${assignment.patientId}`}>详情</Link>
-            <Button
-              type="link"
-              danger
-              size="small"
-              style={{ padding: 0 }}
-              onClick={() => onRemove(assignment.patientId)}
-            >
-              移除
-            </Button>
+            {readOnly ? null : (
+              <Button
+                type="link"
+                danger
+                size="small"
+                style={{ padding: 0 }}
+                onClick={() => onRemove(assignment.patientId)}
+              >
+                移除
+              </Button>
+            )}
           </span>
         </div>
       </Card>
@@ -136,7 +158,10 @@ function LocalAssignmentCard({
   );
 }
 
-export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
+export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props>(function ProjectGroupingBoard(
+  { projectId, groupRevision = 0, readOnly = false, onActionStateChange },
+  ref,
+) {
   const qc = useQueryClient();
   const appliedGroupRevisionRef = useRef(0);
   const [poolSelected, setPoolSelected] = useState<number[]>([]);
@@ -290,10 +315,12 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
   });
 
   const openDeleteGroupModal = (g: StudyGroupRow) => {
+    if (readOnly) return;
     setDeleteGroupTarget(g);
   };
 
   const handleAssignmentDragStart = (patientId: number, event: DragEvent<HTMLDivElement>) => {
+    if (readOnly) return;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData(PATIENT_DRAG_MIME, String(patientId));
   };
@@ -305,6 +332,7 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
 
   const handleGroupDrop = (groupId: number, event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
+    if (readOnly) return;
     if (!activeGroupIds.has(groupId)) return;
 
     const rawPatientId = event.dataTransfer.getData(PATIENT_DRAG_MIME);
@@ -324,18 +352,21 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
     localAssignments.filter((a) => a.groupId === groupId).length;
 
   const hasEligibleSelection = poolSelected.some((id) => !confirmedPatientIds.has(id));
-  const activePercents = activeGroups.map((g) => percentByGroupId[g.id] ?? g.target_ratio);
+  const activePercents = useMemo(
+    () => activeGroups.map((g) => percentByGroupId[g.id] ?? g.target_ratio),
+    [activeGroups, percentByGroupId],
+  );
   const percentValidationError = getPercentValidationError(activePercents);
 
-  const runLocalRandomize = () => {
+  const runLocalRandomize = useCallback(() => {
+    if (readOnly) return;
     const eligibleIds = poolSelected.filter((id) => !confirmedPatientIds.has(id));
     if (!eligibleIds.length) {
       message.warning("请先选择至少一名未确认入组患者。");
       return;
     }
-    const validationError = getPercentValidationError(activePercents);
-    if (validationError) {
-      message.warning(validationError);
+    if (percentValidationError) {
+      message.warning(percentValidationError);
       return;
     }
     try {
@@ -346,9 +377,10 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
     } catch (err) {
       message.error(err instanceof Error ? err.message : "随机分组失败");
     }
-  };
+  }, [activeGroups, confirmedPatientIds, percentByGroupId, percentValidationError, poolSelected, readOnly]);
 
   const handlePatientSelectionChange = (patientId: number, checked: boolean) => {
+    if (readOnly) return;
     setPoolSelected((prev) =>
       checked
         ? prev.includes(patientId)
@@ -362,43 +394,52 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
     }
   };
 
-  const confirmCurrentDraft = () => {
+  const confirmCurrentDraft = useCallback(() => {
+    if (readOnly) return;
     if (percentValidationError) {
       message.warning(percentValidationError);
       return;
     }
     confirmGroupingMutation.mutate();
-  };
+  }, [confirmGroupingMutation, percentValidationError, readOnly]);
+
+  const clearDraft = useCallback(() => {
+    setLocalAssignments([]);
+    setPoolSelected([]);
+    setPercentByGroupId(Object.fromEntries(activeGroups.map((g) => [g.id, g.target_ratio])));
+    setIsPercentDirty(false);
+  }, [activeGroups]);
+
+  useImperativeHandle(ref, () => ({
+    randomize: runLocalRandomize,
+    confirm: confirmCurrentDraft,
+    clearDraft,
+  }), [clearDraft, confirmCurrentDraft, runLocalRandomize]);
+
+  useEffect(() => {
+    onActionStateChange?.({
+      hasActiveGroups: activeGroups.length > 0,
+      hasEligibleSelection,
+      confirmLoading: confirmGroupingMutation.isPending,
+    });
+  }, [activeGroups.length, confirmGroupingMutation.isPending, hasEligibleSelection, onActionStateChange]);
+
+  useEffect(() => {
+    if (!readOnly) return;
+    clearDraft();
+    setDeleteGroupTarget(null);
+    setUnbindTarget(null);
+  }, [clearDraft, readOnly]);
 
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
-      <Card size="small">
-        <Space wrap align="center">
-          <Button type="primary" disabled={!hasEligibleSelection || !activeGroups.length} onClick={runLocalRandomize}>
-            随机分组
-          </Button>
-          <Button
-            type="primary"
-            style={{ backgroundColor: "#16a34a", borderColor: "#16a34a" }}
-            disabled={!activeGroups.length}
-            loading={confirmGroupingMutation.isPending}
-            onClick={confirmCurrentDraft}
-          >
-            确认分组
-          </Button>
-          <Typography.Text type={percentValidationError ? "danger" : "secondary"}>
-            {percentValidationError ?? "占比与本轮随机结果仅在确认后保存。"}
-          </Typography.Text>
-        </Space>
-      </Card>
-
       <Card title={patients ? "全量患者" : "加载患者"} size="small">
         <Space wrap size={[8, 8]}>
           {(patients ?? []).map((p) => (
             <Checkbox
               key={p.id}
               checked={poolSelected.includes(p.id)}
-              disabled={confirmedPatientIds.has(p.id)}
+              disabled={readOnly || confirmedPatientIds.has(p.id)}
               aria-label={`选择患者 ${p.name}`}
               onChange={(e) => handlePatientSelectionChange(p.id, e.target.checked)}
             >
@@ -438,8 +479,9 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
                       aria-label={`${g.name}占比`}
                       style={{ width: 54 }}
                       value={percentByGroupId[g.id]}
-                      disabled={!g.is_active}
+                      disabled={readOnly || !g.is_active}
                       onChange={(v) => {
+                        if (readOnly) return;
                         setIsPercentDirty(true);
                         setPercentByGroupId((prev) => ({
                           ...prev,
@@ -455,32 +497,34 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
               </Space>
             }
           >
-            <Button
-              type="text"
-              danger
-              size="small"
-              aria-label={`删除${g.name}`}
-              className="group-delete-bubble"
-              onClick={() => openDeleteGroupModal(g)}
-              loading={deleteGroupMutation.isPending}
-              disabled={!g.is_active}
-              style={{
-                position: "absolute",
-                right: 8,
-                top: 8,
-                width: 24,
-                height: 24,
-                minWidth: 24,
-                borderRadius: 9999,
-                zIndex: 2,
-              }}
-            >
-              ×
-            </Button>
+            {readOnly ? null : (
+              <Button
+                type="text"
+                danger
+                size="small"
+                aria-label={`删除${g.name}`}
+                className="group-delete-bubble"
+                onClick={() => openDeleteGroupModal(g)}
+                loading={deleteGroupMutation.isPending}
+                disabled={!g.is_active}
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: 8,
+                  width: 24,
+                  height: 24,
+                  minWidth: 24,
+                  borderRadius: 9999,
+                  zIndex: 2,
+                }}
+              >
+                ×
+              </Button>
+            )}
             <div
               data-testid={`group-drop-${g.id}`}
-              onDragOver={g.is_active ? handleGroupDragOver : undefined}
-              onDrop={g.is_active ? (event) => handleGroupDrop(g.id, event) : undefined}
+              onDragOver={g.is_active && !readOnly ? handleGroupDragOver : undefined}
+              onDrop={g.is_active && !readOnly ? (event) => handleGroupDrop(g.id, event) : undefined}
               style={{ minHeight: 80, borderRadius: 6, padding: 4 }}
             >
               {(projectPatients ?? [])
@@ -491,6 +535,7 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
                     row={row}
                     patientById={patientById}
                     onRequestUnbind={(r) => setUnbindTarget(r)}
+                    readOnly={readOnly}
                   />
                 ))}
               {localAssignments
@@ -504,12 +549,14 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
                       setLocalAssignments((prev) => prev.filter((a) => a.patientId !== patientId))
                     }
                     onDragStart={handleAssignmentDragStart}
+                    readOnly={readOnly}
                   />
                 ))}
             </div>
           </Card>
         ))}
       </div>
+      {percentValidationError ? <Typography.Text type="danger">{percentValidationError}</Typography.Text> : null}
 
       <DestructiveActionModal
         open={deleteGroupTarget != null}
@@ -550,4 +597,4 @@ export function ProjectGroupingBoard({ projectId, groupRevision = 0 }: Props) {
       />
     </Space>
   );
-}
+});

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { apiClient } from "../../../api/client";
 
-type StudyProject = { id: number; name: string };
+type StudyProject = { id: number; name: string; status: string };
 
 type StudyGroupRow = {
   id: number;
@@ -64,7 +64,7 @@ export function EnrollProjectsModal({ open, onClose, patientId }: Props) {
 
   const enrolledIds = useMemo(() => new Set(links.map((l) => l.project)), [links]);
   const availableProjects = useMemo(
-    () => projects.filter((p) => !enrolledIds.has(p.id)),
+    () => projects.filter((p) => p.status !== "archived" && !enrolledIds.has(p.id)),
     [projects, enrolledIds],
   );
   const groupsByProject = useMemo(() => {

@@ -1,3 +1,5 @@
+from collections import Counter
+
 from django.db import transaction
 from rest_framework import status
 from rest_framework.decorators import action
@@ -7,6 +9,7 @@ from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
+from apps.studies.project_status import ensure_project_open
 from apps.visits.services import ensure_default_visits
 
 from .models import Patient, PatientBaseline
@@ -44,15 +47,29 @@ class PatientViewSet(ModelViewSet):
         serializer.is_valid(raise_exception=True)
         enrollments = serializer.validated_data["enrollments"]
 
+        duplicate_project_ids = sorted(
+            project_id
+            for project_id, count in Counter(
+                item["project_id"] for item in enrollments
+            ).items()
+            if count > 1
+        )
+        if duplicate_project_ids:
+            raise ValidationError({"detail": f"重复项目: {duplicate_project_ids}"})
+
         project_ids = {item["project_id"] for item in enrollments}
         group_ids = {item["group_id"] for item in enrollments}
 
-        existing_project_ids = set(
-            StudyProject.objects.filter(pk__in=project_ids).values_list("pk", flat=True)
-        )
-        missing_projects = sorted(project_ids - existing_project_ids)
+        existing_projects = {
+            project.id: project
+            for project in StudyProject.objects.filter(pk__in=project_ids)
+        }
+        missing_projects = sorted(project_ids - existing_projects.keys())
         if missing_projects:
             raise ValidationError({"detail": f"以下项目不存在: {missing_projects}"})
+
+        for project_obj in existing_projects.values():
+            ensure_project_open(project_obj)
 
         existing_groups = {
             group.id: group

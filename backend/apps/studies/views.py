@@ -10,6 +10,11 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
+from apps.studies.project_status import (
+    PROJECT_COMPLETED_GROUP_DETAIL,
+    PROJECT_COMPLETED_UNBIND_DETAIL,
+    ensure_project_open,
+)
 from apps.studies.services.unbind_project_patient import unbind_project_patient
 from apps.visits.services import ensure_default_visits
 
@@ -41,6 +46,16 @@ class StudyProjectViewSet(ModelViewSet):
             raise ValidationError({"detail": "项目中仍有患者，无法删除。"})
         return super().destroy(request, *args, **kwargs)
 
+    @action(detail=True, methods=["post"], url_path="complete")
+    @transaction.atomic
+    def complete(self, request, pk=None):
+        project = self.get_object()
+        project = StudyProject.objects.select_for_update(of=("self",)).get(pk=project.pk)
+        if project.status != StudyProject.Status.ARCHIVED:
+            project.status = StudyProject.Status.ARCHIVED
+            project.save(update_fields=["status", "updated_at"])
+        return Response(StudyProjectSerializer(project).data)
+
     @action(detail=True, methods=["post"], url_path="confirm-grouping")
     @transaction.atomic
     def confirm_grouping(self, request, pk=None):
@@ -48,6 +63,7 @@ class StudyProjectViewSet(ModelViewSet):
 
         project = self.get_object()
         project = StudyProject.objects.select_for_update(of=("self",)).get(pk=project.pk)
+        ensure_project_open(project)
         serializer = ConfirmGroupingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -217,7 +233,20 @@ class StudyGroupViewSet(ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        ensure_project_open(serializer.validated_data["project"], PROJECT_COMPLETED_GROUP_DETAIL)
         serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        group = self.get_object()
+        ensure_project_open(group.project, PROJECT_COMPLETED_GROUP_DETAIL)
+        target_project = serializer.validated_data.get("project", group.project)
+        ensure_project_open(target_project, PROJECT_COMPLETED_GROUP_DETAIL)
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        group = self.get_object()
+        ensure_project_open(group.project, PROJECT_COMPLETED_GROUP_DETAIL)
+        return super().destroy(request, *args, **kwargs)
 
 
 class ProjectPatientViewSet(ModelViewSet):
@@ -248,6 +277,7 @@ class ProjectPatientViewSet(ModelViewSet):
     @transaction.atomic
     def unbind(self, request, pk=None):
         pp = self.get_object()
+        ensure_project_open(pp.project, PROJECT_COMPLETED_UNBIND_DETAIL)
         unbind_project_patient(project_patient=pp)
         return Response(
             {

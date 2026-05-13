@@ -1,17 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CrfPreviewPage } from "./CrfPreviewPage";
 
-const { mockGet } = vi.hoisted(() => ({
+const { mockGet, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
+  mockPost: vi.fn(),
 }));
 
 vi.mock("../../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
+    post: (...args: unknown[]) => mockPost(...args),
     interceptors: {
       request: { use: vi.fn(), eject: vi.fn() },
       response: { use: vi.fn(), eject: vi.fn() },
@@ -22,6 +24,7 @@ vi.mock("../../api/client", () => ({
 describe("CrfPreviewPage", () => {
   beforeEach(() => {
     mockGet.mockReset();
+    mockPost.mockReset();
     mockGet.mockImplementation((url: string) => {
       if (url === "/studies/project-patients/") {
         return Promise.resolve({
@@ -47,6 +50,11 @@ describe("CrfPreviewPage", () => {
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
+    mockPost.mockResolvedValue({ data: { docx_file: null } });
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it("renders subject_id and education_years in summary", async () => {
@@ -74,5 +82,25 @@ describe("CrfPreviewPage", () => {
     expect(eduRow).toBeTruthy();
     expect(eduRow!).toHaveTextContent("9");
   });
-});
 
+  it("allows DOCX export for selected project patient", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/?projectPatientId=1"]}>
+          <CrfPreviewPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const exportButton = await screen.findByRole("button", { name: "导出 DOCX" });
+    fireEvent.click(exportButton);
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith("/crf/project-patients/1/export/", {});
+    });
+  });
+});

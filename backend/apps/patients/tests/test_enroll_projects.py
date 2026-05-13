@@ -80,6 +80,50 @@ def test_enroll_projects_rejects_inactive_group(doctor, patient, project):
 
 
 @pytest.mark.django_db
+def test_enroll_projects_rejects_completed_project(doctor, patient, project):
+    project.status = StudyProject.Status.ARCHIVED
+    project.save(update_fields=["status"])
+    group = StudyGroup.objects.create(project=project, name="A", target_ratio=100)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/patients/{patient.id}/enroll-projects/",
+        {"enrollments": [{"project_id": project.id, "group_id": group.id}]},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "项目已完结" in str(response.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
+def test_enroll_projects_rejects_duplicate_project_in_same_payload(
+    doctor, patient, project
+):
+    g1 = StudyGroup.objects.create(project=project, name="A", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="B", target_ratio=50)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/patients/{patient.id}/enroll-projects/",
+        {
+            "enrollments": [
+                {"project_id": project.id, "group_id": g1.id},
+                {"project_id": project.id, "group_id": g2.id},
+            ]
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "重复项目" in str(response.data)
+    assert not ProjectPatient.objects.filter(project=project, patient=patient).exists()
+
+
+@pytest.mark.django_db
 def test_enroll_projects_rejects_unknown_project(doctor, patient):
     client = APIClient()
     client.force_authenticate(user=doctor)

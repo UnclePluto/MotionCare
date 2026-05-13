@@ -12,7 +12,7 @@ import {
   Typography,
   message,
 } from "antd";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -41,6 +41,7 @@ type Assessments = {
 type VisitDetail = {
   id: number;
   project_patient: number;
+  project_status?: "draft" | "active" | "archived";
   visit_type: "T0" | "T1" | "T2";
   status: "draft" | "completed";
   visit_date: string | null;
@@ -206,7 +207,7 @@ export function VisitFormPage() {
     [extensionFields],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!visit) return;
     const { state, computedFlags: flags } = buildInitialForm(visit);
     setInitial(state);
@@ -287,6 +288,7 @@ export function VisitFormPage() {
 
   const renderHint = (key: keyof FormState) =>
     computedFlags[key] ? computedHint : null;
+  const isArchivedProject = visit?.project_status === "archived";
 
   const headerExtra = useMemo(() => {
     if (!visit) return null;
@@ -322,12 +324,21 @@ export function VisitFormPage() {
             />
           )}
 
+          {isArchivedProject && (
+            <Alert
+              type="warning"
+              showIcon
+              message="项目已完结，访视表单只读。"
+            />
+          )}
+
           <div>
             <Card type="inner" title="SPPB" style={{ marginBottom: 12 }}>
               <Space wrap size="middle" align="end">
                 <Form.Item label="平衡">
                   <InputNumber
                     aria-label="SPPB 平衡"
+                    disabled={isArchivedProject}
                     value={current.sppb_balance ?? undefined}
                     onChange={(v) => set("sppb_balance", (v as number) ?? null)}
                   />
@@ -336,6 +347,7 @@ export function VisitFormPage() {
                 <Form.Item label="步行">
                   <InputNumber
                     aria-label="SPPB 步行"
+                    disabled={isArchivedProject}
                     value={current.sppb_gait ?? undefined}
                     onChange={(v) => set("sppb_gait", (v as number) ?? null)}
                   />
@@ -344,6 +356,7 @@ export function VisitFormPage() {
                 <Form.Item label="坐立">
                   <InputNumber
                     aria-label="SPPB 坐立"
+                    disabled={isArchivedProject}
                     value={current.sppb_chair_stand ?? undefined}
                     onChange={(v) =>
                       set("sppb_chair_stand", (v as number) ?? null)
@@ -354,6 +367,7 @@ export function VisitFormPage() {
                 <Form.Item label="SPPB 总分">
                   <InputNumber
                     aria-label="SPPB 总分"
+                    disabled={isArchivedProject}
                     value={current.sppb_total ?? undefined}
                     onChange={(v) => set("sppb_total", (v as number) ?? null)}
                   />
@@ -366,6 +380,7 @@ export function VisitFormPage() {
               <Form.Item label="MoCA 总分">
                 <InputNumber
                   aria-label="MoCA 总分"
+                  disabled={isArchivedProject}
                   value={current.moca_total ?? undefined}
                   onChange={(v) => set("moca_total", (v as number) ?? null)}
                 />
@@ -378,6 +393,7 @@ export function VisitFormPage() {
                 <Form.Item label="TUG（秒）">
                   <InputNumber
                     aria-label="TUG"
+                    disabled={isArchivedProject}
                     value={current.tug_seconds ?? undefined}
                     onChange={(v) => set("tug_seconds", (v as number) ?? null)}
                   />
@@ -386,6 +402,7 @@ export function VisitFormPage() {
                 <Form.Item label="握力（kg）">
                   <InputNumber
                     aria-label="握力"
+                    disabled={isArchivedProject}
                     value={current.grip_strength_kg ?? undefined}
                     onChange={(v) =>
                       set("grip_strength_kg", (v as number) ?? null)
@@ -395,6 +412,7 @@ export function VisitFormPage() {
                 </Form.Item>
                 <Form.Item label="衰弱判定">
                   <Radio.Group
+                    disabled={isArchivedProject}
                     value={current.frailty ?? undefined}
                     onChange={(e) =>
                       set("frailty", e.target.value as FormState["frailty"])
@@ -413,13 +431,13 @@ export function VisitFormPage() {
               <Form
                 form={extForm}
                 layout="vertical"
-                disabled={visit.status === "completed"}
+                disabled={visit.status === "completed" || isArchivedProject}
               >
                 {extensionGroups.map((g) => (
                   <Card key={g.key} type="inner" title={g.label} style={{ marginBottom: 12 }}>
                     {g.fields.map((f) =>
                       renderVisitRegistryField(f, {
-                        disabled: visit.status === "completed",
+                        disabled: visit.status === "completed" || isArchivedProject,
                       }),
                     )}
                   </Card>
@@ -432,6 +450,7 @@ export function VisitFormPage() {
                 type="primary"
                 aria-label="保存"
                 loading={saveMutation.isPending}
+                disabled={isArchivedProject}
                 onClick={() => saveMutation.mutate()}
               >
                 保存
@@ -439,7 +458,7 @@ export function VisitFormPage() {
               <Button
                 aria-label="标记已完成"
                 loading={completeMutation.isPending}
-                disabled={visit.status === "completed"}
+                disabled={visit.status === "completed" || isArchivedProject}
                 onClick={() => completeMutation.mutate()}
               >
                 标记已完成
@@ -454,4 +473,3 @@ export function VisitFormPage() {
     </Card>
   );
 }
-
