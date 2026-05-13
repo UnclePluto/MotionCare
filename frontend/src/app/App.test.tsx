@@ -264,7 +264,7 @@ describe("App", () => {
     });
   });
 
-  it("renders project grouping board when opening /projects/1", async () => {
+  it("renders project detail as grouping board only", async () => {
     window.history.pushState({}, "", "/projects/1");
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -283,31 +283,14 @@ describe("App", () => {
       expect(screen.getAllByText("项目患者乙").length).toBeGreaterThan(0);
       expect(screen.getAllByText(/张三/).length).toBeGreaterThan(0);
     });
-  });
 
-  it("renders T0/T1/T2 visit links on 项目患者 tab", async () => {
-    window.history.pushState({}, "", "/projects/1");
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-
-    render(
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("研究项目 A")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("tab", { name: "项目患者" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("link", { name: "T0" })).toHaveAttribute("href", "/visits/11");
-      expect(screen.getByRole("link", { name: "T1" })).toHaveAttribute("href", "/visits/12");
-      expect(screen.getByRole("link", { name: "T2" })).toHaveAttribute("href", "/visits/13");
-    });
+    expect(screen.queryByRole("tab", { name: "分组看板" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "项目患者" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "添加患者" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/CRF 模板版本/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/CRF 录入请从/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/访视评估/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "患者详情" }).length).toBeGreaterThan(0);
   });
 
   it("opens research entry page from route", async () => {
