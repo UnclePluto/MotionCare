@@ -91,21 +91,37 @@ describe("App", () => {
               {
                 id: 9001,
                 project: 1,
+                project_name: "研究项目 A",
+                project_status: "active",
                 patient: 201,
                 patient_name: "项目患者甲",
                 patient_phone: "13800000201",
                 group: 10,
                 group_name: "试验组",
+                enrolled_at: "2026-05-12T10:00:00+08:00",
                 visit_ids: { T0: 11, T1: 12, T2: 13 },
+                visit_summaries: {
+                  T0: { id: 11, status: "completed", visit_date: "2026-05-12" },
+                  T1: { id: 12, status: "draft", visit_date: null },
+                  T2: { id: 13, status: "draft", visit_date: null },
+                },
               },
               {
                 id: 9002,
                 project: 1,
+                project_name: "研究项目 A",
+                project_status: "active",
                 patient: 202,
                 patient_name: "项目患者乙",
                 patient_phone: "13800000202",
                 group: 11,
                 group_name: "对照组",
+                enrolled_at: "2026-05-13T10:00:00+08:00",
+                visit_summaries: {
+                  T0: { id: 21, status: "draft", visit_date: null },
+                  T1: { id: 22, status: "draft", visit_date: null },
+                  T2: { id: 23, status: "draft", visit_date: null },
+                },
               },
             ],
           });
@@ -354,7 +370,7 @@ describe("App", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("访视类型")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("患者姓名或手机号")).toBeInTheDocument();
     });
   });
 });
