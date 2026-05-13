@@ -7,6 +7,7 @@ import { useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { ageFromBirthDate } from "./ageFromBirthDate";
 import { BaselineLayoutTable } from "../../crf/BaselineLayoutTable";
 import { orderBaselineTableEntries } from "../../crf/baselineSectionOrder";
 import { mergePatientIntoBaselineApiPayload } from "../../crf/baselinePrefill";
@@ -127,6 +128,14 @@ export function PatientCrfBaselinePage() {
       baseline as Record<string, unknown>,
     );
     form.setFieldsValue(baselineToFormValues(merged));
+    const demo = merged.demographics as Record<string, unknown> | undefined;
+    const bd = demo?.birth_date;
+    if (typeof bd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(bd)) {
+      const dj = dayjs(bd);
+      if (dj.isValid()) {
+        form.setFieldValue(["demographics", "age_years"], ageFromBirthDate(dj));
+      }
+    }
   }, [patient, baseline, form]);
 
   const saveMutation = useMutation({
@@ -172,6 +181,22 @@ export function PatientCrfBaselinePage() {
       <Form
         form={form}
         layout="vertical"
+        onValuesChange={(changed) => {
+          const ch = changed as Record<string, unknown>;
+          const demo = ch.demographics;
+          if (demo == null || typeof demo !== "object") return;
+          const d = demo as Record<string, unknown>;
+          if (!("birth_date" in d)) return;
+          const v = d.birth_date;
+          if (v == null || v === "") {
+            form.setFieldValue(["demographics", "age_years"], undefined);
+            return;
+          }
+          const dj = dayjs.isDayjs(v) ? v : typeof v === "string" && v ? dayjs(v) : null;
+          if (dj?.isValid()) {
+            form.setFieldValue(["demographics", "age_years"], ageFromBirthDate(dj));
+          }
+        }}
         onFinish={(v) => saveMutation.mutate(v as Record<string, unknown>)}
         style={{ maxWidth: 1120 }}
       >

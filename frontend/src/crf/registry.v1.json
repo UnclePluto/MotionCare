@@ -38,32 +38,26 @@
         {
           "cells": [
             {
-              "field_id": "dm_age_years",
-              "colspan": 2
+              "field_id": "dm_age_years"
+            },
+            {
+              "field_id": "dm_birth_date"
+            },
+            {
+              "field_id": "dm_ethnicity"
             }
           ]
         },
         {
           "cells": [
             {
-              "field_id": "dm_birth_date",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "dm_gender"
+            },
             {
-              "field_id": "dm_gender",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "dm_marital"
+            },
             {
-              "field_id": "dm_marital",
-              "colspan": 2
+              "blank": true
             }
           ]
         },
@@ -71,15 +65,7 @@
           "cells": [
             {
               "field_id": "dm_address",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
-            {
-              "field_id": "dm_ethnicity",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
@@ -87,7 +73,7 @@
           "cells": [
             {
               "field_id": "dm_insurance",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
@@ -95,7 +81,7 @@
           "cells": [
             {
               "field_id": "dm_education_level",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
@@ -103,31 +89,20 @@
           "cells": [
             {
               "field_id": "dm_education_years",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
         {
           "cells": [
             {
-              "field_id": "dm_children",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "dm_children"
+            },
             {
-              "field_id": "dm_caregiver",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "dm_caregiver"
+            },
             {
-              "field_id": "dm_phone",
-              "colspan": 2
+              "field_id": "dm_phone"
             }
           ]
         },
@@ -135,7 +110,7 @@
           "cells": [
             {
               "field_id": "dm_income_band",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
@@ -143,7 +118,7 @@
           "cells": [
             {
               "field_id": "dm_income_afford",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
@@ -151,7 +126,7 @@
           "cells": [
             {
               "field_id": "dm_self_health",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         }
@@ -380,13 +355,8 @@
         {
           "cells": [
             {
-              "field_id": "cm_gout_attack_1m",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "cm_gout_attack_1m"
+            },
             {
               "field_id": "cm_other_history",
               "colspan": 2
@@ -400,13 +370,8 @@
         {
           "cells": [
             {
-              "field_id": "ls_smoking",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "ls_smoking"
+            },
             {
               "field_id": "ls_smoking_detail",
               "colspan": 2
@@ -416,13 +381,8 @@
         {
           "cells": [
             {
-              "field_id": "ls_drinking",
-              "colspan": 2
-            }
-          ]
-        },
-        {
-          "cells": [
+              "field_id": "ls_drinking"
+            },
             {
               "field_id": "ls_drinking_detail",
               "colspan": 2
@@ -433,7 +393,7 @@
           "cells": [
             {
               "field_id": "ls_exercise",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         },
@@ -441,7 +401,7 @@
           "cells": [
             {
               "field_id": "ls_ipaq",
-              "colspan": 2
+              "colspan": 3
             }
           ]
         }
@@ -455,7 +415,8 @@
               "field_id": "med_antihypertensive_uses"
             },
             {
-              "field_id": "med_antihypertensive_detail"
+              "field_id": "med_antihypertensive_detail",
+              "colspan": 2
             }
           ]
         },
@@ -465,7 +426,8 @@
               "field_id": "med_antidiabetic_uses"
             },
             {
-              "field_id": "med_antidiabetic_detail"
+              "field_id": "med_antidiabetic_detail",
+              "colspan": 2
             }
           ]
         },
@@ -475,7 +437,8 @@
               "field_id": "med_lipid_uses"
             },
             {
-              "field_id": "med_lipid_detail"
+              "field_id": "med_lipid_detail",
+              "colspan": 2
             }
           ]
         },
@@ -485,7 +448,8 @@
               "field_id": "med_inhaler_uses"
             },
             {
-              "field_id": "med_inhaler_detail"
+              "field_id": "med_inhaler_detail",
+              "colspan": 2
             }
           ]
         },
@@ -495,7 +459,8 @@
               "field_id": "med_antiplatelet_uses"
             },
             {
-              "field_id": "med_antiplatelet_detail"
+              "field_id": "med_antiplatelet_detail",
+              "colspan": 2
             }
           ]
         },
@@ -505,7 +470,8 @@
               "field_id": "med_cardiac_uses"
             },
             {
-              "field_id": "med_cardiac_detail"
+              "field_id": "med_cardiac_detail",
+              "colspan": 2
             }
           ]
         },
@@ -515,7 +481,8 @@
               "field_id": "med_sedative_uses"
             },
             {
-              "field_id": "med_sedative_detail"
+              "field_id": "med_sedative_detail",
+              "colspan": 2
             }
           ]
         },
@@ -525,7 +492,8 @@
               "field_id": "med_psych_uses"
             },
             {
-              "field_id": "med_psych_detail"
+              "field_id": "med_psych_detail",
+              "colspan": 2
             }
           ]
         },
@@ -535,7 +503,8 @@
               "field_id": "med_cognitive_uses"
             },
             {
-              "field_id": "med_cognitive_detail"
+              "field_id": "med_cognitive_detail",
+              "colspan": 2
             }
           ]
         },
@@ -545,7 +514,8 @@
               "field_id": "med_bone_uses"
             },
             {
-              "field_id": "med_bone_detail"
+              "field_id": "med_bone_detail",
+              "colspan": 2
             }
           ]
         },
@@ -555,7 +525,8 @@
               "field_id": "med_pain_uses"
             },
             {
-              "field_id": "med_pain_detail"
+              "field_id": "med_pain_detail",
+              "colspan": 2
             }
           ]
         },
@@ -565,15 +536,21 @@
               "field_id": "med_other_long_uses"
             },
             {
-              "field_id": "med_other_long_detail"
+              "field_id": "med_other_long_detail",
+              "colspan": 2
             }
           ]
         },
         {
           "cells": [
             {
-              "field_id": "med_count_regular",
-              "colspan": 2
+              "field_id": "med_count_regular"
+            },
+            {
+              "blank": true
+            },
+            {
+              "blank": true
             }
           ]
         }
@@ -674,8 +651,61 @@
       "visit_types": null,
       "options": [
         "汉族",
-        "黎族",
+        "蒙古族",
+        "回族",
+        "藏族",
+        "维吾尔族",
         "苗族",
+        "彝族",
+        "壮族",
+        "布依族",
+        "朝鲜族",
+        "满族",
+        "侗族",
+        "瑶族",
+        "白族",
+        "土家族",
+        "哈尼族",
+        "哈萨克族",
+        "傣族",
+        "黎族",
+        "傈僳族",
+        "佤族",
+        "畲族",
+        "高山族",
+        "拉祜族",
+        "水族",
+        "东乡族",
+        "纳西族",
+        "景颇族",
+        "柯尔克孜族",
+        "土族",
+        "达斡尔族",
+        "仫佬族",
+        "羌族",
+        "布朗族",
+        "撒拉族",
+        "毛南族",
+        "仡佬族",
+        "锡伯族",
+        "阿昌族",
+        "普米族",
+        "塔吉克族",
+        "怒族",
+        "乌孜别克族",
+        "俄罗斯族",
+        "鄂温克族",
+        "德昂族",
+        "保安族",
+        "裕固族",
+        "京族",
+        "塔塔尔族",
+        "独龙族",
+        "鄂伦春族",
+        "赫哲族",
+        "门巴族",
+        "珞巴族",
+        "基诺族",
         "其他"
       ],
       "doc_table_index": 9,
@@ -1424,10 +1454,14 @@
       "field_id": "cm_gout_attack_1m",
       "table_ref": "#T10",
       "label_zh": "近1个月内是否急性痛风发作",
-      "widget": "text",
+      "widget": "single_choice",
       "storage": "patient_baseline.comorbidities.gout_attack_1m",
       "required_for_complete": false,
       "visit_types": null,
+      "options": [
+        "否",
+        "是"
+      ],
       "doc_table_index": 11
     },
     {

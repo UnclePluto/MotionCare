@@ -43,6 +43,66 @@ DISEASES: list[tuple[str, str]] = [
     ("cm_other", "其他"),
 ]
 
+# 国家认定的 56 个民族（名称与常见统计口径一致）；选项末尾保留「其他」以配合 other_remark。
+CHINA_56_ETHNICITIES: list[str] = [
+    "汉族",
+    "蒙古族",
+    "回族",
+    "藏族",
+    "维吾尔族",
+    "苗族",
+    "彝族",
+    "壮族",
+    "布依族",
+    "朝鲜族",
+    "满族",
+    "侗族",
+    "瑶族",
+    "白族",
+    "土家族",
+    "哈尼族",
+    "哈萨克族",
+    "傣族",
+    "黎族",
+    "傈僳族",
+    "佤族",
+    "畲族",
+    "高山族",
+    "拉祜族",
+    "水族",
+    "东乡族",
+    "纳西族",
+    "景颇族",
+    "柯尔克孜族",
+    "土族",
+    "达斡尔族",
+    "仫佬族",
+    "羌族",
+    "布朗族",
+    "撒拉族",
+    "毛南族",
+    "仡佬族",
+    "锡伯族",
+    "阿昌族",
+    "普米族",
+    "塔吉克族",
+    "怒族",
+    "乌孜别克族",
+    "俄罗斯族",
+    "鄂温克族",
+    "德昂族",
+    "保安族",
+    "裕固族",
+    "京族",
+    "塔塔尔族",
+    "独龙族",
+    "鄂伦春族",
+    "赫哲族",
+    "门巴族",
+    "珞巴族",
+    "基诺族",
+]
+
 MED_CATS: list[tuple[str, str]] = [
     ("med_antihypertensive", "降压药"),
     ("med_antidiabetic", "降糖药"),
@@ -98,24 +158,36 @@ def field(
 
 def baseline_table_layout() -> dict:
     """与 _docx_table_dump TABLE 9–13 对齐；TABLE 9 前两行字段在 #T0，#T8 从年龄起。"""
-    t8_order = [
-        "dm_age_years",
-        "dm_birth_date",
-        "dm_gender",
-        "dm_marital",
-        "dm_address",
-        "dm_ethnicity",
-        "dm_insurance",
-        "dm_education_level",
-        "dm_education_years",
-        "dm_children",
-        "dm_caregiver",
-        "dm_phone",
-        "dm_income_band",
-        "dm_income_afford",
-        "dm_self_health",
+    t8_rows: list[dict] = [
+        {
+            "cells": [
+                {"field_id": "dm_age_years"},
+                {"field_id": "dm_birth_date"},
+                {"field_id": "dm_ethnicity"},
+            ]
+        },
+        {
+            "cells": [
+                {"field_id": "dm_gender"},
+                {"field_id": "dm_marital"},
+                {"blank": True},
+            ]
+        },
+        {"cells": [{"field_id": "dm_address", "colspan": 3}]},
+        {"cells": [{"field_id": "dm_insurance", "colspan": 3}]},
+        {"cells": [{"field_id": "dm_education_level", "colspan": 3}]},
+        {"cells": [{"field_id": "dm_education_years", "colspan": 3}]},
+        {
+            "cells": [
+                {"field_id": "dm_children"},
+                {"field_id": "dm_caregiver"},
+                {"field_id": "dm_phone"},
+            ]
+        },
+        {"cells": [{"field_id": "dm_income_band", "colspan": 3}]},
+        {"cells": [{"field_id": "dm_income_afford", "colspan": 3}]},
+        {"cells": [{"field_id": "dm_self_health", "colspan": 3}]},
     ]
-    t8_rows = [{"cells": [{"field_id": fid, "colspan": 2}]} for fid in t8_order]
 
     t10_rows: list[dict] = []
     for fid, _zh in DISEASES:
@@ -128,18 +200,21 @@ def baseline_table_layout() -> dict:
                 ]
             }
         )
-    t10_rows.append({"cells": [{"field_id": "cm_gout_attack_1m", "colspan": 2}]})
-    t10_rows.append({"cells": [{"field_id": "cm_other_history", "colspan": 2}]})
+    t10_rows.append(
+        {
+            "cells": [
+                {"field_id": "cm_gout_attack_1m"},
+                {"field_id": "cm_other_history", "colspan": 2},
+            ]
+        }
+    )
 
-    t11_ids = [
-        "ls_smoking",
-        "ls_smoking_detail",
-        "ls_drinking",
-        "ls_drinking_detail",
-        "ls_exercise",
-        "ls_ipaq",
+    t11_rows: list[dict] = [
+        {"cells": [{"field_id": "ls_smoking"}, {"field_id": "ls_smoking_detail", "colspan": 2}]},
+        {"cells": [{"field_id": "ls_drinking"}, {"field_id": "ls_drinking_detail", "colspan": 2}]},
+        {"cells": [{"field_id": "ls_exercise", "colspan": 3}]},
+        {"cells": [{"field_id": "ls_ipaq", "colspan": 3}]},
     ]
-    t11_rows = [{"cells": [{"field_id": fid, "colspan": 2}]} for fid in t11_ids]
 
     t12_rows: list[dict] = []
     for slug, _zh in MED_CATS:
@@ -147,11 +222,19 @@ def baseline_table_layout() -> dict:
             {
                 "cells": [
                     {"field_id": f"{slug}_uses"},
-                    {"field_id": f"{slug}_detail"},
+                    {"field_id": f"{slug}_detail", "colspan": 2},
                 ]
             }
         )
-    t12_rows.append({"cells": [{"field_id": "med_count_regular", "colspan": 2}]})
+    t12_rows.append(
+        {
+            "cells": [
+                {"field_id": "med_count_regular"},
+                {"blank": True},
+                {"blank": True},
+            ]
+        }
+    )
 
     return {
         "#T0": {
@@ -231,7 +314,7 @@ def main() -> None:
             "民族",
             "single_choice",
             "patient_baseline.demographics.ethnicity",
-            options=["汉族", "黎族", "苗族", "其他"],
+            options=[*CHINA_56_ETHNICITIES, "其他"],
             doc_table_index=9,
             other_remark_storage="patient_baseline.demographics.ethnicity_other_remark",
             other_remark_widget="text",
@@ -389,8 +472,9 @@ def main() -> None:
             "cm_gout_attack_1m",
             "#T10",
             "近1个月内是否急性痛风发作",
-            "text",
+            "single_choice",
             "patient_baseline.comorbidities.gout_attack_1m",
+            options=["否", "是"],
             doc_table_index=11,
         ),
         field(
