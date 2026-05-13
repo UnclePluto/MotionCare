@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Button, Card, Input, Select, Space, Table, Tag } from "antd";
+import dayjs from "dayjs";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -109,6 +110,11 @@ export function ResearchEntryPage() {
             title: "分组",
             dataIndex: "group_name",
             render: (v: string | null) => v ?? "—",
+          },
+          {
+            title: "入组时间",
+            dataIndex: "enrolled_at",
+            render: (v: string) => dayjs(v).format("YYYY-MM-DD HH:mm"),
           },
           {
             title: "T0 / T1 / T2",

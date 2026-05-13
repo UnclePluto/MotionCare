@@ -87,6 +87,8 @@ describe("ResearchEntryPage", () => {
     expect(await screen.findByText("研究项目 A")).toBeInTheDocument();
     expect(screen.getByText("研究项目 B")).toBeInTheDocument();
     expect(screen.getAllByText("同名患者").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("入组时间")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-12 10:00")).toBeInTheDocument();
     expect(screen.queryByText("访视类型")).not.toBeInTheDocument();
   });
 
