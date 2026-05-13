@@ -284,6 +284,9 @@ describe("App", () => {
       expect(screen.getAllByText(/张三/).length).toBeGreaterThan(0);
     });
 
+    expect(screen.getByRole("button", { name: "新增分组" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新增分组 / 元数据" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/勾选未确认入组患者后点击/)).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "分组看板" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "项目患者" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "添加患者" })).not.toBeInTheDocument();

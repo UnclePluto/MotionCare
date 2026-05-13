@@ -164,6 +164,48 @@ describe("ProjectGroupingBoard", () => {
     expect(mockPost.mock.calls.map((call) => call[0])).not.toContain("/studies/projects/1/randomize/");
   });
 
+  it("不展示全量患者临时随机说明文案", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <ProjectGroupingBoard projectId={1} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/全量患者/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/未入组甲/)).toBeInTheDocument());
+    expect(screen.queryByText(/勾选未确认入组患者后点击/)).not.toBeInTheDocument();
+  });
+
+  it("取消勾选会同步移除本次随机患者", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <ProjectGroupingBoard projectId={1} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/未入组甲/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(/选择患者 未入组甲/));
+    fireEvent.click(screen.getByRole("button", { name: "随机分组" }));
+    await waitFor(() => expect(screen.getByText("本次随机")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(/选择患者 未入组甲/));
+
+    await waitFor(() => expect(screen.queryByText("本次随机")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /确认分组/ })).toBeDisabled();
+
+    fireEvent.click(screen.getByLabelText(/选择患者 未入组甲/));
+
+    expect(screen.queryByText("本次随机")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /确认分组/ })).toBeDisabled();
+  });
+
   it("确认分组提交本地 assignments 并刷新", async () => {
     mockPost.mockResolvedValueOnce({
       data: { confirmed: 1, created: [{ project_patient_id: 9010, patient_id: 1, group_id: 10 }] },
