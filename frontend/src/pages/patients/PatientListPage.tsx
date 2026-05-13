@@ -32,11 +32,7 @@ type PatientRow = {
 };
 
 type ProjectPatientRow = {
-  id: number;
   project: number;
-  patient_name: string;
-  group_name: string | null;
-  grouping_status: string;
 };
 
 type StudyProject = { id: number; name: string };
