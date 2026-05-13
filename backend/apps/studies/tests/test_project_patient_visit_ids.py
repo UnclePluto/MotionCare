@@ -1,7 +1,10 @@
 import pytest
 from rest_framework.test import APIClient
 
+from apps.patients.models import Patient
+from apps.studies.models import ProjectPatient
 from apps.visits.models import VisitRecord
+from apps.visits.services import ensure_default_visits
 
 
 @pytest.fixture
@@ -50,13 +53,30 @@ def test_project_patient_serializer_exposes_visit_summaries(auth_client, project
 
 @pytest.mark.django_db
 def test_project_patient_list_filters_patient_name_and_phone(auth_client, project_patient):
+    other_patient = Patient.objects.create(
+        name="患者乙",
+        gender=Patient.Gender.FEMALE,
+        age=68,
+        phone="13900002222",
+        primary_doctor=project_patient.patient.primary_doctor,
+    )
+    other_project_patient = ProjectPatient.objects.create(
+        project=project_patient.project,
+        patient=other_patient,
+        group=project_patient.group,
+    )
+    ensure_default_visits(other_project_patient)
+
     by_name = auth_client.get("/api/studies/project-patients/", {"patient_name": "患者甲"})
     by_phone = auth_client.get("/api/studies/project-patients/", {"patient_phone": "13900001111"})
-    no_match = auth_client.get("/api/studies/project-patients/", {"patient_name": "不存在"})
+    no_name_match = auth_client.get("/api/studies/project-patients/", {"patient_name": "不存在"})
+    no_phone_match = auth_client.get("/api/studies/project-patients/", {"patient_phone": "000000"})
 
     assert by_name.status_code == 200, by_name.content
     assert by_phone.status_code == 200, by_phone.content
-    assert no_match.status_code == 200, no_match.content
+    assert no_name_match.status_code == 200, no_name_match.content
+    assert no_phone_match.status_code == 200, no_phone_match.content
     assert [row["id"] for row in by_name.data] == [project_patient.id]
     assert [row["id"] for row in by_phone.data] == [project_patient.id]
-    assert no_match.data == []
+    assert no_name_match.data == []
+    assert no_phone_match.data == []
