@@ -37,6 +37,7 @@ docs/superpowers/
 | `plans/2026-05-11-patient-project-admin-and-grouping-board.md` | 患者/项目/分组看板（早期版） | 🗄️ **superseded** by `drop-batch-concept.md` | （历史留档） |
 | `plans/2026-05-11-patient-list-actions-privacy.md` | 患者列表操作 + 隐私 | implementing | `specs/2026-05-11-patient-list-actions-privacy-design.md` |
 | `plans/2026-05-12-frontend-only-randomization-confirmed-binding.md` | 前端临时随机 + 确认入组绑定 | implementing | `specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` |
+| `plans/2026-05-14-project-patient-research-entry-tabs.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` |
 
 ## 状态语义
 
