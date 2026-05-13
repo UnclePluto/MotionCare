@@ -25,9 +25,7 @@ def _missing_id(model):
 @pytest.mark.parametrize(
     "payload_factory",
     [
-        pytest.param(lambda patient, group: {}, id="missing_assignments"),
         pytest.param(lambda patient, group: {"assignments": "bad"}, id="assignments_not_list"),
-        pytest.param(lambda patient, group: {"assignments": []}, id="empty_assignments"),
         pytest.param(
             lambda patient, group: {
                 "assignments": [
@@ -82,15 +80,33 @@ def test_confirm_grouping_rejects_invalid_assignment_payload_structure(
 
 
 @pytest.mark.django_db
+def test_confirm_grouping_rejects_missing_ratios_and_assignments(doctor, project):
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {},
+        format="json",
+    )
+
+    assert r.status_code == 400
+    error_text = str(r.data.get("detail", r.data))
+    assert "请提交" in error_text or "group_ratios" in error_text or "assignments" in error_text
+    assert not ProjectPatient.objects.filter(project=project).exists()
+
+
+@pytest.mark.django_db
 def test_confirm_grouping_creates_project_patients_from_assignments(doctor, project):
-    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
-    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=50)
     p1 = _patient(doctor, "甲", "13900000001")
     p2 = _patient(doctor, "乙", "13900000002")
 
     r = _client(doctor).post(
         f"/api/studies/projects/{project.id}/confirm-grouping/",
         {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": 50},
+                {"group_id": g2.id, "target_ratio": 50},
+            ],
             "assignments": [
                 {"patient_id": p1.id, "group_id": g1.id},
                 {"patient_id": p2.id, "group_id": g2.id},
@@ -102,6 +118,65 @@ def test_confirm_grouping_creates_project_patients_from_assignments(doctor, proj
     assert r.status_code == 200, r.data
     assert r.data["confirmed"] == 2
     assert ProjectPatient.objects.filter(project=project).count() == 2
+    assert ProjectPatient.objects.get(project=project, patient=p1).group_id == g1.id
+    assert ProjectPatient.objects.get(project=project, patient=p2).group_id == g2.id
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_updates_group_ratios_without_assignments(doctor, project):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=1)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": 60},
+                {"group_id": g2.id, "target_ratio": 40},
+            ],
+            "assignments": [],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 200, r.data
+    assert r.data["confirmed"] == 0
+    assert r.data["ratios_updated"] == 2
+    g1.refresh_from_db()
+    g2.refresh_from_db()
+    assert g1.target_ratio == 60
+    assert g2.target_ratio == 40
+    assert not ProjectPatient.objects.filter(project=project).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_updates_ratios_and_creates_project_patients_atomically(doctor, project):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=50)
+    p1 = _patient(doctor, "甲", "13900000001")
+    p2 = _patient(doctor, "乙", "13900000002")
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": 34},
+                {"group_id": g2.id, "target_ratio": 66},
+            ],
+            "assignments": [
+                {"patient_id": p1.id, "group_id": g1.id},
+                {"patient_id": p2.id, "group_id": g2.id},
+            ],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 200, r.data
+    assert r.data["confirmed"] == 2
+    assert r.data["ratios_updated"] == 2
+    g1.refresh_from_db()
+    g2.refresh_from_db()
+    assert (g1.target_ratio, g2.target_ratio) == (34, 66)
     assert ProjectPatient.objects.get(project=project, patient=p1).group_id == g1.id
     assert ProjectPatient.objects.get(project=project, patient=p2).group_id == g2.id
 
@@ -141,6 +216,148 @@ def test_project_patient_update_is_rejected(doctor, project, patient):
     project_patient.refresh_from_db()
     assert project_patient.group_id == original_group.id
     assert project_patient.patient_id == patient.id
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "ratios, expected",
+    [
+        pytest.param([70, 20], "合计须为 100", id="sum_not_100"),
+        pytest.param([100, 0], "大于或者等于 1", id="zero_ratio"),
+    ],
+)
+def test_confirm_grouping_rejects_invalid_group_ratios(doctor, project, ratios, expected):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=50)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": ratios[0]},
+                {"group_id": g2.id, "target_ratio": ratios[1]},
+            ],
+            "assignments": [],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert expected in str(r.data)
+    g1.refresh_from_db()
+    g2.refresh_from_db()
+    assert (g1.target_ratio, g2.target_ratio) == (50, 50)
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_missing_active_group_ratio(doctor, project):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=50)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": 100},
+            ],
+            "assignments": [],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "启用组占比提交不完整" in str(r.data)
+    g1.refresh_from_db()
+    g2.refresh_from_db()
+    assert (g1.target_ratio, g2.target_ratio) == (50, 50)
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rejects_inactive_group_ratio(doctor, project):
+    active = StudyGroup.objects.create(project=project, name="干预组", target_ratio=100)
+    inactive = StudyGroup.objects.create(
+        project=project,
+        name="停用组",
+        target_ratio=1,
+        is_active=False,
+    )
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": active.id, "target_ratio": 50},
+                {"group_id": inactive.id, "target_ratio": 50},
+            ],
+            "assignments": [],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "分组已停用" in str(r.data)
+    active.refresh_from_db()
+    inactive.refresh_from_db()
+    assert (active.target_ratio, inactive.target_ratio) == (100, 1)
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rolls_back_ratio_updates_when_assignment_invalid(doctor, project):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=50)
+    p1 = _patient(doctor, "甲", "13900000001")
+    missing_group_id = _missing_id(StudyGroup)
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": 34},
+                {"group_id": g2.id, "target_ratio": 66},
+            ],
+            "assignments": [
+                {"patient_id": p1.id, "group_id": missing_group_id},
+            ],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "以下分组不存在" in str(r.data)
+    g1.refresh_from_db()
+    g2.refresh_from_db()
+    assert (g1.target_ratio, g2.target_ratio) == (50, 50)
+    assert not ProjectPatient.objects.filter(project=project).exists()
+
+
+@pytest.mark.django_db
+def test_confirm_grouping_rolls_back_assignments_when_group_ratios_invalid(doctor, project):
+    g1 = StudyGroup.objects.create(project=project, name="干预组", target_ratio=50)
+    g2 = StudyGroup.objects.create(project=project, name="对照组", target_ratio=50)
+    p1 = _patient(doctor, "甲", "13900000001")
+    p2 = _patient(doctor, "乙", "13900000002")
+
+    r = _client(doctor).post(
+        f"/api/studies/projects/{project.id}/confirm-grouping/",
+        {
+            "group_ratios": [
+                {"group_id": g1.id, "target_ratio": 70},
+                {"group_id": g2.id, "target_ratio": 20},
+            ],
+            "assignments": [
+                {"patient_id": p1.id, "group_id": g1.id},
+                {"patient_id": p2.id, "group_id": g2.id},
+            ],
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400
+    assert "合计须为 100" in str(r.data)
+    g1.refresh_from_db()
+    g2.refresh_from_db()
+    assert (g1.target_ratio, g2.target_ratio) == (50, 50)
+    assert not ProjectPatient.objects.filter(project=project).exists()
 
 
 @pytest.mark.django_db

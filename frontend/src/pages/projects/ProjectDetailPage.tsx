@@ -19,6 +19,7 @@ export function ProjectDetailPage() {
   const { projectId } = useParams();
   const id = Number(projectId);
   const [configOpen, setConfigOpen] = useState(false);
+  const [groupRevision, setGroupRevision] = useState(0);
 
   const { data: project, isLoading, isError } = useQuery({
     queryKey: ["study-project", id],
@@ -51,7 +52,7 @@ export function ProjectDetailPage() {
     >
       {project && (
         <>
-          <ProjectGroupingBoard projectId={id} />
+          <ProjectGroupingBoard projectId={id} groupRevision={groupRevision} />
           <Drawer
             title="分组配置（元数据）"
             width={720}
@@ -59,7 +60,7 @@ export function ProjectDetailPage() {
             onClose={() => setConfigOpen(false)}
             destroyOnClose
           >
-            <ProjectGroupsTab projectId={id} />
+            <ProjectGroupsTab projectId={id} onGroupCreated={() => setGroupRevision((value) => value + 1)} />
           </Drawer>
         </>
       )}

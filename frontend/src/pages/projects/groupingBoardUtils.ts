@@ -1,57 +1,32 @@
-/** 最大公约数（全为非负整数；至少一项为 0 时返回另一项）。 */
-function gcdPair(a: number, b: number): number {
-  let x = Math.abs(Math.trunc(a));
-  let y = Math.abs(Math.trunc(b));
-  while (y !== 0) {
-    const t = y;
-    y = x % y;
-    x = t;
-  }
-  return x || 1;
-}
-
-function gcdMany(values: number[]): number {
-  if (!values.length) return 1;
-  return values.reduce((acc, v) => gcdPair(acc, v));
-}
-
-/**
- * 将整数权重换算为整数百分比展示，合计严格为 100（最大余数法）。
- */
-export function targetRatiosToDisplayPercents(ratios: number[]): number[] {
-  if (!ratios.length) return [];
-  const total = ratios.reduce((a, b) => a + b, 0);
-  if (total <= 0) return ratios.map(() => 0);
-
-  const exact = ratios.map((r) => (r / total) * 100);
-  const base = exact.map((x) => Math.floor(x));
-  const remainder = 100 - base.reduce((s, x) => s + x, 0);
-  const order = exact
-    .map((x, i) => ({ i, f: x - Math.floor(x) }))
-    .sort((a, b) => b.f - a.f || a.i - b.i);
-  const out = [...base];
-  for (let k = 0; k < remainder; k++) {
-    out[order[k].i] += 1;
-  }
-  return out;
-}
-
-/**
- * 将用户输入的整数百分比（合计应为 100，且每项须 > 0）换算为最小正整数权重，便于写回 `target_ratio`。
- * 若含 0，与 `gcdMany` 组合会产生错误比例（例如 [0,50,50] → [1,1,1]），故显式拒绝。
- */
-export function ratiosToTargetRatios(pcts: number[]): number[] {
-  if (!pcts.length) return [];
-  const cleaned = pcts.map((p) => Math.max(0, Math.round(p)));
-  if (cleaned.some((p) => p <= 0)) {
-    throw new Error("ratiosToTargetRatios: each percent must be a positive integer");
-  }
-  const g = gcdMany(cleaned);
-  return cleaned.map((p) => Math.max(1, Math.round(p / g)));
-}
-
 export type RandomGroupInput = { id: number; target_ratio: number };
 export type LocalAssignment = { patientId: number; groupId: number };
+
+export function balancePercents(groupIds: number[]): Record<number, number> {
+  if (!groupIds.length) return {};
+  const base = Math.floor(100 / groupIds.length);
+  const remainder = 100 - base * groupIds.length;
+  return Object.fromEntries(groupIds.map((id, index) => [id, base + (index < remainder ? 1 : 0)]));
+}
+
+export function getPercentValidationError(percents: number[]): string | null {
+  if (!percents.length) return "没有启用分组，不能确认分组。";
+  if (percents.some((percent) => !Number.isFinite(percent) || !Number.isInteger(percent) || percent <= 0)) {
+    return "每个启用组占比必须为大于 0 的整数。";
+  }
+  const total = percents.reduce((sum, percent) => sum + percent, 0);
+  if (total !== 100) return `启用组占比合计须为 100%，当前为 ${total}%。`;
+  return null;
+}
+
+export function groupsWithDraftPercents(
+  groups: RandomGroupInput[],
+  percentByGroupId: Record<number, number>,
+): RandomGroupInput[] {
+  return groups.map((group) => ({
+    ...group,
+    target_ratio: percentByGroupId[group.id] ?? group.target_ratio,
+  }));
+}
 
 function seededRandom(seed: number) {
   let state = seed >>> 0;
@@ -73,17 +48,33 @@ function shufflePatientIds(patientIds: number[], random: () => number): number[]
   return shuffled;
 }
 
-function calculateGroupCounts(totalPatients: number, groups: RandomGroupInput[]): number[] {
+function pickFractionIndex(fractions: number[], random: () => number): number {
+  const totalFraction = fractions.reduce((sum, fraction) => sum + fraction, 0);
+  if (totalFraction <= 0) return -1;
+
+  let threshold = random() * totalFraction;
+  for (let index = 0; index < fractions.length; index++) {
+    threshold -= fractions[index];
+    if (threshold <= 0) return index;
+  }
+  for (let index = fractions.length - 1; index >= 0; index--) {
+    if (fractions[index] > 0) return index;
+  }
+  return -1;
+}
+
+function calculateGroupCounts(totalPatients: number, groups: RandomGroupInput[], random: () => number): number[] {
   const totalRatio = groups.reduce((sum, g) => sum + g.target_ratio, 0);
   const exact = groups.map((g) => (totalPatients * g.target_ratio) / totalRatio);
   const counts = exact.map((value) => Math.floor(value));
   const remainder = totalPatients - counts.reduce((sum, count) => sum + count, 0);
-  const order = exact
-    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
-    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  const fractions = exact.map((value) => value - Math.floor(value));
 
   for (let i = 0; i < remainder; i++) {
-    counts[order[i].index] += 1;
+    const index = pickFractionIndex(fractions, random);
+    if (index === -1) break;
+    counts[index] += 1;
+    fractions[index] = 0;
   }
 
   return counts;
@@ -99,7 +90,7 @@ export function assignPatientsToGroups(
 
   const random = seededRandom(seed);
   const shuffled = shufflePatientIds(patientIds, random);
-  const counts = calculateGroupCounts(shuffled.length, groups);
+  const counts = calculateGroupCounts(shuffled.length, groups, random);
   let cursor = 0;
   const result: LocalAssignment[] = [];
 

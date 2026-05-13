@@ -293,7 +293,7 @@ describe("App", () => {
     expect(screen.queryByText(/CRF 模板版本/)).not.toBeInTheDocument();
     expect(screen.queryByText(/CRF 录入请从/)).not.toBeInTheDocument();
     expect(screen.queryByText(/访视评估/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "患者详情" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: "详情" }).length).toBeGreaterThan(0);
   });
 
   it("opens research entry page from route", async () => {

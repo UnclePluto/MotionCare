@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Card, Form, Input, InputNumber, Modal, Space, Table, message } from "antd";
+import { Button, Card, Form, Input, Modal, Space, Table, message } from "antd";
 import { useState } from "react";
 
 import { apiClient } from "../../api/client";
@@ -16,12 +16,13 @@ type StudyGroupRow = {
 
 type Props = {
   projectId: number;
+  onGroupCreated?: () => void;
 };
 
-export function ProjectGroupsTab({ projectId }: Props) {
+export function ProjectGroupsTab({ projectId, onGroupCreated }: Props) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [form] = Form.useForm<{ name: string; target_ratio: number }>();
+  const [form] = Form.useForm<{ name: string }>();
 
   const { data, isLoading } = useQuery({
     queryKey: ["study-groups", projectId],
@@ -34,12 +35,11 @@ export function ProjectGroupsTab({ projectId }: Props) {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (values: { name: string; target_ratio: number }) => {
+    mutationFn: async (values: { name: string }) => {
       await apiClient.post("/studies/groups/", {
         project: projectId,
         name: values.name.trim(),
         description: "",
-        target_ratio: values.target_ratio,
         sort_order: (data?.length ?? 0),
         is_active: true,
       });
@@ -49,6 +49,7 @@ export function ProjectGroupsTab({ projectId }: Props) {
       setOpen(false);
       form.resetFields();
       await qc.invalidateQueries({ queryKey: ["study-groups", projectId] });
+      onGroupCreated?.();
     },
     onError: () => message.error("创建失败"),
   });
@@ -68,7 +69,7 @@ export function ProjectGroupsTab({ projectId }: Props) {
         dataSource={data ?? []}
         columns={[
           { title: "名称", dataIndex: "name" },
-          { title: "目标比例", dataIndex: "target_ratio", width: 120 },
+          { title: "已保存占比", dataIndex: "target_ratio", width: 120, render: (v: number) => `${v}%` },
           { title: "排序", dataIndex: "sort_order", width: 100 },
           {
             title: "启用",
@@ -88,7 +89,7 @@ export function ProjectGroupsTab({ projectId }: Props) {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ target_ratio: 1 }}
+          initialValues={{}}
           onFinish={(v) => createMutation.mutate(v)}
         >
           <Form.Item
@@ -97,13 +98,6 @@ export function ProjectGroupsTab({ projectId }: Props) {
             rules={[{ required: true, message: "请输入名称" }]}
           >
             <Input placeholder="例如：干预组" />
-          </Form.Item>
-          <Form.Item
-            label="目标比例"
-            name="target_ratio"
-            rules={[{ required: true, message: "请输入比例" }]}
-          >
-            <InputNumber min={1} style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item>
             <Space>

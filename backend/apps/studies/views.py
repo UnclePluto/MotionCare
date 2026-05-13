@@ -51,16 +51,93 @@ class StudyProjectViewSet(ModelViewSet):
         serializer = ConfirmGroupingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        assignments = serializer.validated_data["assignments"]
+        assignments = serializer.validated_data.get("assignments", [])
+        group_ratios = serializer.validated_data.get("group_ratios", [])
+
+        ratios_updated = 0
+        if group_ratios:
+            ratio_group_ids = [item["group_id"] for item in group_ratios]
+            duplicate_ratio_group_ids = sorted(
+                group_id for group_id, count in Counter(ratio_group_ids).items() if count > 1
+            )
+            if duplicate_ratio_group_ids:
+                return Response(
+                    {"detail": f"重复分组占比: {duplicate_ratio_group_ids}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            ratio_groups = StudyGroup.objects.select_for_update(of=("self",)).filter(
+                pk__in=ratio_group_ids
+            )
+            ratio_groups_by_id = {group.id: group for group in ratio_groups}
+            missing_ratio_group_ids = sorted(set(ratio_group_ids) - set(ratio_groups_by_id))
+            if missing_ratio_group_ids:
+                return Response(
+                    {"detail": f"以下分组不存在: {missing_ratio_group_ids}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            other_project_ratio_group_ids = sorted(
+                group_id
+                for group_id, group in ratio_groups_by_id.items()
+                if group.project_id != project.id
+            )
+            if other_project_ratio_group_ids:
+                return Response(
+                    {"detail": f"分组不属于当前项目: {other_project_ratio_group_ids}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            inactive_ratio_group_ids = sorted(
+                group_id for group_id, group in ratio_groups_by_id.items() if not group.is_active
+            )
+            if inactive_ratio_group_ids:
+                return Response(
+                    {"detail": f"分组已停用: {inactive_ratio_group_ids}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            active_group_ids = set(
+                StudyGroup.objects.select_for_update(of=("self",))
+                .filter(project=project, is_active=True)
+                .values_list("id", flat=True)
+            )
+            submitted_group_ids = set(ratio_group_ids)
+            if submitted_group_ids != active_group_ids:
+                return Response(
+                    {
+                        "detail": (
+                            "启用组占比提交不完整，请刷新后重试。"
+                            f" expected={sorted(active_group_ids)} submitted={sorted(submitted_group_ids)}"
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            total_ratio = sum(item["target_ratio"] for item in group_ratios)
+            if total_ratio != 100:
+                return Response(
+                    {"detail": f"启用组占比合计须为 100%，当前为 {total_ratio}%"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            for item in group_ratios:
+                group = ratio_groups_by_id[item["group_id"]]
+                group.target_ratio = item["target_ratio"]
+                group.save(update_fields=["target_ratio", "updated_at"])
+                ratios_updated += 1
+
+        def bad_request(detail):
+            if ratios_updated:
+                transaction.set_rollback(True)
+            return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+
         patient_ids = [assignment["patient_id"] for assignment in assignments]
         duplicate_patient_ids = sorted(
             patient_id for patient_id, count in Counter(patient_ids).items() if count > 1
         )
         if duplicate_patient_ids:
-            return Response(
-                {"detail": f"重复患者: {duplicate_patient_ids}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return bad_request({"detail": f"重复患者: {duplicate_patient_ids}"})
 
         group_ids = [assignment["group_id"] for assignment in assignments]
 
@@ -69,37 +146,25 @@ class StudyProjectViewSet(ModelViewSet):
         )
         missing_patient_ids = sorted(set(patient_ids) - existing_patient_ids)
         if missing_patient_ids:
-            return Response(
-                {"detail": f"以下患者不存在: {missing_patient_ids}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return bad_request({"detail": f"以下患者不存在: {missing_patient_ids}"})
 
         groups = StudyGroup.objects.select_for_update(of=("self",)).filter(pk__in=group_ids)
         groups_by_id = {group.id: group for group in groups}
         missing_group_ids = sorted(set(group_ids) - set(groups_by_id))
         if missing_group_ids:
-            return Response(
-                {"detail": f"以下分组不存在: {missing_group_ids}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return bad_request({"detail": f"以下分组不存在: {missing_group_ids}"})
 
         other_project_group_ids = sorted(
             group_id for group_id, group in groups_by_id.items() if group.project_id != project.id
         )
         if other_project_group_ids:
-            return Response(
-                {"detail": f"分组不属于当前项目: {other_project_group_ids}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return bad_request({"detail": f"分组不属于当前项目: {other_project_group_ids}"})
 
         inactive_group_ids = sorted(
             group_id for group_id, group in groups_by_id.items() if not group.is_active
         )
         if inactive_group_ids:
-            return Response(
-                {"detail": f"分组已停用: {inactive_group_ids}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return bad_request({"detail": f"分组已停用: {inactive_group_ids}"})
 
         enrolled_patient_ids = set(
             ProjectPatient.objects.select_for_update(of=("self",))
@@ -107,10 +172,7 @@ class StudyProjectViewSet(ModelViewSet):
             .values_list("patient_id", flat=True)
         )
         if enrolled_patient_ids:
-            return Response(
-                {"detail": f"已确认入组: {sorted(enrolled_patient_ids)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return bad_request({"detail": f"已确认入组: {sorted(enrolled_patient_ids)}"})
 
         created = []
         try:
@@ -129,6 +191,7 @@ class StudyProjectViewSet(ModelViewSet):
         return Response(
             {
                 "confirmed": len(created),
+                "ratios_updated": ratios_updated,
                 "created": [
                     {
                         "project_patient_id": project_patient.id,

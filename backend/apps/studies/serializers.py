@@ -40,8 +40,21 @@ class ConfirmGroupingAssignmentSerializer(serializers.Serializer):
     group_id = serializers.IntegerField(min_value=1)
 
 
+class ConfirmGroupingRatioSerializer(serializers.Serializer):
+    group_id = serializers.IntegerField(min_value=1)
+    target_ratio = serializers.IntegerField(min_value=1, max_value=100)
+
+
 class ConfirmGroupingSerializer(serializers.Serializer):
-    assignments = ConfirmGroupingAssignmentSerializer(many=True, allow_empty=False)
+    group_ratios = ConfirmGroupingRatioSerializer(many=True, required=False, allow_empty=False)
+    assignments = ConfirmGroupingAssignmentSerializer(many=True, required=False, allow_empty=True)
+
+    def validate(self, attrs):
+        if not attrs.get("group_ratios") and not attrs.get("assignments"):
+            raise serializers.ValidationError(
+                {"detail": "请提交分组占比或本轮随机患者。"}
+            )
+        return attrs
 
 
 class ProjectPatientSerializer(serializers.ModelSerializer):

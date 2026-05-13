@@ -8,3 +8,59 @@ body {
   margin: 0;
 }
 
+.group-card .group-delete-bubble {
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.group-card:hover .group-delete-bubble,
+.group-card:focus-within .group-delete-bubble {
+  opacity: 1;
+}
+
+.patient-card-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.patient-card-line .patient-name {
+  max-width: 108px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.patient-card-line .patient-meta {
+  white-space: nowrap;
+}
+
+.patient-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.ratio-input-addon {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  color: rgba(0, 0, 0, 0.65);
+  background: #fafafa;
+  border: 1px solid #d9d9d9;
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.ratio-input-addon-disabled {
+  color: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: #d9d9d9;
+}
