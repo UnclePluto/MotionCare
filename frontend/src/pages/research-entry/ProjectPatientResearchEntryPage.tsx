@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Card, Descriptions, Space, Tabs, Tag } from "antd";
 import { useMemo } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -58,6 +58,7 @@ export function ProjectPatientResearchEntryPage() {
   const id = Number(projectPatientId);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const qc = useQueryClient();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["project-patient", id],
@@ -73,6 +74,10 @@ export function ProjectPatientResearchEntryPage() {
     if (isVisitType(requested)) return requested;
     return data ? firstOpenVisit(data) : "T0";
   }, [data, searchParams]);
+
+  const refreshProjectPatient = async () => {
+    await qc.invalidateQueries({ queryKey: ["project-patient", id] });
+  };
 
   if (!Number.isFinite(id)) return <Alert type="error" message="无效的项目患者 ID" />;
   if (isError) return <Alert type="error" message="记录不存在或无权限访问" />;
@@ -95,6 +100,7 @@ export function ProjectPatientResearchEntryPage() {
           visitId={visitId}
           title={`${vt} 访视录入`}
           timeDescription={TIME_DESCRIPTIONS[vt]}
+          onVisitChanged={refreshProjectPatient}
         />
       ) : (
         <Alert type="warning" showIcon message={`${vt} 访视未生成`} />

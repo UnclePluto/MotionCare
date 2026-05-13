@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -123,5 +123,34 @@ describe("ProjectPatientResearchEntryPage", () => {
 
     expect(await screen.findByRole("link", { name: "基线资料" })).toHaveAttribute("href", "/patients/201/crf-baseline");
     expect(screen.getByRole("link", { name: "打开 CRF" })).toHaveAttribute("href", "/crf?projectPatientId=9001");
+  });
+
+  it("refreshes project patient summary after marking a visit completed", async () => {
+    renderAt("/research-entry/project-patients/9001?visit=T1");
+
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/visits/12/"));
+    fireEvent.click(await screen.findByRole("button", { name: "标记已完成" }));
+
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith("/visits/12/", { status: "completed" });
+    });
+    await waitFor(() => {
+      const projectReloads = mockGet.mock.calls.filter(
+        ([url]) => url === "/studies/project-patients/9001/",
+      );
+      expect(projectReloads.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("shows an error when the visit detail cannot be loaded", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/studies/project-patients/9001/") return Promise.resolve({ data: projectPatient });
+      if (url === "/visits/12/") return Promise.reject(new Error("not found"));
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/research-entry/project-patients/9001?visit=T1");
+
+    expect(await screen.findByText("访视记录不存在或无权限访问")).toBeInTheDocument();
   });
 });

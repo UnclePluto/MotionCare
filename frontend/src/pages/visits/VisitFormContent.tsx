@@ -179,12 +179,14 @@ type VisitFormContentProps = {
   visitId: number;
   title?: string;
   timeDescription?: string;
+  onVisitChanged?: () => void | Promise<void>;
 };
 
 export function VisitFormContent({
   visitId,
   title = "访视表单",
   timeDescription,
+  onVisitChanged,
 }: VisitFormContentProps) {
   const id = visitId;
   const qc = useQueryClient();
@@ -196,7 +198,7 @@ export function VisitFormContent({
     Record<keyof FormState, boolean>
   >({} as Record<keyof FormState, boolean>);
 
-  const { data: visit, isLoading } = useQuery({
+  const { data: visit, isLoading, isError } = useQuery({
     queryKey: ["visit", id],
     queryFn: async () => {
       const r = await apiClient.get<VisitDetail>(`/visits/${id}/`);
@@ -270,6 +272,7 @@ export function VisitFormContent({
       if (data) {
         message.success("已保存");
         await qc.invalidateQueries({ queryKey: ["visit", id] });
+        await onVisitChanged?.();
       } else {
         message.info("没有改动");
       }
@@ -285,6 +288,7 @@ export function VisitFormContent({
     onSuccess: async () => {
       message.success("已标记完成");
       await qc.invalidateQueries({ queryKey: ["visit", id] });
+      await onVisitChanged?.();
     },
     onError: () => message.error("操作失败"),
   });
@@ -314,7 +318,9 @@ export function VisitFormContent({
 
   return (
     <Card title={title} loading={isLoading} extra={headerExtra}>
-      {visit && (
+      {isError ? (
+        <Alert type="error" message="访视记录不存在或无权限访问" />
+      ) : visit && (
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Descriptions size="small" column={2} bordered>
             <Descriptions.Item label="访视类型">{visit.visit_type}</Descriptions.Item>
