@@ -213,4 +213,37 @@ describe("VisitFormPage", () => {
     fireEvent.click(completeBtn as Element);
     expect(mockPatch).not.toHaveBeenCalled();
   });
+
+  it("renders completed visits as readonly and blocks mutations", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: 22,
+        project_patient: 1,
+        project_status: "active",
+        visit_type: "T0",
+        status: "completed",
+        visit_date: null,
+        form_data: {
+          assessments: { sppb: { total: 9 } },
+          computed_assessments: {},
+          crf: { adherence: { platform_id: "PID-99" } },
+        },
+      },
+    });
+
+    const r = renderAt(22);
+
+    expect(await screen.findByText("访视已完成，当前为只读查看。")).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "SPPB 总分" })).toBeDisabled();
+    expect(screen.getByLabelText("平台账号/编号")).toBeDisabled();
+
+    const saveBtn = r.container.querySelector('button[aria-label="保存"]');
+    const completeBtn = r.container.querySelector('button[aria-label="标记已完成"]');
+    expect(saveBtn).toBeDisabled();
+    expect(completeBtn).toBeDisabled();
+
+    fireEvent.click(saveBtn as Element);
+    fireEvent.click(completeBtn as Element);
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
 });
