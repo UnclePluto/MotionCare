@@ -1,5 +1,13 @@
 # Grouping Board Selection Polish Implementation Plan
 
+> 状态：implemented
+> 日期：2026-05-13
+> 范围：分组看板患者选择联动与项目详情文案收敛
+> 关联：docs/superpowers/specs/2026-05-13-grouping-board-selection-polish-design.md
+> 实施基线 commit：5a3f08f
+
+执行记录（2026-05-13, codex）：Task 1-3 已落地于 commits 2ec9bbd、5a3f08f；聚焦测试、全量前端测试、前端构建与残留文案扫描已通过。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 修复分组看板患者取消勾选后仍保留本次随机结果的问题，并收敛项目详情页相关文案。
@@ -33,7 +41,7 @@
 - Modify: `frontend/src/pages/projects/ProjectGroupingBoard.test.tsx`
 - Modify: `frontend/src/app/App.test.tsx`
 
-- [ ] **Step 1: Add ProjectGroupingBoard red tests**
+- [x] **Step 1: Add ProjectGroupingBoard red tests**
 
 In `frontend/src/pages/projects/ProjectGroupingBoard.test.tsx`, add this test after `随机只生成本地临时结果，不调用后端 randomize`:
 
@@ -67,7 +75,7 @@ Expected current failure before implementation:
 - The deleted paragraph assertion fails because the paragraph still exists.
 - After removing the paragraph, the final `本次随机` assertion still fails until checkbox cancel also clears `localAssignments`.
 
-- [ ] **Step 2: Add ProjectDetailPage red assertions**
+- [x] **Step 2: Add ProjectDetailPage red assertions**
 
 In `frontend/src/app/App.test.tsx`, inside `renders project detail as grouping board only`, add these assertions after the `waitFor` block and before the existing tab assertions:
 
@@ -82,7 +90,7 @@ Expected current failure before implementation:
 - `新增分组` button is not found because the page still renders `新增分组 / 元数据`.
 - The deleted paragraph still exists on the grouping board.
 
-- [ ] **Step 3: Run focused tests and confirm they fail for the expected reasons**
+- [x] **Step 3: Run focused tests and confirm they fail for the expected reasons**
 
 Run:
 
@@ -96,7 +104,7 @@ Expected: FAIL. The failure should mention one or more of:
 - `新增分组`
 - `本次随机`
 
-- [ ] **Step 4: Commit the red tests**
+- [x] **Step 4: Commit the red tests**
 
 Run:
 
@@ -113,7 +121,7 @@ git commit -m "test: 覆盖分组看板选择联动与文案"
 - Modify: `frontend/src/pages/projects/ProjectGroupingBoard.tsx`
 - Modify: `frontend/src/pages/projects/ProjectDetailPage.tsx`
 
-- [ ] **Step 1: Add unified selection handler**
+- [x] **Step 1: Add unified selection handler**
 
 In `frontend/src/pages/projects/ProjectGroupingBoard.tsx`, add this function near the existing `runLocalRandomize` handler and before `return`:
 
@@ -135,7 +143,7 @@ In `frontend/src/pages/projects/ProjectGroupingBoard.tsx`, add this function nea
 
 This keeps re-check behavior intentionally simple: re-checking only returns the patient to `poolSelected`; it does not restore an old `localAssignments` item.
 
-- [ ] **Step 2: Use the handler from patient checkboxes**
+- [x] **Step 2: Use the handler from patient checkboxes**
 
 In `frontend/src/pages/projects/ProjectGroupingBoard.tsx`, replace the checkbox `onChange` block:
 
@@ -153,7 +161,7 @@ with:
         onChange={(e) => handlePatientSelectionChange(p.id, e.target.checked)}
 ```
 
-- [ ] **Step 3: Remove the redundant patient pool paragraph**
+- [x] **Step 3: Remove the redundant patient pool paragraph**
 
 In `frontend/src/pages/projects/ProjectGroupingBoard.tsx`, remove this paragraph from the `全量患者` card:
 
@@ -169,7 +177,7 @@ Do not remove the toolbar text:
 当前随机结果仅保存在本页面；刷新或切换项目会丢弃，点击「确认分组」后才正式入组。
 ```
 
-- [ ] **Step 4: Rename the project detail config button**
+- [x] **Step 4: Rename the project detail config button**
 
 In `frontend/src/pages/projects/ProjectDetailPage.tsx`, replace:
 
@@ -185,7 +193,7 @@ with:
 
 Do not change the Drawer title `分组配置（元数据）`.
 
-- [ ] **Step 5: Run focused tests and confirm they pass**
+- [x] **Step 5: Run focused tests and confirm they pass**
 
 Run:
 
@@ -195,7 +203,7 @@ cd frontend && npm test -- App.test.tsx ProjectGroupingBoard.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit implementation**
+- [x] **Step 6: Commit implementation**
 
 Run:
 
@@ -211,7 +219,7 @@ git commit -m "fix: 联动清理分组看板临时随机结果"
 **Files:**
 - No code changes expected.
 
-- [ ] **Step 1: Run grouping-focused frontend tests**
+- [x] **Step 1: Run grouping-focused frontend tests**
 
 Run:
 
@@ -221,7 +229,7 @@ cd frontend && npm test -- App.test.tsx ProjectGroupingBoard.test.tsx groupingBo
 
 Expected: PASS.
 
-- [ ] **Step 2: Run full frontend tests**
+- [x] **Step 2: Run full frontend tests**
 
 Run:
 
@@ -231,7 +239,7 @@ cd frontend && npm test
 
 Expected: PASS.
 
-- [ ] **Step 3: Run frontend build**
+- [x] **Step 3: Run frontend build**
 
 Run:
 
@@ -241,7 +249,7 @@ cd frontend && npm run build
 
 Expected: PASS. A Vite chunk-size warning is acceptable if the build exits successfully.
 
-- [ ] **Step 4: Scan production frontend source for removed wording**
+- [x] **Step 4: Scan production frontend source for removed wording**
 
 Run:
 
@@ -251,7 +259,7 @@ rg -n "勾选未确认入组患者后点击|新增分组 / 元数据" frontend/s
 
 Expected: no output.
 
-- [ ] **Step 5: Confirm git status**
+- [x] **Step 5: Confirm git status**
 
 Run:
 
@@ -260,4 +268,3 @@ git status --short
 ```
 
 Expected: no unstaged implementation changes. The branch may contain the planned commits.
-
