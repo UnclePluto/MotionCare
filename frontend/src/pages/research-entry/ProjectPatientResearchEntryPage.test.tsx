@@ -106,6 +106,9 @@ describe("ProjectPatientResearchEntryPage", () => {
 
     expect(await screen.findByText("项目患者甲 · 研究项目 A")).toBeInTheDocument();
     expect(screen.getByText("试验组")).toBeInTheDocument();
+    expect(screen.getByText("进行中")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /T0 已完成 2026-05-12/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /T1 草稿 未填写日期/ })).toBeInTheDocument();
     expect(await screen.findByText(/干预 12 周节点/)).toBeInTheDocument();
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/visits/12/"));
   });

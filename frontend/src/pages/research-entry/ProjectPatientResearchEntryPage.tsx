@@ -37,6 +37,12 @@ const TIME_DESCRIPTIONS: Record<VisitType, string> = {
   T2: "干预后 36 周节点；填写依从性、身体机能、MoCA、满意度、合并用药变化、不良事件、完成/退出与质控核查字段。",
 };
 
+const PROJECT_STATUS_LABEL: Record<ProjectPatientDetail["project_status"], string> = {
+  draft: "草稿",
+  active: "进行中",
+  archived: "已完结",
+};
+
 function isVisitType(v: string | null): v is VisitType {
   return v === "T0" || v === "T1" || v === "T2";
 }
@@ -44,6 +50,11 @@ function isVisitType(v: string | null): v is VisitType {
 function visitStatusLabel(summary: VisitSummary | undefined): string {
   if (!summary) return "访视未生成";
   return summary.status === "completed" ? "已完成" : "草稿";
+}
+
+function visitDateLabel(summary: VisitSummary | undefined): string {
+  if (!summary) return "未生成";
+  return summary.visit_date ?? "未填写日期";
 }
 
 function firstOpenVisit(row: ProjectPatientDetail): VisitType {
@@ -93,6 +104,7 @@ export function ProjectPatientResearchEntryPage() {
           <Tag color={summary?.status === "completed" ? "green" : summary ? "default" : "red"}>
             {visitStatusLabel(summary)}
           </Tag>
+          <span>{visitDateLabel(summary)}</span>
         </Space>
       ),
       children: visitId ? (
@@ -127,6 +139,9 @@ export function ProjectPatientResearchEntryPage() {
             <Descriptions.Item label="患者">{data.patient_name}</Descriptions.Item>
             <Descriptions.Item label="项目">{data.project_name}</Descriptions.Item>
             <Descriptions.Item label="分组">{data.group_name ?? "—"}</Descriptions.Item>
+            <Descriptions.Item label="项目状态">
+              {PROJECT_STATUS_LABEL[data.project_status] ?? data.project_status}
+            </Descriptions.Item>
             <Descriptions.Item label="入组时间">{data.enrolled_at || "—"}</Descriptions.Item>
           </Descriptions>
           <Tabs
