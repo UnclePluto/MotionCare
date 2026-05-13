@@ -1,5 +1,7 @@
 # Project Patient Research Entry Tabs Implementation Plan
 
+执行记录（2026-05-14, codex）：Task 1-7 已落地于 commit 973bb22
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build project-patient-level research entry: list one row per `ProjectPatient`, open a T0/T1/T2 tabbed entry page, rename patient baseline UI to “基线资料”, and make completed visits read-only.
@@ -73,7 +75,7 @@ The approved spec covers one workflow with related slices: backend summaries, vi
 - Modify: `backend/apps/studies/views.py`
 - Test: `backend/apps/studies/tests/test_project_patient_visit_ids.py`
 
-- [ ] **Step 1: Extend the failing serializer/API tests**
+- [x] **Step 1: Extend the failing serializer/API tests**
 
 Append these tests to `backend/apps/studies/tests/test_project_patient_visit_ids.py`:
 
@@ -115,7 +117,7 @@ def test_project_patient_list_filters_patient_name_and_phone(auth_client, projec
     assert no_match.data == []
 ```
 
-- [ ] **Step 2: Run the backend tests and verify they fail**
+- [x] **Step 2: Run the backend tests and verify they fail**
 
 Run:
 
@@ -126,7 +128,7 @@ pytest apps/studies/tests/test_project_patient_visit_ids.py -q
 
 Expected: FAIL because `project_name`, `project_status`, `visit_summaries`, `patient_name`, and `patient_phone` filter behavior are not implemented.
 
-- [ ] **Step 3: Extend `ProjectPatientSerializer`**
+- [x] **Step 3: Extend `ProjectPatientSerializer`**
 
 In `backend/apps/studies/serializers.py`, replace the current `ProjectPatientSerializer` class with this implementation:
 
@@ -194,7 +196,7 @@ class ProjectPatientSerializer(serializers.ModelSerializer):
         return out
 ```
 
-- [ ] **Step 4: Extend `ProjectPatientViewSet.get_queryset()`**
+- [x] **Step 4: Extend `ProjectPatientViewSet.get_queryset()`**
 
 In `backend/apps/studies/views.py`, add `Prefetch` to the imports:
 
@@ -236,7 +238,7 @@ def get_queryset(self):
     return qs
 ```
 
-- [ ] **Step 5: Run focused backend tests**
+- [x] **Step 5: Run focused backend tests**
 
 Run:
 
@@ -247,7 +249,7 @@ pytest apps/studies/tests/test_project_patient_visit_ids.py -q
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit backend project-patient contract**
+- [x] **Step 6: Commit backend project-patient contract**
 
 Run:
 
@@ -265,7 +267,7 @@ git commit -m "feat(studies): 扩展项目患者访视摘要"
 - Modify: `backend/apps/visits/views.py`
 - Modify: `backend/apps/visits/tests/test_status_transition.py`
 
-- [ ] **Step 1: Replace the old editable-completed test**
+- [x] **Step 1: Replace the old editable-completed test**
 
 In `backend/apps/visits/tests/test_status_transition.py`, replace `test_completed_visit_still_editable` with these two tests:
 
@@ -306,7 +308,7 @@ def test_completed_visit_rejects_repeated_completed_patch(auth_client, project_p
     assert "已完成访视只读" in str(r.data)
 ```
 
-- [ ] **Step 2: Run the visit status tests and verify failure**
+- [x] **Step 2: Run the visit status tests and verify failure**
 
 Run:
 
@@ -317,7 +319,7 @@ pytest apps/visits/tests/test_status_transition.py -q
 
 Expected: FAIL because completed visits are still editable.
 
-- [ ] **Step 3: Add completed-visit guard**
+- [x] **Step 3: Add completed-visit guard**
 
 In `backend/apps/visits/views.py`, add this import:
 
@@ -345,7 +347,7 @@ def perform_update(self, serializer):
     serializer.save()
 ```
 
-- [ ] **Step 4: Run backend visit tests**
+- [x] **Step 4: Run backend visit tests**
 
 Run:
 
@@ -356,7 +358,7 @@ pytest apps/visits/tests/test_status_transition.py apps/visits/tests/test_visit_
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit completed-readonly backend rule**
+- [x] **Step 5: Commit completed-readonly backend rule**
 
 Run:
 
@@ -375,7 +377,7 @@ git commit -m "fix(visits): 完成态访视改为只读"
 - Modify: `frontend/src/pages/visits/VisitFormPage.tsx`
 - Modify: `frontend/src/pages/visits/VisitFormPage.test.tsx`
 
-- [ ] **Step 1: Add the failing completed-readonly frontend test**
+- [x] **Step 1: Add the failing completed-readonly frontend test**
 
 Append this test to `frontend/src/pages/visits/VisitFormPage.test.tsx`:
 
@@ -414,7 +416,7 @@ Append this test to `frontend/src/pages/visits/VisitFormPage.test.tsx`:
   });
 ```
 
-- [ ] **Step 2: Run the focused frontend test and verify failure**
+- [x] **Step 2: Run the focused frontend test and verify failure**
 
 Run:
 
@@ -425,7 +427,7 @@ npm run test -- VisitFormPage.test.tsx
 
 Expected: FAIL because completed visits do not show the new readonly alert and core assessment controls are not disabled by completed status.
 
-- [ ] **Step 3: Create `VisitFormContent.tsx` by moving the existing form implementation**
+- [x] **Step 3: Create `VisitFormContent.tsx` by moving the existing form implementation**
 
 Create `frontend/src/pages/visits/VisitFormContent.tsx` by copying the current contents of `VisitFormPage.tsx`, then make these exact changes:
 
@@ -500,7 +502,7 @@ export function VisitFormContent({ visitId, title = "访视表单", timeDescript
                 disabled={isVisitReadonly}
 ```
 
-- [ ] **Step 4: Replace `VisitFormPage.tsx` with a route wrapper**
+- [x] **Step 4: Replace `VisitFormPage.tsx` with a route wrapper**
 
 Replace `frontend/src/pages/visits/VisitFormPage.tsx` with:
 
@@ -522,7 +524,7 @@ export function VisitFormPage() {
 }
 ```
 
-- [ ] **Step 5: Run visit form tests**
+- [x] **Step 5: Run visit form tests**
 
 Run:
 
@@ -533,7 +535,7 @@ npm run test -- VisitFormPage.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit reusable visit form extraction**
+- [x] **Step 6: Commit reusable visit form extraction**
 
 Run:
 
@@ -552,7 +554,7 @@ git commit -m "refactor(frontend): 抽出可复用访视表单"
 - Create: `frontend/src/pages/research-entry/ProjectPatientResearchEntryPage.test.tsx`
 - Modify: `frontend/src/app/App.tsx`
 
-- [ ] **Step 1: Write the failing tab page tests**
+- [x] **Step 1: Write the failing tab page tests**
 
 Create `frontend/src/pages/research-entry/ProjectPatientResearchEntryPage.test.tsx`:
 
@@ -686,7 +688,7 @@ describe("ProjectPatientResearchEntryPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run the new test and verify failure**
+- [x] **Step 2: Run the new test and verify failure**
 
 Run:
 
@@ -697,7 +699,7 @@ npm run test -- ProjectPatientResearchEntryPage.test.tsx
 
 Expected: FAIL because the component does not exist.
 
-- [ ] **Step 3: Create the tab page component**
+- [x] **Step 3: Create the tab page component**
 
 Create `frontend/src/pages/research-entry/ProjectPatientResearchEntryPage.tsx`:
 
@@ -839,7 +841,7 @@ export function ProjectPatientResearchEntryPage() {
 }
 ```
 
-- [ ] **Step 4: Register the route**
+- [x] **Step 4: Register the route**
 
 In `frontend/src/app/App.tsx`, add this import:
 
@@ -853,7 +855,7 @@ Add this route immediately after `/research-entry`:
 <Route path="/research-entry/project-patients/:projectPatientId" element={<ProjectPatientResearchEntryPage />} />
 ```
 
-- [ ] **Step 5: Run focused frontend tests**
+- [x] **Step 5: Run focused frontend tests**
 
 Run:
 
@@ -864,7 +866,7 @@ npm run test -- ProjectPatientResearchEntryPage.test.tsx VisitFormPage.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit research-entry tab page**
+- [x] **Step 6: Commit research-entry tab page**
 
 Run:
 
@@ -883,7 +885,7 @@ git commit -m "feat(frontend): 新增项目患者研究录入页"
 - Create: `frontend/src/pages/research-entry/ResearchEntryPage.test.tsx`
 - Modify: `frontend/src/app/App.test.tsx`
 
-- [ ] **Step 1: Write the failing research-entry list tests**
+- [x] **Step 1: Write the failing research-entry list tests**
 
 Create `frontend/src/pages/research-entry/ResearchEntryPage.test.tsx`:
 
@@ -1009,7 +1011,7 @@ describe("ResearchEntryPage", () => {
 });
 ```
 
-- [ ] **Step 2: Run the new test and verify failure**
+- [x] **Step 2: Run the new test and verify failure**
 
 Run:
 
@@ -1020,7 +1022,7 @@ npm run test -- ResearchEntryPage.test.tsx
 
 Expected: FAIL because the page still uses `/visits/` and renders the visit-type filter.
 
-- [ ] **Step 3: Replace `ResearchEntryPage.tsx` with project-patient list**
+- [x] **Step 3: Replace `ResearchEntryPage.tsx` with project-patient list**
 
 Replace `frontend/src/pages/research-entry/ResearchEntryPage.tsx` with:
 
@@ -1165,7 +1167,7 @@ export function ResearchEntryPage() {
 }
 ```
 
-- [ ] **Step 4: Update `App.test.tsx` research-entry smoke expectation**
+- [x] **Step 4: Update `App.test.tsx` research-entry smoke expectation**
 
 In `frontend/src/app/App.test.tsx`, update the `/studies/project-patients/` mock rows to include `project_name`, `project_status`, `enrolled_at`, and `visit_summaries`.
 
@@ -1177,7 +1179,7 @@ await waitFor(() => {
 });
 ```
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run:
 
@@ -1188,7 +1190,7 @@ npm run test -- ResearchEntryPage.test.tsx App.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit research-entry list**
+- [x] **Step 6: Commit research-entry list**
 
 Run:
 
@@ -1210,7 +1212,7 @@ git commit -m "feat(frontend): 研究录入改为项目患者列表"
 - Test: `frontend/src/pages/patients/PatientDetailPage.tsx` via `App.test.tsx`
 - Test: `frontend/src/pages/projects/ProjectGroupingBoard.test.tsx`
 
-- [ ] **Step 1: Add patient detail route assertions to `App.test.tsx`**
+- [x] **Step 1: Add patient detail route assertions to `App.test.tsx`**
 
 Append this test to `frontend/src/app/App.test.tsx`:
 
@@ -1287,7 +1289,7 @@ if (p.patient === 201) {
 }
 ```
 
-- [ ] **Step 2: Run the failing patient detail test**
+- [x] **Step 2: Run the failing patient detail test**
 
 Run:
 
@@ -1298,7 +1300,7 @@ npm run test -- App.test.tsx
 
 Expected: FAIL because patient detail still shows `CRF 基线录入` and `打开 CRF`.
 
-- [ ] **Step 3: Rename baseline page title**
+- [x] **Step 3: Rename baseline page title**
 
 In `frontend/src/pages/patients/PatientCrfBaselinePage.tsx`, change:
 
@@ -1312,7 +1314,7 @@ to:
 title="患者基础基线资料"
 ```
 
-- [ ] **Step 4: Update patient detail buttons and table action**
+- [x] **Step 4: Update patient detail buttons and table action**
 
 In `frontend/src/pages/patients/PatientDetailPage.tsx`, change the top baseline button:
 
@@ -1330,7 +1332,7 @@ render: (_: unknown, row) => (
 
 Remove the stale `<Alert>` block with message `随访与访视`.
 
-- [ ] **Step 5: Add project-context links on confirmed patient cards**
+- [x] **Step 5: Add project-context links on confirmed patient cards**
 
 In `frontend/src/pages/projects/ProjectGroupingBoard.tsx`, inside `ConfirmedPatientCard`, add these links after the existing patient detail link:
 
@@ -1354,7 +1356,7 @@ The resulting action span for confirmed cards should contain:
 </span>
 ```
 
-- [ ] **Step 6: Update or add grouping-board link assertion**
+- [x] **Step 6: Update or add grouping-board link assertion**
 
 In `frontend/src/pages/projects/ProjectGroupingBoard.test.tsx`, add an assertion in the existing test that renders confirmed patients:
 
@@ -1371,7 +1373,7 @@ expect(screen.getAllByRole("link", { name: "打开 CRF" })[0]).toHaveAttribute(
 
 If the fixture row id is not `9001`, use that fixture’s `ProjectPatientRow.id` in the expected href.
 
-- [ ] **Step 7: Run focused frontend tests**
+- [x] **Step 7: Run focused frontend tests**
 
 Run:
 
@@ -1382,7 +1384,7 @@ npm run test -- App.test.tsx ProjectGroupingBoard.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit naming and entry-link changes**
+- [x] **Step 8: Commit naming and entry-link changes**
 
 Run:
 
@@ -1399,7 +1401,7 @@ git commit -m "feat(frontend): 调整基线资料与研究录入口径"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-14-project-patient-research-entry-tabs.md`
 
-- [ ] **Step 1: Run backend focused suite**
+- [x] **Step 1: Run backend focused suite**
 
 Run:
 
@@ -1410,7 +1412,7 @@ pytest apps/studies/tests/test_project_patient_visit_ids.py apps/visits/tests/te
 
 Expected: PASS.
 
-- [ ] **Step 2: Run frontend focused suite**
+- [x] **Step 2: Run frontend focused suite**
 
 Run:
 
@@ -1421,7 +1423,7 @@ npm run test -- VisitFormPage.test.tsx ProjectPatientResearchEntryPage.test.tsx 
 
 Expected: PASS.
 
-- [ ] **Step 3: Run full frontend validation**
+- [x] **Step 3: Run full frontend validation**
 
 Run:
 
@@ -1433,7 +1435,7 @@ npm run build
 
 Expected: PASS for both commands.
 
-- [ ] **Step 4: Run full backend validation**
+- [x] **Step 4: Run full backend validation**
 
 Run:
 
@@ -1444,7 +1446,7 @@ pytest -q
 
 Expected: PASS.
 
-- [ ] **Step 5: Update plan checkboxes and execution record**
+- [x] **Step 5: Update plan checkboxes and execution record**
 
 After Task 7 Step 4 passes, run:
 
@@ -1457,7 +1459,7 @@ Copy the printed short SHA. At the top of this file, add an execution record in 
 
 Then mark completed steps from `- [ ]` to `- [x]`.
 
-- [ ] **Step 6: Commit plan bookkeeping**
+- [x] **Step 6: Commit plan bookkeeping**
 
 Run:
 
