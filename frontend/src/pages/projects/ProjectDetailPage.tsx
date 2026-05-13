@@ -44,7 +44,7 @@ export function ProjectDetailPage() {
       extra={
         <Space>
           <Button type="default" onClick={() => setConfigOpen(true)}>
-            新增分组 / 元数据
+            新增分组
           </Button>
         </Space>
       }

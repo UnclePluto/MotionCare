@@ -309,6 +309,20 @@ export function ProjectGroupingBoard({ projectId }: Props) {
     }
   };
 
+  const handlePatientSelectionChange = (patientId: number, checked: boolean) => {
+    setPoolSelected((prev) =>
+      checked
+        ? prev.includes(patientId)
+          ? prev
+          : [...prev, patientId]
+        : prev.filter((id) => id !== patientId),
+    );
+
+    if (!checked) {
+      setLocalAssignments((prev) => prev.filter((assignment) => assignment.patientId !== patientId));
+    }
+  };
+
   const hasEligibleSelection = poolSelected.some((id) => !confirmedPatientIds.has(id));
 
   return (
@@ -333,9 +347,6 @@ export function ProjectGroupingBoard({ projectId }: Props) {
       </Card>
 
       <Card title={patients ? "全量患者" : "加载患者"} size="small">
-        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          勾选未确认入组患者后点击「随机分组」会生成本次页面内临时结果；确认前不会写入后端。
-        </Typography.Paragraph>
         <Space wrap size={[8, 8]}>
           {(patients ?? []).map((p) => (
             <Checkbox
@@ -343,11 +354,7 @@ export function ProjectGroupingBoard({ projectId }: Props) {
               checked={poolSelected.includes(p.id)}
               disabled={confirmedPatientIds.has(p.id)}
               aria-label={`选择患者 ${p.name}`}
-              onChange={(e) =>
-                setPoolSelected((prev) =>
-                  e.target.checked ? [...prev, p.id] : prev.filter((id) => id !== p.id),
-                )
-              }
+              onChange={(e) => handlePatientSelectionChange(p.id, e.target.checked)}
             >
               <Tag>
                 {p.name} · {genderLabel[p.gender] ?? p.gender} · 尾号 {phoneTail(p.phone)}
