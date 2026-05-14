@@ -1,9 +1,10 @@
 from django.db import transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 
@@ -16,26 +17,71 @@ from .serializers import (
 from .services import activate_prescription
 
 
-class ActionLibraryItemViewSet(ModelViewSet):
-    queryset = ActionLibraryItem.objects.order_by("-id")
+class ActionLibraryItemViewSet(ReadOnlyModelViewSet):
+    queryset = ActionLibraryItem.objects.order_by("action_type", "id")
     serializer_class = ActionLibraryItemSerializer
     permission_classes = [IsAdminOrDoctor]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        training_type = self.request.query_params.get("training_type")
+        if training_type:
+            qs = qs.filter(training_type=training_type)
+        internal_type = self.request.query_params.get("internal_type")
+        if internal_type:
+            qs = qs.filter(internal_type=internal_type)
+        return qs
+
 
 class PrescriptionActionViewSet(ModelViewSet):
-    queryset = PrescriptionAction.objects.select_related("prescription", "action_library_item").order_by("-id")
+    queryset = PrescriptionAction.objects.select_related(
+        "prescription", "action_library_item"
+    ).order_by("-id")
     serializer_class = PrescriptionActionSerializer
     permission_classes = [IsAdminOrDoctor]
 
 
 class PrescriptionViewSet(ModelViewSet):
-    queryset = Prescription.objects.select_related("project_patient", "opened_by").order_by("-id")
+    queryset = (
+        Prescription.objects.select_related("project_patient", "opened_by")
+        .prefetch_related(
+            Prefetch(
+                "actions",
+                queryset=PrescriptionAction.objects.select_related(
+                    "action_library_item"
+                ).order_by("sort_order", "id"),
+            )
+        )
+        .order_by("-id")
+    )
     serializer_class = PrescriptionSerializer
     permission_classes = [IsAdminOrDoctor]
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return qs.exclude(status=Prescription.Status.TERMINATED)
+        qs = qs.exclude(status=Prescription.Status.TERMINATED)
+        project_patient_id = self.request.query_params.get("project_patient")
+        if project_patient_id:
+            qs = qs.filter(project_patient_id=project_patient_id)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="current")
+    def current(self, request):
+        project_patient_id = request.query_params.get("project_patient")
+        if not project_patient_id:
+            return Response(
+                {"detail": "project_patient 为必填参数"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        prescription = (
+            self.get_queryset()
+            .filter(project_patient_id=project_patient_id, status=Prescription.Status.ACTIVE)
+            .first()
+        )
+        if not prescription:
+            return Response(None)
+        serializer = self.get_serializer(prescription)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
@@ -63,4 +109,3 @@ class PrescriptionViewSet(ModelViewSet):
         prescription.save(update_fields=["status", "updated_at"])
         serializer = self.get_serializer(prescription)
         return Response(serializer.data)
-

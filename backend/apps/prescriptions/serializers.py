@@ -4,6 +4,8 @@ from .models import ActionLibraryItem, Prescription, PrescriptionAction
 
 
 class ActionLibraryItemSerializer(serializers.ModelSerializer):
+    parameter_mode = serializers.SerializerMethodField()
+
     class Meta:
         model = ActionLibraryItem
         fields = [
@@ -22,24 +24,12 @@ class ActionLibraryItemSerializer(serializers.ModelSerializer):
             "video_url",
             "has_ai_supervision",
             "is_active",
+            "parameter_mode",
         ]
         read_only_fields = ["id"]
 
-
-class PrescriptionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Prescription
-        fields = [
-            "id",
-            "project_patient",
-            "version",
-            "opened_by",
-            "opened_at",
-            "effective_at",
-            "status",
-            "note",
-        ]
-        read_only_fields = ["id", "opened_at"]
+    def get_parameter_mode(self, obj):
+        return "duration" if obj.action_type == "有氧训练" else "count"
 
 
 class PrescriptionActionSerializer(serializers.ModelSerializer):
@@ -65,3 +55,49 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
             "sort_order",
         ]
         read_only_fields = ["id"]
+
+
+class PrescriptionSerializer(serializers.ModelSerializer):
+    actions = PrescriptionActionSerializer(many=True, read_only=True)
+    opened_by_name = serializers.CharField(source="opened_by.name", read_only=True)
+
+    class Meta:
+        model = Prescription
+        fields = [
+            "id",
+            "project_patient",
+            "version",
+            "opened_by",
+            "opened_by_name",
+            "opened_at",
+            "effective_at",
+            "status",
+            "note",
+            "actions",
+        ]
+        read_only_fields = fields
+
+
+class ActivateNowActionSerializer(serializers.Serializer):
+    action_library_item = serializers.PrimaryKeyRelatedField(
+        queryset=ActionLibraryItem.objects.filter(is_active=True)
+    )
+    weekly_frequency = serializers.CharField(required=False, allow_blank=True, default="")
+    duration_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    sets = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    repetitions = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    difficulty = serializers.CharField(required=False, allow_blank=True, default="")
+    notes = serializers.CharField(required=False, allow_blank=True, default="")
+    sort_order = serializers.IntegerField(required=False, min_value=0, default=0)
+
+
+class ActivateNowPrescriptionSerializer(serializers.Serializer):
+    expected_active_version = serializers.IntegerField(required=False, allow_null=True)
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+    actions = ActivateNowActionSerializer(many=True, allow_empty=False)
+
+    def validate_actions(self, actions):
+        action_ids = [action["action_library_item"].id for action in actions]
+        if len(action_ids) != len(set(action_ids)):
+            raise serializers.ValidationError("重复动作，请检查后重试。")
+        return actions
