@@ -30,7 +30,7 @@ class TrainingRecordCreateSerializer(serializers.Serializer):
     training_date = serializers.DateField()
     status = serializers.ChoiceField(choices=TrainingRecord.Status.choices)
     actual_duration_minutes = serializers.IntegerField(
-        required=False, allow_null=True, min_value=1
+        required=False, allow_null=True, min_value=1, max_value=2147483647
     )
     score = serializers.DecimalField(
         required=False, allow_null=True, max_digits=6, decimal_places=2

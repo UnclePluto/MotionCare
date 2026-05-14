@@ -2,8 +2,11 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from apps.prescriptions.models import Prescription
+from apps.patients.models import Patient
+from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.studies.models import ProjectPatient
 
+from apps.training.models import TrainingRecord
 from apps.training.services import create_training_record
 
 
@@ -51,3 +54,51 @@ def test_training_rejects_action_from_archived_prescription(
         )
 
     assert newer.status == Prescription.Status.ACTIVE
+
+
+@pytest.mark.django_db
+def test_training_create_ignores_malicious_controlled_foreign_key_ids(
+    active_prescription,
+    prescription_action,
+    doctor,
+    project,
+    group,
+):
+    other_patient = Patient.objects.create(
+        name="患者乙",
+        phone="13900002222",
+        primary_doctor=doctor,
+    )
+    other_project_patient = ProjectPatient.objects.create(
+        project=project,
+        patient=other_patient,
+        group=group,
+    )
+    other_prescription = Prescription.objects.create(
+        project_patient=other_project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+    other_action = ActionLibraryItem.objects.create(
+        name="错误动作",
+        training_type="运动训练",
+        internal_type=ActionLibraryItem.InternalType.MOTION,
+        action_type="力量训练",
+    )
+    other_prescription_action = other_prescription.add_action_snapshot(other_action)
+
+    record = create_training_record(
+        project_patient=active_prescription.project_patient,
+        training_date="2026-05-06",
+        prescription_action=prescription_action,
+        status=TrainingRecord.Status.COMPLETED,
+        prescription_id=other_prescription.id,
+        prescription_action_id=other_prescription_action.id,
+        project_patient_id=other_project_patient.id,
+    )
+
+    assert record.project_patient == active_prescription.project_patient
+    assert record.prescription == active_prescription
+    assert record.prescription_action == prescription_action

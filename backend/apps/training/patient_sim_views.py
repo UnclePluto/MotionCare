@@ -1,13 +1,14 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.db.models import Prefetch
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DrfValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAdminOrDoctor
-from apps.prescriptions.models import Prescription
+from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.prescriptions.serializers import PrescriptionSerializer
 from apps.studies.models import ProjectPatient
 
@@ -22,7 +23,9 @@ def get_current_active_prescription(project_patient):
             project_patient=project_patient,
             status=Prescription.Status.ACTIVE,
         )
-        .prefetch_related("actions")
+        .prefetch_related(
+            Prefetch("actions", queryset=PrescriptionAction.objects.order_by("sort_order", "id"))
+        )
         .order_by("-effective_at", "-id")
         .first()
     )
