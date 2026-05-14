@@ -52,6 +52,17 @@ def test_project_patient_serializer_exposes_visit_summaries(auth_client, project
 
 
 @pytest.mark.django_db
+def test_project_patient_serializer_exposes_updated_at(auth_client, project_patient):
+    r = auth_client.get(f"/api/studies/project-patients/?project={project_patient.project_id}")
+
+    assert r.status_code == 200, r.content
+    rows = r.data if isinstance(r.data, list) else r.data["results"]
+    row = rows[0]
+    assert row["updated_at"]
+    assert "T" in row["updated_at"]
+
+
+@pytest.mark.django_db
 def test_project_patient_list_filters_patient_name_and_phone(auth_client, project_patient):
     other_patient = Patient.objects.create(
         name="患者乙",

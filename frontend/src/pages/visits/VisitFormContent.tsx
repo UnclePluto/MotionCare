@@ -6,10 +6,10 @@ import {
   Descriptions,
   Form,
   InputNumber,
+  Popconfirm,
   Radio,
   Space,
   Tag,
-  Typography,
   message,
 } from "antd";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -270,14 +270,14 @@ export function VisitFormContent({
     },
     onSuccess: async (data) => {
       if (data) {
-        message.success("已保存");
+        message.success("已暂存");
         await qc.invalidateQueries({ queryKey: ["visit", id] });
         await onVisitChanged?.();
       } else {
         message.info("没有改动");
       }
     },
-    onError: () => message.error("保存失败"),
+    onError: () => message.error("暂存失败"),
   });
 
   const completeMutation = useMutation({
@@ -286,7 +286,7 @@ export function VisitFormContent({
       return r.data;
     },
     onSuccess: async () => {
-      message.success("已标记完成");
+      message.success("已完成");
       await qc.invalidateQueries({ queryKey: ["visit", id] });
       await onVisitChanged?.();
     },
@@ -479,25 +479,29 @@ export function VisitFormContent({
 
             <Space>
               <Button
-                type="primary"
-                aria-label="保存"
+                aria-label="暂存"
                 loading={saveMutation.isPending}
                 disabled={isVisitReadonly}
                 onClick={() => saveMutation.mutate()}
               >
-                保存
+                暂存
               </Button>
-              <Button
-                aria-label="标记已完成"
-                loading={completeMutation.isPending}
-                disabled={isVisitReadonly}
-                onClick={() => completeMutation.mutate()}
+              <Popconfirm
+                title="确认完成？"
+                description="完成后对应记录无法修改。"
+                okText="确认完成"
+                cancelText="取消"
+                onConfirm={() => completeMutation.mutate()}
               >
-                标记已完成
-              </Button>
-              <Typography.Text type="secondary">
-                保存只会发送改动字段；状态切换走独立 PATCH。
-              </Typography.Text>
+                <Button
+                  type="primary"
+                  aria-label="完成"
+                  loading={completeMutation.isPending}
+                  disabled={isVisitReadonly}
+                >
+                  完成
+                </Button>
+              </Popconfirm>
             </Space>
           </div>
         </Space>

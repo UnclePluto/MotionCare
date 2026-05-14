@@ -47,6 +47,7 @@ describe("ResearchEntryPage", () => {
               group: 10,
               group_name: "试验组",
               enrolled_at: "2026-05-12T10:00:00+08:00",
+              updated_at: "2026-05-14T09:30:00+08:00",
               visit_ids: { T0: 11, T1: 12, T2: 13 },
               visit_summaries: {
                 T0: { id: 11, status: "completed", visit_date: "2026-05-12" },
@@ -65,6 +66,7 @@ describe("ResearchEntryPage", () => {
               group: 20,
               group_name: "对照组",
               enrolled_at: "2026-05-13T10:00:00-04:00",
+              updated_at: "2026-05-14T11:45:00+08:00",
               visit_ids: { T0: 21, T1: 22, T2: 23 },
               visit_summaries: {
                 T0: { id: 21, status: "draft", visit_date: null },
@@ -88,21 +90,23 @@ describe("ResearchEntryPage", () => {
     expect(screen.getByText("研究项目 B")).toBeInTheDocument();
     expect(screen.getAllByText("同名患者").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("入组时间")).toBeInTheDocument();
+    expect(screen.getByText("最后更新时间")).toBeInTheDocument();
     expect(screen.getByText("2026-05-12 10:00")).toBeInTheDocument();
     expect(screen.getByText("2026-05-13 10:00")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-14 09:30")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-14 11:45")).toBeInTheDocument();
     expect(screen.queryByText("访视类型")).not.toBeInTheDocument();
+    expect(screen.queryByText("T0 / T1 / T2")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /T1 草稿/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "基线资料" })).not.toBeInTheDocument();
   });
 
-  it("links record and visit status to project-patient research-entry page", async () => {
+  it("links record to project-patient research-entry page only", async () => {
     renderPage();
 
     const recordLinks = await screen.findAllByRole("link", { name: "录入" });
     expect(recordLinks[0]).toHaveAttribute("href", "/research-entry/project-patients/9001");
-    expect(screen.getAllByRole("link", { name: /T1 草稿/ })[0]).toHaveAttribute(
-      "href",
-      "/research-entry/project-patients/9001?visit=T1",
-    );
-    expect(screen.getAllByRole("link", { name: "基线资料" })[0]).toHaveAttribute("href", "/patients/201/crf-baseline");
+    expect(screen.queryByRole("link", { name: "基线资料" })).not.toBeInTheDocument();
   });
 
   it("passes project and patient filters to backend", async () => {

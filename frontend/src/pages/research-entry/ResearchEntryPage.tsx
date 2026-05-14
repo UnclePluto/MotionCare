@@ -1,13 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Input, Select, Space, Table, Tag } from "antd";
+import { Button, Card, Input, Select, Space, Table } from "antd";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 
 type StudyProject = { id: number; name: string };
-type VisitType = "T0" | "T1" | "T2";
-type VisitSummary = { id: number; status: "draft" | "completed"; visit_date: string | null };
 
 type ProjectPatientRow = {
   id: number;
@@ -20,10 +18,8 @@ type ProjectPatientRow = {
   group: number | null;
   group_name: string | null;
   enrolled_at: string;
-  visit_summaries?: Partial<Record<VisitType, VisitSummary>>;
+  updated_at: string;
 };
-
-const VISIT_TYPES: VisitType[] = ["T0", "T1", "T2"];
 
 function patientSearchParams(value: string) {
   const trimmed = value.trim();
@@ -42,16 +38,6 @@ function formatEnrolledAt(value: string | null | undefined) {
   if (!match) return value;
 
   return `${match[1]} ${match[2]}`;
-}
-
-function statusTag(summary: VisitSummary | undefined) {
-  if (!summary) return <Tag color="red">访视未生成</Tag>;
-  return (
-    <Tag color={summary.status === "completed" ? "green" : "default"}>
-      {summary.status === "completed" ? "已完成" : "草稿"}
-      {summary.visit_date ? ` · ${summary.visit_date}` : ""}
-    </Tag>
-  );
 }
 
 export function ResearchEntryPage() {
@@ -135,23 +121,15 @@ export function ResearchEntryPage() {
             render: (v: string | null | undefined) => formatEnrolledAt(v),
           },
           {
-            title: "T0 / T1 / T2",
-            render: (_: unknown, r) => (
-              <Space wrap>
-                {VISIT_TYPES.map((vt) => (
-                  <Link key={vt} to={`/research-entry/project-patients/${r.id}?visit=${vt}`}>
-                    {vt} {statusTag(r.visit_summaries?.[vt])}
-                  </Link>
-                ))}
-              </Space>
-            ),
+            title: "最后更新时间",
+            dataIndex: "updated_at",
+            render: (v: string | null | undefined) => formatEnrolledAt(v),
           },
           {
             title: "操作",
             render: (_: unknown, r) => (
               <Space>
                 <Link to={`/research-entry/project-patients/${r.id}`}>录入</Link>
-                <Link to={`/patients/${r.patient}/crf-baseline`}>基线资料</Link>
               </Space>
             ),
           },

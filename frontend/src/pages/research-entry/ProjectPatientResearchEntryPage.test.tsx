@@ -132,7 +132,9 @@ describe("ProjectPatientResearchEntryPage", () => {
     renderAt("/research-entry/project-patients/9001?visit=T1");
 
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/visits/12/"));
-    fireEvent.click(await screen.findByRole("button", { name: "标记已完成" }));
+    fireEvent.click(await screen.findByRole("button", { name: "完成" }));
+    expect(await screen.findByText("完成后对应记录无法修改。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认完成" }));
 
     await waitFor(() => {
       expect(mockPatch).toHaveBeenCalledWith("/visits/12/", { status: "completed" });

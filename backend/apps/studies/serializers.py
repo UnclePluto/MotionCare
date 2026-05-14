@@ -79,12 +79,14 @@ class ProjectPatientSerializer(serializers.ModelSerializer):
             "group",
             "group_name",
             "enrolled_at",
+            "updated_at",
             "visit_ids",
             "visit_summaries",
         ]
         read_only_fields = [
             "id",
             "enrolled_at",
+            "updated_at",
             "project_name",
             "project_status",
             "patient_name",
