@@ -72,6 +72,12 @@ describe("App", () => {
           },
         });
       }
+      if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
+      if (url === "/prescriptions/") return Promise.resolve({ data: [] });
+      if (url === "/prescriptions/actions/") return Promise.resolve({ data: [] });
+      if (url === "/patient-sim/project-patients/9001/current-prescription/") {
+        return Promise.resolve({ data: null });
+      }
       if (url === "/studies/groups/" && params?.project === 1) {
         return Promise.resolve({
           data: [

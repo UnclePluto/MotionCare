@@ -127,6 +127,7 @@ export function ProjectPatientResearchEntryPage() {
       extra={
         data ? (
           <Space wrap>
+            <Link to={`/research-entry/project-patients/${data.id}/prescriptions`}>处方</Link>
             <Link to={`/patients/${data.patient}/crf-baseline`}>基线资料</Link>
             <Link to={`/crf?projectPatientId=${data.id}`}>打开 CRF</Link>
           </Space>
