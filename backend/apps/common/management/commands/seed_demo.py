@@ -37,11 +37,16 @@ class Command(BaseCommand):
         ensure_default_visits(project_patient)
 
         action, _ = ActionLibraryItem.objects.get_or_create(
-            name="坐立训练",
+            source_key="motion-balance-sit-stand",
             defaults={
+                "name": "坐站转移训练",
                 "training_type": "运动训练",
                 "internal_type": ActionLibraryItem.InternalType.MOTION,
                 "action_type": "平衡训练",
+                "instruction_text": "找一把高度45CM的椅子，坐稳；双腿发力站直，缓慢坐下。",
+                "suggested_frequency": "2 次/周",
+                "suggested_duration_minutes": 15,
+                "has_ai_supervision": True,
             },
         )
         prescription, _ = Prescription.objects.get_or_create(
@@ -50,7 +55,12 @@ class Command(BaseCommand):
             defaults={"opened_by": doctor, "effective_at": timezone.now()},
         )
         if not prescription.actions.exists():
-            prescription.add_action_snapshot(action, duration_minutes=10, sets=2)
+            prescription.add_action_snapshot(
+                action,
+                weekly_frequency="2 次/周",
+                duration_minutes=15,
+                sets=2,
+            )
         activate_prescription(prescription)
 
         self.stdout.write(self.style.SUCCESS("Demo data created. Doctor: 13800000000 / pass123456"))

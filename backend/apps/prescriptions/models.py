@@ -10,16 +10,19 @@ class ActionLibraryItem(UserStampedModel):
         GAME = "game", "游戏互动类"
         MOTION = "motion", "运动类"
 
+    source_key = models.CharField("动作编码", max_length=120, unique=True, null=True, blank=True)
     name = models.CharField("动作名称", max_length=120)
     training_type = models.CharField("训练类型", max_length=80)
     internal_type = models.CharField("内部类型", max_length=20, choices=InternalType.choices)
     action_type = models.CharField("动作类型", max_length=80)
-    execution_description = models.TextField("执行描述", blank=True)
-    key_points = models.TextField("动作要点", blank=True)
+    instruction_text = models.TextField("动作说明文案", blank=True)
     suggested_frequency = models.CharField("建议频次", max_length=80, blank=True)
     suggested_duration_minutes = models.PositiveIntegerField("建议时长", null=True, blank=True)
     suggested_sets = models.PositiveIntegerField("建议组数", null=True, blank=True)
+    suggested_repetitions = models.PositiveIntegerField("建议次数", null=True, blank=True)
     default_difficulty = models.CharField("默认难度", max_length=40, blank=True)
+    video_url = models.URLField("视频URL", max_length=500, blank=True)
+    has_ai_supervision = models.BooleanField("是否支持AI监督", default=False)
     is_active = models.BooleanField("是否启用", default=True)
 
 
@@ -56,9 +59,10 @@ class Prescription(UserStampedModel):
         self,
         action: ActionLibraryItem,
         *,
-        frequency: str = "",
+        weekly_frequency: str = "",
         duration_minutes: int | None = None,
         sets: int | None = None,
+        repetitions: int | None = None,
         difficulty: str = "",
         notes: str = "",
         sort_order: int = 0,
@@ -70,10 +74,13 @@ class Prescription(UserStampedModel):
             training_type_snapshot=action.training_type,
             internal_type_snapshot=action.internal_type,
             action_type_snapshot=action.action_type,
-            execution_description_snapshot=action.execution_description,
-            frequency=frequency,
+            action_instruction_snapshot=action.instruction_text,
+            video_url_snapshot=action.video_url,
+            has_ai_supervision_snapshot=action.has_ai_supervision,
+            weekly_frequency=weekly_frequency,
             duration_minutes=duration_minutes,
             sets=sets,
+            repetitions=repetitions,
             difficulty=difficulty,
             notes=notes,
             sort_order=sort_order,
@@ -89,11 +96,13 @@ class PrescriptionAction(UserStampedModel):
     training_type_snapshot = models.CharField("训练类型快照", max_length=80)
     internal_type_snapshot = models.CharField("内部类型快照", max_length=20)
     action_type_snapshot = models.CharField("动作类型快照", max_length=80)
-    execution_description_snapshot = models.TextField("执行描述快照", blank=True)
-    frequency = models.CharField("频次", max_length=80, blank=True)
+    action_instruction_snapshot = models.TextField("动作说明文案快照", blank=True)
+    video_url_snapshot = models.URLField("视频URL快照", max_length=500, blank=True)
+    has_ai_supervision_snapshot = models.BooleanField("是否支持AI监督快照", default=False)
+    weekly_frequency = models.CharField("每周频次", max_length=80, blank=True)
     duration_minutes = models.PositiveIntegerField("时长", null=True, blank=True)
     sets = models.PositiveIntegerField("组数", null=True, blank=True)
+    repetitions = models.PositiveIntegerField("次数", null=True, blank=True)
     difficulty = models.CharField("难度", max_length=40, blank=True)
     notes = models.TextField("注意事项", blank=True)
     sort_order = models.PositiveIntegerField("排序", default=0)
-
