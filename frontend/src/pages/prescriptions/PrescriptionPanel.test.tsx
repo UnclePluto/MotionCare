@@ -66,6 +66,25 @@ const countAction = {
   parameter_mode: "count",
 };
 
+const countActionWithoutSuggestedCounts = {
+  id: 103,
+  source_key: "motion-resistance-leg-kickback",
+  name: "腿部后踢",
+  training_type: "运动训练",
+  internal_type: "motion",
+  action_type: "抗阻训练",
+  instruction_text: "弹力带下肢后踢",
+  suggested_frequency: "2 次/周",
+  suggested_duration_minutes: 10,
+  suggested_sets: null,
+  suggested_repetitions: null,
+  default_difficulty: "中",
+  video_url: "",
+  has_ai_supervision: false,
+  is_active: true,
+  parameter_mode: "count",
+};
+
 const activePrescription = {
   id: 1,
   project_patient: 9001,
@@ -109,7 +128,7 @@ describe("PrescriptionPanel", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
       if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action, countAction] });
+        return Promise.resolve({ data: [action, countAction, countActionWithoutSuggestedCounts] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -190,6 +209,57 @@ describe("PrescriptionPanel", () => {
     });
   });
 
+  it("uses executable fallback parameters for count-mode action without suggested counts", async () => {
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
+    fireEvent.click(await screen.findByLabelText("腿部后踢"));
+    await waitFor(() => {
+      expect(screen.getAllByRole("cell", { name: "1" })).toHaveLength(2);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        "/studies/project-patients/9001/prescriptions/activate-now/",
+        expect.objectContaining({
+          expected_active_version: null,
+          actions: [
+            expect.objectContaining({
+              action_library_item: 103,
+              duration_minutes: null,
+              sets: 1,
+              repetitions: 1,
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("does not submit when selected prescription actions cannot be mapped to action library", async () => {
+    mockGet.mockImplementation((url: string, config?: unknown) => {
+      const params =
+        typeof config === "object" && config ? (config as { params?: Record<string, unknown> }).params : {};
+      if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
+      if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
+      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
+        return Promise.resolve({ data: [] });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "调整处方" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+
+    await waitFor(() => {
+      expect(mockPost).not.toHaveBeenCalled();
+      expect(screen.getByText("动作库未加载完成，请刷新后重试")).toBeInTheDocument();
+    });
+  });
+
   it("terminates active prescription after confirmation", async () => {
     mockGet.mockImplementation((url: string, config?: unknown) => {
       const params =
@@ -197,7 +267,7 @@ describe("PrescriptionPanel", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
       if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
       if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action, countAction] });
+        return Promise.resolve({ data: [action, countAction, countActionWithoutSuggestedCounts] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });

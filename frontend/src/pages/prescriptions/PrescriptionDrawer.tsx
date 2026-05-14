@@ -1,4 +1,4 @@
-import { Button, Checkbox, Drawer, Empty, Form, InputNumber, Space, Table, Tag, Typography } from "antd";
+import { Button, Checkbox, Drawer, Empty, Form, InputNumber, Space, Table, Tag, Typography, message } from "antd";
 import { useEffect, useMemo } from "react";
 
 import { getActionParameterMode } from "./prescriptionUtils";
@@ -24,12 +24,26 @@ function buildActionPayload(action: ActionLibraryItem, sortOrder: number): Activ
     action_library_item: action.id,
     weekly_frequency: action.suggested_frequency,
     duration_minutes: mode === "duration" ? action.suggested_duration_minutes : null,
-    sets: mode === "count" ? action.suggested_sets : null,
-    repetitions: mode === "count" ? action.suggested_repetitions : null,
+    sets: mode === "count" ? action.suggested_sets ?? 1 : null,
+    repetitions: mode === "count" ? action.suggested_repetitions ?? 1 : null,
     difficulty: action.default_difficulty,
     notes: "",
     sort_order: sortOrder,
   };
+}
+
+function renderDuration(action: ActionLibraryItem) {
+  if (getActionParameterMode(action.action_type) === "count") {
+    return "—";
+  }
+  return action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "—";
+}
+
+function renderCountValue(action: ActionLibraryItem, field: "suggested_sets" | "suggested_repetitions") {
+  if (getActionParameterMode(action.action_type) !== "count") {
+    return "—";
+  }
+  return action[field] ?? 1;
 }
 
 export function PrescriptionDrawer({
@@ -58,6 +72,10 @@ export function PrescriptionDrawer({
     const values = await form.validateFields();
     const selected = values.selectedActionIds ?? [];
     const selectedActionsForPayload = actions.filter((action) => selected.includes(action.id));
+    if (selectedActionsForPayload.length !== selected.length) {
+      message.error("动作库未加载完成，请刷新后重试");
+      return;
+    }
     onSubmit({
       expected_active_version: currentPrescription?.version ?? null,
       actions: selectedActionsForPayload.map((action, index) => buildActionPayload(action, index)),
@@ -107,11 +125,10 @@ export function PrescriptionDrawer({
               { title: "频次", dataIndex: "suggested_frequency", render: (value: string) => value || "未配置" },
               {
                 title: "时长",
-                dataIndex: "suggested_duration_minutes",
-                render: (value: number | null) => (value ? `${value} 分钟` : "—"),
+                render: (_: unknown, action) => renderDuration(action),
               },
-              { title: "组数", dataIndex: "suggested_sets", render: (value: number | null) => value ?? "—" },
-              { title: "次数", dataIndex: "suggested_repetitions", render: (value: number | null) => value ?? "—" },
+              { title: "组数", render: (_: unknown, action) => renderCountValue(action, "suggested_sets") },
+              { title: "次数", render: (_: unknown, action) => renderCountValue(action, "suggested_repetitions") },
               { title: "难度", dataIndex: "default_difficulty", render: (value: string) => value || "—" },
             ]}
           />
