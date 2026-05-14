@@ -119,6 +119,26 @@ def test_patient_sim_training_submit_rejects_too_large_actual_duration(
 
 
 @pytest.mark.django_db
+def test_patient_sim_training_submit_rejects_array_body(
+    client, doctor, active_prescription
+):
+    client.force_login(doctor)
+
+    response = client.post(
+        f"/api/patient-sim/project-patients/"
+        f"{active_prescription.project_patient_id}/training-records/",
+        [],
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "请求体格式错误"
+    assert not TrainingRecord.objects.filter(
+        project_patient=active_prescription.project_patient
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_patient_sim_training_submit_requires_active_prescription(
     client, doctor, project_patient
 ):

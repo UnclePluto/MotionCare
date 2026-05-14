@@ -1,7 +1,9 @@
+from collections.abc import Mapping
+
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from django.db.models import Prefetch
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DrfValidationError
 from rest_framework.response import Response
@@ -50,6 +52,12 @@ class PatientSimTrainingRecordView(APIView):
         if not get_current_active_prescription(project_patient):
             return Response(
                 {"detail": "当前无生效处方，不能录入训练"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not isinstance(request.data, Mapping):
+            return Response(
+                {"detail": "请求体格式错误"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
