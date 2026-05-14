@@ -102,6 +102,25 @@ class ActivateNowActionSerializer(serializers.Serializer):
         required=False, min_value=0, max_value=2147483647, default=0
     )
 
+    def validate(self, attrs):
+        action = attrs["action_library_item"]
+        is_duration_mode = action.action_type == "有氧训练"
+        duration_minutes = attrs.get("duration_minutes")
+        sets = attrs.get("sets")
+        repetitions = attrs.get("repetitions")
+
+        if is_duration_mode:
+            if duration_minutes is None:
+                raise serializers.ValidationError("有氧训练需填写时长")
+            if sets is not None or repetitions is not None:
+                raise serializers.ValidationError("有氧训练不能填写组数或次数")
+        else:
+            if duration_minutes is not None:
+                raise serializers.ValidationError("计数型动作不能填写时长")
+            if sets is None or repetitions is None:
+                raise serializers.ValidationError("计数型动作需填写组数和次数")
+        return attrs
+
 
 class ActivateNowPrescriptionSerializer(serializers.Serializer):
     expected_active_version = serializers.IntegerField(

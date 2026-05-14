@@ -2,7 +2,8 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DrfValidationError
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
+from rest_framework import mixins
+from rest_framework.viewsets import GenericViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 
@@ -22,7 +23,12 @@ def validation_detail(exc):
     return str(exc)
 
 
-class TrainingRecordViewSet(ModelViewSet):
+class TrainingRecordViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    GenericViewSet,
+):
     queryset = TrainingRecord.objects.select_related(
         "project_patient", "prescription", "prescription_action"
     ).order_by("-id")

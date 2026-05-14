@@ -1,6 +1,7 @@
 import pytest
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
@@ -99,6 +100,37 @@ def test_training_create_ignores_malicious_controlled_foreign_key_ids(
         project_patient_id=other_project_patient.id,
     )
 
+    assert record.project_patient == active_prescription.project_patient
+    assert record.prescription == active_prescription
+    assert record.prescription_action == prescription_action
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("method", ["patch", "put"])
+def test_training_record_update_methods_are_not_allowed(
+    method,
+    active_prescription,
+    prescription_action,
+    doctor,
+):
+    record = create_training_record(
+        project_patient=active_prescription.project_patient,
+        training_date="2026-05-06",
+        prescription_action=prescription_action,
+        status=TrainingRecord.Status.COMPLETED,
+        actual_duration_minutes=20,
+    )
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = getattr(client, method)(
+        f"/api/training/{record.id}/",
+        {"prescription_action": 999},
+        format="json",
+    )
+
+    assert response.status_code == 405
+    record.refresh_from_db()
     assert record.project_patient == active_prescription.project_patient
     assert record.prescription == active_prescription
     assert record.prescription_action == prescription_action

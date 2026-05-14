@@ -1,6 +1,5 @@
 from django.db import transaction
 from django.db.models import Prefetch
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,7 +13,7 @@ from .serializers import (
     PrescriptionActionSerializer,
     PrescriptionSerializer,
 )
-from .services import activate_prescription, lock_open_project_patient_for_prescription
+from .services import lock_open_project_patient_for_prescription
 
 
 class ActionLibraryItemViewSet(ReadOnlyModelViewSet):
@@ -85,20 +84,11 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
         return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
-    @transaction.atomic
     def activate(self, request, pk=None):
-        prescription: Prescription = self.get_object()
-        effective_at = request.data.get("effective_at")
-        if effective_at:
-            try:
-                effective_at = timezone.datetime.fromisoformat(effective_at)
-            except Exception:
-                return Response({"detail": "effective_at 格式错误"}, status=status.HTTP_400_BAD_REQUEST)
-            if timezone.is_naive(effective_at):
-                effective_at = timezone.make_aware(effective_at)
-        prescription = activate_prescription(prescription, effective_at=effective_at)
-        serializer = self.get_serializer(prescription)
-        return Response(serializer.data)
+        return Response(
+            {"detail": "请通过项目患者处方立即生效接口开具或调整处方。"},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
