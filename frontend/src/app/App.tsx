@@ -1,3 +1,4 @@
+import { Alert } from "antd";
 import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import { AuthProvider } from "../auth/AuthContext";
@@ -22,6 +23,9 @@ import { CrfPreviewPage } from "../pages/crf/CrfPreviewPage";
 function PrescriptionRouteWrapper() {
   const { projectPatientId } = useParams<{ projectPatientId: string }>();
   const id = Number(projectPatientId);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return <Alert type="error" message="无效的项目患者 ID" />;
+  }
   return <PrescriptionPanel projectPatientId={id} />;
 }
 

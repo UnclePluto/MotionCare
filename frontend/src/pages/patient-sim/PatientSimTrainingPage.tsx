@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Descriptions, Empty, Form, Input, InputNumber, List, Space, Tag, message } from "antd";
 import dayjs from "dayjs";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -11,9 +11,19 @@ function formatDateTime(value: string | null) {
   return value ? value.replace("T", " ").slice(0, 16) : "—";
 }
 
+function isValidProjectPatientId(value: number) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function getErrorMessage(error: unknown) {
+  const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+  return typeof detail === "string" && detail ? detail : "训练记录提交失败";
+}
+
 export function PatientSimTrainingPage() {
   const { projectPatientId } = useParams<{ projectPatientId: string }>();
   const id = Number(projectPatientId);
+  const isValidId = isValidProjectPatientId(id);
   const [selected, setSelected] = useState<PrescriptionAction | null>(null);
   const [actualDuration, setActualDuration] = useState<number>(1);
   const [note, setNote] = useState("");
@@ -26,14 +36,14 @@ export function PatientSimTrainingPage() {
       );
       return response.data;
     },
-    enabled: Number.isFinite(id),
+    enabled: isValidId,
   });
 
-  useEffect(() => {
-    if (!selected) return;
-    setActualDuration(selected.duration_minutes ?? 1);
+  const selectAction = (action: PrescriptionAction) => {
+    setSelected(action);
+    setActualDuration(action.duration_minutes ?? 1);
     setNote("");
-  }, [selected]);
+  };
 
   const submitMutation = useMutation({
     mutationFn: async (action: PrescriptionAction) => {
@@ -53,9 +63,10 @@ export function PatientSimTrainingPage() {
       return response.data;
     },
     onSuccess: () => message.success("训练记录已提交"),
+    onError: (error) => message.error(getErrorMessage(error)),
   });
 
-  if (!Number.isFinite(id)) return <Alert type="error" message="无效的项目患者 ID" />;
+  if (!isValidId) return <Alert type="error" message="无效的项目患者 ID" />;
   if (isError) return <Alert type="error" message="无法读取当前处方" />;
   if (!isLoading && !data) return <Empty description="暂无可执行处方" />;
 
@@ -69,9 +80,10 @@ export function PatientSimTrainingPage() {
           </Descriptions>
           <List
             dataSource={data.actions}
+            locale={{ emptyText: <Empty description="当前处方暂无动作" /> }}
             renderItem={(action) => (
               <List.Item
-                onClick={() => setSelected(action)}
+                onClick={() => selectAction(action)}
                 style={{ cursor: "pointer" }}
                 aria-current={selected?.id === action.id ? "true" : undefined}
               >

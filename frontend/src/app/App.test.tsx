@@ -442,4 +442,34 @@ describe("App", () => {
       expect(screen.getByPlaceholderText("患者姓名或手机号")).toBeInTheDocument();
     });
   });
+
+  it("opens patient sim route", async () => {
+    window.history.pushState({}, "", "/patient-sim/project-patients/9001");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("暂无可执行处方")).toBeInTheDocument();
+  });
+
+  it("opens project patient prescription route", async () => {
+    window.history.pushState({}, "", "/research-entry/project-patients/9001/prescriptions");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findAllByText("处方管理")).not.toHaveLength(0);
+  });
 });
