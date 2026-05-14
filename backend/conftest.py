@@ -24,8 +24,10 @@ def prescription_action(db, active_prescription):
         training_type="运动训练",
         internal_type=ActionLibraryItem.InternalType.MOTION,
         action_type="平衡训练",
-        execution_description="从椅子坐下后站起",
-        key_points="保持躯干稳定",
+        instruction_text="从椅子坐下后站起。\n\n动作要点：保持躯干稳定。",
     )
-    return active_prescription.add_action_snapshot(action, duration_minutes=10, sets=2)
-
+    return active_prescription.add_action_snapshot(
+        action,
+        weekly_frequency="2 次/周",
+        duration_minutes=10,
+    )

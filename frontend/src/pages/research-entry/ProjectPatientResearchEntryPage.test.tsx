@@ -121,10 +121,11 @@ describe("ProjectPatientResearchEntryPage", () => {
     expect(await screen.findByText("访视已完成，当前为只读查看。")).toBeInTheDocument();
   });
 
-  it("renders baseline and CRF links in project context", async () => {
+  it("renders baseline and CRF links in project context without prescription entry", async () => {
     renderAt("/research-entry/project-patients/9001?visit=T1");
 
     expect(await screen.findByRole("link", { name: "基线资料" })).toHaveAttribute("href", "/patients/201/crf-baseline");
+    expect(screen.queryByRole("link", { name: "处方" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "打开 CRF" })).toHaveAttribute("href", "/crf?projectPatientId=9001");
   });
 

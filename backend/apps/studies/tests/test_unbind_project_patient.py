@@ -13,5 +13,6 @@ def test_unbind_terminates_prescriptions_and_removes_link(doctor, project_patien
     assert r.status_code == 200
     active_prescription.refresh_from_db()
     assert active_prescription.status == Prescription.Status.TERMINATED
+    assert active_prescription.archived_at is not None
     assert active_prescription.project_patient_id is None
     assert not ProjectPatient.objects.filter(pk=project_patient.pk).exists()

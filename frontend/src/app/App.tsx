@@ -1,13 +1,17 @@
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { Alert } from "antd";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import { AuthProvider } from "../auth/AuthContext";
 import { RequireAuth } from "../auth/RequireAuth";
 import { LoginPage } from "../pages/auth/LoginPage";
 import { AdminLayout } from "./layout/AdminLayout";
+import { PatientSimTrainingPage } from "../pages/patient-sim/PatientSimTrainingPage";
 import { PatientCrfBaselinePage } from "../pages/patients/PatientCrfBaselinePage";
 import { PatientListPage } from "../pages/patients/PatientListPage";
 import { PatientDetailPage } from "../pages/patients/PatientDetailPage";
 import { PatientEditPage } from "../pages/patients/PatientEditPage";
+import { PrescriptionEntryPage } from "../pages/prescriptions/PrescriptionEntryPage";
+import { PrescriptionPanel } from "../pages/prescriptions/PrescriptionPanel";
 import { ProjectDetailPage } from "../pages/projects/ProjectDetailPage";
 import { ProjectListPage } from "../pages/projects/ProjectListPage";
 import { ProjectPatientResearchEntryPage } from "../pages/research-entry/ProjectPatientResearchEntryPage";
@@ -16,6 +20,20 @@ import { VisitFormPage } from "../pages/visits/VisitFormPage";
 import { TrainingEntryPage } from "../pages/training/TrainingEntryPage";
 import { DailyHealthPage } from "../pages/health/DailyHealthPage";
 import { CrfPreviewPage } from "../pages/crf/CrfPreviewPage";
+
+function PrescriptionRouteWrapper() {
+  const { projectPatientId } = useParams<{ projectPatientId: string }>();
+  const id = Number(projectPatientId);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    return <Alert type="error" message="无效的项目患者 ID" />;
+  }
+  return <PrescriptionPanel projectPatientId={id} />;
+}
+
+function LegacyPrescriptionRouteRedirect() {
+  const { projectPatientId } = useParams<{ projectPatientId: string }>();
+  return <Navigate to={`/prescriptions/project-patients/${projectPatientId ?? ""}`} replace />;
+}
 
 export function App() {
   return (
@@ -33,6 +51,13 @@ export function App() {
               <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
               <Route path="/research-entry" element={<ResearchEntryPage />} />
               <Route path="/research-entry/project-patients/:projectPatientId" element={<ProjectPatientResearchEntryPage />} />
+              <Route path="/prescriptions" element={<PrescriptionEntryPage />} />
+              <Route path="/prescriptions/project-patients/:projectPatientId" element={<PrescriptionRouteWrapper />} />
+              <Route
+                path="/research-entry/project-patients/:projectPatientId/prescriptions"
+                element={<LegacyPrescriptionRouteRedirect />}
+              />
+              <Route path="/patient-sim/project-patients/:projectPatientId" element={<PatientSimTrainingPage />} />
               <Route path="/visits/:visitId" element={<VisitFormPage />} />
               <Route path="/training" element={<TrainingEntryPage />} />
               <Route path="/health" element={<DailyHealthPage />} />

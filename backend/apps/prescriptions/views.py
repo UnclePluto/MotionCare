@@ -1,9 +1,10 @@
 from django.db import transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 
@@ -13,54 +14,99 @@ from .serializers import (
     PrescriptionActionSerializer,
     PrescriptionSerializer,
 )
-from .services import activate_prescription
+from .services import lock_open_project_patient_for_prescription
 
 
-class ActionLibraryItemViewSet(ModelViewSet):
-    queryset = ActionLibraryItem.objects.order_by("-id")
+class ActionLibraryItemViewSet(ReadOnlyModelViewSet):
+    queryset = ActionLibraryItem.objects.order_by("action_type", "id")
     serializer_class = ActionLibraryItemSerializer
     permission_classes = [IsAdminOrDoctor]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        training_type = self.request.query_params.get("training_type")
+        if training_type:
+            qs = qs.filter(training_type=training_type)
+        internal_type = self.request.query_params.get("internal_type")
+        if internal_type:
+            qs = qs.filter(internal_type=internal_type)
+        return qs
 
-class PrescriptionActionViewSet(ModelViewSet):
-    queryset = PrescriptionAction.objects.select_related("prescription", "action_library_item").order_by("-id")
+
+class PrescriptionActionViewSet(ReadOnlyModelViewSet):
+    queryset = PrescriptionAction.objects.select_related(
+        "prescription", "action_library_item"
+    ).order_by("-id")
     serializer_class = PrescriptionActionSerializer
     permission_classes = [IsAdminOrDoctor]
 
 
-class PrescriptionViewSet(ModelViewSet):
-    queryset = Prescription.objects.select_related("project_patient", "opened_by").order_by("-id")
+class PrescriptionViewSet(ReadOnlyModelViewSet):
+    queryset = (
+        Prescription.objects.select_related("project_patient", "opened_by")
+        .prefetch_related(
+            Prefetch(
+                "actions",
+                queryset=PrescriptionAction.objects.select_related(
+                    "action_library_item"
+                ).order_by("sort_order", "id"),
+            )
+        )
+        .order_by("-id")
+    )
     serializer_class = PrescriptionSerializer
     permission_classes = [IsAdminOrDoctor]
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return qs.exclude(status=Prescription.Status.TERMINATED)
+        include_terminated = self.request.query_params.get("include_terminated") == "true"
+        if not include_terminated:
+            qs = qs.exclude(status=Prescription.Status.TERMINATED)
+        project_patient_id = self.request.query_params.get("project_patient")
+        if project_patient_id:
+            qs = qs.filter(project_patient_id=project_patient_id)
+        return qs
 
-    @action(detail=True, methods=["post"])
-    @transaction.atomic
-    def activate(self, request, pk=None):
-        prescription: Prescription = self.get_object()
-        effective_at = request.data.get("effective_at")
-        if effective_at:
-            try:
-                effective_at = timezone.datetime.fromisoformat(effective_at)
-            except Exception:
-                return Response({"detail": "effective_at 格式错误"}, status=status.HTTP_400_BAD_REQUEST)
-            if timezone.is_naive(effective_at):
-                effective_at = timezone.make_aware(effective_at)
-        activate_prescription(prescription, effective_at=effective_at)
+    @action(detail=False, methods=["get"], url_path="current")
+    def current(self, request):
+        project_patient_id = request.query_params.get("project_patient")
+        if not project_patient_id:
+            return Response(
+                {"detail": "project_patient 为必填参数"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        prescription = (
+            self.get_queryset()
+            .filter(project_patient_id=project_patient_id, status=Prescription.Status.ACTIVE)
+            .order_by("-version", "-id")
+            .first()
+        )
+        if not prescription:
+            return Response(None)
         serializer = self.get_serializer(prescription)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        return Response(
+            {"detail": "请通过项目患者处方立即生效接口开具或调整处方。"},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
 
     @action(detail=True, methods=["post"])
     @transaction.atomic
     def terminate(self, request, pk=None):
         prescription: Prescription = self.get_object()
+        if prescription.project_patient_id:
+            lock_open_project_patient_for_prescription(prescription.project_patient_id)
+        prescription = Prescription.objects.select_for_update(of=("self",)).get(
+            pk=prescription.pk
+        )
         if prescription.status != Prescription.Status.ACTIVE:
             return Response({"detail": "只能终止生效中的处方"}, status=status.HTTP_400_BAD_REQUEST)
+        now = timezone.now()
         prescription.status = Prescription.Status.TERMINATED
-        prescription.save(update_fields=["status", "updated_at"])
+        prescription.archived_at = now
+        prescription.save(update_fields=["status", "archived_at", "updated_at"])
         serializer = self.get_serializer(prescription)
         return Response(serializer.data)
-

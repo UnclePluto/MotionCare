@@ -1,5 +1,6 @@
 from collections import Counter
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count, Prefetch
@@ -10,10 +11,12 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
+from apps.prescriptions.serializers import ActivateNowPrescriptionSerializer, PrescriptionSerializer
+from apps.prescriptions.services import create_active_prescription_now
 from apps.studies.project_status import (
+    ensure_project_open,
     PROJECT_COMPLETED_GROUP_DETAIL,
     PROJECT_COMPLETED_UNBIND_DETAIL,
-    ensure_project_open,
 )
 from apps.studies.services.unbind_project_patient import unbind_project_patient
 from apps.visits.models import VisitRecord
@@ -286,6 +289,25 @@ class ProjectPatientViewSet(ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         raise MethodNotAllowed("PATCH", detail="入组关系不可直接修改，请先解绑后重新确认入组。")
+
+    @action(detail=True, methods=["post"], url_path="prescriptions/activate-now")
+    def activate_prescription_now(self, request, pk=None):
+        project_patient = self.get_object()
+        serializer = ActivateNowPrescriptionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            prescription = create_active_prescription_now(
+                project_patient=project_patient,
+                opened_by=request.user,
+                actions=serializer.validated_data["actions"],
+                expected_active_version=serializer.validated_data.get("expected_active_version"),
+                note=serializer.validated_data.get("note", ""),
+            )
+        except DjangoValidationError as exc:
+            detail = exc.messages[0] if hasattr(exc, "messages") and exc.messages else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+        output = PrescriptionSerializer(prescription)
+        return Response(output.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="unbind")
     @transaction.atomic

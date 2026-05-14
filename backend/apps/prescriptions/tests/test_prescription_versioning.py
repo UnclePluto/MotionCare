@@ -26,7 +26,9 @@ def test_activating_new_prescription_archives_existing_active(project_patient, d
     first.refresh_from_db()
     second.refresh_from_db()
     assert first.status == Prescription.Status.ARCHIVED
+    assert first.archived_at is not None
     assert second.status == Prescription.Status.ACTIVE
+    assert second.archived_at is None
 
 
 @pytest.mark.django_db
@@ -36,8 +38,7 @@ def test_prescription_action_keeps_snapshot(project_patient, doctor):
         training_type="运动训练",
         internal_type=ActionLibraryItem.InternalType.MOTION,
         action_type="平衡训练",
-        execution_description="从椅子坐下后站起",
-        key_points="保持躯干稳定",
+        instruction_text="从椅子坐下后站起。\n\n动作要点：保持躯干稳定。",
     )
 
     prescription = Prescription.objects.create(
@@ -45,7 +46,7 @@ def test_prescription_action_keeps_snapshot(project_patient, doctor):
         version=1,
         opened_by=doctor,
     )
-    snapshot = prescription.add_action_snapshot(action, duration_minutes=10, sets=2)
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
 
     action.name = "已修改动作名"
     action.save()
@@ -53,4 +54,4 @@ def test_prescription_action_keeps_snapshot(project_patient, doctor):
     snapshot.refresh_from_db()
     assert snapshot.action_library_item == action
     assert snapshot.action_name_snapshot == "坐立训练"
-
+    assert snapshot.action_instruction_snapshot == "从椅子坐下后站起。\n\n动作要点：保持躯干稳定。"
