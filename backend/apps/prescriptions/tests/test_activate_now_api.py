@@ -33,7 +33,7 @@ def _action(**overrides):
 def _payload(action, *, expected_active_version=None):
     return {
         "expected_active_version": expected_active_version,
-        "note": "立即生效处方",
+        "note": None,
         "actions": [
             {
                 "action_library_item": action.id,
@@ -72,6 +72,8 @@ def test_activate_now_creates_active_prescription_and_snapshots(project_patient,
     assert prescription.status == Prescription.Status.ACTIVE
     assert prescription.opened_by == doctor
     assert prescription.effective_at is not None
+    assert body["note"] == ""
+    assert prescription.note == ""
 
     assert len(body["actions"]) == 1
     snapshot = body["actions"][0]

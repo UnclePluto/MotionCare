@@ -93,7 +93,7 @@ class ActivateNowActionSerializer(serializers.Serializer):
 
 class ActivateNowPrescriptionSerializer(serializers.Serializer):
     expected_active_version = serializers.IntegerField(required=False, allow_null=True)
-    note = serializers.CharField(required=False, allow_blank=True, default="")
+    note = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     actions = ActivateNowActionSerializer(many=True, allow_empty=False)
 
     def validate_actions(self, actions):

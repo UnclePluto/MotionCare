@@ -35,6 +35,7 @@ def create_active_prescription_now(
     expected_active_version=None,
     note="",
 ) -> Prescription:
+    note = note or ""
     locked_project_patient = ProjectPatient.objects.select_for_update(of=("self",)).get(
         pk=project_patient.pk
     )
