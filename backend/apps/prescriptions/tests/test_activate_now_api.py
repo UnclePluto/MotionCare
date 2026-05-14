@@ -1,8 +1,10 @@
 import pytest
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.prescriptions.services import lock_open_project_patient_for_prescription
 from apps.studies.models import StudyProject
 
 
@@ -325,3 +327,11 @@ def test_activate_returns_updated_prescription_body(project_patient, doctor):
     body = response.json()
     assert body["status"] == Prescription.Status.ACTIVE
     assert body["effective_at"] is not None
+
+
+@pytest.mark.django_db
+def test_lock_open_project_patient_handles_missing_link():
+    with pytest.raises(ValidationError) as exc_info:
+        lock_open_project_patient_for_prescription(999999)
+
+    assert "入组关系已不存在" in str(exc_info.value.detail)
