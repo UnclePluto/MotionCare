@@ -47,6 +47,25 @@ const action = {
   parameter_mode: "duration",
 };
 
+const countAction = {
+  id: 102,
+  source_key: "motion-resistance-row",
+  name: "坐姿划船",
+  training_type: "运动训练",
+  internal_type: "motion",
+  action_type: "抗阻训练",
+  instruction_text: "弹力带坐姿背部训练",
+  suggested_frequency: "2 次/周",
+  suggested_duration_minutes: 10,
+  suggested_sets: 3,
+  suggested_repetitions: 12,
+  default_difficulty: "中",
+  video_url: "",
+  has_ai_supervision: false,
+  is_active: true,
+  parameter_mode: "count",
+};
+
 const activePrescription = {
   id: 1,
   project_patient: 9001,
@@ -90,7 +109,7 @@ describe("PrescriptionPanel", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
       if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action] });
+        return Promise.resolve({ data: [action, countAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -146,6 +165,31 @@ describe("PrescriptionPanel", () => {
     });
   });
 
+  it("creates count-mode prescription action without duration minutes", async () => {
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
+    fireEvent.click(await screen.findByLabelText("坐姿划船"));
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        "/studies/project-patients/9001/prescriptions/activate-now/",
+        expect.objectContaining({
+          expected_active_version: null,
+          actions: [
+            expect.objectContaining({
+              action_library_item: 102,
+              duration_minutes: null,
+              sets: 3,
+              repetitions: 12,
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
   it("terminates active prescription after confirmation", async () => {
     mockGet.mockImplementation((url: string, config?: unknown) => {
       const params =
@@ -153,7 +197,7 @@ describe("PrescriptionPanel", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
       if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
       if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action] });
+        return Promise.resolve({ data: [action, countAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });

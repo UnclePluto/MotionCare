@@ -23,7 +23,7 @@ function buildActionPayload(action: ActionLibraryItem, sortOrder: number): Activ
   return {
     action_library_item: action.id,
     weekly_frequency: action.suggested_frequency,
-    duration_minutes: mode === "duration" ? action.suggested_duration_minutes : action.suggested_duration_minutes,
+    duration_minutes: mode === "duration" ? action.suggested_duration_minutes : null,
     sets: mode === "count" ? action.suggested_sets : null,
     repetitions: mode === "count" ? action.suggested_repetitions : null,
     difficulty: action.default_difficulty,
