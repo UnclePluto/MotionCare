@@ -66,10 +66,12 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
+DATABASE_CONN_MAX_AGE = int(os.getenv("DATABASE_CONN_MAX_AGE", "0" if DEBUG else "60"))
 DATABASES = {
     "default": dj_database_url.parse(
         os.getenv("DATABASE_URL", "postgres://motioncare:motioncare@localhost:5432/motioncare"),
-        conn_max_age=600,
+        conn_max_age=DATABASE_CONN_MAX_AGE,
+        conn_health_checks=True,
     )
 }
 

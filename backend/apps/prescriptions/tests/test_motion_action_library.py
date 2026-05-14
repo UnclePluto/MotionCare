@@ -66,7 +66,6 @@ def test_action_snapshot_keeps_merged_instruction_and_video(project_patient, doc
         action,
         weekly_frequency="3 次/周",
         duration_minutes=20,
-        repetitions=None,
     )
 
     action.name = "动作库已改名"
@@ -92,6 +91,9 @@ def test_action_library_endpoint_uses_motion_fields(client, doctor):
     first = response.json()[0]
     assert "instruction_text" in first
     assert "has_ai_supervision" in first
+    assert "suggested_sets" not in first
+    assert "suggested_repetitions" not in first
+    assert "parameter_mode" not in first
     assert "execution_description" not in first
     assert "key_points" not in first
 
@@ -126,5 +128,7 @@ def test_prescription_action_endpoint_uses_motion_snapshot_fields(
     row = next(item for item in response.json() if item["id"] == snapshot.id)
     assert row["action_instruction_snapshot"] == action.instruction_text
     assert row["weekly_frequency"] == "3 次/周"
+    assert "sets" not in row
+    assert "repetitions" not in row
     assert "execution_description_snapshot" not in row
     assert "frequency" not in row

@@ -18,8 +18,6 @@ class ActionLibraryItem(UserStampedModel):
     instruction_text = models.TextField("动作说明文案", blank=True)
     suggested_frequency = models.CharField("建议频次", max_length=80, blank=True)
     suggested_duration_minutes = models.PositiveIntegerField("建议时长", null=True, blank=True)
-    suggested_sets = models.PositiveIntegerField("建议组数", null=True, blank=True)
-    suggested_repetitions = models.PositiveIntegerField("建议次数", null=True, blank=True)
     default_difficulty = models.CharField("默认难度", max_length=40, blank=True)
     video_url = models.URLField("视频URL", max_length=500, blank=True)
     has_ai_supervision = models.BooleanField("是否支持AI监督", default=False)
@@ -49,6 +47,7 @@ class Prescription(UserStampedModel):
     )
     opened_at = models.DateTimeField("开设时间", auto_now_add=True)
     effective_at = models.DateTimeField("生效时间", null=True, blank=True)
+    archived_at = models.DateTimeField("归档时间", null=True, blank=True)
     status = models.CharField("状态", max_length=20, choices=Status.choices, default=Status.DRAFT)
     note = models.TextField("备注", blank=True)
 
@@ -61,8 +60,6 @@ class Prescription(UserStampedModel):
         *,
         weekly_frequency: str = "",
         duration_minutes: int | None = None,
-        sets: int | None = None,
-        repetitions: int | None = None,
         difficulty: str = "",
         notes: str = "",
         sort_order: int = 0,
@@ -79,8 +76,6 @@ class Prescription(UserStampedModel):
             has_ai_supervision_snapshot=action.has_ai_supervision,
             weekly_frequency=weekly_frequency,
             duration_minutes=duration_minutes,
-            sets=sets,
-            repetitions=repetitions,
             difficulty=difficulty,
             notes=notes,
             sort_order=sort_order,
@@ -101,8 +96,6 @@ class PrescriptionAction(UserStampedModel):
     has_ai_supervision_snapshot = models.BooleanField("是否支持AI监督快照", default=False)
     weekly_frequency = models.CharField("每周频次", max_length=80, blank=True)
     duration_minutes = models.PositiveIntegerField("时长", null=True, blank=True)
-    sets = models.PositiveIntegerField("组数", null=True, blank=True)
-    repetitions = models.PositiveIntegerField("次数", null=True, blank=True)
     difficulty = models.CharField("难度", max_length=40, blank=True)
     notes = models.TextField("注意事项", blank=True)
     sort_order = models.PositiveIntegerField("排序", default=0)

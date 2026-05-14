@@ -76,8 +76,6 @@ def test_patient_sim_training_submit_creates_record(
             "status": "completed",
             "actual_duration_minutes": 15,
             "form_data": {
-                "completed_sets": 2,
-                "completed_repetitions": 12,
                 "perceived_difficulty": "中",
                 "discomfort": "无",
             },
@@ -91,7 +89,9 @@ def test_patient_sim_training_submit_creates_record(
     assert body["project_patient"] == active_prescription.project_patient_id
     assert body["prescription"] == active_prescription.id
     assert body["prescription_action"] == prescription_action.id
-    assert body["form_data"]["completed_sets"] == 2
+    assert body["form_data"]["perceived_difficulty"] == "中"
+    assert "completed_sets" not in body["form_data"]
+    assert "completed_repetitions" not in body["form_data"]
 
 
 @pytest.mark.django_db

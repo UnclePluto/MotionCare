@@ -10,6 +10,7 @@ import { PatientCrfBaselinePage } from "../pages/patients/PatientCrfBaselinePage
 import { PatientListPage } from "../pages/patients/PatientListPage";
 import { PatientDetailPage } from "../pages/patients/PatientDetailPage";
 import { PatientEditPage } from "../pages/patients/PatientEditPage";
+import { PrescriptionEntryPage } from "../pages/prescriptions/PrescriptionEntryPage";
 import { PrescriptionPanel } from "../pages/prescriptions/PrescriptionPanel";
 import { ProjectDetailPage } from "../pages/projects/ProjectDetailPage";
 import { ProjectListPage } from "../pages/projects/ProjectListPage";
@@ -29,6 +30,11 @@ function PrescriptionRouteWrapper() {
   return <PrescriptionPanel projectPatientId={id} />;
 }
 
+function LegacyPrescriptionRouteRedirect() {
+  const { projectPatientId } = useParams<{ projectPatientId: string }>();
+  return <Navigate to={`/prescriptions/project-patients/${projectPatientId ?? ""}`} replace />;
+}
+
 export function App() {
   return (
     <BrowserRouter>
@@ -45,9 +51,11 @@ export function App() {
               <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
               <Route path="/research-entry" element={<ResearchEntryPage />} />
               <Route path="/research-entry/project-patients/:projectPatientId" element={<ProjectPatientResearchEntryPage />} />
+              <Route path="/prescriptions" element={<PrescriptionEntryPage />} />
+              <Route path="/prescriptions/project-patients/:projectPatientId" element={<PrescriptionRouteWrapper />} />
               <Route
                 path="/research-entry/project-patients/:projectPatientId/prescriptions"
-                element={<PrescriptionRouteWrapper />}
+                element={<LegacyPrescriptionRouteRedirect />}
               />
               <Route path="/patient-sim/project-patients/:projectPatientId" element={<PatientSimTrainingPage />} />
               <Route path="/visits/:visitId" element={<VisitFormPage />} />

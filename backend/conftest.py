@@ -30,5 +30,4 @@ def prescription_action(db, active_prescription):
         action,
         weekly_frequency="2 次/周",
         duration_minutes=10,
-        sets=2,
     )

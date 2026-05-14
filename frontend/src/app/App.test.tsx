@@ -156,6 +156,29 @@ describe("App", () => {
             ],
           });
         }
+        return Promise.resolve({
+          data: [
+            {
+              id: 9001,
+              project: 1,
+              project_name: "研究项目 A",
+              project_status: "active",
+              patient: 201,
+              patient_name: "项目患者甲",
+              patient_phone: "13800000201",
+              group: 10,
+              group_name: "试验组",
+              enrolled_at: "2026-05-12T10:00:00+08:00",
+              updated_at: "2026-05-14T09:30:00+08:00",
+              visit_ids: { T0: 11, T1: 12, T2: 13 },
+              visit_summaries: {
+                T0: { id: 11, status: "completed", visit_date: "2026-05-12" },
+                T1: { id: 12, status: "draft", visit_date: null },
+                T2: { id: 13, status: "draft", visit_date: null },
+              },
+            },
+          ],
+        });
       }
       if (url === "/patients/") {
         return Promise.resolve({
@@ -283,6 +306,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getAllByText("患者档案").length).toBeGreaterThan(0);
       expect(screen.getAllByText("研究录入").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("处方管理").length).toBeGreaterThan(0);
       expect(screen.getAllByText("研究项目").length).toBeGreaterThan(0);
       expect(screen.getAllByText("CRF 报告").length).toBeGreaterThan(0);
     });
@@ -458,8 +482,26 @@ describe("App", () => {
     expect(await screen.findByText("暂无可执行处方")).toBeInTheDocument();
   });
 
+  it("opens prescription entry route", async () => {
+    window.history.pushState({}, "", "/prescriptions");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "处方" })).toHaveAttribute(
+      "href",
+      "/prescriptions/project-patients/9001",
+    );
+  });
+
   it("opens project patient prescription route", async () => {
-    window.history.pushState({}, "", "/research-entry/project-patients/9001/prescriptions");
+    window.history.pushState({}, "", "/prescriptions/project-patients/9001");
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });

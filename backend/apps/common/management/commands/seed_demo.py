@@ -59,7 +59,6 @@ class Command(BaseCommand):
                 action,
                 weekly_frequency="2 次/周",
                 duration_minutes=15,
-                sets=2,
             )
         activate_prescription(prescription)
 

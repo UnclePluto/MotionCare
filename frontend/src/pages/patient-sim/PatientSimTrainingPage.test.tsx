@@ -54,8 +54,6 @@ const prescription = {
       has_ai_supervision_snapshot: true,
       weekly_frequency: "2 次/周",
       duration_minutes: 15,
-      sets: 2,
-      repetitions: 10,
       difficulty: "中",
       notes: "",
       sort_order: 0,
@@ -73,8 +71,6 @@ const twoActionPrescription = {
       action_name_snapshot: "弹力带划船",
       action_instruction_snapshot: "保持躯干稳定，向后拉动弹力带。",
       duration_minutes: 20,
-      sets: 3,
-      repetitions: 12,
       sort_order: 1,
     },
   ],
@@ -97,6 +93,8 @@ describe("PatientSimTrainingPage", () => {
     fireEvent.click(screen.getByText("坐站转移训练"));
     expect(screen.getByText("坐稳后起身，再缓慢坐下。")).toBeInTheDocument();
     expect(screen.getByText("视频待配置")).toBeInTheDocument();
+    expect(screen.queryByText("组数")).not.toBeInTheDocument();
+    expect(screen.queryByText("次数")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "提交训练记录" }));
 
     await waitFor(() => {
@@ -108,6 +106,9 @@ describe("PatientSimTrainingPage", () => {
         }),
       );
     });
+    const payload = mockPost.mock.calls[0][1] as { form_data?: Record<string, unknown> };
+    expect(payload.form_data).not.toHaveProperty("completed_sets");
+    expect(payload.form_data).not.toHaveProperty("completed_repetitions");
   });
 
   it("shows empty state without active prescription", async () => {

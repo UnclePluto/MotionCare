@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { weeklyFrequencyLabel } from "../prescriptions/prescriptionUtils";
 import type { Prescription, PrescriptionAction } from "../prescriptions/types";
 
 function formatDateTime(value: string | null) {
@@ -53,8 +54,6 @@ export function PatientSimTrainingPage() {
         status: "completed",
         actual_duration_minutes: actualDuration,
         form_data: {
-          completed_sets: action.sets,
-          completed_repetitions: action.repetitions,
           perceived_difficulty: action.difficulty,
           discomfort: "无",
         },
@@ -92,7 +91,7 @@ export function PatientSimTrainingPage() {
                   description={
                     <Space wrap>
                       <Tag>{action.action_type_snapshot}</Tag>
-                      <Tag>{action.weekly_frequency || "未配置频次"}</Tag>
+                      <Tag>{weeklyFrequencyLabel(action.weekly_frequency)}</Tag>
                       <Tag>{action.duration_minutes ? `${action.duration_minutes} 分钟` : "未配置时长"}</Tag>
                     </Space>
                   }
@@ -112,12 +111,10 @@ export function PatientSimTrainingPage() {
                   {selected.action_instruction_snapshot || "暂无动作说明"}
                 </p>
                 <Descriptions size="small" bordered column={2}>
-                  <Descriptions.Item label="频次">{selected.weekly_frequency || "—"}</Descriptions.Item>
+                  <Descriptions.Item label="频次">{weeklyFrequencyLabel(selected.weekly_frequency)}</Descriptions.Item>
                   <Descriptions.Item label="时长">
                     {selected.duration_minutes ? `${selected.duration_minutes} 分钟` : "—"}
                   </Descriptions.Item>
-                  <Descriptions.Item label="组数">{selected.sets ?? "—"}</Descriptions.Item>
-                  <Descriptions.Item label="次数">{selected.repetitions ?? "—"}</Descriptions.Item>
                 </Descriptions>
                 <Form layout="vertical">
                   <Form.Item label="实际时长">

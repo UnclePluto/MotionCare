@@ -38,8 +38,6 @@ def _payload(action, *, expected_active_version=None, action_overrides=None):
         "action_library_item": action.id,
         "weekly_frequency": "3 次/周",
         "duration_minutes": 20,
-        "sets": None,
-        "repetitions": None,
         "difficulty": "中",
         "notes": "注意呼吸",
         "sort_order": 1,
@@ -91,8 +89,8 @@ def test_activate_now_creates_active_prescription_and_snapshots(project_patient,
     assert snapshot["has_ai_supervision_snapshot"] is True
     assert snapshot["weekly_frequency"] == "3 次/周"
     assert snapshot["duration_minutes"] == 20
-    assert snapshot["sets"] is None
-    assert snapshot["repetitions"] is None
+    assert "sets" not in snapshot
+    assert "repetitions" not in snapshot
     assert snapshot["difficulty"] == "中"
     assert snapshot["notes"] == "注意呼吸"
     assert snapshot["sort_order"] == 1
@@ -119,7 +117,9 @@ def test_activate_now_archives_previous_active(project_patient, doctor):
     first.refresh_from_db()
     second = Prescription.objects.get(project_patient=project_patient, version=2)
     assert first.status == Prescription.Status.ARCHIVED
+    assert first.archived_at is not None
     assert second.status == Prescription.Status.ACTIVE
+    assert second.archived_at is None
     assert response.json()["version"] == 2
 
 
@@ -157,6 +157,8 @@ def test_activate_now_archives_all_existing_active_prescriptions(project_patient
     assert response.json()["version"] == 3
     assert first.status == Prescription.Status.ARCHIVED
     assert second.status == Prescription.Status.ARCHIVED
+    assert first.archived_at is not None
+    assert second.archived_at is not None
     assert list(active_prescriptions.values_list("version", flat=True)) == [3]
 
 
@@ -205,8 +207,6 @@ def test_activate_now_rejects_stale_active_version(project_patient, doctor):
         {"weekly_frequency": "x" * 81},
         {"difficulty": "x" * 41},
         {"duration_minutes": 0},
-        {"sets": 0},
-        {"repetitions": 0},
     ],
 )
 def test_activate_now_rejects_invalid_action_parameters(
@@ -239,7 +239,7 @@ def test_activate_now_rejects_invalid_expected_active_version(project_patient, d
 
 
 @pytest.mark.django_db
-def test_activate_now_accepts_count_action_without_duration(project_patient, doctor):
+def test_activate_now_accepts_non_aerobic_action_with_adjustable_duration(project_patient, doctor):
     action = _action(action_type="抗阻训练")
 
     response = _client(doctor).post(
@@ -247,9 +247,7 @@ def test_activate_now_accepts_count_action_without_duration(project_patient, doc
         data=_payload(
             action,
             action_overrides={
-                "duration_minutes": None,
-                "sets": 2,
-                "repetitions": 12,
+                "duration_minutes": 12,
             },
         ),
         format="json",
@@ -257,37 +255,41 @@ def test_activate_now_accepts_count_action_without_duration(project_patient, doc
 
     assert response.status_code == 201
     snapshot = response.json()["actions"][0]
-    assert snapshot["duration_minutes"] is None
-    assert snapshot["sets"] == 2
-    assert snapshot["repetitions"] == 12
+    assert snapshot["duration_minutes"] == 12
+    assert "sets" not in snapshot
+    assert "repetitions" not in snapshot
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "action_type, action_overrides, detail",
-    [
-        ("有氧训练", {"sets": 2}, "有氧训练不能填写组数或次数"),
-        ("抗阻训练", {"duration_minutes": 20, "sets": 2, "repetitions": 12}, "计数型动作不能填写时长"),
-        ("抗阻训练", {"duration_minutes": None, "sets": None, "repetitions": 12}, "计数型动作需填写组数和次数"),
-    ],
-)
-def test_activate_now_rejects_parameter_mode_mismatch(
+def test_activate_now_rejects_missing_duration_for_any_motion_action(
     project_patient,
     doctor,
-    action_type,
-    action_overrides,
-    detail,
 ):
-    action = _action(action_type=action_type)
+    action = _action(action_type="抗阻训练")
 
     response = _client(doctor).post(
         f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
-        data=_payload(action, action_overrides=action_overrides),
+        data=_payload(action, action_overrides={"duration_minutes": None}),
         format="json",
     )
 
     assert response.status_code == 400
-    assert detail in str(response.data)
+    assert "动作需填写时长" in str(response.data)
+    assert not Prescription.objects.filter(project_patient=project_patient).exists()
+
+
+@pytest.mark.django_db
+def test_activate_now_rejects_legacy_set_or_repetition_payload(project_patient, doctor):
+    action = _action()
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=_payload(action, action_overrides={"sets": 2}),
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "不支持组数或次数" in str(response.data)
     assert not Prescription.objects.filter(project_patient=project_patient).exists()
 
 
@@ -344,6 +346,52 @@ def test_terminate_rejects_completed_project(project_patient, doctor):
     assert response.json() == {"detail": "项目已完结，不能调整处方。"}
     prescription.refresh_from_db()
     assert prescription.status == Prescription.Status.ACTIVE
+    assert prescription.archived_at is None
+
+
+@pytest.mark.django_db
+def test_terminate_sets_archived_at(project_patient, doctor):
+    prescription = Prescription.objects.create(
+        project_patient=project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+
+    response = _client(doctor).post(f"/api/prescriptions/{prescription.id}/terminate/")
+
+    assert response.status_code == 200
+    prescription.refresh_from_db()
+    assert prescription.status == Prescription.Status.TERMINATED
+    assert prescription.archived_at is not None
+    assert response.json()["archived_at"] is not None
+
+
+@pytest.mark.django_db
+def test_prescription_history_can_include_terminated(project_patient, doctor):
+    terminated = Prescription.objects.create(
+        project_patient=project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.TERMINATED,
+        effective_at=timezone.now(),
+        archived_at=timezone.now(),
+    )
+
+    default_response = _client(doctor).get(
+        "/api/prescriptions/",
+        {"project_patient": project_patient.id},
+    )
+    history_response = _client(doctor).get(
+        "/api/prescriptions/",
+        {"project_patient": project_patient.id, "include_terminated": "true"},
+    )
+
+    assert default_response.status_code == 200
+    assert history_response.status_code == 200
+    assert all(item["id"] != terminated.id for item in default_response.json())
+    assert any(item["id"] == terminated.id for item in history_response.json())
 
 
 @pytest.mark.django_db

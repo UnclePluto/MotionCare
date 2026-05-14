@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.db.models import Prefetch
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -58,7 +59,9 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        qs = qs.exclude(status=Prescription.Status.TERMINATED)
+        include_terminated = self.request.query_params.get("include_terminated") == "true"
+        if not include_terminated:
+            qs = qs.exclude(status=Prescription.Status.TERMINATED)
         project_patient_id = self.request.query_params.get("project_patient")
         if project_patient_id:
             qs = qs.filter(project_patient_id=project_patient_id)
@@ -101,7 +104,9 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
         )
         if prescription.status != Prescription.Status.ACTIVE:
             return Response({"detail": "只能终止生效中的处方"}, status=status.HTTP_400_BAD_REQUEST)
+        now = timezone.now()
         prescription.status = Prescription.Status.TERMINATED
-        prescription.save(update_fields=["status", "updated_at"])
+        prescription.archived_at = now
+        prescription.save(update_fields=["status", "archived_at", "updated_at"])
         serializer = self.get_serializer(prescription)
         return Response(serializer.data)

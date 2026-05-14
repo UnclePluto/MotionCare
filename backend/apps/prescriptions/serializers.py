@@ -4,8 +4,6 @@ from .models import ActionLibraryItem, Prescription, PrescriptionAction
 
 
 class ActionLibraryItemSerializer(serializers.ModelSerializer):
-    parameter_mode = serializers.SerializerMethodField()
-
     class Meta:
         model = ActionLibraryItem
         fields = [
@@ -18,18 +16,12 @@ class ActionLibraryItemSerializer(serializers.ModelSerializer):
             "instruction_text",
             "suggested_frequency",
             "suggested_duration_minutes",
-            "suggested_sets",
-            "suggested_repetitions",
             "default_difficulty",
             "video_url",
             "has_ai_supervision",
             "is_active",
-            "parameter_mode",
         ]
         read_only_fields = ["id"]
-
-    def get_parameter_mode(self, obj):
-        return "duration" if obj.action_type == "有氧训练" else "count"
 
 
 class PrescriptionActionSerializer(serializers.ModelSerializer):
@@ -48,8 +40,6 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
             "has_ai_supervision_snapshot",
             "weekly_frequency",
             "duration_minutes",
-            "sets",
-            "repetitions",
             "difficulty",
             "notes",
             "sort_order",
@@ -71,6 +61,7 @@ class PrescriptionSerializer(serializers.ModelSerializer):
             "opened_by_name",
             "opened_at",
             "effective_at",
+            "archived_at",
             "status",
             "note",
             "actions",
@@ -88,12 +79,6 @@ class ActivateNowActionSerializer(serializers.Serializer):
     duration_minutes = serializers.IntegerField(
         required=False, allow_null=True, min_value=1, max_value=2147483647
     )
-    sets = serializers.IntegerField(
-        required=False, allow_null=True, min_value=1, max_value=2147483647
-    )
-    repetitions = serializers.IntegerField(
-        required=False, allow_null=True, min_value=1, max_value=2147483647
-    )
     difficulty = serializers.CharField(
         required=False, allow_blank=True, max_length=40, default=""
     )
@@ -102,23 +87,15 @@ class ActivateNowActionSerializer(serializers.Serializer):
         required=False, min_value=0, max_value=2147483647, default=0
     )
 
-    def validate(self, attrs):
-        action = attrs["action_library_item"]
-        is_duration_mode = action.action_type == "有氧训练"
-        duration_minutes = attrs.get("duration_minutes")
-        sets = attrs.get("sets")
-        repetitions = attrs.get("repetitions")
+    def to_internal_value(self, data):
+        if isinstance(data, dict) and ("sets" in data or "repetitions" in data):
+            raise serializers.ValidationError("处方动作仅支持时长，不支持组数或次数")
+        return super().to_internal_value(data)
 
-        if is_duration_mode:
-            if duration_minutes is None:
-                raise serializers.ValidationError("有氧训练需填写时长")
-            if sets is not None or repetitions is not None:
-                raise serializers.ValidationError("有氧训练不能填写组数或次数")
-        else:
-            if duration_minutes is not None:
-                raise serializers.ValidationError("计数型动作不能填写时长")
-            if sets is None or repetitions is None:
-                raise serializers.ValidationError("计数型动作需填写组数和次数")
+    def validate(self, attrs):
+        duration_minutes = attrs.get("duration_minutes")
+        if duration_minutes is None:
+            raise serializers.ValidationError("动作需填写时长")
         return attrs
 
 

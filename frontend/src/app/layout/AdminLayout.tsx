@@ -3,6 +3,7 @@ import {
   FileTextOutlined,
   FormOutlined,
   HeartOutlined,
+  MedicineBoxOutlined,
   ProjectOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -29,6 +30,7 @@ export function AdminLayout() {
           items={[
             { key: "/patients", icon: <TeamOutlined />, label: "患者档案" },
             { key: "/research-entry", icon: <FormOutlined />, label: "研究录入" },
+            { key: "/prescriptions", icon: <MedicineBoxOutlined />, label: "处方管理" },
             { key: "/projects", icon: <ProjectOutlined />, label: "研究项目" },
             { key: "/training", icon: <HeartOutlined />, label: "训练记录" },
             { key: "/crf", icon: <FileTextOutlined />, label: "CRF 报告" },
@@ -60,4 +62,3 @@ export function AdminLayout() {
     </Layout>
   );
 }
-

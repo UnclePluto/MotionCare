@@ -50,13 +50,18 @@ def activate_prescription(prescription: Prescription, effective_at=None) -> Pres
     Prescription.objects.filter(
         project_patient=locked_project_patient or prescription.project_patient,
         status=Prescription.Status.ACTIVE,
-    ).exclude(id=prescription.id).update(status=Prescription.Status.ARCHIVED)
+    ).exclude(id=prescription.id).update(
+        status=Prescription.Status.ARCHIVED,
+        archived_at=now,
+        updated_at=now,
+    )
 
     prescription.effective_at = effective_at
+    prescription.archived_at = None
     prescription.status = (
         Prescription.Status.ACTIVE if effective_at <= now else Prescription.Status.PENDING
     )
-    prescription.save(update_fields=["effective_at", "status", "updated_at"])
+    prescription.save(update_fields=["effective_at", "archived_at", "status", "updated_at"])
     return prescription
 
 
@@ -86,6 +91,7 @@ def create_active_prescription_now(
     now = timezone.now()
     prescriptions.filter(status=Prescription.Status.ACTIVE).update(
         status=Prescription.Status.ARCHIVED,
+        archived_at=now,
         updated_at=now,
     )
 
@@ -103,8 +109,6 @@ def create_active_prescription_now(
             action,
             weekly_frequency=action_data.get("weekly_frequency", ""),
             duration_minutes=action_data.get("duration_minutes"),
-            sets=action_data.get("sets"),
-            repetitions=action_data.get("repetitions"),
             difficulty=action_data.get("difficulty", ""),
             notes=action_data.get("notes", ""),
             sort_order=action_data.get("sort_order", 0),

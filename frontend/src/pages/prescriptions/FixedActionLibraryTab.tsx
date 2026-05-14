@@ -1,6 +1,7 @@
 import { Badge, Card, Empty, List, Space, Tag, Typography } from "antd";
 
 import type { ActionLibraryItem } from "./types";
+import { weeklyFrequencyLabel } from "./prescriptionUtils";
 
 type Props = {
   actions: ActionLibraryItem[];
@@ -21,7 +22,7 @@ export function FixedActionLibraryTab({ actions }: Props) {
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
               <Space wrap size={[8, 8]}>
                 <Tag>{action.action_type}</Tag>
-                <Tag>{action.suggested_frequency || "未配置频次"}</Tag>
+                <Tag>{weeklyFrequencyLabel(action.suggested_frequency)}</Tag>
                 <Tag>
                   {action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "未配置时长"}
                 </Tag>
