@@ -3,6 +3,17 @@
 from django.db import migrations, models
 
 
+def split_instruction_text_for_reverse(instruction):
+    instruction = instruction or ""
+    full_marker = "\n\n动作要点："
+    leading_marker = "动作要点："
+    if full_marker in instruction:
+        return tuple(instruction.split(full_marker, 1))
+    if instruction.startswith(leading_marker):
+        return "", instruction.removeprefix(leading_marker)
+    return instruction, ""
+
+
 def forwards(apps, schema_editor):
     ActionLibraryItem = apps.get_model("prescriptions", "ActionLibraryItem")
     PrescriptionAction = apps.get_model("prescriptions", "PrescriptionAction")
@@ -29,13 +40,9 @@ def backwards(apps, schema_editor):
     PrescriptionAction = apps.get_model("prescriptions", "PrescriptionAction")
 
     for action in ActionLibraryItem.objects.all():
-        instruction = action.instruction_text or ""
-        marker = "\n\n动作要点："
-        if marker in instruction:
-            action.execution_description, action.key_points = instruction.split(marker, 1)
-        else:
-            action.execution_description = instruction
-            action.key_points = ""
+        action.execution_description, action.key_points = split_instruction_text_for_reverse(
+            action.instruction_text
+        )
         action.save(update_fields=["execution_description", "key_points"])
 
     for snapshot in PrescriptionAction.objects.all():

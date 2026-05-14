@@ -1,6 +1,25 @@
+import importlib
+
 import pytest
 
 from apps.prescriptions.models import ActionLibraryItem
+
+
+def test_reverse_instruction_split_handles_leading_key_points_only():
+    migration = importlib.import_module(
+        "apps.prescriptions.migrations.0003_motion_prescription_fields"
+    )
+
+    assert migration.split_instruction_text_for_reverse("步骤一。\n\n动作要点：保持稳定") == (
+        "步骤一。",
+        "保持稳定",
+    )
+    assert migration.split_instruction_text_for_reverse("动作要点：保持稳定") == (
+        "",
+        "保持稳定",
+    )
+    assert migration.split_instruction_text_for_reverse("步骤一。") == ("步骤一。", "")
+    assert migration.split_instruction_text_for_reverse("") == ("", "")
 
 
 @pytest.mark.django_db
