@@ -8,6 +8,7 @@ from apps.studies.models import ProjectPatient
 from .models import Prescription
 
 STALE_ACTIVE_VERSION_DETAIL = "当前处方已变化，请刷新后重试。"
+PROJECT_COMPLETED_PRESCRIPTION_DETAIL = "项目已完结，不能调整处方。"
 
 
 @transaction.atomic

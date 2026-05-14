@@ -12,11 +12,13 @@ from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 from apps.prescriptions.serializers import ActivateNowPrescriptionSerializer, PrescriptionSerializer
-from apps.prescriptions.services import create_active_prescription_now
+from apps.prescriptions.services import (
+    PROJECT_COMPLETED_PRESCRIPTION_DETAIL,
+    create_active_prescription_now,
+)
 from apps.studies.project_status import (
     ensure_project_open,
     PROJECT_COMPLETED_GROUP_DETAIL,
-    PROJECT_COMPLETED_PRESCRIPTION_DETAIL,
     PROJECT_COMPLETED_UNBIND_DETAIL,
 )
 from apps.studies.services.unbind_project_patient import unbind_project_patient

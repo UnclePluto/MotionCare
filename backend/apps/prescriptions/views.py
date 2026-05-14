@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
-from apps.studies.project_status import PROJECT_COMPLETED_PRESCRIPTION_DETAIL, ensure_project_open
+from apps.studies.project_status import ensure_project_open
 
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
 from .serializers import (
@@ -15,7 +15,7 @@ from .serializers import (
     PrescriptionActionSerializer,
     PrescriptionSerializer,
 )
-from .services import activate_prescription
+from .services import PROJECT_COMPLETED_PRESCRIPTION_DETAIL, activate_prescription
 
 
 class ActionLibraryItemViewSet(ReadOnlyModelViewSet):
