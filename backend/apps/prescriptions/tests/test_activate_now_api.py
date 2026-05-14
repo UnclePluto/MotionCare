@@ -308,3 +308,20 @@ def test_activate_rejects_completed_project(project_patient, doctor):
     assert response.json() == {"detail": "项目已完结，不能调整处方。"}
     prescription.refresh_from_db()
     assert prescription.status == Prescription.Status.DRAFT
+
+
+@pytest.mark.django_db
+def test_activate_returns_updated_prescription_body(project_patient, doctor):
+    prescription = Prescription.objects.create(
+        project_patient=project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.DRAFT,
+    )
+
+    response = _client(doctor).post(f"/api/prescriptions/{prescription.id}/activate/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == Prescription.Status.ACTIVE
+    assert body["effective_at"] is not None

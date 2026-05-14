@@ -96,7 +96,7 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
                 return Response({"detail": "effective_at 格式错误"}, status=status.HTTP_400_BAD_REQUEST)
             if timezone.is_naive(effective_at):
                 effective_at = timezone.make_aware(effective_at)
-        activate_prescription(prescription, effective_at=effective_at)
+        prescription = activate_prescription(prescription, effective_at=effective_at)
         serializer = self.get_serializer(prescription)
         return Response(serializer.data)
 
@@ -106,6 +106,9 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
         prescription: Prescription = self.get_object()
         if prescription.project_patient_id:
             lock_open_project_patient_for_prescription(prescription.project_patient_id)
+        prescription = Prescription.objects.select_for_update(of=("self",)).get(
+            pk=prescription.pk
+        )
         if prescription.status != Prescription.Status.ACTIVE:
             return Response({"detail": "只能终止生效中的处方"}, status=status.HTTP_400_BAD_REQUEST)
         prescription.status = Prescription.Status.TERMINATED
