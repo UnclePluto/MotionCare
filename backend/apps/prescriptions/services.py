@@ -3,7 +3,8 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from apps.studies.models import ProjectPatient
+from apps.studies.models import ProjectPatient, StudyProject
+from apps.studies.project_status import ensure_project_open
 
 from .models import Prescription
 
@@ -11,11 +12,26 @@ STALE_ACTIVE_VERSION_DETAIL = "当前处方已变化，请刷新后重试。"
 PROJECT_COMPLETED_PRESCRIPTION_DETAIL = "项目已完结，不能调整处方。"
 
 
+def lock_open_project_patient_for_prescription(project_patient_id) -> ProjectPatient:
+    project_patient = (
+        ProjectPatient.objects.select_for_update(of=("self",))
+        .select_related("project")
+        .get(pk=project_patient_id)
+    )
+    project = StudyProject.objects.select_for_update(of=("self",)).get(
+        pk=project_patient.project_id
+    )
+    ensure_project_open(project, PROJECT_COMPLETED_PRESCRIPTION_DETAIL)
+    project_patient.project = project
+    return project_patient
+
+
 @transaction.atomic
 def activate_prescription(prescription: Prescription, effective_at=None) -> Prescription:
+    locked_project_patient = None
     if prescription.project_patient_id:
-        ProjectPatient.objects.select_for_update(of=("self",)).get(
-            pk=prescription.project_patient_id
+        locked_project_patient = lock_open_project_patient_for_prescription(
+            prescription.project_patient_id
         )
         prescription = Prescription.objects.select_for_update(of=("self",)).get(
             pk=prescription.pk
@@ -28,7 +44,7 @@ def activate_prescription(prescription: Prescription, effective_at=None) -> Pres
     now = timezone.now()
     effective_at = effective_at or now
     Prescription.objects.filter(
-        project_patient=prescription.project_patient,
+        project_patient=locked_project_patient or prescription.project_patient,
         status=Prescription.Status.ACTIVE,
     ).exclude(id=prescription.id).update(status=Prescription.Status.ARCHIVED)
 
@@ -49,8 +65,8 @@ def create_active_prescription_now(
     note="",
 ) -> Prescription:
     note = note or ""
-    locked_project_patient = ProjectPatient.objects.select_for_update(of=("self",)).get(
-        pk=project_patient.pk
+    locked_project_patient = lock_open_project_patient_for_prescription(
+        project_patient.pk
     )
     prescriptions = Prescription.objects.select_for_update(of=("self",)).filter(
         project_patient=locked_project_patient

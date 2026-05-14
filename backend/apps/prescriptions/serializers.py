@@ -82,17 +82,31 @@ class ActivateNowActionSerializer(serializers.Serializer):
     action_library_item = serializers.PrimaryKeyRelatedField(
         queryset=ActionLibraryItem.objects.filter(is_active=True)
     )
-    weekly_frequency = serializers.CharField(required=False, allow_blank=True, default="")
-    duration_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=0)
-    sets = serializers.IntegerField(required=False, allow_null=True, min_value=0)
-    repetitions = serializers.IntegerField(required=False, allow_null=True, min_value=0)
-    difficulty = serializers.CharField(required=False, allow_blank=True, default="")
+    weekly_frequency = serializers.CharField(
+        required=False, allow_blank=True, max_length=80, default=""
+    )
+    duration_minutes = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1, max_value=2147483647
+    )
+    sets = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1, max_value=2147483647
+    )
+    repetitions = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1, max_value=2147483647
+    )
+    difficulty = serializers.CharField(
+        required=False, allow_blank=True, max_length=40, default=""
+    )
     notes = serializers.CharField(required=False, allow_blank=True, default="")
-    sort_order = serializers.IntegerField(required=False, min_value=0, default=0)
+    sort_order = serializers.IntegerField(
+        required=False, min_value=0, max_value=2147483647, default=0
+    )
 
 
 class ActivateNowPrescriptionSerializer(serializers.Serializer):
-    expected_active_version = serializers.IntegerField(required=False, allow_null=True)
+    expected_active_version = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
     note = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     actions = ActivateNowActionSerializer(many=True, allow_empty=False)
 

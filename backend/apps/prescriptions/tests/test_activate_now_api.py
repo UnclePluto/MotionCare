@@ -31,22 +31,23 @@ def _action(**overrides):
     return ActionLibraryItem.objects.create(**data)
 
 
-def _payload(action, *, expected_active_version=None):
+def _payload(action, *, expected_active_version=None, action_overrides=None):
+    action_data = {
+        "action_library_item": action.id,
+        "weekly_frequency": "3 次/周",
+        "duration_minutes": 20,
+        "sets": 2,
+        "repetitions": 12,
+        "difficulty": "中",
+        "notes": "注意呼吸",
+        "sort_order": 1,
+    }
+    if action_overrides:
+        action_data.update(action_overrides)
     return {
         "expected_active_version": expected_active_version,
         "note": None,
-        "actions": [
-            {
-                "action_library_item": action.id,
-                "weekly_frequency": "3 次/周",
-                "duration_minutes": 20,
-                "sets": 2,
-                "repetitions": 12,
-                "difficulty": "中",
-                "notes": "注意呼吸",
-                "sort_order": 1,
-            }
-        ],
+        "actions": [action_data],
     }
 
 
@@ -193,6 +194,46 @@ def test_activate_now_rejects_stale_active_version(project_patient, doctor):
 
     assert response.status_code == 400
     assert response.json() == {"detail": "当前处方已变化，请刷新后重试。"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "action_overrides",
+    [
+        {"weekly_frequency": "x" * 81},
+        {"difficulty": "x" * 41},
+        {"duration_minutes": 0},
+        {"sets": 0},
+        {"repetitions": 0},
+    ],
+)
+def test_activate_now_rejects_invalid_action_parameters(
+    project_patient, doctor, action_overrides
+):
+    action = _action()
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=_payload(action, action_overrides=action_overrides),
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert not Prescription.objects.filter(project_patient=project_patient).exists()
+
+
+@pytest.mark.django_db
+def test_activate_now_rejects_invalid_expected_active_version(project_patient, doctor):
+    action = _action()
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=_payload(action, expected_active_version=0),
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert not Prescription.objects.filter(project_patient=project_patient).exists()
 
 
 @pytest.mark.django_db
