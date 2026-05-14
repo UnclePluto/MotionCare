@@ -29,8 +29,13 @@ def backwards(apps, schema_editor):
     PrescriptionAction = apps.get_model("prescriptions", "PrescriptionAction")
 
     for action in ActionLibraryItem.objects.all():
-        action.execution_description = action.instruction_text
-        action.key_points = ""
+        instruction = action.instruction_text or ""
+        marker = "\n\n动作要点："
+        if marker in instruction:
+            action.execution_description, action.key_points = instruction.split(marker, 1)
+        else:
+            action.execution_description = instruction
+            action.key_points = ""
         action.save(update_fields=["execution_description", "key_points"])
 
     for snapshot in PrescriptionAction.objects.all():

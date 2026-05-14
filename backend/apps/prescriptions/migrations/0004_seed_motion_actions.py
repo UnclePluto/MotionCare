@@ -94,18 +94,11 @@ def seed_motion_actions(apps, schema_editor):
         )
 
 
-def unseed_motion_actions(apps, schema_editor):
-    ActionLibraryItem = apps.get_model("prescriptions", "ActionLibraryItem")
-    ActionLibraryItem.objects.filter(
-        source_key__in=[item["source_key"] for item in MOTION_ACTIONS]
-    ).delete()
-
-
 class Migration(migrations.Migration):
     dependencies = [
         ("prescriptions", "0003_motion_prescription_fields"),
     ]
 
     operations = [
-        migrations.RunPython(seed_motion_actions, unseed_motion_actions),
+        migrations.RunPython(seed_motion_actions, migrations.RunPython.noop),
     ]

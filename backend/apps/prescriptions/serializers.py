@@ -8,16 +8,19 @@ class ActionLibraryItemSerializer(serializers.ModelSerializer):
         model = ActionLibraryItem
         fields = [
             "id",
+            "source_key",
             "name",
             "training_type",
             "internal_type",
             "action_type",
-            "execution_description",
-            "key_points",
+            "instruction_text",
             "suggested_frequency",
             "suggested_duration_minutes",
             "suggested_sets",
+            "suggested_repetitions",
             "default_difficulty",
+            "video_url",
+            "has_ai_supervision",
             "is_active",
         ]
         read_only_fields = ["id"]
@@ -50,13 +53,15 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
             "training_type_snapshot",
             "internal_type_snapshot",
             "action_type_snapshot",
-            "execution_description_snapshot",
-            "frequency",
+            "action_instruction_snapshot",
+            "video_url_snapshot",
+            "has_ai_supervision_snapshot",
+            "weekly_frequency",
             "duration_minutes",
             "sets",
+            "repetitions",
             "difficulty",
             "notes",
             "sort_order",
         ]
         read_only_fields = ["id"]
-
