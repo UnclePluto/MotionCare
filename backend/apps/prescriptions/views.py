@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
+from apps.studies.project_status import PROJECT_COMPLETED_PRESCRIPTION_DETAIL, ensure_project_open
 
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
 from .serializers import (
@@ -76,6 +77,7 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
         prescription = (
             self.get_queryset()
             .filter(project_patient_id=project_patient_id, status=Prescription.Status.ACTIVE)
+            .order_by("-version", "-id")
             .first()
         )
         if not prescription:
@@ -87,6 +89,11 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
     @transaction.atomic
     def activate(self, request, pk=None):
         prescription: Prescription = self.get_object()
+        if prescription.project_patient_id:
+            ensure_project_open(
+                prescription.project_patient.project,
+                PROJECT_COMPLETED_PRESCRIPTION_DETAIL,
+            )
         effective_at = request.data.get("effective_at")
         if effective_at:
             try:
@@ -103,6 +110,11 @@ class PrescriptionViewSet(ReadOnlyModelViewSet):
     @transaction.atomic
     def terminate(self, request, pk=None):
         prescription: Prescription = self.get_object()
+        if prescription.project_patient_id:
+            ensure_project_open(
+                prescription.project_patient.project,
+                PROJECT_COMPLETED_PRESCRIPTION_DETAIL,
+            )
         if prescription.status != Prescription.Status.ACTIVE:
             return Response({"detail": "只能终止生效中的处方"}, status=status.HTTP_400_BAD_REQUEST)
         prescription.status = Prescription.Status.TERMINATED

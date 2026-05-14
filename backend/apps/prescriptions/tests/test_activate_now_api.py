@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.studies.models import StudyProject
 
 
 def _client(user):
@@ -210,3 +211,59 @@ def test_prescription_action_base_post_returns_405(doctor):
     )
 
     assert response.status_code == 405
+
+
+@pytest.mark.django_db
+def test_activate_now_rejects_completed_project(project_patient, doctor):
+    action = _action()
+    project_patient.project.status = StudyProject.Status.ARCHIVED
+    project_patient.project.save(update_fields=["status", "updated_at"])
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=_payload(action),
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "项目已完结，不能调整处方。"}
+    assert not Prescription.objects.filter(project_patient=project_patient).exists()
+
+
+@pytest.mark.django_db
+def test_terminate_rejects_completed_project(project_patient, doctor):
+    prescription = Prescription.objects.create(
+        project_patient=project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+    project_patient.project.status = StudyProject.Status.ARCHIVED
+    project_patient.project.save(update_fields=["status", "updated_at"])
+
+    response = _client(doctor).post(f"/api/prescriptions/{prescription.id}/terminate/")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "项目已完结，不能调整处方。"}
+    prescription.refresh_from_db()
+    assert prescription.status == Prescription.Status.ACTIVE
+
+
+@pytest.mark.django_db
+def test_activate_rejects_completed_project(project_patient, doctor):
+    prescription = Prescription.objects.create(
+        project_patient=project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.DRAFT,
+    )
+    project_patient.project.status = StudyProject.Status.ARCHIVED
+    project_patient.project.save(update_fields=["status", "updated_at"])
+
+    response = _client(doctor).post(f"/api/prescriptions/{prescription.id}/activate/")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "项目已完结，不能调整处方。"}
+    prescription.refresh_from_db()
+    assert prescription.status == Prescription.Status.DRAFT

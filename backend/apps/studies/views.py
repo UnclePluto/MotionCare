@@ -14,9 +14,10 @@ from apps.common.permissions import IsAdminOrDoctor
 from apps.prescriptions.serializers import ActivateNowPrescriptionSerializer, PrescriptionSerializer
 from apps.prescriptions.services import create_active_prescription_now
 from apps.studies.project_status import (
-    PROJECT_COMPLETED_GROUP_DETAIL,
-    PROJECT_COMPLETED_UNBIND_DETAIL,
     ensure_project_open,
+    PROJECT_COMPLETED_GROUP_DETAIL,
+    PROJECT_COMPLETED_PRESCRIPTION_DETAIL,
+    PROJECT_COMPLETED_UNBIND_DETAIL,
 )
 from apps.studies.services.unbind_project_patient import unbind_project_patient
 from apps.visits.models import VisitRecord
@@ -293,6 +294,7 @@ class ProjectPatientViewSet(ModelViewSet):
     @action(detail=True, methods=["post"], url_path="prescriptions/activate-now")
     def activate_prescription_now(self, request, pk=None):
         project_patient = self.get_object()
+        ensure_project_open(project_patient.project, PROJECT_COMPLETED_PRESCRIPTION_DETAIL)
         serializer = ActivateNowPrescriptionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
