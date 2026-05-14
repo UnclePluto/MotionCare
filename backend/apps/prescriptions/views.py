@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
+from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 
@@ -33,7 +33,7 @@ class ActionLibraryItemViewSet(ReadOnlyModelViewSet):
         return qs
 
 
-class PrescriptionActionViewSet(ModelViewSet):
+class PrescriptionActionViewSet(ReadOnlyModelViewSet):
     queryset = PrescriptionAction.objects.select_related(
         "prescription", "action_library_item"
     ).order_by("-id")
@@ -41,7 +41,7 @@ class PrescriptionActionViewSet(ModelViewSet):
     permission_classes = [IsAdminOrDoctor]
 
 
-class PrescriptionViewSet(ModelViewSet):
+class PrescriptionViewSet(ReadOnlyModelViewSet):
     queryset = (
         Prescription.objects.select_related("project_patient", "opened_by")
         .prefetch_related(

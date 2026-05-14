@@ -12,6 +12,18 @@ STALE_ACTIVE_VERSION_DETAIL = "当前处方已变化，请刷新后重试。"
 
 @transaction.atomic
 def activate_prescription(prescription: Prescription, effective_at=None) -> Prescription:
+    if prescription.project_patient_id:
+        ProjectPatient.objects.select_for_update(of=("self",)).get(
+            pk=prescription.project_patient_id
+        )
+        prescription = Prescription.objects.select_for_update(of=("self",)).get(
+            pk=prescription.pk
+        )
+    else:
+        prescription = Prescription.objects.select_for_update(of=("self",)).get(
+            pk=prescription.pk
+        )
+
     now = timezone.now()
     effective_at = effective_at or now
     Prescription.objects.filter(
@@ -42,16 +54,19 @@ def create_active_prescription_now(
     prescriptions = Prescription.objects.select_for_update(of=("self",)).filter(
         project_patient=locked_project_patient
     )
-    active_prescription = prescriptions.filter(status=Prescription.Status.ACTIVE).first()
+    active_prescription = (
+        prescriptions.filter(status=Prescription.Status.ACTIVE).order_by("-version", "-id").first()
+    )
     active_version = active_prescription.version if active_prescription else None
     if active_version != expected_active_version:
         raise ValidationError(STALE_ACTIVE_VERSION_DETAIL)
 
     next_version = (prescriptions.aggregate(max_version=Max("version"))["max_version"] or 0) + 1
     now = timezone.now()
-    if active_prescription:
-        active_prescription.status = Prescription.Status.ARCHIVED
-        active_prescription.save(update_fields=["status", "updated_at"])
+    prescriptions.filter(status=Prescription.Status.ACTIVE).update(
+        status=Prescription.Status.ARCHIVED,
+        updated_at=now,
+    )
 
     prescription = Prescription.objects.create(
         project_patient=locked_project_patient,

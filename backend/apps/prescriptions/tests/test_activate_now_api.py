@@ -120,6 +120,43 @@ def test_activate_now_archives_previous_active(project_patient, doctor):
 
 
 @pytest.mark.django_db
+def test_activate_now_archives_all_existing_active_prescriptions(project_patient, doctor):
+    action = _action()
+    first = Prescription.objects.create(
+        project_patient=project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+    second = Prescription.objects.create(
+        project_patient=project_patient,
+        version=2,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=_payload(action, expected_active_version=2),
+        format="json",
+    )
+
+    assert response.status_code == 201
+    first.refresh_from_db()
+    second.refresh_from_db()
+    active_prescriptions = Prescription.objects.filter(
+        project_patient=project_patient,
+        status=Prescription.Status.ACTIVE,
+    )
+    assert response.json()["version"] == 3
+    assert first.status == Prescription.Status.ARCHIVED
+    assert second.status == Prescription.Status.ARCHIVED
+    assert list(active_prescriptions.values_list("version", flat=True)) == [3]
+
+
+@pytest.mark.django_db
 def test_activate_now_rejects_duplicate_actions(project_patient, doctor):
     action = _action()
     payload = _payload(action)
@@ -155,3 +192,21 @@ def test_activate_now_rejects_stale_active_version(project_patient, doctor):
 
     assert response.status_code == 400
     assert response.json() == {"detail": "当前处方已变化，请刷新后重试。"}
+
+
+@pytest.mark.django_db
+def test_prescription_base_post_returns_405(doctor):
+    response = _client(doctor).post("/api/prescriptions/", data={}, format="json")
+
+    assert response.status_code == 405
+
+
+@pytest.mark.django_db
+def test_prescription_action_base_post_returns_405(doctor):
+    response = _client(doctor).post(
+        "/api/prescriptions/prescription-actions/",
+        data={},
+        format="json",
+    )
+
+    assert response.status_code == 405
