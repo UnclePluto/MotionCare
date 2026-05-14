@@ -1,4 +1,5 @@
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.viewsets import ModelViewSet
 
@@ -37,8 +38,13 @@ class VisitRecordViewSet(ModelViewSet):
             return VisitRecordListSerializer
         return VisitRecordSerializer
 
+    def _ensure_current_visit_writable(self, visit: VisitRecord) -> None:
+        if visit.status == VisitRecord.Status.COMPLETED:
+            raise ValidationError({"detail": "已完成访视只读，不能继续编辑。"})
+
     def perform_update(self, serializer):
         visit = self.get_object()
+        self._ensure_current_visit_writable(visit)
         ensure_project_open(visit.project_patient.project)
         target_project_patient = serializer.validated_data.get("project_patient", visit.project_patient)
         ensure_project_open(target_project_patient.project)

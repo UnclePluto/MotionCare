@@ -105,7 +105,7 @@ describe("VisitFormPage", () => {
     fireEvent.change(sppbInput, { target: { value: "9" } });
     fireEvent.blur(sppbInput);
 
-    const saveBtn = r.container.querySelector('button[aria-label="保存"]');
+    const saveBtn = r.container.querySelector('button[aria-label="暂存"]');
     expect(saveBtn).toBeTruthy();
     fireEvent.click(saveBtn as Element);
 
@@ -119,7 +119,7 @@ describe("VisitFormPage", () => {
     });
   });
 
-  it("mark-completed button sends standalone status patch", async () => {
+  it("complete button asks for confirmation before sending standalone status patch", async () => {
     mockGet.mockResolvedValue({
       data: {
         id: 14,
@@ -136,13 +136,18 @@ describe("VisitFormPage", () => {
     // Wait for page to load, then click button inside this render container.
     await waitFor(() => {
       expect(
-        r.container.querySelector('button[aria-label="标记已完成"]'),
+        r.container.querySelector('button[aria-label="完成"]'),
       ).toBeTruthy();
     });
     const completeBtn = r.container.querySelector(
-      'button[aria-label="标记已完成"]',
+      'button[aria-label="完成"]',
     );
+    expect(completeBtn).toHaveClass("ant-btn-primary");
     fireEvent.click(completeBtn as Element);
+
+    expect(await screen.findByText("完成后对应记录无法修改。")).toBeInTheDocument();
+    expect(mockPatch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认完成" }));
 
     await waitFor(() => {
       expect(mockPatch).toHaveBeenCalledWith("/visits/14/", { status: "completed" });
@@ -170,7 +175,7 @@ describe("VisitFormPage", () => {
     const platform = await screen.findByLabelText("平台账号/编号");
     fireEvent.change(platform, { target: { value: "PID-99" } });
 
-    const saveBtn = r.container.querySelector('button[aria-label="保存"]');
+    const saveBtn = r.container.querySelector('button[aria-label="暂存"]');
     expect(saveBtn).toBeTruthy();
     fireEvent.click(saveBtn as Element);
 
@@ -204,8 +209,41 @@ describe("VisitFormPage", () => {
     expect(screen.getByRole("spinbutton", { name: "SPPB 总分" })).toBeDisabled();
     expect(screen.getByLabelText("平台账号/编号")).toBeDisabled();
 
-    const saveBtn = r.container.querySelector('button[aria-label="保存"]');
-    const completeBtn = r.container.querySelector('button[aria-label="标记已完成"]');
+    const saveBtn = r.container.querySelector('button[aria-label="暂存"]');
+    const completeBtn = r.container.querySelector('button[aria-label="完成"]');
+    expect(saveBtn).toBeDisabled();
+    expect(completeBtn).toBeDisabled();
+
+    fireEvent.click(saveBtn as Element);
+    fireEvent.click(completeBtn as Element);
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
+
+  it("renders completed visits as readonly and blocks mutations", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        id: 22,
+        project_patient: 1,
+        project_status: "active",
+        visit_type: "T0",
+        status: "completed",
+        visit_date: null,
+        form_data: {
+          assessments: { sppb: { total: 9 } },
+          computed_assessments: {},
+          crf: { adherence: { platform_id: "PID-99" } },
+        },
+      },
+    });
+
+    const r = renderAt(22);
+
+    expect(await screen.findByText("访视已完成，当前为只读查看。")).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "SPPB 总分" })).toBeDisabled();
+    expect(screen.getByLabelText("平台账号/编号")).toBeDisabled();
+
+    const saveBtn = r.container.querySelector('button[aria-label="暂存"]');
+    const completeBtn = r.container.querySelector('button[aria-label="完成"]');
     expect(saveBtn).toBeDisabled();
     expect(completeBtn).toBeDisabled();
 

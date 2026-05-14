@@ -31,7 +31,7 @@ def test_patch_status_only(auth_client, project_patient):
 
 
 @pytest.mark.django_db
-def test_completed_visit_still_editable(auth_client, project_patient):
+def test_completed_visit_rejects_form_data_patch(auth_client, project_patient):
     visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
     visit.status = VisitRecord.Status.COMPLETED
     visit.form_data = {"assessments": {"sppb": {"total": 8}}, "computed_assessments": {}}
@@ -42,10 +42,56 @@ def test_completed_visit_still_editable(auth_client, project_patient):
         {"form_data": {"assessments": {"sppb": {"total": 9}}}},
         format="json",
     )
-    assert r.status_code == 200, r.content
+
+    assert r.status_code == 400, r.content
+    assert "已完成访视只读" in str(r.data)
     visit.refresh_from_db()
-    assert visit.form_data["assessments"]["sppb"]["total"] == 9
+    assert visit.form_data["assessments"]["sppb"]["total"] == 8
     assert visit.status == VisitRecord.Status.COMPLETED
+
+
+@pytest.mark.django_db
+def test_completed_visit_rejects_repeated_completed_patch(auth_client, project_patient):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    visit.status = VisitRecord.Status.COMPLETED
+    visit.save(update_fields=["status"])
+
+    r = auth_client.patch(
+        f"/api/visits/{visit.id}/",
+        {"status": VisitRecord.Status.COMPLETED},
+        format="json",
+    )
+
+    assert r.status_code == 400, r.content
+    assert "已完成访视只读" in str(r.data)
+
+
+@pytest.mark.django_db
+def test_completed_visit_rejects_put(auth_client, project_patient):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    visit.status = VisitRecord.Status.COMPLETED
+    visit.visit_date = "2026-05-01"
+    visit.form_data = {"assessments": {"sppb": {"total": 8}}, "computed_assessments": {}}
+    visit.save()
+
+    r = auth_client.put(
+        f"/api/visits/{visit.id}/",
+        {
+            "project_patient": project_patient.id,
+            "visit_type": visit.visit_type,
+            "status": VisitRecord.Status.DRAFT,
+            "visit_date": "2026-05-02",
+            "form_data": {"assessments": {"sppb": {"total": 9}}},
+        },
+        format="json",
+    )
+
+    assert r.status_code == 400, r.content
+    assert "已完成访视只读" in str(r.data)
+    visit.refresh_from_db()
+    assert visit.status == VisitRecord.Status.COMPLETED
+    assert visit.visit_date.isoformat() == "2026-05-01"
+    assert visit.form_data["assessments"]["sppb"]["total"] == 8
 
 
 @pytest.mark.django_db

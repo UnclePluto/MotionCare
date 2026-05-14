@@ -10,6 +10,7 @@ import { PatientDetailPage } from "../pages/patients/PatientDetailPage";
 import { PatientEditPage } from "../pages/patients/PatientEditPage";
 import { ProjectDetailPage } from "../pages/projects/ProjectDetailPage";
 import { ProjectListPage } from "../pages/projects/ProjectListPage";
+import { ProjectPatientResearchEntryPage } from "../pages/research-entry/ProjectPatientResearchEntryPage";
 import { ResearchEntryPage } from "../pages/research-entry/ResearchEntryPage";
 import { VisitFormPage } from "../pages/visits/VisitFormPage";
 import { TrainingEntryPage } from "../pages/training/TrainingEntryPage";
@@ -31,6 +32,7 @@ export function App() {
               <Route path="/projects" element={<ProjectListPage />} />
               <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
               <Route path="/research-entry" element={<ResearchEntryPage />} />
+              <Route path="/research-entry/project-patients/:projectPatientId" element={<ProjectPatientResearchEntryPage />} />
               <Route path="/visits/:visitId" element={<VisitFormPage />} />
               <Route path="/training" element={<TrainingEntryPage />} />
               <Route path="/health" element={<DailyHealthPage />} />

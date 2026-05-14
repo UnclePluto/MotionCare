@@ -167,6 +167,14 @@ describe("ProjectGroupingBoard", () => {
     expect(experimentGroup).toBeTruthy();
     expect(within(experimentGroup as HTMLElement).getByText("已确认丙")).toBeInTheDocument();
     expect(within(experimentGroup as HTMLElement).getByText("已确认")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "研究录入" })[0]).toHaveAttribute(
+      "href",
+      "/research-entry/project-patients/9001",
+    );
+    expect(screen.getAllByRole("link", { name: "打开 CRF" })[0]).toHaveAttribute(
+      "href",
+      "/crf?projectPatientId=9001",
+    );
   });
 
   it("停用分组内已有已确认患者时仍渲染该分组列", async () => {
@@ -551,6 +559,14 @@ describe("ProjectGroupingBoard", () => {
     expect(deleteButton).toHaveClass("group-delete-bubble");
     expect(within(groupCard).getByTestId("confirmed-patient-201")).toHaveClass("patient-card-line");
     expect(within(groupCard).getByRole("link", { name: "详情" })).toBeInTheDocument();
+    expect(within(groupCard).getByRole("link", { name: "研究录入" })).toHaveAttribute(
+      "href",
+      "/research-entry/project-patients/9001",
+    );
+    expect(within(groupCard).getByRole("link", { name: "打开 CRF" })).toHaveAttribute(
+      "href",
+      "/crf?projectPatientId=9001",
+    );
     expect(within(groupCard).getByRole("button", { name: "解绑" })).toBeInTheDocument();
   });
 

@@ -1,0 +1,511 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Alert,
+  Button,
+  Card,
+  Descriptions,
+  Form,
+  InputNumber,
+  Popconfirm,
+  Radio,
+  Space,
+  Tag,
+  message,
+} from "antd";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
+import { apiClient } from "../../api/client";
+import {
+  buildVisitExtensionInitial,
+  deepDiffPatch,
+  deepMergeRecords,
+  groupVisitExtensionFields,
+  registryVisitExtensionFields,
+} from "../../crf/registryVisitExtensions";
+import { renderVisitRegistryField } from "../../crf/renderRegistryFields";
+
+type Assessments = {
+  sppb?: {
+    balance?: number | null;
+    gait?: number | null;
+    chair_stand?: number | null;
+    total?: number | null;
+  };
+  moca?: { total?: number | null };
+  tug_seconds?: number | null;
+  grip_strength_kg?: number | null;
+  frailty?: "robust" | "pre_frail" | "frail" | null;
+};
+
+type VisitDetail = {
+  id: number;
+  project_patient: number;
+  project_status?: "draft" | "active" | "archived";
+  visit_type: "T0" | "T1" | "T2";
+  status: "draft" | "completed";
+  visit_date: string | null;
+  form_data: {
+    assessments: Assessments;
+    computed_assessments: Assessments;
+    crf?: Record<string, unknown>;
+  };
+};
+
+type FormState = {
+  sppb_balance: number | null;
+  sppb_gait: number | null;
+  sppb_chair_stand: number | null;
+  sppb_total: number | null;
+  moca_total: number | null;
+  tug_seconds: number | null;
+  grip_strength_kg: number | null;
+  frailty: "robust" | "pre_frail" | "frail" | null;
+};
+
+const EMPTY_FORM: FormState = {
+  sppb_balance: null,
+  sppb_gait: null,
+  sppb_chair_stand: null,
+  sppb_total: null,
+  moca_total: null,
+  tug_seconds: null,
+  grip_strength_kg: null,
+  frailty: null,
+};
+
+function pickInitial(
+  manual: number | null | undefined,
+  computed: number | null | undefined,
+): { value: number | null; fromComputed: boolean } {
+  if (manual !== undefined && manual !== null) {
+    return { value: manual, fromComputed: false };
+  }
+  if (computed !== undefined && computed !== null) {
+    return { value: computed, fromComputed: true };
+  }
+  return { value: null, fromComputed: false };
+}
+
+function pickInitialEnum(
+  manual: FormState["frailty"] | undefined,
+  computed: FormState["frailty"] | undefined,
+): { value: FormState["frailty"]; fromComputed: boolean } {
+  if (manual) return { value: manual, fromComputed: false };
+  if (computed) return { value: computed, fromComputed: true };
+  return { value: null, fromComputed: false };
+}
+
+function buildInitialForm(visit: VisitDetail): {
+  state: FormState;
+  computedFlags: Record<keyof FormState, boolean>;
+} {
+  const m = visit.form_data.assessments ?? {};
+  const c = visit.form_data.computed_assessments ?? {};
+  const flags = {} as Record<keyof FormState, boolean>;
+  const state: FormState = { ...EMPTY_FORM };
+
+  const num = (
+    key: keyof FormState,
+    manual?: number | null,
+    computed?: number | null,
+  ) => {
+    const r = pickInitial(manual ?? null, computed ?? null);
+    state[key] = r.value as never;
+    flags[key] = r.fromComputed;
+  };
+
+  num("sppb_balance", m.sppb?.balance, c.sppb?.balance);
+  num("sppb_gait", m.sppb?.gait, c.sppb?.gait);
+  num("sppb_chair_stand", m.sppb?.chair_stand, c.sppb?.chair_stand);
+  num("sppb_total", m.sppb?.total, c.sppb?.total);
+  num("moca_total", m.moca?.total, c.moca?.total);
+  num("tug_seconds", m.tug_seconds, c.tug_seconds);
+  num("grip_strength_kg", m.grip_strength_kg, c.grip_strength_kg);
+
+  const f = pickInitialEnum(m.frailty ?? null, c.frailty ?? null);
+  state.frailty = f.value;
+  flags.frailty = f.fromComputed;
+
+  return { state, computedFlags: flags };
+}
+
+function diffPatch(
+  initial: FormState,
+  current: FormState,
+): { form_data?: { assessments: Assessments } } {
+  const changed: Assessments = {};
+  let hasChange = false;
+
+  const setSppb = (
+    key: "balance" | "gait" | "chair_stand" | "total",
+    v: number | null,
+  ) => {
+    changed.sppb = { ...(changed.sppb ?? {}), [key]: v };
+    hasChange = true;
+  };
+
+  if (initial.sppb_balance !== current.sppb_balance)
+    setSppb("balance", current.sppb_balance);
+  if (initial.sppb_gait !== current.sppb_gait)
+    setSppb("gait", current.sppb_gait);
+  if (initial.sppb_chair_stand !== current.sppb_chair_stand)
+    setSppb("chair_stand", current.sppb_chair_stand);
+  if (initial.sppb_total !== current.sppb_total)
+    setSppb("total", current.sppb_total);
+
+  if (initial.moca_total !== current.moca_total) {
+    changed.moca = { total: current.moca_total };
+    hasChange = true;
+  }
+  if (initial.tug_seconds !== current.tug_seconds) {
+    changed.tug_seconds = current.tug_seconds;
+    hasChange = true;
+  }
+  if (initial.grip_strength_kg !== current.grip_strength_kg) {
+    changed.grip_strength_kg = current.grip_strength_kg;
+    hasChange = true;
+  }
+  if (initial.frailty !== current.frailty) {
+    changed.frailty = current.frailty;
+    hasChange = true;
+  }
+
+  return hasChange ? { form_data: { assessments: changed } } : {};
+}
+
+const computedHint = <Tag color="blue">系统预填值</Tag>;
+
+type VisitFormContentProps = {
+  visitId: number;
+  title?: string;
+  timeDescription?: string;
+  onVisitChanged?: () => void | Promise<void>;
+};
+
+export function VisitFormContent({
+  visitId,
+  title = "访视表单",
+  timeDescription,
+  onVisitChanged,
+}: VisitFormContentProps) {
+  const id = visitId;
+  const qc = useQueryClient();
+  const [extForm] = Form.useForm();
+  const extInitialRef = useRef<Record<string, unknown>>({});
+  const [initial, setInitial] = useState<FormState>(EMPTY_FORM);
+  const [current, setCurrent] = useState<FormState>(EMPTY_FORM);
+  const [computedFlags, setComputedFlags] = useState<
+    Record<keyof FormState, boolean>
+  >({} as Record<keyof FormState, boolean>);
+
+  const { data: visit, isLoading, isError } = useQuery({
+    queryKey: ["visit", id],
+    queryFn: async () => {
+      const r = await apiClient.get<VisitDetail>(`/visits/${id}/`);
+      return r.data;
+    },
+    enabled: !!id,
+  });
+
+  const extensionFields = useMemo(
+    () => (visit ? registryVisitExtensionFields(visit.visit_type) : []),
+    [visit],
+  );
+
+  const extensionGroups = useMemo(
+    () => groupVisitExtensionFields(extensionFields),
+    [extensionFields],
+  );
+
+  useLayoutEffect(() => {
+    if (!visit) return;
+    const { state, computedFlags: flags } = buildInitialForm(visit);
+    setInitial(state);
+    setCurrent(state);
+    setComputedFlags(flags);
+  }, [visit]);
+
+  useEffect(() => {
+    if (!visit) return;
+    if (extensionFields.length === 0) {
+      extInitialRef.current = {};
+      extForm.resetFields();
+      return;
+    }
+    const fd = visit.form_data as unknown as Record<string, unknown>;
+    const initialExt = buildVisitExtensionInitial(fd, extensionFields);
+    extInitialRef.current = JSON.parse(JSON.stringify(initialExt)) as Record<string, unknown>;
+    extForm.setFieldsValue(initialExt);
+  }, [visit, extensionFields, extForm]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const basePatch = diffPatch(initial, current);
+      const baseFd = basePatch.form_data as Record<string, unknown> | undefined;
+
+      const extDiffRaw =
+        extensionFields.length > 0
+          ? deepDiffPatch(extInitialRef.current, extForm.getFieldsValue(true))
+          : undefined;
+      const extDiff = extDiffRaw as Record<string, unknown> | undefined;
+
+      const form_data: Record<string, unknown> = {};
+
+      const mergedAssessments = deepMergeRecords(
+        baseFd?.assessments as Record<string, unknown> | undefined,
+        extDiff?.assessments as Record<string, unknown> | undefined,
+      );
+      if (mergedAssessments && Object.keys(mergedAssessments).length > 0) {
+        form_data.assessments = mergedAssessments;
+      }
+
+      const extCrf = extDiff?.crf as Record<string, unknown> | undefined;
+      if (extCrf && typeof extCrf === "object" && Object.keys(extCrf).length > 0) {
+        form_data.crf = extCrf;
+      }
+
+      if (Object.keys(form_data).length === 0) return null;
+      const r = await apiClient.patch(`/visits/${id}/`, { form_data });
+      return r.data;
+    },
+    onSuccess: async (data) => {
+      if (data) {
+        message.success("已暂存");
+        await qc.invalidateQueries({ queryKey: ["visit", id] });
+        await onVisitChanged?.();
+      } else {
+        message.info("没有改动");
+      }
+    },
+    onError: () => message.error("暂存失败"),
+  });
+
+  const completeMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiClient.patch(`/visits/${id}/`, { status: "completed" });
+      return r.data;
+    },
+    onSuccess: async () => {
+      message.success("已完成");
+      await qc.invalidateQueries({ queryKey: ["visit", id] });
+      await onVisitChanged?.();
+    },
+    onError: () => message.error("操作失败"),
+  });
+
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+    setCurrent((prev) => ({ ...prev, [key]: value }));
+    setComputedFlags((prev) => ({ ...prev, [key]: false }));
+  };
+
+  const renderHint = (key: keyof FormState) =>
+    computedFlags[key] ? computedHint : null;
+  const isCompletedVisit = visit?.status === "completed";
+  const isArchivedProject = visit?.project_status === "archived";
+  const isVisitReadonly = Boolean(isCompletedVisit || isArchivedProject);
+
+  const headerExtra = useMemo(() => {
+    if (!visit) return null;
+    return (
+      <Space>
+        <Tag color="geekblue">{visit.visit_type}</Tag>
+        <Tag color={visit.status === "completed" ? "green" : "default"}>
+          {visit.status === "completed" ? "已完成" : "草稿"}
+        </Tag>
+      </Space>
+    );
+  }, [visit]);
+
+  return (
+    <Card title={title} loading={isLoading} extra={headerExtra}>
+      {isError ? (
+        <Alert type="error" message="访视记录不存在或无权限访问" />
+      ) : visit && (
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <Descriptions size="small" column={2} bordered>
+            <Descriptions.Item label="访视类型">{visit.visit_type}</Descriptions.Item>
+            <Descriptions.Item label="访视日期">
+              {visit.visit_date ?? "—"}
+            </Descriptions.Item>
+            <Descriptions.Item label="状态">
+              {visit.status === "completed" ? "已完成" : "草稿"}
+            </Descriptions.Item>
+          </Descriptions>
+
+          {Object.values(computedFlags).some(Boolean) && (
+            <Alert
+              type="info"
+              showIcon
+              message="部分字段使用了“系统预填值”，确认或修改后保存即写入医生填写值。"
+            />
+          )}
+
+          {isCompletedVisit && (
+            <Alert
+              type="info"
+              showIcon
+              message="访视已完成，当前为只读查看。"
+            />
+          )}
+
+          {timeDescription && (
+            <Alert
+              type="info"
+              showIcon
+              message={timeDescription}
+            />
+          )}
+
+          {isArchivedProject && (
+            <Alert
+              type="warning"
+              showIcon
+              message="项目已完结，访视表单只读。"
+            />
+          )}
+
+          <div>
+            <Card type="inner" title="SPPB" style={{ marginBottom: 12 }}>
+              <Space wrap size="middle" align="end">
+                <Form.Item label="平衡">
+                  <InputNumber
+                    aria-label="SPPB 平衡"
+                    disabled={isVisitReadonly}
+                    value={current.sppb_balance ?? undefined}
+                    onChange={(v) => set("sppb_balance", (v as number) ?? null)}
+                  />
+                  {renderHint("sppb_balance")}
+                </Form.Item>
+                <Form.Item label="步行">
+                  <InputNumber
+                    aria-label="SPPB 步行"
+                    disabled={isVisitReadonly}
+                    value={current.sppb_gait ?? undefined}
+                    onChange={(v) => set("sppb_gait", (v as number) ?? null)}
+                  />
+                  {renderHint("sppb_gait")}
+                </Form.Item>
+                <Form.Item label="坐立">
+                  <InputNumber
+                    aria-label="SPPB 坐立"
+                    disabled={isVisitReadonly}
+                    value={current.sppb_chair_stand ?? undefined}
+                    onChange={(v) =>
+                      set("sppb_chair_stand", (v as number) ?? null)
+                    }
+                  />
+                  {renderHint("sppb_chair_stand")}
+                </Form.Item>
+                <Form.Item label="SPPB 总分">
+                  <InputNumber
+                    aria-label="SPPB 总分"
+                    disabled={isVisitReadonly}
+                    value={current.sppb_total ?? undefined}
+                    onChange={(v) => set("sppb_total", (v as number) ?? null)}
+                  />
+                  {renderHint("sppb_total")}
+                </Form.Item>
+              </Space>
+            </Card>
+
+            <Card type="inner" title="MoCA" style={{ marginBottom: 12 }}>
+              <Form.Item label="MoCA 总分">
+                <InputNumber
+                  aria-label="MoCA 总分"
+                  disabled={isVisitReadonly}
+                  value={current.moca_total ?? undefined}
+                  onChange={(v) => set("moca_total", (v as number) ?? null)}
+                />
+                {renderHint("moca_total")}
+              </Form.Item>
+            </Card>
+
+            <Card type="inner" title="其他评估" style={{ marginBottom: 12 }}>
+              <Space wrap size="middle" align="end">
+                <Form.Item label="TUG（秒）">
+                  <InputNumber
+                    aria-label="TUG"
+                    disabled={isVisitReadonly}
+                    value={current.tug_seconds ?? undefined}
+                    onChange={(v) => set("tug_seconds", (v as number) ?? null)}
+                  />
+                  {renderHint("tug_seconds")}
+                </Form.Item>
+                <Form.Item label="握力（kg）">
+                  <InputNumber
+                    aria-label="握力"
+                    disabled={isVisitReadonly}
+                    value={current.grip_strength_kg ?? undefined}
+                    onChange={(v) =>
+                      set("grip_strength_kg", (v as number) ?? null)
+                    }
+                  />
+                  {renderHint("grip_strength_kg")}
+                </Form.Item>
+                <Form.Item label="衰弱判定">
+                  <Radio.Group
+                    disabled={isVisitReadonly}
+                    value={current.frailty ?? undefined}
+                    onChange={(e) =>
+                      set("frailty", e.target.value as FormState["frailty"])
+                    }
+                  >
+                    <Radio value="robust">非衰弱</Radio>
+                    <Radio value="pre_frail">衰弱前期</Radio>
+                    <Radio value="frail">衰弱</Radio>
+                  </Radio.Group>
+                  {renderHint("frailty")}
+                </Form.Item>
+              </Space>
+            </Card>
+
+            {extensionFields.length > 0 && (
+              <Form
+                form={extForm}
+                layout="vertical"
+                disabled={isVisitReadonly}
+              >
+                {extensionGroups.map((g) => (
+                  <Card key={g.key} type="inner" title={g.label} style={{ marginBottom: 12 }}>
+                    {g.fields.map((f) =>
+                      renderVisitRegistryField(f, {
+                        disabled: isVisitReadonly,
+                      }),
+                    )}
+                  </Card>
+                ))}
+              </Form>
+            )}
+
+            <Space>
+              <Button
+                aria-label="暂存"
+                loading={saveMutation.isPending}
+                disabled={isVisitReadonly}
+                onClick={() => saveMutation.mutate()}
+              >
+                暂存
+              </Button>
+              <Popconfirm
+                title="确认完成？"
+                description="完成后对应记录无法修改。"
+                okText="确认完成"
+                cancelText="取消"
+                onConfirm={() => completeMutation.mutate()}
+              >
+                <Button
+                  type="primary"
+                  aria-label="完成"
+                  loading={completeMutation.isPending}
+                  disabled={isVisitReadonly}
+                >
+                  完成
+                </Button>
+              </Popconfirm>
+            </Space>
+          </div>
+        </Space>
+      )}
+    </Card>
+  );
+}
