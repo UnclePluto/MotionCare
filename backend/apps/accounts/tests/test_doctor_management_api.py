@@ -127,6 +127,69 @@ def test_update_doctor_basic_profile_does_not_change_password_or_role(auth_clien
 
 
 @pytest.mark.django_db
+def test_doctor_cannot_retrieve_other_admin_user(auth_client):
+    admin = User.objects.create_user(
+        phone="13700000010",
+        password="pass123456",
+        name="其他管理员",
+        role=User.Role.ADMIN,
+    )
+
+    response = auth_client.get(f"/api/accounts/users/{admin.id}/")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_doctor_cannot_patch_other_admin_user(auth_client):
+    admin = User.objects.create_user(
+        phone="13700000011",
+        password="pass123456",
+        name="禁止编辑管理员",
+        role=User.Role.ADMIN,
+    )
+
+    response = auth_client.patch(
+        f"/api/accounts/users/{admin.id}/",
+        {"name": "被越权编辑", "phone": "13700000012"},
+        format="json",
+    )
+
+    assert response.status_code == 404
+    admin.refresh_from_db()
+    assert admin.name == "禁止编辑管理员"
+    assert admin.phone == "13700000011"
+
+
+@pytest.mark.django_db
+def test_admin_can_retrieve_and_patch_self_account():
+    admin = User.objects.create_user(
+        phone="13700000013",
+        password="pass123456",
+        name="当前管理员",
+        role=User.Role.ADMIN,
+    )
+    client = APIClient()
+    client.force_authenticate(user=admin)
+
+    retrieve_response = client.get(f"/api/accounts/users/{admin.id}/")
+    assert retrieve_response.status_code == 200, retrieve_response.content
+
+    patch_response = client.patch(
+        f"/api/accounts/users/{admin.id}/",
+        {"name": "已编辑管理员", "gender": User.Gender.FEMALE, "phone": "13700000014"},
+        format="json",
+    )
+
+    assert patch_response.status_code == 200, patch_response.content
+    admin.refresh_from_db()
+    assert admin.name == "已编辑管理员"
+    assert admin.gender == User.Gender.FEMALE
+    assert admin.phone == "13700000014"
+    assert admin.username == "13700000014"
+
+
+@pytest.mark.django_db
 def test_delete_doctor_is_not_allowed_and_does_not_delete_user(auth_client):
     target = User.objects.create_user(
         phone="13700000007",

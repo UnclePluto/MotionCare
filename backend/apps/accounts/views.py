@@ -1,3 +1,5 @@
+from django.contrib.auth import update_session_auth_hash
+from django.db.models import Q
 from rest_framework.decorators import action
 from rest_framework.mixins import CreateModelMixin, ListModelMixin, RetrieveModelMixin, UpdateModelMixin
 from rest_framework.response import Response
@@ -18,7 +20,7 @@ class UserViewSet(CreateModelMixin, ListModelMixin, RetrieveModelMixin, UpdateMo
         qs = User.objects.order_by("-date_joined", "-id")
         if self.action == "list":
             return qs.filter(role=User.Role.DOCTOR)
-        return qs
+        return qs.filter(Q(role=User.Role.DOCTOR) | Q(pk=self.request.user.pk))
 
     @action(detail=False, methods=["post"], url_path="me/change-password")
     def change_password(self, request):
@@ -27,4 +29,5 @@ class UserViewSet(CreateModelMixin, ListModelMixin, RetrieveModelMixin, UpdateMo
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.must_change_password = False
         request.user.save(update_fields=["password", "must_change_password"])
+        update_session_auth_hash(request, request.user)
         return Response({"detail": "密码已修改"})
