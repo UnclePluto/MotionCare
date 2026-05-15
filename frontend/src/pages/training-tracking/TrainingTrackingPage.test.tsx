@@ -40,7 +40,7 @@ describe("TrainingTrackingPage", () => {
                 phone_masked: "138****0201",
               },
               project_count: 2,
-              last_training_at: "2026-05-14T10:30:00+08:00",
+              last_training_at: "2026-05-14",
               last_30_days_completed_count: 12,
             },
           ],
@@ -66,11 +66,19 @@ describe("TrainingTrackingPage", () => {
     expect(screen.getByText("训练患者甲")).toBeInTheDocument();
     expect(screen.getByText("138****0201")).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
-    expect(screen.getByText("2026-05-14 10:30")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-14")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看追踪" })).toHaveAttribute(
       "href",
       "/training-tracking/patients/201",
     );
+  });
+
+  it("请求失败时展示后端错误而不是空表", async () => {
+    mockGet.mockRejectedValueOnce({ response: { data: { detail: "无权查看训练追踪" } } });
+
+    renderPage();
+
+    expect(await screen.findByText("无权查看训练追踪")).toBeInTheDocument();
   });
 });

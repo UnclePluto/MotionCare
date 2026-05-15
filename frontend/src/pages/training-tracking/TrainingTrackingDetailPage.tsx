@@ -1,7 +1,7 @@
 import { DualAxes, type DualAxesConfig } from "@ant-design/charts";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, Descriptions, Empty, Select, Space, Spin, Statistic, Table, Tabs, Tag } from "antd";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -40,6 +40,17 @@ function formatDateTime(value: string | null | undefined) {
   const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
   if (!match) return value;
   return `${match[1]} ${match[2]}`;
+}
+
+function errorMessage(error: unknown) {
+  if (error && typeof error === "object" && "response" in error) {
+    const data = (error as { response?: { data?: unknown } }).response?.data;
+    if (data && typeof data === "object" && "detail" in data) {
+      const detail = (data as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) return detail;
+    }
+  }
+  return "加载训练追踪数据失败";
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -134,7 +145,16 @@ export function TrainingTrackingDetailPage() {
   const numericPatientId = Number(patientId);
   const isValidPatientId = Number.isSafeInteger(numericPatientId) && numericPatientId > 0;
   const [range, setRange] = useState<TrainingTrackingRange>("30d");
-  const [selectedProjectPatientId, setSelectedProjectPatientId] = useState<number | undefined>();
+  const [selectedProjectPatient, setSelectedProjectPatient] = useState<{
+    patientId: number;
+    projectPatientId: number;
+  } | null>(null);
+  const selectedProjectPatientId =
+    selectedProjectPatient?.patientId === numericPatientId ? selectedProjectPatient.projectPatientId : undefined;
+
+  useEffect(() => {
+    setSelectedProjectPatient(null);
+  }, [numericPatientId]);
 
   const queryParams = useMemo(() => {
     const params: { range: TrainingTrackingRange; project_patient?: number } = { range };
@@ -142,7 +162,7 @@ export function TrainingTrackingDetailPage() {
     return params;
   }, [range, selectedProjectPatientId]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["training-tracking", "patients", numericPatientId, queryParams],
     queryFn: async () => {
       const response = await apiClient.get<TrackingDetail>(`/training/tracking/patients/${numericPatientId}/`, {
@@ -161,6 +181,14 @@ export function TrainingTrackingDetailPage() {
     return (
       <Card>
         <Spin />
+      </Card>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Card title="患者训练追踪">
+        <Alert type="error" showIcon message={errorMessage(error)} />
       </Card>
     );
   }
@@ -198,7 +226,7 @@ export function TrainingTrackingDetailPage() {
               aria-label="切换项目"
               style={{ minWidth: 260 }}
               value={currentProjectPatientId}
-              onChange={(value) => setSelectedProjectPatientId(value)}
+              onChange={(value) => setSelectedProjectPatient({ patientId: numericPatientId, projectPatientId: value })}
               options={data.project_patients.map((projectPatient) => ({
                 value: projectPatient.id,
                 label: projectPatient.project_name,

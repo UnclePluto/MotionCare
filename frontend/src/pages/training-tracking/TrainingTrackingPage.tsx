@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Button, Card, Input, Space, Table } from "antd";
+import { Alert, Button, Card, Input, Space, Table } from "antd";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -14,11 +14,22 @@ function formatDateTime(value: string | null | undefined) {
   return `${match[1]} ${match[2]}`;
 }
 
+function errorMessage(error: unknown) {
+  if (error && typeof error === "object" && "response" in error) {
+    const data = (error as { response?: { data?: unknown } }).response?.data;
+    if (data && typeof data === "object" && "detail" in data) {
+      const detail = (data as { detail?: unknown }).detail;
+      if (typeof detail === "string" && detail.trim()) return detail;
+    }
+  }
+  return "加载训练追踪数据失败";
+}
+
 export function TrainingTrackingPage() {
   const [draftQuery, setDraftQuery] = useState("");
   const [query, setQuery] = useState("");
 
-  const { data = [], isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["training-tracking", "patients", query],
     queryFn: async () => {
       const response = await apiClient.get<TrackingPatientRow[]>("/training/tracking/patients/", {
@@ -44,10 +55,12 @@ export function TrainingTrackingPage() {
         </Button>
       </Space>
 
+      {isError && <Alert type="error" showIcon message={errorMessage(error)} style={{ marginBottom: 16 }} />}
+
       <Table<TrackingPatientRow>
         rowKey={(row) => row.patient.id}
         loading={isLoading}
-        dataSource={data}
+        dataSource={data ?? []}
         pagination={{ pageSize: 20, showSizeChanger: false }}
         columns={[
           {

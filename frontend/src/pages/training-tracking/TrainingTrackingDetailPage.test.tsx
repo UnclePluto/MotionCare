@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrainingTrackingDetailPage } from "./TrainingTrackingDetailPage";
@@ -14,7 +14,9 @@ vi.mock("../../api/client", () => ({
 }));
 
 vi.mock("@ant-design/charts", () => ({
-  DualAxes: () => <div data-testid="dual-axes-chart">趋势图</div>,
+  DualAxes: (props: Record<string, unknown>) => (
+    <pre data-testid="dual-axes-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
+  ),
 }));
 
 function renderAt(path: string) {
@@ -25,6 +27,31 @@ function renderAt(path: string) {
         <Routes>
           <Route path="/training-tracking/patients/:patientId" element={<TrainingTrackingDetailPage />} />
         </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function RouteSwitcher() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate("/training-tracking/patients/202")}>
+        切换患者
+      </button>
+      <Routes>
+        <Route path="/training-tracking/patients/:patientId" element={<TrainingTrackingDetailPage />} />
+      </Routes>
+    </>
+  );
+}
+
+function renderWithRouteSwitcher(path: string) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[path]}>
+        <RouteSwitcher />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -80,7 +107,7 @@ const trackingDetail = {
       target_count: 16,
       completed_count: 12,
       completion_rate: 75,
-      recent_record_at: "2026-05-14T10:30:00+08:00",
+      recent_record_at: "2026-05-14",
     },
   ],
   trend: {
@@ -113,7 +140,7 @@ const trackingDetail = {
         record_count: 4,
         average_score: 88.5,
         average_accuracy_rate: 91,
-        recent_record_at: "2026-05-14T10:30:00+08:00",
+        recent_record_at: "2026-05-14",
       },
     ],
   },
@@ -137,6 +164,18 @@ const trackingDetail = {
     },
   ],
 };
+
+function chartProps() {
+  return screen.getAllByTestId("dual-axes-chart").map((node) => JSON.parse(node.textContent ?? "{}") as { data?: unknown[] });
+}
+
+function trendChartData() {
+  const chart = chartProps().find((props) => {
+    const first = Array.isArray(props.data) ? (props.data[0] as Record<string, unknown> | undefined) : undefined;
+    return typeof first?.label === "string";
+  });
+  return (chart?.data ?? []) as Array<Record<string, unknown>>;
+}
 
 describe("TrainingTrackingDetailPage", () => {
   beforeEach(() => {
@@ -162,7 +201,7 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getAllByText("坐站转移训练").length).toBeGreaterThan(0);
     expect(screen.getAllByText("16").length).toBeGreaterThan(0);
     expect(screen.getAllByText("75%").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("2026-05-14 10:30").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2026-05-14").length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0);
     expect(screen.getAllByText("平均得分").length).toBeGreaterThan(0);
     expect(screen.getAllByText("88.5").length).toBeGreaterThan(0);
@@ -172,11 +211,52 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getAllByText("6").length).toBeGreaterThan(0);
     expect(screen.getAllByText("认知卡片").length).toBeGreaterThan(0);
     expect(screen.getAllByText("4").length).toBeGreaterThan(0);
-    expect(screen.getByText("2026-05-14")).toBeInTheDocument();
+    expect(screen.getAllByText("2026-05-14").length).toBeGreaterThan(0);
     expect(screen.getByText("18")).toBeInTheDocument();
     expect(screen.getByText("95%")).toBeInTheDocument();
     expect(screen.getByText("中")).toBeInTheDocument();
     expect(screen.getByText("完成顺利")).toBeInTheDocument();
+  });
+
+  it("初次请求不带 project_patient，并按 range 切换趋势图数据", async () => {
+    renderAt("/training-tracking/patients/201");
+
+    await screen.findByText("训练患者甲");
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/201/", { params: { range: "30d" } });
+    });
+    await waitFor(() => expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0));
+    expect(trendChartData()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "2026-05-14", completed_count: 2, moving_average: 1.1 }),
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "近 7 天" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/201/", { params: { range: "7d" } });
+    });
+    await waitFor(() => expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0));
+    expect(trendChartData()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "2026-05-14", completed_count: 2, moving_average: 1.1 }),
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "按周" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/201/", { params: { range: "weekly" } });
+    });
+    await waitFor(() => expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0));
+    expect(trendChartData()).toEqual([
+      expect.objectContaining({
+        label: "2026-05-11 至 2026-05-17",
+        completed_count: 5,
+        moving_average: 5,
+      }),
+    ]);
   });
 
   it("切换项目后用 project_patient 重新请求", async () => {
@@ -195,6 +275,39 @@ describe("TrainingTrackingDetailPage", () => {
     });
   });
 
+  it("切换患者路由时不沿用上一个患者的项目选择", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/" || url === "/training/tracking/patients/202/") {
+        return Promise.resolve({ data: trackingDetail });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    renderWithRouteSwitcher("/training-tracking/patients/201");
+
+    await screen.findByText("训练患者甲");
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "切换项目" }));
+    fireEvent.click(await screen.findByTitle("研究项目 B"));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/tracking/patients/201/",
+        expect.objectContaining({ params: expect.objectContaining({ project_patient: 9002 }) }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "切换患者" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/202/", { params: { range: "30d" } });
+    });
+    expect(
+      mockGet.mock.calls.some(([url, config]) => {
+        const params = (config as { params?: Record<string, unknown> } | undefined)?.params;
+        return url === "/training/tracking/patients/202/" && params?.project_patient === 9002;
+      }),
+    ).toBe(false);
+  });
+
   it("无效 patientId 不请求接口", () => {
     renderAt("/training-tracking/patients/not-a-number");
 
@@ -208,5 +321,14 @@ describe("TrainingTrackingDetailPage", () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("暂无可追踪项目")).toBeInTheDocument();
+  });
+
+  it("请求失败时展示后端错误而不是空态", async () => {
+    mockGet.mockRejectedValueOnce({ response: { data: { detail: "患者不存在或无权访问" } } });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("患者不存在或无权访问")).toBeInTheDocument();
+    expect(screen.queryByText("暂无训练追踪数据")).not.toBeInTheDocument();
   });
 });
