@@ -14,6 +14,7 @@
 执行记录（2026-05-15, codex）：Task 2 已落地于 commits 24ce13b、47f935f。
 执行记录（2026-05-15, codex）：Task 3 已落地于 commit b5ecaad。
 执行记录（2026-05-15, codex）：Task 4 已落地于 commits 61c896d、d34cfdf、5c87974。
+执行记录（2026-05-15, codex）：Task 5 已完成全量验证；backend pytest 227 passed，frontend test 123 passed，lint/build/makemigrations 均退出 0，UI smoke 通过。
 
 ## Scope Check
 
@@ -1927,7 +1928,7 @@ Expected: commit succeeds.
 - No planned source edits.
 - Update only files required by failures found during verification.
 
-- [ ] **Step 1: Run all backend tests**
+- [x] **Step 1: Run all backend tests**
 
 Run:
 
@@ -1938,7 +1939,7 @@ pytest
 
 Expected: PASS.
 
-- [ ] **Step 2: Run all frontend tests**
+- [x] **Step 2: Run all frontend tests**
 
 Run:
 
@@ -1949,7 +1950,7 @@ npm run test
 
 Expected: PASS.
 
-- [ ] **Step 3: Run frontend lint**
+- [x] **Step 3: Run frontend lint**
 
 Run:
 
@@ -1960,7 +1961,7 @@ npm run lint
 
 Expected: PASS.
 
-- [ ] **Step 4: Run frontend build**
+- [x] **Step 4: Run frontend build**
 
 Run:
 
@@ -1971,7 +1972,7 @@ npm run build
 
 Expected: PASS.
 
-- [ ] **Step 5: Run migration check**
+- [x] **Step 5: Run migration check**
 
 Run:
 
@@ -1982,7 +1983,7 @@ python manage.py makemigrations --check --dry-run
 
 Expected: `No changes detected`.
 
-- [ ] **Step 6: Manually smoke the local UI**
+- [x] **Step 6: Manually smoke the local UI**
 
 Start services if they are not already running:
 
@@ -2012,7 +2013,7 @@ Open `http://localhost:5173` and verify:
 7. 修改为非 `888888` 密码后弹窗消失。
 8. 右上角账号入口进入“我的账号”，可保存基础资料。
 
-- [ ] **Step 7: Commit verification fixes if needed**
+- [x] **Step 7: Commit verification fixes if needed**
 
 If verification required source changes, commit them:
 
