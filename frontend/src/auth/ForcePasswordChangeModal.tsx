@@ -1,29 +1,14 @@
 import { Button, Form, Input, Modal, Space, Typography, message } from "antd";
-import { isAxiosError } from "axios";
 import { useState } from "react";
 
 import { apiClient } from "../api/client";
+import { backendErrorsToMessage, extractBackendFieldErrors, fieldErrorsToFormFields } from "../pages/doctors/formErrorUtils";
 
 type PasswordFormValues = {
   old_password: string;
   new_password: string;
   confirm_password: string;
 };
-
-function backendDetail(err: unknown): string | null {
-  if (!isAxiosError(err)) return null;
-  const data = err.response?.data;
-  if (!data || typeof data !== "object") return null;
-  if ("detail" in data && typeof (data as { detail?: unknown }).detail === "string") {
-    return (data as { detail: string }).detail;
-  }
-  const parts = Object.entries(data as Record<string, unknown>).map(([key, value]) => {
-    if (Array.isArray(value)) return `${key}: ${value.map(String).join(", ")}`;
-    if (typeof value === "string") return `${key}: ${value}`;
-    return `${key}: ${JSON.stringify(value)}`;
-  });
-  return parts.length ? parts.join("；") : null;
-}
 
 export function ForcePasswordChangeModal({
   open,
@@ -45,7 +30,13 @@ export function ForcePasswordChangeModal({
       form.resetFields();
       onChanged();
     } catch (err) {
-      message.error(backendDetail(err) ?? "修改密码失败");
+      const errors = extractBackendFieldErrors(err);
+      const fields = fieldErrorsToFormFields(errors, ["old_password", "new_password", "confirm_password"]);
+      if (fields.length) {
+        form.setFields(fields);
+      } else {
+        message.error(backendErrorsToMessage(errors) ?? "修改密码失败");
+      }
     } finally {
       setSubmitting(false);
     }
