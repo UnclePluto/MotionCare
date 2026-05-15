@@ -40,9 +40,11 @@ describe("App", () => {
             id: 1,
             phone: "13800000000",
             name: "测试医生",
+            gender: "male",
             role: "doctor",
             roles: ["doctor"],
-            permissions: ["patient.read"],
+            permissions: ["patient.read", "user.manage"],
+            must_change_password: false,
           },
         });
       }
@@ -308,6 +310,7 @@ describe("App", () => {
       expect(screen.getAllByText("研究录入").length).toBeGreaterThan(0);
       expect(screen.getAllByText("处方管理").length).toBeGreaterThan(0);
       expect(screen.getAllByText("研究项目").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("医生管理").length).toBeGreaterThan(0);
       expect(screen.getAllByText("CRF 报告").length).toBeGreaterThan(0);
     });
   });

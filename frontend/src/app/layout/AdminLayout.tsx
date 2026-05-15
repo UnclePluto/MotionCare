@@ -1,4 +1,4 @@
-import { Button, Layout, Menu, Space, Typography } from "antd";
+import { Button, Layout, Menu, Space } from "antd";
 import {
   FileTextOutlined,
   FormOutlined,
@@ -6,16 +6,21 @@ import {
   MedicineBoxOutlined,
   ProjectOutlined,
   TeamOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { ForcePasswordChangeModal } from "../../auth/ForcePasswordChangeModal";
 import { useAuth } from "../../auth/AuthContext";
+import { maskPhoneForList } from "../../pages/patients/phoneMask";
 
 const { Header, Sider, Content } = Layout;
 
 export function AdminLayout() {
   const navigate = useNavigate();
-  const { me, logout } = useAuth();
+  const location = useLocation();
+  const { me, logout, refetchSession } = useAuth();
+  const selectedKey = `/${location.pathname.split("/").filter(Boolean)[0] ?? "patients"}`;
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -26,12 +31,14 @@ export function AdminLayout() {
         <Menu
           theme="dark"
           mode="inline"
+          selectedKeys={[selectedKey]}
           onClick={(item) => navigate(item.key)}
           items={[
             { key: "/patients", icon: <TeamOutlined />, label: "患者档案" },
             { key: "/research-entry", icon: <FormOutlined />, label: "研究录入" },
             { key: "/prescriptions", icon: <MedicineBoxOutlined />, label: "处方管理" },
             { key: "/projects", icon: <ProjectOutlined />, label: "研究项目" },
+            { key: "/doctors", icon: <UserOutlined />, label: "医生管理" },
             { key: "/training", icon: <HeartOutlined />, label: "训练记录" },
             { key: "/crf", icon: <FileTextOutlined />, label: "CRF 报告" },
           ]}
@@ -49,14 +56,19 @@ export function AdminLayout() {
         >
           <span>医院康复研究后台</span>
           <Space>
-            <Typography.Text type="secondary">
-              {me?.name}（{me?.phone}）
-            </Typography.Text>
+            <Button type="link" onClick={() => navigate("/account")}>
+              {me?.name}（{maskPhoneForList(me?.phone ?? "")}）
+            </Button>
             <Button onClick={() => void logout()}>退出</Button>
           </Space>
         </Header>
         <Content style={{ padding: 24 }}>
           <Outlet />
+          <ForcePasswordChangeModal
+            open={me?.must_change_password === true}
+            onChanged={() => void refetchSession()}
+            onLogout={() => void logout()}
+          />
         </Content>
       </Layout>
     </Layout>

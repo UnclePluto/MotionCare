@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-
 
 import { AuthProvider } from "../auth/AuthContext";
 import { RequireAuth } from "../auth/RequireAuth";
+import { AccountPage } from "../pages/account/AccountPage";
 import { LoginPage } from "../pages/auth/LoginPage";
 import { AdminLayout } from "./layout/AdminLayout";
 import { PatientSimTrainingPage } from "../pages/patient-sim/PatientSimTrainingPage";
@@ -20,6 +21,9 @@ import { VisitFormPage } from "../pages/visits/VisitFormPage";
 import { TrainingEntryPage } from "../pages/training/TrainingEntryPage";
 import { DailyHealthPage } from "../pages/health/DailyHealthPage";
 import { CrfPreviewPage } from "../pages/crf/CrfPreviewPage";
+import { DoctorCreatePage } from "../pages/doctors/DoctorCreatePage";
+import { DoctorEditPage } from "../pages/doctors/DoctorEditPage";
+import { DoctorListPage } from "../pages/doctors/DoctorListPage";
 
 function PrescriptionRouteWrapper() {
   const { projectPatientId } = useParams<{ projectPatientId: string }>();
@@ -57,6 +61,10 @@ export function App() {
                 path="/research-entry/project-patients/:projectPatientId/prescriptions"
                 element={<LegacyPrescriptionRouteRedirect />}
               />
+              <Route path="/doctors" element={<DoctorListPage />} />
+              <Route path="/doctors/new" element={<DoctorCreatePage />} />
+              <Route path="/doctors/:doctorId/edit" element={<DoctorEditPage />} />
+              <Route path="/account" element={<AccountPage />} />
               <Route path="/patient-sim/project-patients/:projectPatientId" element={<PatientSimTrainingPage />} />
               <Route path="/visits/:visitId" element={<VisitFormPage />} />
               <Route path="/training" element={<TrainingEntryPage />} />
