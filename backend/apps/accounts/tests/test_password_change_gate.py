@@ -89,7 +89,7 @@ def test_change_password_rejects_wrong_old_password(forced_client):
 
 
 @pytest.mark.django_db
-def test_global_default_permission_blocks_force_authenticated_default_password_user(forced_user):
+def test_explicit_patient_app_permission_blocks_force_authenticated_default_password_user(forced_user):
     client = APIClient()
     client.force_authenticate(user=forced_user)
 

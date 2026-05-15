@@ -1,5 +1,4 @@
-from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.permissions import BasePermission
 
 
 PASSWORD_CHANGE_ALLOWED_PATHS = {
@@ -38,17 +37,3 @@ class IsAdminOrDoctor(BasePermission):
             passes_password_change_gate(request)
             and request.user.role in {"super_admin", "admin", "doctor"}
         )
-
-
-if not getattr(IsAuthenticated, "_motioncare_password_gate_patched", False):
-    _original_is_authenticated_has_permission = IsAuthenticated.has_permission
-
-    def _is_authenticated_with_password_gate(self, request, view):
-        if not _original_is_authenticated_has_permission(self, request, view):
-            return False
-        if getattr(request.user, "must_change_password", False) and not is_password_change_allowed_path(request.path):
-            raise PermissionDenied("请先修改默认密码")
-        return True
-
-    IsAuthenticated.has_permission = _is_authenticated_with_password_gate
-    IsAuthenticated._motioncare_password_gate_patched = True

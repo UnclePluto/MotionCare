@@ -5,10 +5,11 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DrfValidationError
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.permissions import IsAuthenticatedAndPasswordChanged
 from apps.health.models import DailyHealthRecord
 from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.training.models import TrainingRecord
@@ -158,7 +159,7 @@ class PatientAppBindView(APIView):
 
 class PatientAppBaseView(APIView):
     authentication_classes = [PatientAppTokenAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticatedAndPasswordChanged]
 
     def project_patient(self):
         return self.request.user.project_patient
