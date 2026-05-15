@@ -43,6 +43,9 @@ class User(AbstractUser):
     def save(self, *args, **kwargs):
         if self.phone:
             self.username = self.phone
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = {*update_fields, "username"}
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:

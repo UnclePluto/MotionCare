@@ -43,3 +43,19 @@ def test_user_defaults_gender_and_password_change_flag():
 
     assert user.gender == User.Gender.UNKNOWN
     assert user.must_change_password is False
+
+
+@pytest.mark.django_db
+def test_user_save_update_fields_keeps_username_synced_with_phone():
+    user = User.objects.create_user(
+        phone="13700002000",
+        password="pass123456",
+        name="同步医生",
+        role=User.Role.DOCTOR,
+    )
+
+    user.phone = "13700002001"
+    user.save(update_fields=["phone"])
+
+    user.refresh_from_db()
+    assert user.username == "13700002001"
