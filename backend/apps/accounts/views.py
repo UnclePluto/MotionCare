@@ -1,6 +1,7 @@
 from rest_framework.decorators import action
+from rest_framework.mixins import CreateModelMixin, ListModelMixin, RetrieveModelMixin, UpdateModelMixin
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import GenericViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 
@@ -8,9 +9,10 @@ from .models import User
 from .serializers import ChangePasswordSerializer, UserSerializer
 
 
-class UserViewSet(ModelViewSet):
+class UserViewSet(CreateModelMixin, ListModelMixin, RetrieveModelMixin, UpdateModelMixin, GenericViewSet):
     serializer_class = UserSerializer
     permission_classes = [IsAdminOrDoctor]
+    http_method_names = ["get", "post", "patch", "head", "options"]
 
     def get_queryset(self):
         qs = User.objects.order_by("-date_joined", "-id")

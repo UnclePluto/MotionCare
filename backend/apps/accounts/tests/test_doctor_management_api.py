@@ -124,3 +124,106 @@ def test_update_doctor_basic_profile_does_not_change_password_or_role(auth_clien
     assert target.username == "13700000006"
     assert target.role == User.Role.DOCTOR
     assert target.check_password("pass123456")
+
+
+@pytest.mark.django_db
+def test_delete_doctor_is_not_allowed_and_does_not_delete_user(auth_client):
+    target = User.objects.create_user(
+        phone="13700000007",
+        password="pass123456",
+        name="不可删除医生",
+        role=User.Role.DOCTOR,
+    )
+
+    response = auth_client.delete(f"/api/accounts/users/{target.id}/")
+
+    assert response.status_code == 405
+    assert User.objects.filter(id=target.id).exists()
+
+
+@pytest.mark.django_db
+def test_put_doctor_is_not_allowed(auth_client):
+    target = User.objects.create_user(
+        phone="13700000008",
+        password="pass123456",
+        name="不可整体更新医生",
+        role=User.Role.DOCTOR,
+    )
+
+    response = auth_client.put(
+        f"/api/accounts/users/{target.id}/",
+        {"name": "PUT 医生", "gender": User.Gender.FEMALE, "phone": "13700000009"},
+        format="json",
+    )
+
+    assert response.status_code == 405
+
+
+@pytest.mark.django_db
+def test_change_password_rejects_wrong_old_password(auth_client):
+    response = auth_client.post(
+        "/api/accounts/users/me/change-password/",
+        {
+            "old_password": "wrong-password",
+            "new_password": "newpass123456",
+            "confirm_password": "newpass123456",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "old_password" in response.json()
+
+
+@pytest.mark.django_db
+def test_change_password_rejects_mismatched_confirmation(auth_client):
+    response = auth_client.post(
+        "/api/accounts/users/me/change-password/",
+        {
+            "old_password": "pass123456",
+            "new_password": "newpass123456",
+            "confirm_password": "otherpass123456",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "confirm_password" in response.json()
+
+
+@pytest.mark.django_db
+def test_change_password_rejects_default_password(auth_client):
+    response = auth_client.post(
+        "/api/accounts/users/me/change-password/",
+        {
+            "old_password": "pass123456",
+            "new_password": "888888",
+            "confirm_password": "888888",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert "new_password" in response.json()
+
+
+@pytest.mark.django_db
+def test_change_password_accepts_new_password(auth_client, doctor):
+    doctor.must_change_password = True
+    doctor.save(update_fields=["must_change_password"])
+
+    response = auth_client.post(
+        "/api/accounts/users/me/change-password/",
+        {
+            "old_password": "pass123456",
+            "new_password": "newpass123456",
+            "confirm_password": "newpass123456",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200, response.content
+    doctor.refresh_from_db()
+    assert doctor.must_change_password is False
+    assert not doctor.check_password("pass123456")
+    assert doctor.check_password("newpass123456")

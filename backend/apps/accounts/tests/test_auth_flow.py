@@ -30,9 +30,12 @@ def test_login_me_flow(doctor):
     body = me.json()
     assert body["phone"] == doctor.phone
     assert body["name"] == doctor.name
+    assert body["gender"] == doctor.gender
     assert body["role"] == doctor.role
     assert doctor.role in body["roles"]
+    assert body["must_change_password"] == doctor.must_change_password
     assert "patient.read" in body["permissions"]
+    assert "user.manage" in body["permissions"]
 
 
 @pytest.mark.django_db
