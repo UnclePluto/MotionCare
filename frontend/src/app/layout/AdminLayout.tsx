@@ -3,6 +3,7 @@ import {
   FileTextOutlined,
   FormOutlined,
   HeartOutlined,
+  LineChartOutlined,
   MedicineBoxOutlined,
   ProjectOutlined,
   TeamOutlined,
@@ -40,6 +41,7 @@ export function AdminLayout() {
             { key: "/research-entry", icon: <FormOutlined />, label: "研究录入" },
             { key: "/prescriptions", icon: <MedicineBoxOutlined />, label: "处方管理" },
             { key: "/training", icon: <HeartOutlined />, label: "训练记录" },
+            { key: "/training-tracking", icon: <LineChartOutlined />, label: "训练追踪" },
             { key: "/crf", icon: <FileTextOutlined />, label: "CRF 报告" },
             { key: "/doctors", icon: <UserOutlined />, label: "医生管理" },
           ]}

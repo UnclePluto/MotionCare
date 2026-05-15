@@ -19,6 +19,8 @@ import { ProjectPatientResearchEntryPage } from "../pages/research-entry/Project
 import { ResearchEntryPage } from "../pages/research-entry/ResearchEntryPage";
 import { VisitFormPage } from "../pages/visits/VisitFormPage";
 import { TrainingEntryPage } from "../pages/training/TrainingEntryPage";
+import { TrainingTrackingDetailPage } from "../pages/training-tracking/TrainingTrackingDetailPage";
+import { TrainingTrackingPage } from "../pages/training-tracking/TrainingTrackingPage";
 import { DailyHealthPage } from "../pages/health/DailyHealthPage";
 import { CrfPreviewPage } from "../pages/crf/CrfPreviewPage";
 import { DoctorCreatePage } from "../pages/doctors/DoctorCreatePage";
@@ -68,6 +70,8 @@ export function App() {
               <Route path="/patient-sim/project-patients/:projectPatientId" element={<PatientSimTrainingPage />} />
               <Route path="/visits/:visitId" element={<VisitFormPage />} />
               <Route path="/training" element={<TrainingEntryPage />} />
+              <Route path="/training-tracking" element={<TrainingTrackingPage />} />
+              <Route path="/training-tracking/patients/:patientId" element={<TrainingTrackingDetailPage />} />
               <Route path="/health" element={<DailyHealthPage />} />
               <Route path="/crf" element={<CrfPreviewPage />} />
               <Route path="*" element={<Navigate to="/patients" replace />} />

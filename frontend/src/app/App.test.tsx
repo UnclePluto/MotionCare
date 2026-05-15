@@ -23,6 +23,10 @@ vi.mock("../api/client", () => ({
   },
 }));
 
+vi.mock("@ant-design/charts", () => ({
+  DualAxes: () => <div data-testid="dual-axes-chart">趋势图</div>,
+}));
+
 describe("App", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/");
@@ -269,6 +273,9 @@ describe("App", () => {
             baseline_medications: {},
           },
         });
+      }
+      if (url === "/training/tracking/patients/") {
+        return Promise.resolve({ data: [] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -552,5 +559,20 @@ describe("App", () => {
     );
 
     expect(await screen.findAllByText("处方管理")).not.toHaveLength(0);
+  });
+
+  it("opens training tracking route", async () => {
+    window.history.pushState({}, "", "/training-tracking");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("患者训练追踪")).toBeInTheDocument();
   });
 });
