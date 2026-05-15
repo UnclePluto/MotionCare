@@ -34,64 +34,106 @@ const trackingDetail = {
   patient: {
     id: 201,
     name: "训练患者甲",
-    phone: "13800000201",
+    phone_masked: "138****0201",
   },
-  project_options: [
-    { project_patient_id: 9001, project_id: 1, project_name: "研究项目 A", group_name: "试验组" },
-    { project_patient_id: 9002, project_id: 2, project_name: "研究项目 B", group_name: "对照组" },
+  project_patients: [
+    {
+      id: 9001,
+      project: 1,
+      project_name: "研究项目 A",
+      project_status: "active",
+      group: 10,
+      group_name: "试验组",
+      enrolled_at: "2026-05-01T09:00:00+08:00",
+    },
+    {
+      id: 9002,
+      project: 2,
+      project_name: "研究项目 B",
+      project_status: "active",
+      group: 20,
+      group_name: "对照组",
+      enrolled_at: "2026-05-02T09:00:00+08:00",
+    },
   ],
-  current_project_patient: {
+  selected_project_patient: {
     id: 9001,
-    project_id: 1,
+    project: 1,
     project_name: "研究项目 A",
+    project_status: "active",
+    group: 10,
     group_name: "试验组",
+    enrolled_at: "2026-05-01T09:00:00+08:00",
   },
   current_prescription: {
     id: 501,
     version: 3,
     status: "active",
+    effective_at: "2026-05-03T10:00:00+08:00",
   },
   prescription_completion: [
     {
-      action_id: 1001,
+      prescription_action: 1001,
       action_name: "坐站转移训练",
-      prescribed_count: 16,
+      internal_type: "motion",
+      action_type: "下肢训练",
+      target_count: 16,
       completed_count: 12,
       completion_rate: 75,
+      recent_record_at: "2026-05-14T10:30:00+08:00",
     },
   ],
-  trends: {
-    daily_30d: [
-      { date: "2026-05-13", completed_count: 1, moving_average: 0.7 },
-      { date: "2026-05-14", completed_count: 2, moving_average: 1.1 },
+  trend: {
+    daily: [
+      { date: "2026-05-13", completed_count: 1, duration_minutes: 20, game_average_score: 86 },
+      { date: "2026-05-14", completed_count: 2, duration_minutes: 35, game_average_score: 92 },
     ],
-    daily_7d: [{ date: "2026-05-14", completed_count: 2, moving_average: 1.1 }],
-    weekly: [{ week_start: "2026-W20", completed_count: 5, moving_average: 5 }],
+    moving_average: [
+      { date: "2026-05-13", completed_count_avg: 0.7, duration_minutes_avg: 18 },
+      { date: "2026-05-14", completed_count_avg: 1.1, duration_minutes_avg: 23 },
+    ],
+    weekly: [
+      {
+        week_start: "2026-05-11",
+        week_end: "2026-05-17",
+        completed_count: 5,
+        duration_minutes: 120,
+        game_average_score: 88.5,
+      },
+    ],
   },
   game_summary: {
     average_score: 88.5,
-    average_accuracy: 91,
-    total_errors: 6,
+    average_accuracy_rate: 91,
+    total_error_count: 6,
     by_game: [
       {
-        game_name: "认知卡片",
-        completed_count: 4,
+        prescription_action: 1002,
+        action_name: "认知卡片",
+        record_count: 4,
         average_score: 88.5,
-        average_accuracy: 91,
-        total_errors: 6,
+        average_accuracy_rate: 91,
+        recent_record_at: "2026-05-14T10:30:00+08:00",
       },
     ],
   },
   recent_records: [
     {
       id: 7001,
-      trained_at: "2026-05-14T10:30:00+08:00",
+      training_date: "2026-05-14",
+      prescription: 501,
+      prescription_version: 3,
+      prescription_action: 1001,
       action_name: "坐站转移训练",
-      game_name: "认知卡片",
+      internal_type: "game",
+      action_type: "认知训练",
       status: "completed",
+      actual_duration_minutes: 18,
       score: 92,
-      accuracy: 95,
-      error_count: 1,
+      game_accuracy_rate: 95,
+      game_error_count: 1,
+      game_difficulty: "中",
+      note: "完成顺利",
     },
   ],
 };
@@ -118,7 +160,9 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getByText("试验组")).toBeInTheDocument();
     expect(screen.getByText("当前处方 v3")).toBeInTheDocument();
     expect(screen.getAllByText("坐站转移训练").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("16").length).toBeGreaterThan(0);
     expect(screen.getAllByText("75%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2026-05-14 10:30").length).toBeGreaterThan(0);
     expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0);
     expect(screen.getAllByText("平均得分").length).toBeGreaterThan(0);
     expect(screen.getAllByText("88.5").length).toBeGreaterThan(0);
@@ -127,7 +171,12 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getAllByText("总错误次数").length).toBeGreaterThan(0);
     expect(screen.getAllByText("6").length).toBeGreaterThan(0);
     expect(screen.getAllByText("认知卡片").length).toBeGreaterThan(0);
-    expect(screen.getByText("2026-05-14 10:30")).toBeInTheDocument();
+    expect(screen.getAllByText("4").length).toBeGreaterThan(0);
+    expect(screen.getByText("2026-05-14")).toBeInTheDocument();
+    expect(screen.getByText("18")).toBeInTheDocument();
+    expect(screen.getByText("95%")).toBeInTheDocument();
+    expect(screen.getByText("中")).toBeInTheDocument();
+    expect(screen.getByText("完成顺利")).toBeInTheDocument();
   });
 
   it("切换项目后用 project_patient 重新请求", async () => {
@@ -154,7 +203,7 @@ describe("TrainingTrackingDetailPage", () => {
   });
 
   it("无可访问项目时展示空状态", async () => {
-    mockGet.mockResolvedValue({ data: { ...trackingDetail, project_options: [], current_project_patient: null } });
+    mockGet.mockResolvedValue({ data: { ...trackingDetail, project_patients: [], selected_project_patient: null } });
 
     renderAt("/training-tracking/patients/201");
 

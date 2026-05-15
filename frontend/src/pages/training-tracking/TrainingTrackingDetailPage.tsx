@@ -6,15 +6,21 @@ import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import type {
-  GamePerformanceRow,
-  PrescriptionCompletionRow,
-  RecentTrainingRecord,
-  TrainingTrackingCurrentProjectPatient,
-  TrainingTrackingDetail,
-  TrainingTrackingProjectOption,
+  TrackingDailyTrendPoint,
+  TrackingDetail,
+  TrackingGameSummaryRow,
+  TrackingMovingAveragePoint,
+  TrackingPrescriptionCompletionRow,
+  TrackingRecentRecord,
+  TrackingWeeklyTrendPoint,
   TrainingTrackingRange,
-  TrainingTrendPoint,
 } from "./types";
+
+type ChartTrendPoint = {
+  label: string;
+  completed_count: number;
+  moving_average: number;
+};
 
 const TRAINING_STATUS_LABEL: Record<string, string> = {
   completed: "已完成",
@@ -46,33 +52,31 @@ function formatNumber(value: number | null | undefined) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-function projectPatientId(project: TrainingTrackingProjectOption | TrainingTrackingCurrentProjectPatient | null | undefined) {
-  if (!project) return undefined;
-  return project.project_patient_id ?? project.id;
-}
-
-function projectId(project: TrainingTrackingProjectOption | TrainingTrackingCurrentProjectPatient | null | undefined) {
-  if (!project) return undefined;
-  return project.project_id ?? project.project;
-}
-
-function trendLabel(point: TrainingTrendPoint) {
-  return point.label ?? point.date ?? point.week_start ?? "";
-}
-
-function buildTrendData(points: TrainingTrendPoint[]) {
-  return points.map((point) => ({
-    label: trendLabel(point),
+function buildDailyTrendData(
+  daily: TrackingDailyTrendPoint[],
+  movingAverage: TrackingMovingAveragePoint[],
+): ChartTrendPoint[] {
+  const movingAverageByDate = new Map(movingAverage.map((point) => [point.date, point.completed_count_avg]));
+  return daily.map((point) => ({
+    label: point.date,
     completed_count: point.completed_count,
-    moving_average: point.moving_average ?? point.completed_count,
+    moving_average: movingAverageByDate.get(point.date) ?? point.completed_count,
   }));
 }
 
-function makeTrendChartConfig(points: TrainingTrendPoint[], range: TrainingTrackingRange): DualAxesConfig {
+function buildWeeklyTrendData(weekly: TrackingWeeklyTrendPoint[]): ChartTrendPoint[] {
+  return weekly.map((point) => ({
+    label: `${point.week_start} 至 ${point.week_end}`,
+    completed_count: point.completed_count,
+    moving_average: point.completed_count,
+  }));
+}
+
+function makeTrendChartConfig(data: ChartTrendPoint[], range: TrainingTrackingRange): DualAxesConfig {
   return {
     height: 280,
     autoFit: true,
-    data: buildTrendData(points),
+    data,
     xField: "label",
     children: [
       {
@@ -94,7 +98,7 @@ function makeTrendChartConfig(points: TrainingTrendPoint[], range: TrainingTrack
   };
 }
 
-function makeCompletionChartConfig(rows: PrescriptionCompletionRow[]): DualAxesConfig {
+function makeCompletionChartConfig(rows: TrackingPrescriptionCompletionRow[]): DualAxesConfig {
   const data = rows.map((row) => ({
     action_name: row.action_name,
     completion_rate: row.completion_rate,
@@ -141,7 +145,7 @@ export function TrainingTrackingDetailPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["training-tracking", "patients", numericPatientId, queryParams],
     queryFn: async () => {
-      const response = await apiClient.get<TrainingTrackingDetail>(`/training/tracking/patients/${numericPatientId}/`, {
+      const response = await apiClient.get<TrackingDetail>(`/training/tracking/patients/${numericPatientId}/`, {
         params: queryParams,
       });
       return response.data;
@@ -169,20 +173,20 @@ export function TrainingTrackingDetailPage() {
     );
   }
 
-  const projectOptions = data.project_options.length > 0 ? data.project_options : data.projects ?? [];
-  const currentProject = data.current_project_patient ?? data.current_project;
-  const currentProjectPatientId = selectedProjectPatientId ?? projectPatientId(currentProject);
-  const currentPrescriptionVersion = data.current_prescription?.version ?? currentProject?.prescription_version ?? null;
-  const activeTrendPoints =
-    range === "30d" ? data.trends.daily_30d : range === "7d" ? data.trends.daily_7d : data.trends.weekly;
-
-  if (!currentProject || projectOptions.length === 0) {
+  if (data.project_patients.length === 0 || !data.selected_project_patient) {
     return (
       <Card title="患者训练追踪">
         <Empty description="暂无可追踪项目" />
       </Card>
     );
   }
+
+  const currentProject = data.selected_project_patient;
+  const currentProjectPatientId = selectedProjectPatientId ?? currentProject.id;
+  const activeTrendData =
+    range === "weekly"
+      ? buildWeeklyTrendData(data.trend.weekly)
+      : buildDailyTrendData(data.trend.daily, data.trend.moving_average);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -195,17 +199,11 @@ export function TrainingTrackingDetailPage() {
               style={{ minWidth: 260 }}
               value={currentProjectPatientId}
               onChange={(value) => setSelectedProjectPatientId(value)}
-              options={projectOptions
-                .map((project) => {
-                  const value = projectPatientId(project);
-                  if (value == null) return null;
-                  return {
-                    value,
-                    label: project.project_name,
-                    title: project.project_name,
-                  };
-                })
-                .filter((item): item is { value: number; label: string; title: string } => item != null)}
+              options={data.project_patients.map((projectPatient) => ({
+                value: projectPatient.id,
+                label: projectPatient.project_name,
+                title: projectPatient.project_name,
+              }))}
             />
           </Space>
 
@@ -216,14 +214,14 @@ export function TrainingTrackingDetailPage() {
             column={{ xs: 1, sm: 2, lg: 3 }}
             items={[
               { key: "patient", label: "患者", children: data.patient.name },
-              { key: "phone", label: "手机号", children: data.patient.phone },
+              { key: "phone", label: "手机号", children: data.patient.phone_masked },
               { key: "project", label: "当前项目", children: currentProject.project_name },
-              { key: "projectId", label: "项目 ID", children: projectId(currentProject) ?? "—" },
+              { key: "projectId", label: "项目 ID", children: currentProject.project },
               { key: "group", label: "分组", children: currentProject.group_name ?? "—" },
               {
                 key: "prescription",
                 label: "当前处方版本",
-                children: currentPrescriptionVersion ? `当前处方 v${currentPrescriptionVersion}` : "暂无当前处方",
+                children: data.current_prescription ? `当前处方 v${data.current_prescription.version}` : "暂无当前处方",
               },
             ]}
           />
@@ -235,18 +233,24 @@ export function TrainingTrackingDetailPage() {
           <Empty description="暂无处方完成数据" />
         ) : (
           <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <Table<PrescriptionCompletionRow>
-              rowKey="action_id"
+            <Table<TrackingPrescriptionCompletionRow>
+              rowKey="prescription_action"
               dataSource={data.prescription_completion}
               pagination={false}
               columns={[
                 { title: "处方动作", dataIndex: "action_name" },
-                { title: "应完成次数", dataIndex: "prescribed_count" },
+                { title: "动作类型", dataIndex: "action_type" },
+                { title: "目标次数", dataIndex: "target_count" },
                 { title: "已完成次数", dataIndex: "completed_count" },
                 {
                   title: "完成率",
                   dataIndex: "completion_rate",
                   render: (value: number) => formatPercent(value),
+                },
+                {
+                  title: "最近完成",
+                  dataIndex: "recent_record_at",
+                  render: (value: string | null) => formatDateTime(value),
                 },
               ]}
             />
@@ -263,8 +267,8 @@ export function TrainingTrackingDetailPage() {
             key,
             label: RANGE_LABEL[key],
             children:
-              activeTrendPoints.length > 0 ? (
-                <DualAxes {...makeTrendChartConfig(activeTrendPoints, range)} />
+              activeTrendData.length > 0 ? (
+                <DualAxes {...makeTrendChartConfig(activeTrendData, range)} />
               ) : (
                 <Empty description="暂无趋势数据" />
               ),
@@ -279,19 +283,19 @@ export function TrainingTrackingDetailPage() {
               <Statistic title="平均得分" value={formatNumber(data.game_summary.average_score)} />
             </Card>
             <Card size="small">
-              <Statistic title="平均正确率" value={formatPercent(data.game_summary.average_accuracy)} />
+              <Statistic title="平均正确率" value={formatPercent(data.game_summary.average_accuracy_rate)} />
             </Card>
             <Card size="small">
-              <Statistic title="总错误次数" value={data.game_summary.total_errors} />
+              <Statistic title="总错误次数" value={data.game_summary.total_error_count} />
             </Card>
           </Space>
-          <Table<GamePerformanceRow>
-            rowKey="game_name"
+          <Table<TrackingGameSummaryRow>
+            rowKey="prescription_action"
             dataSource={data.game_summary.by_game}
             pagination={false}
             columns={[
-              { title: "游戏", dataIndex: "game_name" },
-              { title: "完成次数", dataIndex: "completed_count" },
+              { title: "游戏动作", dataIndex: "action_name" },
+              { title: "记录次数", dataIndex: "record_count" },
               {
                 title: "平均得分",
                 dataIndex: "average_score",
@@ -299,51 +303,63 @@ export function TrainingTrackingDetailPage() {
               },
               {
                 title: "平均正确率",
-                dataIndex: "average_accuracy",
+                dataIndex: "average_accuracy_rate",
                 render: (value: number | null) => formatPercent(value),
               },
-              { title: "总错误次数", dataIndex: "total_errors" },
+              {
+                title: "最近记录",
+                dataIndex: "recent_record_at",
+                render: (value: string | null) => formatDateTime(value),
+              },
             ]}
           />
         </Space>
       </Card>
 
       <Card title="最近训练记录">
-        <Table<RecentTrainingRecord>
+        <Table<TrackingRecentRecord>
           rowKey="id"
           dataSource={data.recent_records}
           pagination={{ pageSize: 10, showSizeChanger: false }}
           columns={[
-            {
-              title: "训练时间",
-              dataIndex: "trained_at",
-              render: (value: string | null) => formatDateTime(value),
-            },
+            { title: "训练日期", dataIndex: "training_date" },
             { title: "动作", dataIndex: "action_name" },
-            {
-              title: "游戏",
-              dataIndex: "game_name",
-              render: (value: string | null | undefined) => value ?? "—",
-            },
+            { title: "动作类型", dataIndex: "action_type" },
             {
               title: "状态",
               dataIndex: "status",
               render: (value: string) => <Tag>{TRAINING_STATUS_LABEL[value] ?? value}</Tag>,
             },
+            { title: "处方版本", dataIndex: "prescription_version" },
+            {
+              title: "时长",
+              dataIndex: "actual_duration_minutes",
+              render: (value: number | null) => value ?? "—",
+            },
             {
               title: "得分",
               dataIndex: "score",
-              render: (value: number | null | undefined) => formatNumber(value),
+              render: (value: number | null) => formatNumber(value),
             },
             {
               title: "正确率",
-              dataIndex: "accuracy",
-              render: (value: number | null | undefined) => formatPercent(value),
+              dataIndex: "game_accuracy_rate",
+              render: (value: number | null) => formatPercent(value),
             },
             {
               title: "错误次数",
-              dataIndex: "error_count",
-              render: (value: number | null | undefined) => value ?? "—",
+              dataIndex: "game_error_count",
+              render: (value: number | null) => value ?? "—",
+            },
+            {
+              title: "难度",
+              dataIndex: "game_difficulty",
+              render: (value: string | null) => value ?? "—",
+            },
+            {
+              title: "备注",
+              dataIndex: "note",
+              render: (value: string) => value || "—",
             },
           ]}
         />

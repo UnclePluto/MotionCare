@@ -1,109 +1,112 @@
 export type TrainingTrackingRange = "30d" | "7d" | "weekly";
 
-export type TrainingTrackingPatientSummary = {
-  patient_id: number;
-  patient_name: string;
-  patient_phone: string;
-  project_count: number;
-  latest_training_at: string | null;
-  completed_count_30d: number;
-};
-
-export type TrainingTrackingPatientsResponse =
-  | TrainingTrackingPatientSummary[]
-  | {
-      results: TrainingTrackingPatientSummary[];
-    };
-
-export type TrainingTrackingPatient = {
+export type TrackingPatient = {
   id: number;
   name: string;
-  phone: string;
-  gender?: string | null;
-  age?: number | null;
+  phone_masked: string;
 };
 
-export type TrainingTrackingProjectOption = {
-  project_patient_id?: number;
-  id?: number;
-  project_id?: number;
-  project?: number;
+export type TrackingPatientRow = {
+  patient: TrackingPatient;
+  project_count: number;
+  last_training_at: string | null;
+  last_30_days_completed_count: number;
+};
+
+export type TrackingProjectPatient = {
+  id: number;
+  project: number;
   project_name: string;
-  group_name?: string | null;
-  prescription_version?: number | null;
+  project_status: string;
+  group: number | null;
+  group_name: string | null;
+  enrolled_at: string;
 };
 
-export type TrainingTrackingCurrentProjectPatient = {
-  id?: number;
-  project_patient_id?: number;
-  project_id?: number;
-  project?: number;
-  project_name: string;
-  group_name?: string | null;
-  prescription_version?: number | null;
-};
-
-export type TrainingTrackingCurrentPrescription = {
+export type TrackingCurrentPrescription = {
   id: number;
   version: number;
-  status?: string | null;
+  status: string;
+  effective_at: string | null;
 };
 
-export type PrescriptionCompletionRow = {
-  action_id: number;
+export type TrackingPrescriptionCompletionRow = {
+  prescription_action: number;
   action_name: string;
-  prescribed_count: number;
+  internal_type: string;
+  action_type: string;
+  target_count: number;
   completed_count: number;
   completion_rate: number;
+  recent_record_at: string | null;
 };
 
-export type TrainingTrendPoint = {
-  date?: string;
-  week_start?: string;
-  label?: string;
+export type TrackingDailyTrendPoint = {
+  date: string;
   completed_count: number;
-  moving_average?: number | null;
+  duration_minutes: number;
+  game_average_score: number | null;
 };
 
-export type GamePerformanceRow = {
-  game_name: string;
+export type TrackingMovingAveragePoint = {
+  date: string;
+  completed_count_avg: number;
+  duration_minutes_avg: number;
+};
+
+export type TrackingWeeklyTrendPoint = {
+  week_start: string;
+  week_end: string;
   completed_count: number;
-  average_score: number | null;
-  average_accuracy: number | null;
-  total_errors: number;
+  duration_minutes: number;
+  game_average_score: number | null;
 };
 
-export type GamePerformanceSummary = {
-  average_score: number | null;
-  average_accuracy: number | null;
-  total_errors: number;
-  by_game: GamePerformanceRow[];
-};
-
-export type RecentTrainingRecord = {
-  id: number;
-  trained_at: string | null;
+export type TrackingGameSummaryRow = {
+  prescription_action: number;
   action_name: string;
-  game_name?: string | null;
-  status: string;
-  score?: number | null;
-  accuracy?: number | null;
-  error_count?: number | null;
+  record_count: number;
+  average_score: number | null;
+  average_accuracy_rate: number | null;
+  recent_record_at: string | null;
 };
 
-export type TrainingTrackingDetail = {
-  patient: TrainingTrackingPatient;
-  project_options: TrainingTrackingProjectOption[];
-  projects?: TrainingTrackingProjectOption[];
-  current_project_patient: TrainingTrackingCurrentProjectPatient | null;
-  current_project?: TrainingTrackingCurrentProjectPatient | null;
-  current_prescription: TrainingTrackingCurrentPrescription | null;
-  prescription_completion: PrescriptionCompletionRow[];
-  trends: {
-    daily_30d: TrainingTrendPoint[];
-    daily_7d: TrainingTrendPoint[];
-    weekly: TrainingTrendPoint[];
+export type TrackingGameSummary = {
+  average_score: number | null;
+  average_accuracy_rate: number | null;
+  total_error_count: number;
+  by_game: TrackingGameSummaryRow[];
+};
+
+export type TrackingRecentRecord = {
+  id: number;
+  training_date: string;
+  status: string;
+  prescription: number;
+  prescription_version: number;
+  prescription_action: number;
+  action_name: string;
+  internal_type: string;
+  action_type: string;
+  actual_duration_minutes: number | null;
+  score: number | null;
+  game_accuracy_rate: number | null;
+  game_error_count: number | null;
+  game_difficulty: string | null;
+  note: string;
+};
+
+export type TrackingDetail = {
+  patient: TrackingPatient;
+  project_patients: TrackingProjectPatient[];
+  selected_project_patient: TrackingProjectPatient | null;
+  current_prescription: TrackingCurrentPrescription | null;
+  prescription_completion: TrackingPrescriptionCompletionRow[];
+  trend: {
+    daily: TrackingDailyTrendPoint[];
+    moving_average: TrackingMovingAveragePoint[];
+    weekly: TrackingWeeklyTrendPoint[];
   };
-  game_summary: GamePerformanceSummary;
-  recent_records: RecentTrainingRecord[];
+  game_summary: TrackingGameSummary;
+  recent_records: TrackingRecentRecord[];
 };

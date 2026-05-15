@@ -34,12 +34,14 @@ describe("TrainingTrackingPage", () => {
         return Promise.resolve({
           data: [
             {
-              patient_id: 201,
-              patient_name: "训练患者甲",
-              patient_phone: "13800000201",
+              patient: {
+                id: 201,
+                name: "训练患者甲",
+                phone_masked: "138****0201",
+              },
               project_count: 2,
-              latest_training_at: "2026-05-14T10:30:00+08:00",
-              completed_count_30d: 12,
+              last_training_at: "2026-05-14T10:30:00+08:00",
+              last_30_days_completed_count: 12,
             },
           ],
         });
@@ -62,7 +64,7 @@ describe("TrainingTrackingPage", () => {
     });
 
     expect(screen.getByText("训练患者甲")).toBeInTheDocument();
-    expect(screen.getByText("13800000201")).toBeInTheDocument();
+    expect(screen.getByText("138****0201")).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("2026-05-14 10:30")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();

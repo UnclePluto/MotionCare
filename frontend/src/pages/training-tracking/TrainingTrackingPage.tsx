@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
-import type { TrainingTrackingPatientSummary, TrainingTrackingPatientsResponse } from "./types";
+import type { TrackingPatientRow } from "./types";
 
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "—";
@@ -14,10 +14,6 @@ function formatDateTime(value: string | null | undefined) {
   return `${match[1]} ${match[2]}`;
 }
 
-function unwrapRows(data: TrainingTrackingPatientsResponse): TrainingTrackingPatientSummary[] {
-  return Array.isArray(data) ? data : data.results;
-}
-
 export function TrainingTrackingPage() {
   const [draftQuery, setDraftQuery] = useState("");
   const [query, setQuery] = useState("");
@@ -25,10 +21,10 @@ export function TrainingTrackingPage() {
   const { data = [], isLoading } = useQuery({
     queryKey: ["training-tracking", "patients", query],
     queryFn: async () => {
-      const response = await apiClient.get<TrainingTrackingPatientsResponse>("/training/tracking/patients/", {
+      const response = await apiClient.get<TrackingPatientRow[]>("/training/tracking/patients/", {
         params: { q: query.trim() },
       });
-      return unwrapRows(response.data);
+      return response.data;
     },
   });
 
@@ -48,25 +44,31 @@ export function TrainingTrackingPage() {
         </Button>
       </Space>
 
-      <Table<TrainingTrackingPatientSummary>
-        rowKey="patient_id"
+      <Table<TrackingPatientRow>
+        rowKey={(row) => row.patient.id}
         loading={isLoading}
         dataSource={data}
         pagination={{ pageSize: 20, showSizeChanger: false }}
         columns={[
-          { title: "患者", dataIndex: "patient_name" },
-          { title: "手机号", dataIndex: "patient_phone" },
+          {
+            title: "患者",
+            render: (_: unknown, row) => row.patient.name,
+          },
+          {
+            title: "手机号",
+            render: (_: unknown, row) => row.patient.phone_masked,
+          },
           { title: "参与项目数", dataIndex: "project_count" },
           {
             title: "最近训练",
-            dataIndex: "latest_training_at",
+            dataIndex: "last_training_at",
             render: (value: string | null) => formatDateTime(value),
           },
-          { title: "近 30 天完成次数", dataIndex: "completed_count_30d" },
+          { title: "近 30 天完成次数", dataIndex: "last_30_days_completed_count" },
           {
             title: "操作",
             render: (_: unknown, row) => (
-              <Link to={`/training-tracking/patients/${row.patient_id}`}>查看追踪</Link>
+              <Link to={`/training-tracking/patients/${row.patient.id}`}>查看追踪</Link>
             ),
           },
         ]}
