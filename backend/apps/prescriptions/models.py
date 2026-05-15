@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from apps.common.models import UserStampedModel
@@ -60,10 +61,13 @@ class Prescription(UserStampedModel):
         *,
         weekly_frequency: str = "",
         duration_minutes: int | None = None,
+        weekly_target_count: int = 1,
         difficulty: str = "",
         notes: str = "",
         sort_order: int = 0,
     ):
+        if weekly_target_count <= 0:
+            raise ValidationError("每周目标次数必须大于 0")
         return PrescriptionAction.objects.create(
             prescription=self,
             action_library_item=action,
@@ -76,6 +80,7 @@ class Prescription(UserStampedModel):
             has_ai_supervision_snapshot=action.has_ai_supervision,
             weekly_frequency=weekly_frequency,
             duration_minutes=duration_minutes,
+            weekly_target_count=weekly_target_count,
             difficulty=difficulty,
             notes=notes,
             sort_order=sort_order,
@@ -96,6 +101,15 @@ class PrescriptionAction(UserStampedModel):
     has_ai_supervision_snapshot = models.BooleanField("是否支持AI监督快照", default=False)
     weekly_frequency = models.CharField("每周频次", max_length=80, blank=True)
     duration_minutes = models.PositiveIntegerField("时长", null=True, blank=True)
+    weekly_target_count = models.PositiveIntegerField("每周目标次数", default=1)
     difficulty = models.CharField("难度", max_length=40, blank=True)
     notes = models.TextField("注意事项", blank=True)
     sort_order = models.PositiveIntegerField("排序", default=0)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(weekly_target_count__gt=0),
+                name="prescription_action_weekly_target_count_gt_0",
+            )
+        ]

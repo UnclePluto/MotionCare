@@ -6,6 +6,7 @@ from apps.studies.models import StudyProject
 PROJECT_COMPLETED_DETAIL = "项目已完结，不能继续新增患者或录入访视。"
 PROJECT_COMPLETED_GROUP_DETAIL = "项目已完结，不能修改分组配置。"
 PROJECT_COMPLETED_UNBIND_DETAIL = "项目已完结，不能解绑患者。"
+PROJECT_COMPLETED_BINDING_DETAIL = "项目已完结，不能修改患者端绑定。"
 
 
 def is_project_completed(project: StudyProject) -> bool:

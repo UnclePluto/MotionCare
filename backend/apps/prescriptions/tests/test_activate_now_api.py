@@ -37,6 +37,7 @@ def _payload(action, *, expected_active_version=None, action_overrides=None):
     action_data = {
         "action_library_item": action.id,
         "weekly_frequency": "3 次/周",
+        "weekly_target_count": 3,
         "duration_minutes": 20,
         "difficulty": "中",
         "notes": "注意呼吸",
@@ -88,12 +89,33 @@ def test_activate_now_creates_active_prescription_and_snapshots(project_patient,
     assert snapshot["video_url_snapshot"] == action.video_url
     assert snapshot["has_ai_supervision_snapshot"] is True
     assert snapshot["weekly_frequency"] == "3 次/周"
+    assert snapshot["weekly_target_count"] == 3
     assert snapshot["duration_minutes"] == 20
     assert "sets" not in snapshot
     assert "repetitions" not in snapshot
     assert snapshot["difficulty"] == "中"
     assert snapshot["notes"] == "注意呼吸"
     assert snapshot["sort_order"] == 1
+
+
+@pytest.mark.django_db
+def test_activate_now_derives_weekly_target_count_from_frequency_when_omitted(
+    project_patient, doctor
+):
+    action = _action()
+    payload = _payload(action, action_overrides={"weekly_frequency": "4 次/周"})
+    del payload["actions"][0]["weekly_target_count"]
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=payload,
+        format="json",
+    )
+
+    assert response.status_code == 201
+    snapshot = response.json()["actions"][0]
+    assert snapshot["weekly_frequency"] == "4 次/周"
+    assert snapshot["weekly_target_count"] == 4
 
 
 @pytest.mark.django_db
@@ -207,6 +229,7 @@ def test_activate_now_rejects_stale_active_version(project_patient, doctor):
         {"weekly_frequency": "x" * 81},
         {"difficulty": "x" * 41},
         {"duration_minutes": 0},
+        {"weekly_target_count": 0},
     ],
 )
 def test_activate_now_rejects_invalid_action_parameters(

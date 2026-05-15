@@ -26,6 +26,7 @@ export type PrescriptionAction = {
   video_url_snapshot: string;
   has_ai_supervision_snapshot: boolean;
   weekly_frequency: string;
+  weekly_target_count: number;
   duration_minutes: number | null;
   difficulty: string;
   notes: string;
@@ -49,6 +50,7 @@ export type Prescription = {
 export type ActivateNowActionPayload = {
   action_library_item: number;
   weekly_frequency?: string;
+  weekly_target_count?: number;
   duration_minutes?: number | null;
   difficulty?: string;
   notes?: string;

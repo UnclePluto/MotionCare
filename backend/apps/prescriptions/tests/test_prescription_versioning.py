@@ -1,4 +1,5 @@
 import pytest
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
@@ -55,3 +56,53 @@ def test_prescription_action_keeps_snapshot(project_patient, doctor):
     assert snapshot.action_library_item == action
     assert snapshot.action_name_snapshot == "坐立训练"
     assert snapshot.action_instruction_snapshot == "从椅子坐下后站起。\n\n动作要点：保持躯干稳定。"
+
+
+@pytest.mark.django_db
+def test_action_snapshot_records_weekly_target_count(active_prescription):
+    action = ActionLibraryItem.objects.create(
+        name="坐站转移训练",
+        training_type="运动训练",
+        internal_type=ActionLibraryItem.InternalType.MOTION,
+        action_type="平衡训练",
+        instruction_text="从椅子坐下后站起。\n\n动作要点：保持躯干稳定。",
+    )
+
+    snapshot = active_prescription.add_action_snapshot(
+        action,
+        weekly_frequency="每周 2 次",
+        duration_minutes=15,
+        weekly_target_count=2,
+    )
+
+    assert snapshot.weekly_target_count == 2
+
+
+@pytest.mark.django_db
+def test_action_snapshot_rejects_invalid_weekly_target_count(active_prescription):
+    action = ActionLibraryItem.objects.create(
+        name="坐站转移训练",
+        training_type="运动训练",
+        internal_type=ActionLibraryItem.InternalType.MOTION,
+        action_type="平衡训练",
+        instruction_text="从椅子坐下后站起。",
+    )
+
+    with pytest.raises(ValidationError, match="每周目标次数必须大于 0"):
+        active_prescription.add_action_snapshot(
+            action,
+            duration_minutes=15,
+            weekly_target_count=0,
+        )
+
+
+@pytest.mark.django_db
+def test_prescription_action_serializer_exposes_weekly_target_count(prescription_action):
+    from apps.prescriptions.serializers import PrescriptionActionSerializer
+
+    prescription_action.weekly_target_count = 3
+    prescription_action.save(update_fields=["weekly_target_count", "updated_at"])
+
+    data = PrescriptionActionSerializer(prescription_action).data
+
+    assert data["weekly_target_count"] == 3

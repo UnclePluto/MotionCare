@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { apiClient } from "../../api/client";
 import { VisitFormContent } from "../visits/VisitFormContent";
+import { ProjectPatientBindingCard } from "./ProjectPatientBindingCard";
 
 type VisitType = "T0" | "T1" | "T2";
 
@@ -144,6 +145,7 @@ export function ProjectPatientResearchEntryPage() {
             </Descriptions.Item>
             <Descriptions.Item label="入组时间">{data.enrolled_at || "—"}</Descriptions.Item>
           </Descriptions>
+          <ProjectPatientBindingCard projectPatientId={data.id} />
           <Tabs
             activeKey={activeVisit}
             onChange={(key) => navigate(`/research-entry/project-patients/${id}?visit=${key}`)}

@@ -25,6 +25,7 @@ docs/superpowers/
 | `specs/2026-05-11-patient-list-actions-privacy-design.md` | 患者列表操作与隐私展示 | approved |
 | `specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` | 前端临时随机 + 确认时建绑定 | approved |
 | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved |
+| `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` | 微信小程序患者日常工作台 | approved |
 
 ## 实施计划（plans/）当前清单
 
@@ -38,6 +39,7 @@ docs/superpowers/
 | `plans/2026-05-11-patient-list-actions-privacy.md` | 患者列表操作 + 隐私 | implementing | `specs/2026-05-11-patient-list-actions-privacy-design.md` |
 | `plans/2026-05-12-frontend-only-randomization-confirmed-binding.md` | 前端临时随机 + 确认入组绑定 | implementing | `specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` |
 | `plans/2026-05-14-project-patient-research-entry-tabs.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` |
+| `plans/2026-05-14-wechat-miniapp-patient-daily-workbench.md` | 微信小程序患者日常工作台 | approved | `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` |
 
 ## 状态语义
 

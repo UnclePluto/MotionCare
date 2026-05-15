@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db import transaction
 from django.db.models import Count, Prefetch
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed, ValidationError
@@ -11,10 +12,13 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
+from apps.patient_app.models import PatientAppBindingCode, PatientAppSession
+from apps.patient_app.services import create_binding_code, revoke_project_patient_binding
 from apps.prescriptions.serializers import ActivateNowPrescriptionSerializer, PrescriptionSerializer
 from apps.prescriptions.services import create_active_prescription_now
 from apps.studies.project_status import (
     ensure_project_open,
+    PROJECT_COMPLETED_BINDING_DETAIL,
     PROJECT_COMPLETED_GROUP_DETAIL,
     PROJECT_COMPLETED_UNBIND_DETAIL,
 )
@@ -289,6 +293,84 @@ class ProjectPatientViewSet(ModelViewSet):
 
     def partial_update(self, request, *args, **kwargs):
         raise MethodNotAllowed("PATCH", detail="入组关系不可直接修改，请先解绑后重新确认入组。")
+
+    def _binding_status_payload(self, project_patient):
+        now = timezone.now()
+        active_code = (
+            PatientAppBindingCode.objects.filter(
+                project_patient=project_patient,
+                used_at__isnull=True,
+                revoked_at__isnull=True,
+                expires_at__gt=now,
+            )
+            .order_by("-expires_at", "-id")
+            .first()
+        )
+        active_session = (
+            PatientAppSession.objects.filter(
+                project_patient=project_patient,
+                is_active=True,
+                expires_at__gt=now,
+            )
+            .order_by("-created_at", "-id")
+            .first()
+        )
+
+        return {
+            "project_patient_id": project_patient.id,
+            "patient_id": project_patient.patient_id,
+            "patient_name": project_patient.patient.name,
+            "project_id": project_patient.project_id,
+            "project_name": project_patient.project.name,
+            "has_active_binding_code": active_code is not None,
+            "binding_code_expires_at": (
+                active_code.expires_at.isoformat() if active_code else None
+            ),
+            "has_active_session": active_session is not None,
+            "last_bound_at": active_session.created_at.isoformat() if active_session else None,
+            "active_session_expires_at": (
+                active_session.expires_at.isoformat() if active_session else None
+            ),
+        }
+
+    @action(detail=True, methods=["post"], url_path="binding-code")
+    def binding_code(self, request, pk=None):
+        project_patient = self.get_object()
+        ensure_project_open(project_patient.project, PROJECT_COMPLETED_BINDING_DETAIL)
+        try:
+            plain_code, binding = create_binding_code(
+                project_patient=project_patient,
+                created_by=request.user,
+            )
+        except DjangoValidationError as exc:
+            detail = exc.messages[0] if hasattr(exc, "messages") and exc.messages else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "id": binding.id,
+                "project_patient_id": project_patient.id,
+                "code": plain_code,
+                "expires_at": binding.expires_at.isoformat(),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["get"], url_path="binding-status")
+    def binding_status(self, request, pk=None):
+        project_patient = self.get_object()
+        return Response(self._binding_status_payload(project_patient))
+
+    @action(detail=True, methods=["post"], url_path="revoke-binding")
+    def revoke_binding(self, request, pk=None):
+        project_patient = self.get_object()
+        ensure_project_open(project_patient.project, PROJECT_COMPLETED_BINDING_DETAIL)
+        revoke_project_patient_binding(project_patient)
+        return Response(
+            {
+                "detail": "已撤销未使用绑定码，并停用患者端登录。",
+                **self._binding_status_payload(project_patient),
+            }
+        )
 
     @action(detail=True, methods=["post"], url_path="prescriptions/activate-now")
     def activate_prescription_now(self, request, pk=None):

@@ -109,6 +109,7 @@ def create_active_prescription_now(
             action,
             weekly_frequency=action_data.get("weekly_frequency", ""),
             duration_minutes=action_data.get("duration_minutes"),
+            weekly_target_count=action_data.get("weekly_target_count", 1),
             difficulty=action_data.get("difficulty", ""),
             notes=action_data.get("notes", ""),
             sort_order=action_data.get("sort_order", 0),

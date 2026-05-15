@@ -44,7 +44,10 @@ type ActionParamValues = {
 
 function defaultParamsForAction(action: ActionLibraryItem, currentAction?: PrescriptionAction): ActionParamValues {
   return {
-    weekly_times: parseWeeklyFrequencyTimes(currentAction?.weekly_frequency ?? action.suggested_frequency) ?? 1,
+    weekly_times:
+      currentAction?.weekly_target_count ??
+      parseWeeklyFrequencyTimes(currentAction?.weekly_frequency ?? action.suggested_frequency) ??
+      1,
     duration_minutes: currentAction?.duration_minutes ?? action.suggested_duration_minutes,
     difficulty: currentAction?.difficulty ?? action.default_difficulty,
     notes: currentAction?.notes ?? "",
@@ -56,9 +59,11 @@ function buildActionPayload(
   params: ActionParamValues,
   sortOrder: number,
 ): ActivateNowActionPayload {
+  const weeklyTargetCount = params.weekly_times ?? 1;
   return {
     action_library_item: action.id,
-    weekly_frequency: formatWeeklyFrequency(params.weekly_times),
+    weekly_frequency: formatWeeklyFrequency(weeklyTargetCount),
+    weekly_target_count: weeklyTargetCount,
     duration_minutes: params.duration_minutes ?? action.suggested_duration_minutes ?? 1,
     difficulty: params.difficulty ?? action.default_difficulty,
     notes: params.notes ?? "",
@@ -246,7 +251,10 @@ export function PrescriptionDrawer({
                     </span>
                     <Form.Item
                       name={["actionParams", String(action.id), "weekly_times"]}
-                      rules={[{ required: true, message: "请填写每周次数" }]}
+                      rules={[
+                        { required: true, message: "请填写每周次数" },
+                        { type: "number", min: 1, message: "每周次数至少为 1" },
+                      ]}
                       noStyle
                     >
                       <InputNumber

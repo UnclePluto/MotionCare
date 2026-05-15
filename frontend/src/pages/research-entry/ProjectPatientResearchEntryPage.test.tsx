@@ -5,15 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectPatientResearchEntryPage } from "./ProjectPatientResearchEntryPage";
 
-const { mockGet, mockPatch } = vi.hoisted(() => ({
+const { mockGet, mockPatch, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPatch: vi.fn(),
+  mockPost: vi.fn(),
 }));
 
 vi.mock("../../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
     patch: (...args: unknown[]) => mockPatch(...args),
+    post: (...args: unknown[]) => mockPost(...args),
   },
 }));
 
@@ -53,9 +55,22 @@ describe("ProjectPatientResearchEntryPage", () => {
   beforeEach(() => {
     mockGet.mockReset();
     mockPatch.mockReset();
+    mockPost.mockReset();
     mockPatch.mockResolvedValue({ data: {} });
+    mockPost.mockResolvedValue({ data: {} });
     mockGet.mockImplementation((url: string) => {
       if (url === "/studies/project-patients/9001/") return Promise.resolve({ data: projectPatient });
+      if (url === "/studies/project-patients/9001/binding-status/") {
+        return Promise.resolve({
+          data: {
+            has_active_session: false,
+            has_active_binding_code: false,
+            binding_code_expires_at: null,
+            last_bound_at: null,
+            active_session_expires_at: null,
+          },
+        });
+      }
       if (url === "/visits/11/") {
         return Promise.resolve({
           data: {
@@ -151,6 +166,17 @@ describe("ProjectPatientResearchEntryPage", () => {
   it("shows an error when the visit detail cannot be loaded", async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/studies/project-patients/9001/") return Promise.resolve({ data: projectPatient });
+      if (url === "/studies/project-patients/9001/binding-status/") {
+        return Promise.resolve({
+          data: {
+            has_active_session: false,
+            has_active_binding_code: false,
+            binding_code_expires_at: null,
+            last_bound_at: null,
+            active_session_expires_at: null,
+          },
+        });
+      }
       if (url === "/visits/12/") return Promise.reject(new Error("not found"));
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });

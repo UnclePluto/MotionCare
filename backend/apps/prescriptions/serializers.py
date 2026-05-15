@@ -1,6 +1,18 @@
+import re
+
 from rest_framework import serializers
 
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
+
+
+def parse_weekly_target_count(value):
+    if not value:
+        return 1
+    match = re.search(r"\d+", str(value))
+    if not match:
+        return 1
+    count = int(match.group(0))
+    return count if count > 0 else 1
 
 
 class ActionLibraryItemSerializer(serializers.ModelSerializer):
@@ -40,6 +52,7 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
             "has_ai_supervision_snapshot",
             "weekly_frequency",
             "duration_minutes",
+            "weekly_target_count",
             "difficulty",
             "notes",
             "sort_order",
@@ -79,6 +92,9 @@ class ActivateNowActionSerializer(serializers.Serializer):
     duration_minutes = serializers.IntegerField(
         required=False, allow_null=True, min_value=1, max_value=2147483647
     )
+    weekly_target_count = serializers.IntegerField(
+        required=False, min_value=1, max_value=2147483647, default=1
+    )
     difficulty = serializers.CharField(
         required=False, allow_blank=True, max_length=40, default=""
     )
@@ -90,6 +106,13 @@ class ActivateNowActionSerializer(serializers.Serializer):
     def to_internal_value(self, data):
         if isinstance(data, dict) and ("sets" in data or "repetitions" in data):
             raise serializers.ValidationError("处方动作仅支持时长，不支持组数或次数")
+        if isinstance(data, dict) and (
+            "weekly_target_count" not in data or data.get("weekly_target_count") is None
+        ):
+            data = data.copy()
+            data["weekly_target_count"] = parse_weekly_target_count(
+                data.get("weekly_frequency")
+            )
         return super().to_internal_value(data)
 
     def validate(self, attrs):

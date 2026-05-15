@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "apps.prescriptions",
     "apps.training",
     "apps.health",
+    "apps.patient_app",
     "apps.crf",
 ]
 

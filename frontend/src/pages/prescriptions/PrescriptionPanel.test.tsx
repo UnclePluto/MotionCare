@@ -100,6 +100,7 @@ const activePrescription = {
       video_url_snapshot: "https://example.com/video.mp4",
       has_ai_supervision_snapshot: true,
       weekly_frequency: "3 次/周",
+      weekly_target_count: 5,
       duration_minutes: 20,
       difficulty: "低",
       notes: "",
@@ -183,6 +184,7 @@ describe("PrescriptionPanel", () => {
             expect.objectContaining({
               action_library_item: 101,
               weekly_frequency: "3 次/周",
+              weekly_target_count: 3,
               duration_minutes: 20,
             }),
           ],
@@ -206,6 +208,7 @@ describe("PrescriptionPanel", () => {
           actions: [
             expect.objectContaining({
               action_library_item: 102,
+              weekly_target_count: 2,
               duration_minutes: 10,
             }),
           ],
@@ -235,6 +238,7 @@ describe("PrescriptionPanel", () => {
           actions: [
             expect.objectContaining({
               action_library_item: 103,
+              weekly_target_count: 2,
               duration_minutes: 10,
             }),
           ],
@@ -267,6 +271,7 @@ describe("PrescriptionPanel", () => {
             expect.objectContaining({
               action_library_item: 102,
               weekly_frequency: "4 次/周",
+              weekly_target_count: 4,
               duration_minutes: 12,
             }),
           ],
@@ -298,6 +303,41 @@ describe("PrescriptionPanel", () => {
     await waitFor(() => {
       expect(mockPost).not.toHaveBeenCalled();
       expect(screen.getByText("动作库未加载完成，请刷新后重试")).toBeInTheDocument();
+    });
+  });
+
+  it("uses current structured weekly target count when adjusting prescription", async () => {
+    mockGet.mockImplementation((url: string, config?: unknown) => {
+      const params =
+        typeof config === "object" && config ? (config as { params?: Record<string, unknown> }).params : {};
+      if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
+      if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
+      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
+        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction] });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "调整处方" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        "/studies/project-patients/9001/prescriptions/activate-now/",
+        expect.objectContaining({
+          expected_active_version: 1,
+          actions: [
+            expect.objectContaining({
+              action_library_item: 101,
+              weekly_frequency: "5 次/周",
+              weekly_target_count: 5,
+              duration_minutes: 20,
+            }),
+          ],
+        }),
+      );
     });
   });
 
