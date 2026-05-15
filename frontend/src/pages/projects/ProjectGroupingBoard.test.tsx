@@ -158,9 +158,11 @@ describe("ProjectGroupingBoard", () => {
     await waitFor(() => expect(screen.getByText("全量患者")).toBeInTheDocument());
     const patientSelection = screen.getByText("全量患者").closest(".ant-card");
     expect(patientSelection).toBeTruthy();
-    expect(within(patientSelection as HTMLElement).getByText(/未入组甲/)).toBeInTheDocument();
-    expect(within(patientSelection as HTMLElement).getByText(/未入组乙/)).toBeInTheDocument();
-    expect(within(patientSelection as HTMLElement).getByText(/已确认丙/)).toBeInTheDocument();
+    const confirmedSection = within(patientSelection as HTMLElement).getByTestId("patient-pool-confirmed");
+    const unconfirmedSection = within(patientSelection as HTMLElement).getByTestId("patient-pool-unconfirmed");
+    expect(within(confirmedSection).getByText(/已确认丙/)).toBeInTheDocument();
+    expect(within(unconfirmedSection).getByText(/未入组甲/)).toBeInTheDocument();
+    expect(within(unconfirmedSection).getByText(/未入组乙/)).toBeInTheDocument();
     expect(screen.getByLabelText(/选择患者 已确认丙/)).toBeDisabled();
 
     const experimentGroup = screen.getByText("试验组").closest(".ant-card");
@@ -242,6 +244,9 @@ describe("ProjectGroupingBoard", () => {
     fireEvent.click(screen.getByRole("button", { name: "随机分组" }));
 
     await waitFor(() => expect(screen.getByText("本轮")).toBeInTheDocument());
+    const patientSelection = screen.getByText("全量患者").closest(".ant-card");
+    const unconfirmedSection = within(patientSelection as HTMLElement).getByTestId("patient-pool-unconfirmed");
+    expect(within(unconfirmedSection).getByText(/未入组甲 · .* · 随机中/)).toBeInTheDocument();
     expect(mockPost.mock.calls.map((call) => call[0])).not.toContain("/studies/projects/1/randomize/");
   });
 

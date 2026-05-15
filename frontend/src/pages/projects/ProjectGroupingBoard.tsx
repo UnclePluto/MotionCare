@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Divider,
   InputNumber,
   Space,
   Tag,
@@ -69,6 +70,36 @@ const genderLabel: Record<string, string> = {
 function phoneTail(phone: string): string {
   const d = phone.replace(/\D/g, "");
   return d.length <= 4 ? d : d.slice(-4);
+}
+
+function PatientPoolCheckbox({
+  patient,
+  checked,
+  disabled,
+  tagColor,
+  statusSuffix,
+  onChange,
+}: {
+  patient: PatientOption;
+  checked: boolean;
+  disabled: boolean;
+  tagColor?: string;
+  statusSuffix?: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <Checkbox
+      checked={checked}
+      disabled={disabled}
+      aria-label={`选择患者 ${patient.name}`}
+      onChange={(e) => onChange(e.target.checked)}
+    >
+      <Tag color={tagColor}>
+        {patient.name} · {genderLabel[patient.gender] ?? patient.gender} · 尾号 {phoneTail(patient.phone)}
+        {statusSuffix ?? ""}
+      </Tag>
+    </Checkbox>
+  );
 }
 
 function ConfirmedPatientCard({
@@ -215,6 +246,31 @@ export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props
   const confirmedPatientIds = useMemo(
     () => new Set((projectPatients ?? []).map((pp) => pp.patient)),
     [projectPatients],
+  );
+
+  const localRandomizingPatientIds = useMemo(
+    () => new Set(localAssignments.map((assignment) => assignment.patientId)),
+    [localAssignments],
+  );
+
+  const confirmedGroupNameByPatientId = useMemo(() => {
+    const groupNameById = Object.fromEntries((groups ?? []).map((g) => [g.id, g.name]));
+    return Object.fromEntries(
+      (projectPatients ?? []).map((row) => [
+        row.patient,
+        row.group != null ? (groupNameById[row.group] ?? "—") : "—",
+      ]),
+    ) as Record<number, string>;
+  }, [groups, projectPatients]);
+
+  const confirmedPatientsInPool = useMemo(
+    () => (patients ?? []).filter((p) => confirmedPatientIds.has(p.id)),
+    [confirmedPatientIds, patients],
+  );
+
+  const unconfirmedPatientsInPool = useMemo(
+    () => (patients ?? []).filter((p) => !confirmedPatientIds.has(p.id)),
+    [confirmedPatientIds, patients],
   );
 
   const activeGroups = useMemo(
@@ -434,21 +490,51 @@ export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props
   return (
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Card title={patients ? "全量患者" : "加载患者"} size="small">
-        <Space wrap size={[8, 8]}>
-          {(patients ?? []).map((p) => (
-            <Checkbox
-              key={p.id}
-              checked={poolSelected.includes(p.id)}
-              disabled={readOnly || confirmedPatientIds.has(p.id)}
-              aria-label={`选择患者 ${p.name}`}
-              onChange={(e) => handlePatientSelectionChange(p.id, e.target.checked)}
-            >
-              <Tag>
-                {p.name} · {genderLabel[p.gender] ?? p.gender} · 尾号 {phoneTail(p.phone)}
-                {confirmedPatientIds.has(p.id) ? " · 已确认" : ""}
-              </Tag>
-            </Checkbox>
-          ))}
+        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+          <div data-testid="patient-pool-confirmed">
+            <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+              已确认
+            </Typography.Text>
+            {confirmedPatientsInPool.length ? (
+              <Space wrap size={[8, 8]}>
+                {confirmedPatientsInPool.map((p) => (
+                  <PatientPoolCheckbox
+                    key={p.id}
+                    patient={p}
+                    checked={poolSelected.includes(p.id)}
+                    disabled
+                    statusSuffix={` · 已确认 · ${confirmedGroupNameByPatientId[p.id] ?? "—"}`}
+                    onChange={(checked) => handlePatientSelectionChange(p.id, checked)}
+                  />
+                ))}
+              </Space>
+            ) : (
+              <Typography.Text type="secondary">暂无</Typography.Text>
+            )}
+          </div>
+          <Divider style={{ margin: 0 }} />
+          <div data-testid="patient-pool-unconfirmed">
+            <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+              未确认
+            </Typography.Text>
+            {unconfirmedPatientsInPool.length ? (
+              <Space wrap size={[8, 8]}>
+                {unconfirmedPatientsInPool.map((p) => (
+                  <PatientPoolCheckbox
+                    key={p.id}
+                    patient={p}
+                    checked={poolSelected.includes(p.id)}
+                    disabled={readOnly}
+                    tagColor={localRandomizingPatientIds.has(p.id) ? "blue" : undefined}
+                    statusSuffix={localRandomizingPatientIds.has(p.id) ? " · 随机中" : ""}
+                    onChange={(checked) => handlePatientSelectionChange(p.id, checked)}
+                  />
+                ))}
+              </Space>
+            ) : (
+              <Typography.Text type="secondary">暂无</Typography.Text>
+            )}
+          </div>
         </Space>
       </Card>
 
