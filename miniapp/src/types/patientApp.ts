@@ -28,7 +28,7 @@ export type CurrentPrescription = null | {
     action_library_item: number
     action_name: string
     training_type: string
-    internal_type: string
+    internal_type: 'motion' | 'game' | 'video'
     action_type: string
     action_instruction: string
     video_url: string

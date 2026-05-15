@@ -61,9 +61,16 @@ export default function PrescriptionPage() {
           <View className='button-row'>
             <Button
               className='primary-button'
-              onClick={() => Taro.navigateTo({ url: `/pages/training/index?actionId=${action.id}` })}
+              onClick={() =>
+                Taro.navigateTo({
+                  url:
+                    action.internal_type === 'game'
+                      ? `/pages/game-session/index?actionId=${action.id}`
+                      : `/pages/training/index?actionId=${action.id}`
+                })
+              }
             >
-              开始训练
+              {action.internal_type === 'game' ? '开始游戏' : '开始训练'}
             </Button>
             <Button
               className='secondary-button'

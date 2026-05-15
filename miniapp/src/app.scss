@@ -135,3 +135,13 @@
   font-weight: 700;
   line-height: 1;
 }
+
+.game-session-page {
+  .paragraph {
+    display: block;
+    margin: 16px 0;
+    color: #394150;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+}
