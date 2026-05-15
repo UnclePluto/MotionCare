@@ -223,6 +223,21 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         project_patient,
         active_prescription,
         game_action,
+        training_date=today,
+        status=TrainingRecord.Status.PARTIAL,
+        duration=7,
+        score=Decimal("70.00"),
+        form_data={
+            "accuracy_rate": 70,
+            "error_count": 4,
+            "difficulty": "普通",
+        },
+        note="部分完成游戏",
+    )
+    _record(
+        project_patient,
+        active_prescription,
+        game_action,
         training_date=today - timezone.timedelta(days=10),
         duration=9,
         score=Decimal("80.00"),
@@ -262,9 +277,9 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         item["prescription_action"]: item for item in response.data["prescription_completion"]
     }
     assert completion_by_action[prescription_action.id]["completed_count"] == 2
-    assert completion_by_action[prescription_action.id]["completion_rate"] == 1.0
+    assert completion_by_action[prescription_action.id]["completion_rate"] == 100.0
     assert completion_by_action[game_action.id]["completed_count"] == 1
-    assert completion_by_action[game_action.id]["completion_rate"] == 0.5
+    assert completion_by_action[game_action.id]["completion_rate"] == 50.0
     assert completion_by_action[game_action.id]["internal_type"] == "game"
 
     trend = response.data["trend"]
@@ -273,8 +288,8 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
     assert trend["daily"][-1] == {
         "date": today.isoformat(),
         "completed_count": 3,
-        "duration_minutes": 43,
-        "game_average_score": 90.0,
+        "duration_minutes": 50,
+        "game_average_score": 80.0,
     }
     assert trend["moving_average"][-1]["date"] == today.isoformat()
     assert trend["moving_average"][-1]["completed_count_avg"] > 0
@@ -282,30 +297,39 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
     assert {"week_start", "week_end", "completed_count", "duration_minutes", "game_average_score"} <= set(
         trend["weekly"][0]
     )
+    this_week = next(
+        item
+        for item in trend["weekly"]
+        if item["week_start"]
+        <= today.isoformat()
+        <= item["week_end"]
+    )
+    assert this_week["completed_count"] == 3
+    assert this_week["duration_minutes"] == 50
+    assert this_week["game_average_score"] == 80.0
 
     game_summary = response.data["game_summary"]
-    assert game_summary["average_score"] == 85.0
-    assert game_summary["average_accuracy_rate"] == 86.0
-    assert game_summary["total_error_count"] == 5
+    assert game_summary["average_score"] == 80.0
+    assert game_summary["average_accuracy_rate"] == 80.67
+    assert game_summary["total_error_count"] == 9
     assert game_summary["by_game"] == [
         {
             "prescription_action": game_action.id,
             "action_name": "颜色记忆",
-            "record_count": 2,
-            "average_score": 85.0,
-            "average_accuracy_rate": 86.0,
+            "record_count": 3,
+            "average_score": 80.0,
+            "average_accuracy_rate": 80.67,
             "recent_record_at": today.isoformat(),
         }
     ]
 
     recent = response.data["recent_records"]
-    assert len(recent) == 4
-    latest_game = next(item for item in recent if item["prescription_action"] == game_action.id)
-    assert latest_game["score"] == 90.0
-    assert latest_game["game_accuracy_rate"] == 92.0
-    assert latest_game["game_error_count"] == 3
-    assert latest_game["game_difficulty"] == "简单"
-    assert latest_game["note"] == "游戏顺利"
+    assert len(recent) == 5
+    completed_game = next(item for item in recent if item["note"] == "游戏顺利")
+    assert completed_game["score"] == 90.0
+    assert completed_game["game_accuracy_rate"] == 92.0
+    assert completed_game["game_error_count"] == 3
+    assert completed_game["game_difficulty"] == "简单"
 
 
 @pytest.mark.django_db

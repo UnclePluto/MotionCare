@@ -202,7 +202,7 @@ def prescription_completion(project_patient: ProjectPatient, prescription: Presc
                 "action_type": action.action_type_snapshot,
                 "target_count": target_count,
                 "completed_count": completed_count,
-                "completion_rate": round(completed_count / target_count, 2)
+                "completion_rate": round(completed_count / target_count * 100, 2)
                 if target_count
                 else 0,
                 "recent_record_at": recent_dates[action.id].isoformat()
@@ -248,16 +248,15 @@ def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> d
     for record in records:
         if record.training_date not in buckets:
             continue
-        if record.status != TrainingRecord.Status.COMPLETED:
-            continue
         day_bucket = buckets[record.training_date]
         duration = record.actual_duration_minutes or 0
-        day_bucket["completed_count"] += 1
         day_bucket["duration_minutes"] += duration
         week_start = record.training_date - timezone.timedelta(days=record.training_date.weekday())
         weekly_bucket = weekly_buckets[week_start]
-        weekly_bucket["completed_count"] += 1
         weekly_bucket["duration_minutes"] += duration
+        if record.status == TrainingRecord.Status.COMPLETED:
+            day_bucket["completed_count"] += 1
+            weekly_bucket["completed_count"] += 1
         if (
             record.prescription_action.internal_type_snapshot == ActionLibraryItem.InternalType.GAME
             and record.score is not None
@@ -322,7 +321,6 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
             project_patient=project_patient,
             training_date__gte=start,
             training_date__lte=today,
-            status=TrainingRecord.Status.COMPLETED,
             prescription_action__internal_type_snapshot=ActionLibraryItem.InternalType.GAME,
         )
         .select_related("prescription_action")
