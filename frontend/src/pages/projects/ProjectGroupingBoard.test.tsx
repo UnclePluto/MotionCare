@@ -229,6 +229,31 @@ describe("ProjectGroupingBoard", () => {
     expect(within(inactiveGroup as HTMLElement).getByText("已确认")).toBeInTheDocument();
   });
 
+  it("未确认区域全选会勾选所有未确认患者", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <ProjectGroupingBoardHarness projectId={1} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("全量患者")).toBeInTheDocument());
+    const patientSelection = screen.getByText("全量患者").closest(".ant-card");
+    const unconfirmedSection = within(patientSelection as HTMLElement).getByTestId("patient-pool-unconfirmed");
+    fireEvent.click(within(unconfirmedSection).getByRole("button", { name: "全选" }));
+
+    expect(screen.getByLabelText(/选择患者 未入组甲/)).toBeChecked();
+    expect(screen.getByLabelText(/选择患者 未入组乙/)).toBeChecked();
+    expect(screen.getByLabelText(/选择患者 已确认丙/)).not.toBeChecked();
+
+    fireEvent.click(within(unconfirmedSection).getByRole("button", { name: "取消全选" }));
+    expect(screen.getByLabelText(/选择患者 未入组甲/)).not.toBeChecked();
+    expect(screen.getByLabelText(/选择患者 未入组乙/)).not.toBeChecked();
+    expect(within(unconfirmedSection).getByRole("button", { name: "全选" })).toBeInTheDocument();
+  });
+
   it("随机只生成本地临时结果，不调用后端 randomize", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(

@@ -273,6 +273,18 @@ export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props
     [confirmedPatientIds, patients],
   );
 
+  const unconfirmedPatientIds = useMemo(
+    () => unconfirmedPatientsInPool.map((p) => p.id),
+    [unconfirmedPatientsInPool],
+  );
+
+  const allUnconfirmedSelected = useMemo(
+    () =>
+      unconfirmedPatientIds.length > 0 &&
+      unconfirmedPatientIds.every((id) => poolSelected.includes(id)),
+    [poolSelected, unconfirmedPatientIds],
+  );
+
   const activeGroups = useMemo(
     () => [...(groups ?? []).filter((g) => g.is_active)].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
     [groups],
@@ -450,6 +462,21 @@ export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props
     }
   };
 
+  const handleSelectAllUnconfirmed = () => {
+    if (readOnly || !unconfirmedPatientIds.length) return;
+    if (allUnconfirmedSelected) {
+      setPoolSelected((prev) => prev.filter((id) => confirmedPatientIds.has(id)));
+      setLocalAssignments((prev) =>
+        prev.filter((assignment) => confirmedPatientIds.has(assignment.patientId)),
+      );
+      return;
+    }
+    setPoolSelected((prev) => {
+      const confirmedSelections = prev.filter((id) => confirmedPatientIds.has(id));
+      return [...confirmedSelections, ...unconfirmedPatientIds];
+    });
+  };
+
   const confirmCurrentDraft = useCallback(() => {
     if (readOnly) return;
     if (percentValidationError) {
@@ -491,12 +518,10 @@ export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props
     <Space direction="vertical" size="large" style={{ width: "100%" }}>
       <Card title={patients ? "全量患者" : "加载患者"} size="small">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <div data-testid="patient-pool-confirmed">
-            <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-              已确认
-            </Typography.Text>
+          <div data-testid="patient-pool-confirmed" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Typography.Text type="secondary">已确认</Typography.Text>
             {confirmedPatientsInPool.length ? (
-              <Space wrap size={[8, 8]}>
+              <Space wrap size={[8, 8]} style={{ width: "100%" }}>
                 {confirmedPatientsInPool.map((p) => (
                   <PatientPoolCheckbox
                     key={p.id}
@@ -513,12 +538,17 @@ export const ProjectGroupingBoard = forwardRef<ProjectGroupingBoardHandle, Props
             )}
           </div>
           <Divider style={{ margin: 0 }} />
-          <div data-testid="patient-pool-unconfirmed">
-            <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-              未确认
-            </Typography.Text>
+          <div data-testid="patient-pool-unconfirmed" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Space align="center" size={12}>
+              <Typography.Text type="secondary">未确认</Typography.Text>
+              {!readOnly && unconfirmedPatientsInPool.length ? (
+                <Button type="link" size="small" style={{ padding: 0, height: "auto" }} onClick={handleSelectAllUnconfirmed}>
+                  {allUnconfirmedSelected ? "取消全选" : "全选"}
+                </Button>
+              ) : null}
+            </Space>
             {unconfirmedPatientsInPool.length ? (
-              <Space wrap size={[8, 8]}>
+              <Space wrap size={[8, 8]} style={{ width: "100%" }}>
                 {unconfirmedPatientsInPool.map((p) => (
                   <PatientPoolCheckbox
                     key={p.id}
