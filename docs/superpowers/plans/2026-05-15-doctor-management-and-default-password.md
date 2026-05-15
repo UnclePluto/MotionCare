@@ -13,6 +13,7 @@
 执行记录（2026-05-15, codex）：Task 1 已落地于 commits 84d3b94、e5751e5、4d678c9、cd81293。
 执行记录（2026-05-15, codex）：Task 2 已落地于 commits 24ce13b、47f935f。
 执行记录（2026-05-15, codex）：Task 3 已落地于 commit b5ecaad。
+执行记录（2026-05-15, codex）：Task 4 已落地于 commits 61c896d、d34cfdf、5c87974。
 
 ## Scope Check
 
@@ -1031,7 +1032,7 @@ Expected: commit succeeds.
 - Create: `frontend/src/pages/account/AccountPage.tsx`
 - Create: `frontend/src/pages/account/AccountPage.test.tsx`
 
-- [ ] **Step 1: Add doctor utility tests**
+- [x] **Step 1: Add doctor utility tests**
 
 Create `frontend/src/pages/doctors/doctorUtils.test.ts`:
 
@@ -1055,7 +1056,7 @@ describe("doctorUtils", () => {
 });
 ```
 
-- [ ] **Step 2: Implement doctor utility files**
+- [x] **Step 2: Implement doctor utility files**
 
 Create `frontend/src/pages/doctors/types.ts`:
 
@@ -1104,7 +1105,7 @@ export function formatDoctorDateTime(value: string | null | undefined): string {
 }
 ```
 
-- [ ] **Step 3: Run utility tests**
+- [x] **Step 3: Run utility tests**
 
 Run:
 
@@ -1115,7 +1116,7 @@ npx vitest run src/pages/doctors/doctorUtils.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 4: Add failing page tests**
+- [x] **Step 4: Add failing page tests**
 
 Create `frontend/src/pages/doctors/DoctorListPage.test.tsx`:
 
@@ -1400,7 +1401,7 @@ describe("AccountPage", () => {
 });
 ```
 
-- [ ] **Step 5: Run page tests and verify they fail**
+- [x] **Step 5: Run page tests and verify they fail**
 
 Run:
 
@@ -1411,7 +1412,7 @@ npx vitest run src/pages/doctors/DoctorListPage.test.tsx src/pages/doctors/Docto
 
 Expected: FAIL because page components do not exist.
 
-- [ ] **Step 6: Create doctor list page**
+- [x] **Step 6: Create doctor list page**
 
 Create `frontend/src/pages/doctors/DoctorListPage.tsx`:
 
@@ -1463,7 +1464,7 @@ export function DoctorListPage() {
 }
 ```
 
-- [ ] **Step 7: Create doctor create page**
+- [x] **Step 7: Create doctor create page**
 
 Create `frontend/src/pages/doctors/DoctorCreatePage.tsx`:
 
@@ -1561,7 +1562,7 @@ export function DoctorCreatePage() {
 }
 ```
 
-- [ ] **Step 8: Create doctor edit page**
+- [x] **Step 8: Create doctor edit page**
 
 Create `frontend/src/pages/doctors/DoctorEditPage.tsx`:
 
@@ -1667,7 +1668,7 @@ export function DoctorEditPage() {
 }
 ```
 
-- [ ] **Step 9: Create account page**
+- [x] **Step 9: Create account page**
 
 Create `frontend/src/pages/account/AccountPage.tsx`:
 
@@ -1806,7 +1807,7 @@ export function AccountPage() {
 }
 ```
 
-- [ ] **Step 10: Wire layout and routes**
+- [x] **Step 10: Wire layout and routes**
 
 Modify `frontend/src/app/layout/AdminLayout.tsx`:
 
@@ -1880,7 +1881,7 @@ Add routes under `AdminLayout`:
               <Route path="/account" element={<AccountPage />} />
 ```
 
-- [ ] **Step 11: Update App test mock fields**
+- [x] **Step 11: Update App test mock fields**
 
 In `frontend/src/app/App.test.tsx`, every `/me/` mock user must include:
 
@@ -1896,7 +1897,7 @@ Add a smoke expectation to the existing authenticated app test:
 expect(await screen.findByText("医生管理")).toBeInTheDocument();
 ```
 
-- [ ] **Step 12: Run focused frontend page tests**
+- [x] **Step 12: Run focused frontend page tests**
 
 Run:
 
@@ -1907,7 +1908,7 @@ npx vitest run src/pages/doctors/doctorUtils.test.ts src/pages/doctors/DoctorLis
 
 Expected: PASS.
 
-- [ ] **Step 13: Commit Task 4**
+- [x] **Step 13: Commit Task 4**
 
 Run:
 
