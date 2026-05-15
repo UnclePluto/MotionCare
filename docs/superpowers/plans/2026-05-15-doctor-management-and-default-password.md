@@ -12,6 +12,7 @@
 
 执行记录（2026-05-15, codex）：Task 1 已落地于 commits 84d3b94、e5751e5、4d678c9、cd81293。
 执行记录（2026-05-15, codex）：Task 2 已落地于 commits 24ce13b、47f935f。
+执行记录（2026-05-15, codex）：Task 3 已落地于 commit b5ecaad。
 
 ## Scope Check
 
@@ -749,7 +750,7 @@ Expected: commit succeeds.
 - Create: `frontend/src/auth/ForcePasswordChangeModal.tsx`
 - Test: `frontend/src/auth/ForcePasswordChangeModal.test.tsx`
 
-- [ ] **Step 1: Add failing modal tests**
+- [x] **Step 1: Add failing modal tests**
 
 Create `frontend/src/auth/ForcePasswordChangeModal.test.tsx`:
 
@@ -820,7 +821,7 @@ describe("ForcePasswordChangeModal", () => {
 });
 ```
 
-- [ ] **Step 2: Run the modal test and verify it fails**
+- [x] **Step 2: Run the modal test and verify it fails**
 
 Run:
 
@@ -831,7 +832,7 @@ npx vitest run src/auth/ForcePasswordChangeModal.test.tsx
 
 Expected: FAIL because `ForcePasswordChangeModal` does not exist.
 
-- [ ] **Step 3: Extend `Me` and add `changePassword` to AuthContext**
+- [x] **Step 3: Extend `Me` and add `changePassword` to AuthContext**
 
 Modify `frontend/src/auth/AuthContext.tsx`:
 
@@ -876,7 +877,7 @@ Inside `AuthProvider`, add:
 
 Add `changePassword` to `value` and the `useMemo` dependency list.
 
-- [ ] **Step 4: Create the blocking password modal**
+- [x] **Step 4: Create the blocking password modal**
 
 Create `frontend/src/auth/ForcePasswordChangeModal.tsx`:
 
@@ -988,7 +989,7 @@ export function ForcePasswordChangeModal({
 }
 ```
 
-- [ ] **Step 5: Run the modal test and verify it passes**
+- [x] **Step 5: Run the modal test and verify it passes**
 
 Run:
 
@@ -999,7 +1000,7 @@ npx vitest run src/auth/ForcePasswordChangeModal.test.tsx
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 Run:
 
