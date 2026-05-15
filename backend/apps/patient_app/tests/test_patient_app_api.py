@@ -181,6 +181,38 @@ def test_patient_app_submits_game_result(
 
 
 @pytest.mark.django_db
+def test_patient_app_submits_game_result_with_blank_optional_metrics(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    game_action = _game_prescription_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-records/",
+        {
+            "prescription_action": game_action.id,
+            "training_date": str(timezone.localdate()),
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 8,
+            "form_data": {
+                "accuracy_rate": "",
+                "error_count": "",
+                "difficulty": "简单",
+            },
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    record = TrainingRecord.objects.get(pk=response.data["id"])
+    assert record.prescription_action == game_action
+    assert record.form_data["accuracy_rate"] == ""
+    assert record.form_data["error_count"] == ""
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "form_data,error_text",
     [
