@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
 from apps.health.models import DailyHealthRecord
 from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.training.game_results import validate_game_result_fields
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
@@ -204,10 +205,21 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
         serializer = PatientAppTrainingRecordCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        project_patient = self.project_patient()
         try:
             action = PrescriptionAction.objects.get(pk=data.pop("prescription_action"))
+            active_prescription = current_prescription_for(project_patient)
+            if active_prescription is None or action.prescription_id != active_prescription.id:
+                return Response(
+                    {"detail": "处方已更新，请返回当前处方重新进入"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            validate_game_result_fields(
+                action,
+                form_data=data.get("form_data"),
+            )
             record = create_training_record(
-                project_patient=self.project_patient(),
+                project_patient=project_patient,
                 prescription_action=action,
                 **data,
             )

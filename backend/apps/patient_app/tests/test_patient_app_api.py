@@ -4,6 +4,7 @@ from rest_framework.test import APIClient
 
 from apps.health.models import DailyHealthRecord
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
+from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.training.models import TrainingRecord
 
 
@@ -13,6 +14,17 @@ def _auth_client(project_patient, doctor):
     client = APIClient()
     client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
     return client
+
+
+def _game_prescription_action(active_prescription):
+    action = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    return active_prescription.add_action_snapshot(
+        action,
+        weekly_frequency="2 次/周",
+        weekly_target_count=2,
+        duration_minutes=10,
+        difficulty="简单",
+    )
 
 
 @pytest.mark.django_db
@@ -127,6 +139,119 @@ def test_training_record_api_allows_multiple_records_same_day(
     assert TrainingRecord.objects.filter(project_patient=project_patient).count() == 2
     assert first.data["prescription"] == active_prescription.id
     assert second.data["prescription_action"] == prescription_action.id
+
+
+@pytest.mark.django_db
+def test_patient_app_submits_game_result(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    game_action = _game_prescription_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-records/",
+        {
+            "prescription_action": game_action.id,
+            "training_date": str(timezone.localdate()),
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 8,
+            "score": "86.50",
+            "form_data": {
+                "accuracy_rate": 92,
+                "error_count": 3,
+                "difficulty": "简单",
+                "raw_detail": {"rounds": 6, "max_sequence": 5},
+            },
+            "note": "完成顺利",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    record = TrainingRecord.objects.get(pk=response.data["id"])
+    assert record.prescription == active_prescription
+    assert record.prescription_action == game_action
+    assert str(record.score) == "86.50"
+    assert record.form_data["accuracy_rate"] == 92
+    assert record.form_data["error_count"] == 3
+    assert record.form_data["difficulty"] == "简单"
+    assert record.form_data["raw_detail"]["max_sequence"] == 5
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "form_data,error_text",
+    [
+        ([], "游戏结果明细必须是对象"),
+        ({"accuracy_rate": 101}, "正确率必须在 0 到 100 之间"),
+        ({"accuracy_rate": -1}, "正确率必须在 0 到 100 之间"),
+        ({"error_count": -1}, "错误次数必须是非负整数"),
+        ({"error_count": "很多"}, "错误次数必须是非负整数"),
+    ],
+)
+def test_patient_app_rejects_invalid_game_result_metrics(
+    project_patient,
+    doctor,
+    active_prescription,
+    form_data,
+    error_text,
+):
+    game_action = _game_prescription_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-records/",
+        {
+            "prescription_action": game_action.id,
+            "training_date": str(timezone.localdate()),
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 8,
+            "form_data": form_data,
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert error_text in str(response.data)
+    assert not TrainingRecord.objects.filter(prescription_action=game_action).exists()
+
+
+@pytest.mark.django_db
+def test_patient_app_rejects_stale_game_prescription_action(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    old_game_action = _game_prescription_action(active_prescription)
+    active_prescription.status = Prescription.Status.ARCHIVED
+    active_prescription.archived_at = timezone.now()
+    active_prescription.save(update_fields=["status", "archived_at", "updated_at"])
+    Prescription.objects.create(
+        project_patient=project_patient,
+        version=2,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-records/",
+        {
+            "prescription_action": old_game_action.id,
+            "training_date": str(timezone.localdate()),
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 8,
+            "form_data": {"accuracy_rate": 90, "error_count": 1},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert response.data["detail"] == "处方已更新，请返回当前处方重新进入"
+    assert not TrainingRecord.objects.filter(prescription_action=old_game_action).exists()
 
 
 @pytest.mark.django_db
