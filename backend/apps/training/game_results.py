@@ -32,3 +32,7 @@ def validate_game_result_fields(
     difficulty = form_data.get("difficulty")
     if difficulty is not None and not isinstance(difficulty, str):
         raise ValidationError("游戏难度必须是文本")
+
+    raw_detail = form_data.get("raw_detail")
+    if raw_detail not in (None, "") and not isinstance(raw_detail, dict):
+        raise ValidationError("游戏原始明细必须是对象")

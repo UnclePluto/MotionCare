@@ -221,6 +221,8 @@ def test_patient_app_submits_game_result_with_blank_optional_metrics(
         ({"accuracy_rate": -1}, "正确率必须在 0 到 100 之间"),
         ({"error_count": -1}, "错误次数必须是非负整数"),
         ({"error_count": "很多"}, "错误次数必须是非负整数"),
+        ({"raw_detail": []}, "游戏原始明细必须是对象"),
+        ({"raw_detail": "bad"}, "游戏原始明细必须是对象"),
     ],
 )
 def test_patient_app_rejects_invalid_game_result_metrics(
