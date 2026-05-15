@@ -6,6 +6,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { isValidMainlandPhone } from "./doctorUtils";
+import { backendErrorsToMessage, extractBackendFieldErrors, fieldErrorsToFormFields } from "./formErrorUtils";
 import type { Doctor, DoctorFormValues } from "./types";
 
 function backendDetail(err: unknown): string | null {
@@ -23,6 +24,7 @@ function backendDetail(err: unknown): string | null {
 export function DoctorEditPage() {
   const { doctorId } = useParams();
   const id = Number(doctorId);
+  const doctorQueryKey = ["doctor", String(id)];
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [form] = Form.useForm<DoctorFormValues>();
@@ -33,7 +35,7 @@ export function DoctorEditPage() {
     isError,
     error,
   } = useQuery({
-    queryKey: ["doctor", doctorId ?? ""],
+    queryKey: doctorQueryKey,
     queryFn: async () => {
       const r = await apiClient.get<Doctor>(`/accounts/users/${id}/`);
       return r.data;
@@ -57,10 +59,18 @@ export function DoctorEditPage() {
     onSuccess: async () => {
       message.success("医生资料已保存");
       await qc.invalidateQueries({ queryKey: ["doctors"] });
-      await qc.invalidateQueries({ queryKey: ["doctor", String(id)] });
+      await qc.invalidateQueries({ queryKey: doctorQueryKey });
       navigate("/doctors");
     },
-    onError: (err) => message.error(backendDetail(err) || "保存失败"),
+    onError: (err) => {
+      const errors = extractBackendFieldErrors(err);
+      const fields = fieldErrorsToFormFields(errors, ["phone"]);
+      if (fields.length) {
+        form.setFields(fields);
+        return;
+      }
+      message.error(backendErrorsToMessage(errors) || "保存失败");
+    },
   });
 
   if (!Number.isSafeInteger(id) || id <= 0) return <Alert type="error" message="无效的医生 ID" />;

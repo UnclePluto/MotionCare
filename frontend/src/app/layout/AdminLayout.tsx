@@ -21,6 +21,7 @@ export function AdminLayout() {
   const location = useLocation();
   const { me, logout, refetchSession } = useAuth();
   const selectedKey = `/${location.pathname.split("/").filter(Boolean)[0] ?? "patients"}`;
+  const mustChangePassword = me?.must_change_password === true;
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -63,9 +64,9 @@ export function AdminLayout() {
           </Space>
         </Header>
         <Content style={{ padding: 24 }}>
-          <Outlet />
+          {!mustChangePassword && <Outlet />}
           <ForcePasswordChangeModal
-            open={me?.must_change_password === true}
+            open={mustChangePassword}
             onChanged={() => void refetchSession()}
             onLogout={() => void logout()}
           />

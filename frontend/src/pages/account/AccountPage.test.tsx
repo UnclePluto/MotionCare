@@ -90,4 +90,18 @@ describe("AccountPage", () => {
       expect(mockRefetchSession).toHaveBeenCalled();
     });
   });
+
+  it("shows backend password errors on the matching password field", async () => {
+    mockPost.mockRejectedValueOnce({
+      response: { data: { old_password: ["原密码错误"] } },
+    });
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("原密码"), { target: { value: "oldpass123456" } });
+    fireEvent.change(screen.getByLabelText("新密码"), { target: { value: "newpass123456" } });
+    fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "newpass123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "修改密码" }));
+
+    expect(await screen.findByText("原密码错误")).toBeInTheDocument();
+  });
 });

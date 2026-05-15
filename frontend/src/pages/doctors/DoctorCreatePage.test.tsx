@@ -63,4 +63,17 @@ describe("DoctorCreatePage", () => {
       expect(mockNavigate).toHaveBeenCalledWith("/doctors");
     });
   });
+
+  it("shows backend phone errors on the phone field", async () => {
+    mockPost.mockRejectedValueOnce({
+      response: { data: { phone: ["该手机号已存在"] } },
+    });
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText("姓名"), { target: { value: "新医生" } });
+    fireEvent.change(screen.getByLabelText("手机号"), { target: { value: "13812345678" } });
+    fireEvent.click(screen.getByRole("button", { name: /创\s*建/ }));
+
+    expect(await screen.findByText("该手机号已存在")).toBeInTheDocument();
+  });
 });

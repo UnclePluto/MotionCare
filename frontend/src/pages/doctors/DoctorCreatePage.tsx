@@ -1,23 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Form, Input, Radio, Space, message } from "antd";
-import { isAxiosError } from "axios";
 import { useNavigate } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { isValidMainlandPhone } from "./doctorUtils";
+import { backendErrorsToMessage, extractBackendFieldErrors, fieldErrorsToFormFields } from "./formErrorUtils";
 import type { DoctorFormValues } from "./types";
-
-function backendDetail(err: unknown): string | null {
-  if (!isAxiosError(err)) return null;
-  const data = err.response?.data;
-  if (!data || typeof data !== "object") return null;
-  const parts = Object.entries(data as Record<string, unknown>).map(([key, value]) => {
-    if (Array.isArray(value)) return `${key}: ${value.map(String).join(", ")}`;
-    if (typeof value === "string") return `${key}: ${value}`;
-    return `${key}: ${JSON.stringify(value)}`;
-  });
-  return parts.length ? parts.join("；") : null;
-}
 
 export function DoctorCreatePage() {
   const navigate = useNavigate();
@@ -38,7 +26,15 @@ export function DoctorCreatePage() {
       await qc.invalidateQueries({ queryKey: ["doctors"] });
       navigate("/doctors");
     },
-    onError: (err) => message.error(backendDetail(err) ?? "创建失败"),
+    onError: (err) => {
+      const errors = extractBackendFieldErrors(err);
+      const fields = fieldErrorsToFormFields(errors, ["phone"]);
+      if (fields.length) {
+        form.setFields(fields);
+        return;
+      }
+      message.error(backendErrorsToMessage(errors) ?? "创建失败");
+    },
   });
 
   return (

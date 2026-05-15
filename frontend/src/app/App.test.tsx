@@ -315,6 +315,42 @@ describe("App", () => {
     });
   });
 
+  it("does not mount business routes while default password must be changed", async () => {
+    window.history.pushState({}, "", "/patients");
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/me/") {
+        return Promise.resolve({
+          data: {
+            id: 1,
+            phone: "13800000000",
+            name: "测试医生",
+            gender: "male",
+            role: "doctor",
+            roles: ["doctor"],
+            permissions: ["patient.read", "user.manage"],
+            must_change_password: true,
+          },
+        });
+      }
+      if (url === "/patients/") return Promise.resolve({ data: [] });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("请先修改默认密码")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(mockGet.mock.calls.some(([url]) => url === "/patients/")).toBe(false);
+  });
+
   it("navigates to patient detail when clicking a list row", async () => {
     window.history.pushState({}, "", "/patients");
     const queryClient = new QueryClient({

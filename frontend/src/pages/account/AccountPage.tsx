@@ -1,11 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
 import { Alert, Button, Card, Divider, Form, Input, Radio, Space, message } from "antd";
-import { isAxiosError } from "axios";
 import { useEffect } from "react";
 
 import { apiClient } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import { isValidMainlandPhone } from "../doctors/doctorUtils";
+import { backendErrorsToMessage, extractBackendFieldErrors, fieldErrorsToFormFields } from "../doctors/formErrorUtils";
 import type { DoctorFormValues } from "../doctors/types";
 
 type PasswordValues = {
@@ -13,15 +13,6 @@ type PasswordValues = {
   new_password: string;
   confirm_password: string;
 };
-
-function backendDetail(err: unknown): string | null {
-  if (!isAxiosError(err)) return null;
-  const data = err.response?.data;
-  if (!data || typeof data !== "object") return null;
-  return Object.entries(data as Record<string, unknown>)
-    .map(([key, value]) => (Array.isArray(value) ? `${key}: ${value.map(String).join(", ")}` : `${key}: ${String(value)}`))
-    .join("；");
-}
 
 export function AccountPage() {
   const { me, refetchSession } = useAuth();
@@ -46,7 +37,15 @@ export function AccountPage() {
       message.success("账号资料已保存");
       await refetchSession();
     },
-    onError: (err) => message.error(backendDetail(err) || "保存失败"),
+    onError: (err) => {
+      const errors = extractBackendFieldErrors(err);
+      const fields = fieldErrorsToFormFields(errors, ["phone"]);
+      if (fields.length) {
+        profileForm.setFields(fields);
+        return;
+      }
+      message.error(backendErrorsToMessage(errors) || "保存失败");
+    },
   });
 
   const passwordMutation = useMutation({
@@ -58,7 +57,15 @@ export function AccountPage() {
       passwordForm.resetFields();
       await refetchSession();
     },
-    onError: (err) => message.error(backendDetail(err) || "修改密码失败"),
+    onError: (err) => {
+      const errors = extractBackendFieldErrors(err);
+      const fields = fieldErrorsToFormFields(errors, ["old_password", "new_password", "confirm_password"]);
+      if (fields.length) {
+        passwordForm.setFields(fields);
+        return;
+      }
+      message.error(backendErrorsToMessage(errors) || "修改密码失败");
+    },
   });
 
   if (!me) return <Alert type="error" message="无法读取当前账号" />;
