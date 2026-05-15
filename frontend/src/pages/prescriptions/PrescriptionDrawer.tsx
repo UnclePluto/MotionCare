@@ -75,6 +75,16 @@ function renderDuration(action: ActionLibraryItem) {
   return action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "—";
 }
 
+function internalTypeLabel(type: ActionLibraryItem["internal_type"]) {
+  if (type === "game") return "认知游戏";
+  if (type === "motion") return "运动训练";
+  return "视频训练";
+}
+
+function groupKeyForAction(action: ActionLibraryItem) {
+  return `${action.internal_type}:${action.action_type}`;
+}
+
 export function PrescriptionDrawer({
   open,
   actions,
@@ -116,11 +126,17 @@ export function PrescriptionDrawer({
   const groupedActions = useMemo(() => {
     const groups = new Map<string, ActionLibraryItem[]>();
     for (const action of actions) {
-      const group = groups.get(action.action_type) ?? [];
+      const key = groupKeyForAction(action);
+      const group = groups.get(key) ?? [];
       group.push(action);
-      groups.set(action.action_type, group);
+      groups.set(key, group);
     }
-    return [...groups.entries()];
+    return [...groups.entries()].map(([key, groupActions]) => ({
+      key,
+      internalType: groupActions[0].internal_type,
+      actionType: groupActions[0].action_type,
+      actions: groupActions,
+    }));
   }, [actions]);
 
   useEffect(() => {
@@ -184,21 +200,23 @@ export function PrescriptionDrawer({
           <Checkbox.Group style={{ width: "100%" }}>
             <Collapse
               size="small"
-              defaultActiveKey={groupedActions.map(([actionType]) => actionType)}
-              items={groupedActions.map(([actionType, groupActions]) => ({
-                key: actionType,
+              defaultActiveKey={groupedActions.map((group) => group.key)}
+              items={groupedActions.map((group) => ({
+                key: group.key,
                 label: (
                   <Space>
-                    <span>{actionType}</span>
-                    <Tag>{groupActions.length} 个动作</Tag>
+                    <span>{internalTypeLabel(group.internalType)}</span>
+                    <Tag>{group.actionType}</Tag>
+                    <Tag>{group.actions.length} 个动作</Tag>
                   </Space>
                 ),
                 children: (
                   <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                    {groupActions.map((action) => (
+                    {group.actions.map((action) => (
                       <Checkbox key={action.id} value={action.id} aria-label={action.name} disabled={!action.is_active}>
                         <Space wrap size={8}>
                           <span>{action.name}</span>
+                          <Tag>{action.training_type}</Tag>
                           <Tag>{weeklyFrequencyLabel(action.suggested_frequency)}</Tag>
                           <Tag>{renderDuration(action)}</Tag>
                         </Space>

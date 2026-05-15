@@ -78,11 +78,9 @@ export function PrescriptionPanel({ projectPatientId }: Props) {
   });
 
   const actionsQuery = useQuery({
-    queryKey: ["motion-actions"],
+    queryKey: ["action-library"],
     queryFn: async () => {
-      const response = await apiClient.get<ActionLibraryItem[]>("/prescriptions/actions/", {
-        params: { training_type: "运动训练", internal_type: "motion" },
-      });
+      const response = await apiClient.get<ActionLibraryItem[]>("/prescriptions/actions/");
       return response.data;
     },
   });

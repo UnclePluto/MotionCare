@@ -1,9 +1,11 @@
+export type ActionInternalType = "video" | "game" | "motion";
+
 export type ActionLibraryItem = {
   id: number;
   source_key: string | null;
   name: string;
   training_type: string;
-  internal_type: "video" | "game" | "motion";
+  internal_type: ActionInternalType;
   action_type: string;
   instruction_text: string;
   suggested_frequency: string;
@@ -20,7 +22,7 @@ export type PrescriptionAction = {
   action_library_item: number;
   action_name_snapshot: string;
   training_type_snapshot: string;
-  internal_type_snapshot: string;
+  internal_type_snapshot: ActionInternalType;
   action_type_snapshot: string;
   action_instruction_snapshot: string;
   video_url_snapshot: string;

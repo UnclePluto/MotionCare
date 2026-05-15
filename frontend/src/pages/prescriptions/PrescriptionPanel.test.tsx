@@ -76,6 +76,22 @@ const legKickbackAction = {
   is_active: true,
 };
 
+const gameAction = {
+  id: 201,
+  source_key: "game-memory-color-sequence",
+  name: "颜色顺序记忆",
+  training_type: "认知训练",
+  internal_type: "game",
+  action_type: "记忆力训练",
+  instruction_text: "按顺序点击变色方块\n\n实现成本：可实现\n资源难度：低",
+  suggested_frequency: "1 次/周",
+  suggested_duration_minutes: 10,
+  default_difficulty: "",
+  video_url: "",
+  has_ai_supervision: false,
+  is_active: true,
+};
+
 const activePrescription = {
   id: 1,
   project_patient: 9001,
@@ -130,12 +146,11 @@ describe("PrescriptionPanel", () => {
     mockGet.mockReset();
     mockPost.mockReset();
     mockGet.mockImplementation((url: string, config?: unknown) => {
-      const params =
-        typeof config === "object" && config ? (config as { params?: Record<string, unknown> }).params : {};
       if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
-      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction] });
+      if (url === "/prescriptions/actions/") {
+        expect(config).toBeUndefined();
+        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction, gameAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -188,6 +203,38 @@ describe("PrescriptionPanel", () => {
               duration_minutes: 20,
             }),
           ],
+        }),
+      );
+    });
+  });
+
+  it("creates mixed motion and game prescription actions", async () => {
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
+    fireEvent.click(await screen.findByLabelText("椰林步道模拟（原地高抬腿+摆臂）"));
+    fireEvent.click(await screen.findByLabelText("颜色顺序记忆"));
+    expect(await screen.findByText("认知游戏")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        "/studies/project-patients/9001/prescriptions/activate-now/",
+        expect.objectContaining({
+          expected_active_version: null,
+          actions: expect.arrayContaining([
+            expect.objectContaining({
+              action_library_item: 101,
+              weekly_target_count: 3,
+              duration_minutes: 20,
+            }),
+            expect.objectContaining({
+              action_library_item: 201,
+              weekly_frequency: "1 次/周",
+              weekly_target_count: 1,
+              duration_minutes: 10,
+            }),
+          ]),
         }),
       );
     });
@@ -285,11 +332,10 @@ describe("PrescriptionPanel", () => {
 
   it("does not submit when selected prescription actions cannot be mapped to action library", async () => {
     mockGet.mockImplementation((url: string, config?: unknown) => {
-      const params =
-        typeof config === "object" && config ? (config as { params?: Record<string, unknown> }).params : {};
       if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
       if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
-      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
+      if (url === "/prescriptions/actions/") {
+        expect(config).toBeUndefined();
         return Promise.resolve({ data: [] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
@@ -308,12 +354,11 @@ describe("PrescriptionPanel", () => {
 
   it("uses current structured weekly target count when adjusting prescription", async () => {
     mockGet.mockImplementation((url: string, config?: unknown) => {
-      const params =
-        typeof config === "object" && config ? (config as { params?: Record<string, unknown> }).params : {};
       if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
       if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
-      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction] });
+      if (url === "/prescriptions/actions/") {
+        expect(config).toBeUndefined();
+        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction, gameAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -343,12 +388,11 @@ describe("PrescriptionPanel", () => {
 
   it("terminates active prescription after confirmation", async () => {
     mockGet.mockImplementation((url: string, config?: unknown) => {
-      const params =
-        typeof config === "object" && config ? (config as { params?: Record<string, unknown> }).params : {};
       if (url === "/prescriptions/current/") return Promise.resolve({ data: activePrescription });
       if (url === "/prescriptions/") return Promise.resolve({ data: [activePrescription] });
-      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction] });
+      if (url === "/prescriptions/actions/") {
+        expect(config).toBeUndefined();
+        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction, gameAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -373,8 +417,9 @@ describe("PrescriptionPanel", () => {
         expect(params?.include_terminated).toBe("true");
         return Promise.resolve({ data: [activePrescription, archivedPrescription] });
       }
-      if (url === "/prescriptions/actions/" && params?.training_type === "运动训练") {
-        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction] });
+      if (url === "/prescriptions/actions/") {
+        expect(config).toBeUndefined();
+        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction, gameAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });

@@ -7,6 +7,12 @@ type Props = {
   actions: ActionLibraryItem[];
 };
 
+function internalTypeLabel(type: ActionLibraryItem["internal_type"]) {
+  if (type === "game") return "认知游戏";
+  if (type === "motion") return "运动训练";
+  return "视频训练";
+}
+
 export function FixedActionLibraryTab({ actions }: Props) {
   if (actions.length === 0) {
     return <Empty description="暂无固定动作" />;
@@ -21,12 +27,14 @@ export function FixedActionLibraryTab({ actions }: Props) {
           <Card size="small" title={action.name}>
             <Space direction="vertical" size={8} style={{ width: "100%" }}>
               <Space wrap size={[8, 8]}>
+                <Tag>{action.training_type}</Tag>
+                <Tag>{internalTypeLabel(action.internal_type)}</Tag>
                 <Tag>{action.action_type}</Tag>
                 <Tag>{weeklyFrequencyLabel(action.suggested_frequency)}</Tag>
                 <Tag>
                   {action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "未配置时长"}
                 </Tag>
-                <Badge status={action.video_url ? "success" : "default"} text={action.video_url ? "已配置视频" : "视频待配置"} />
+                <Badge status={action.video_url ? "success" : "default"} text={action.video_url ? "已配置视频" : "无视频资源"} />
                 {action.has_ai_supervision ? <Tag color="blue">支持 AI 监督</Tag> : <Tag>无 AI 监督</Tag>}
               </Space>
               <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>
