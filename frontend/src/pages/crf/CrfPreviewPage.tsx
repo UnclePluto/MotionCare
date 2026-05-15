@@ -56,7 +56,7 @@ export function CrfPreviewPage() {
     () =>
       (ppOptions ?? []).map((p) => ({
         value: p.id,
-        label: `${p.patient_name}（${p.patient_phone}）· #${p.id}`,
+        label: `${p.patient_name}（${p.patient_phone}）`,
       })),
     [ppOptions],
   );
