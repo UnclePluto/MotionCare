@@ -10,6 +10,8 @@
 
 ---
 
+执行记录（2026-05-15, codex）：游戏处方与训练追踪已落地，验证通过。实施 commit：38839e0, e7c4fcd, 55142b7, 17c18e8, 86b988e, 266150d, 321eb00, 3ef50a5, a8fd307, 2f28a9b, 1de66ea, a59d8eb, e440773, 65ff3d3
+
 ## Execution Notes
 
 - 当前工作区已有用户确认保留的未提交改动：`.gitignore`、`scripts/start_backend.sh`。执行本计划时不要回退、覆盖或顺手格式化这些文件。
@@ -86,7 +88,7 @@
 - Create: `backend/apps/prescriptions/tests/test_game_action_library.py`
 - Create: `backend/apps/prescriptions/migrations/0010_seed_game_actions.py`
 
-- [ ] **Step 1: 写游戏动作库失败测试**
+- [x] **Step 1: 写游戏动作库失败测试**
 
 Create `backend/apps/prescriptions/tests/test_game_action_library.py`:
 
@@ -176,7 +178,7 @@ def test_game_action_snapshot_keeps_prescription_fields(project_patient, doctor)
     assert snapshot.notes == "从简单难度开始"
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -186,7 +188,7 @@ cd backend && pytest apps/prescriptions/tests/test_game_action_library.py -q
 
 Expected: FAIL，原因是 6 个游戏动作尚未 seed。
 
-- [ ] **Step 3: 新增游戏动作 seed migration**
+- [x] **Step 3: 新增游戏动作 seed migration**
 
 Create `backend/apps/prescriptions/migrations/0010_seed_game_actions.py`:
 
@@ -291,7 +293,7 @@ class Migration(migrations.Migration):
     ]
 ```
 
-- [ ] **Step 4: 运行游戏动作库测试**
+- [x] **Step 4: 运行游戏动作库测试**
 
 Run:
 
@@ -301,7 +303,7 @@ cd backend && pytest apps/prescriptions/tests/test_game_action_library.py -q
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交游戏动作库 seed**
+- [x] **Step 5: 提交游戏动作库 seed**
 
 ```bash
 git add backend/apps/prescriptions/migrations/0010_seed_game_actions.py backend/apps/prescriptions/tests/test_game_action_library.py
@@ -317,7 +319,7 @@ git commit -m "feat(prescriptions): 预置认知游戏动作库"
 - Create: `backend/apps/training/game_results.py`
 - Modify: `backend/apps/patient_app/views.py`
 
-- [ ] **Step 1: 写患者端游戏结果回传失败测试**
+- [x] **Step 1: 写患者端游戏结果回传失败测试**
 
 Append to `backend/apps/patient_app/tests/test_patient_app_api.py`:
 
@@ -449,7 +451,7 @@ def test_patient_app_rejects_stale_game_prescription_action(
     assert not TrainingRecord.objects.filter(prescription_action=old_game_action).exists()
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run:
 
@@ -459,7 +461,7 @@ cd backend && pytest apps/patient_app/tests/test_patient_app_api.py -q
 
 Expected: FAIL，原因是游戏指标校验和旧处方动作提示尚未实现。
 
-- [ ] **Step 3: 创建游戏结果校验工具**
+- [x] **Step 3: 创建游戏结果校验工具**
 
 Create `backend/apps/training/game_results.py`:
 
@@ -500,7 +502,7 @@ def validate_game_result_fields(
         raise ValidationError("游戏难度必须是文本")
 ```
 
-- [ ] **Step 4: 在患者端训练提交视图中调用校验**
+- [x] **Step 4: 在患者端训练提交视图中调用校验**
 
 Modify `backend/apps/patient_app/views.py`:
 
@@ -542,7 +544,7 @@ Replace `PatientAppTrainingRecordView.post()` body after `data = serializer.vali
             )
 ```
 
-- [ ] **Step 5: 运行患者端 API 测试**
+- [x] **Step 5: 运行患者端 API 测试**
 
 Run:
 
@@ -552,7 +554,7 @@ cd backend && pytest apps/patient_app/tests/test_patient_app_api.py -q
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交游戏结果回传校验**
+- [x] **Step 6: 提交游戏结果回传校验**
 
 ```bash
 git add backend/apps/training/game_results.py backend/apps/patient_app/views.py backend/apps/patient_app/tests/test_patient_app_api.py
@@ -569,7 +571,7 @@ git commit -m "feat(training): 支持患者端游戏结果回传校验"
 - Create: `backend/apps/training/tracking_views.py`
 - Modify: `backend/apps/training/urls.py`
 
-- [ ] **Step 1: 写训练追踪 API 失败测试**
+- [x] **Step 1: 写训练追踪 API 失败测试**
 
 Create `backend/apps/training/tests/test_tracking_api.py`:
 
@@ -806,7 +808,7 @@ def test_tracking_patient_search_hides_inaccessible_patient(doctor):
     assert response.data == []
 ```
 
-- [ ] **Step 2: 运行训练追踪测试确认失败**
+- [x] **Step 2: 运行训练追踪测试确认失败**
 
 Run:
 
@@ -816,7 +818,7 @@ cd backend && pytest apps/training/tests/test_tracking_api.py -q
 
 Expected: FAIL，原因是 tracking API 尚未存在。
 
-- [ ] **Step 3: 创建训练追踪聚合服务**
+- [x] **Step 3: 创建训练追踪聚合服务**
 
 Create `backend/apps/training/tracking.py`:
 
@@ -1254,7 +1256,7 @@ def patient_tracking_detail(user: User, patient_id: int, project_patient_id=None
     }
 ```
 
-- [ ] **Step 4: 创建训练追踪 API 视图**
+- [x] **Step 4: 创建训练追踪 API 视图**
 
 Create `backend/apps/training/tracking_views.py`:
 
@@ -1299,7 +1301,7 @@ class TrackingPatientDetailView(APIView):
         return Response(data)
 ```
 
-- [ ] **Step 5: 挂载训练追踪 URL**
+- [x] **Step 5: 挂载训练追踪 URL**
 
 Modify `backend/apps/training/urls.py`:
 
@@ -1323,7 +1325,7 @@ urlpatterns = [
 ] + router.urls
 ```
 
-- [ ] **Step 6: 运行训练追踪 API 测试**
+- [x] **Step 6: 运行训练追踪 API 测试**
 
 Run:
 
@@ -1333,7 +1335,7 @@ cd backend && pytest apps/training/tests/test_tracking_api.py -q
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交训练追踪后端 API**
+- [x] **Step 7: 提交训练追踪后端 API**
 
 ```bash
 git add backend/apps/training/tracking.py backend/apps/training/tracking_views.py backend/apps/training/urls.py backend/apps/training/tests/test_tracking_api.py
@@ -1351,7 +1353,7 @@ git commit -m "feat(training): 新增患者训练追踪聚合接口"
 - Modify: `frontend/src/pages/prescriptions/FixedActionLibraryTab.tsx`
 - Modify: `frontend/src/pages/prescriptions/PrescriptionPanel.test.tsx`
 
-- [ ] **Step 1: 写混合处方前端失败测试**
+- [x] **Step 1: 写混合处方前端失败测试**
 
 Modify `frontend/src/pages/prescriptions/PrescriptionPanel.test.tsx`:
 
@@ -1419,7 +1421,7 @@ Append this test:
   });
 ```
 
-- [ ] **Step 2: 运行处方面板测试确认失败**
+- [x] **Step 2: 运行处方面板测试确认失败**
 
 Run:
 
@@ -1429,7 +1431,7 @@ cd frontend && npm run test -- src/pages/prescriptions/PrescriptionPanel.test.ts
 
 Expected: FAIL，原因是处方面板目前只加载 `training_type=运动训练&internal_type=motion`。
 
-- [ ] **Step 3: 更新处方类型**
+- [x] **Step 3: 更新处方类型**
 
 Modify `frontend/src/pages/prescriptions/types.ts`:
 
@@ -1459,7 +1461,7 @@ Keep the rest of the file as-is, but update `PrescriptionAction.internal_type_sn
   internal_type_snapshot: ActionInternalType;
 ```
 
-- [ ] **Step 4: 加载全部动作库**
+- [x] **Step 4: 加载全部动作库**
 
 Modify the `actionsQuery` in `frontend/src/pages/prescriptions/PrescriptionPanel.tsx`:
 
@@ -1473,7 +1475,7 @@ Modify the `actionsQuery` in `frontend/src/pages/prescriptions/PrescriptionPanel
   });
 ```
 
-- [ ] **Step 5: 按内部类型分组动作抽屉**
+- [x] **Step 5: 按内部类型分组动作抽屉**
 
 Modify `frontend/src/pages/prescriptions/PrescriptionDrawer.tsx`:
 
@@ -1540,7 +1542,7 @@ Replace the `Collapse` `items` mapping with:
               }))}
 ```
 
-- [ ] **Step 6: 固定动作库展示训练类型**
+- [x] **Step 6: 固定动作库展示训练类型**
 
 Modify the tag area in `frontend/src/pages/prescriptions/FixedActionLibraryTab.tsx`:
 
@@ -1558,7 +1560,7 @@ Modify the tag area in `frontend/src/pages/prescriptions/FixedActionLibraryTab.t
               </Space>
 ```
 
-- [ ] **Step 7: 运行处方前端测试**
+- [x] **Step 7: 运行处方前端测试**
 
 Run:
 
@@ -1568,7 +1570,7 @@ cd frontend && npm run test -- src/pages/prescriptions/PrescriptionPanel.test.ts
 
 Expected: PASS。
 
-- [ ] **Step 8: 提交混合处方 UI**
+- [x] **Step 8: 提交混合处方 UI**
 
 ```bash
 git add frontend/src/pages/prescriptions
@@ -1586,7 +1588,7 @@ git commit -m "feat(frontend): 处方管理支持认知游戏动作"
 - Create: `miniapp/src/pages/game-session/index.tsx`
 - Modify: `miniapp/src/app.scss`
 
-- [ ] **Step 1: 新增小程序游戏页面路由**
+- [x] **Step 1: 新增小程序游戏页面路由**
 
 Modify `miniapp/src/app.config.ts`:
 
@@ -1610,7 +1612,7 @@ export default defineAppConfig({
 })
 ```
 
-- [ ] **Step 2: 更新患者端处方动作类型**
+- [x] **Step 2: 更新患者端处方动作类型**
 
 Modify action item type in `miniapp/src/types/patientApp.ts`:
 
@@ -1620,7 +1622,7 @@ Modify action item type in `miniapp/src/types/patientApp.ts`:
 
 Keep other fields unchanged.
 
-- [ ] **Step 3: 当前处方页增加游戏入口**
+- [x] **Step 3: 当前处方页增加游戏入口**
 
 Modify the button row in `miniapp/src/pages/prescription/index.tsx`:
 
@@ -1648,7 +1650,7 @@ Modify the button row in `miniapp/src/pages/prescription/index.tsx`:
           </View>
 ```
 
-- [ ] **Step 4: 创建游戏占位页**
+- [x] **Step 4: 创建游戏占位页**
 
 Create `miniapp/src/pages/game-session/index.tsx`:
 
@@ -1793,7 +1795,7 @@ export default function GameSessionPage() {
 }
 ```
 
-- [ ] **Step 5: 补充游戏页面样式**
+- [x] **Step 5: 补充游戏页面样式**
 
 Append to `miniapp/src/app.scss`:
 
@@ -1809,7 +1811,7 @@ Append to `miniapp/src/app.scss`:
 }
 ```
 
-- [ ] **Step 6: 运行小程序构建和类型检查**
+- [x] **Step 6: 运行小程序构建和类型检查**
 
 Run:
 
@@ -1820,7 +1822,7 @@ cd miniapp && npx tsc --noEmit --skipLibCheck
 
 Expected: both commands pass。
 
-- [ ] **Step 7: 提交小程序游戏占位页**
+- [x] **Step 7: 提交小程序游戏占位页**
 
 ```bash
 git add miniapp/src/app.config.ts miniapp/src/types/patientApp.ts miniapp/src/pages/prescription/index.tsx miniapp/src/pages/game-session/index.tsx miniapp/src/app.scss
@@ -1843,7 +1845,7 @@ git commit -m "feat(miniapp): 新增游戏处方占位提交页"
 - Modify: `frontend/src/app/layout/AdminLayout.tsx`
 - Modify: `frontend/src/app/App.test.tsx`
 
-- [ ] **Step 1: 安装 Web 图表依赖**
+- [x] **Step 1: 安装 Web 图表依赖**
 
 Run:
 
@@ -1853,7 +1855,7 @@ cd frontend && npm install @ant-design/charts
 
 Expected: `frontend/package.json` and `frontend/package-lock.json` are updated。
 
-- [ ] **Step 2: 写训练追踪患者搜索页失败测试**
+- [x] **Step 2: 写训练追踪患者搜索页失败测试**
 
 Create `frontend/src/pages/training-tracking/TrainingTrackingPage.test.tsx`:
 
@@ -1928,7 +1930,7 @@ describe("TrainingTrackingPage", () => {
 });
 ```
 
-- [ ] **Step 3: 写训练追踪详情页失败测试**
+- [x] **Step 3: 写训练追踪详情页失败测试**
 
 Create `frontend/src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx`:
 
@@ -2090,7 +2092,7 @@ describe("TrainingTrackingDetailPage", () => {
 });
 ```
 
-- [ ] **Step 4: 创建训练追踪类型**
+- [x] **Step 4: 创建训练追踪类型**
 
 Create `frontend/src/pages/training-tracking/types.ts`:
 
@@ -2168,7 +2170,7 @@ export type TrackingDetail = {
 };
 ```
 
-- [ ] **Step 5: 创建患者搜索页**
+- [x] **Step 5: 创建患者搜索页**
 
 Create `frontend/src/pages/training-tracking/TrainingTrackingPage.tsx`:
 
@@ -2230,7 +2232,7 @@ export function TrainingTrackingPage() {
 }
 ```
 
-- [ ] **Step 6: 创建患者训练追踪详情页**
+- [x] **Step 6: 创建患者训练追踪详情页**
 
 Create `frontend/src/pages/training-tracking/TrainingTrackingDetailPage.tsx`:
 
@@ -2401,7 +2403,7 @@ export function TrainingTrackingDetailPage() {
 }
 ```
 
-- [ ] **Step 7: 加入路由和侧边栏**
+- [x] **Step 7: 加入路由和侧边栏**
 
 Modify `frontend/src/app/App.tsx` imports:
 
@@ -2429,7 +2431,7 @@ Add menu item:
             { key: "/training-tracking", icon: <LineChartOutlined />, label: "训练追踪" },
 ```
 
-- [ ] **Step 8: 更新 App 路由测试**
+- [x] **Step 8: 更新 App 路由测试**
 
 Modify `frontend/src/app/App.test.tsx` by adding a mock response for tracking list where the test mock dispatches `apiClient.get`:
 
@@ -2448,7 +2450,7 @@ Append a route smoke test:
   });
 ```
 
-- [ ] **Step 9: 运行训练追踪前端测试**
+- [x] **Step 9: 运行训练追踪前端测试**
 
 Run:
 
@@ -2458,7 +2460,7 @@ cd frontend && npm run test -- src/pages/training-tracking/TrainingTrackingPage.
 
 Expected: PASS。
 
-- [ ] **Step 10: 提交训练追踪 Web 模块**
+- [x] **Step 10: 提交训练追踪 Web 模块**
 
 ```bash
 git add frontend/package.json frontend/package-lock.json frontend/src/pages/training-tracking frontend/src/app/App.tsx frontend/src/app/layout/AdminLayout.tsx frontend/src/app/App.test.tsx
@@ -2472,7 +2474,7 @@ git commit -m "feat(frontend): 新增患者训练追踪模块"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-15-game-prescription-tracking.md`
 
-- [ ] **Step 1: 运行后端完整测试**
+- [x] **Step 1: 运行后端完整测试**
 
 Run:
 
@@ -2482,7 +2484,7 @@ cd backend && pytest
 
 Expected: PASS。
 
-- [ ] **Step 2: 运行前端测试、lint 和构建**
+- [x] **Step 2: 运行前端测试、lint 和构建**
 
 Run:
 
@@ -2494,7 +2496,7 @@ cd frontend && npm run build
 
 Expected: all commands pass。
 
-- [ ] **Step 3: 运行小程序构建和类型检查**
+- [x] **Step 3: 运行小程序构建和类型检查**
 
 Run:
 
@@ -2505,7 +2507,7 @@ cd miniapp && npx tsc --noEmit --skipLibCheck
 
 Expected: both commands pass。
 
-- [ ] **Step 4: 更新本计划执行记录**
+- [x] **Step 4: 更新本计划执行记录**
 
 At the top of this file after the header block, add one execution record using the actual completion date and actual implementation commit short SHAs. The line must use this shape:
 
@@ -2515,7 +2517,7 @@ At the top of this file after the header block, add one execution record using t
 
 Then change all completed task checkboxes from `- [ ]` to `- [x]`.
 
-- [ ] **Step 5: 提交计划收口记录**
+- [x] **Step 5: 提交计划收口记录**
 
 ```bash
 git add docs/superpowers/plans/2026-05-15-game-prescription-tracking.md
