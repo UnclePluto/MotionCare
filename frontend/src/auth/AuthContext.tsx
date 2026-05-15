@@ -14,9 +14,17 @@ export type Me = {
   id: number;
   phone: string;
   name: string;
+  gender: "male" | "female" | "unknown";
   role: string;
   roles: string[];
   permissions: string[];
+  must_change_password: boolean;
+};
+
+type ChangePasswordValues = {
+  old_password: string;
+  new_password: string;
+  confirm_password: string;
 };
 
 type AuthContextValue = {
@@ -27,6 +35,7 @@ type AuthContextValue = {
   refetchSession: () => Promise<unknown>;
   login: (phone: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  changePassword: (values: ChangePasswordValues) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -79,6 +88,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.setQueryData(["me"], null);
   }, [queryClient]);
 
+  const changePassword = useCallback(
+    async (values: ChangePasswordValues) => {
+      await apiClient.post("/accounts/users/me/change-password/", values);
+      await queryClient.invalidateQueries({ queryKey: ["me"] });
+    },
+    [queryClient],
+  );
+
   const value = useMemo(
     () => ({
       me,
@@ -87,8 +104,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refetchSession: refetch,
       login,
       logout,
+      changePassword,
     }),
-    [me, loading, sessionError, refetch, login, logout],
+    [me, loading, sessionError, refetch, login, logout, changePassword],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
