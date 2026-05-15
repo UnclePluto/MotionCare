@@ -11,6 +11,7 @@
 ---
 
 执行记录（2026-05-15, codex）：Task 1 已落地于 commits 84d3b94、e5751e5、4d678c9、cd81293。
+执行记录（2026-05-15, codex）：Task 2 已落地于 commits 24ce13b、47f935f。
 
 ## Scope Check
 
@@ -529,7 +530,7 @@ Expected: commit succeeds.
 - Modify: `backend/config/settings.py`
 - Create: `backend/apps/accounts/tests/test_password_change_gate.py`
 
-- [ ] **Step 1: Add failing backend gate tests**
+- [x] **Step 1: Add failing backend gate tests**
 
 Create `backend/apps/accounts/tests/test_password_change_gate.py`:
 
@@ -635,7 +636,7 @@ def test_global_default_permission_blocks_force_authenticated_default_password_u
     assert response.json()["detail"] == "请先修改默认密码"
 ```
 
-- [ ] **Step 2: Run the gate tests and verify they fail**
+- [x] **Step 2: Run the gate tests and verify they fail**
 
 Run:
 
@@ -646,7 +647,7 @@ pytest apps/accounts/tests/test_password_change_gate.py -q
 
 Expected: FAIL because password-change gate is not enforced yet.
 
-- [ ] **Step 3: Add shared permission helpers**
+- [x] **Step 3: Add shared permission helpers**
 
 Replace `backend/apps/common/permissions.py` with:
 
@@ -692,7 +693,7 @@ class IsAdminOrDoctor(BasePermission):
         )
 ```
 
-- [ ] **Step 4: Switch the global DRF default permission**
+- [x] **Step 4: Switch the global DRF default permission**
 
 Modify `backend/config/settings.py`:
 
@@ -706,7 +707,7 @@ REST_FRAMEWORK = {
 }
 ```
 
-- [ ] **Step 5: Run the gate and auth tests**
+- [x] **Step 5: Run the gate and auth tests**
 
 Run:
 
@@ -717,7 +718,7 @@ pytest apps/accounts/tests/test_password_change_gate.py apps/accounts/tests/test
 
 Expected: PASS.
 
-- [ ] **Step 6: Run a focused backend regression set**
+- [x] **Step 6: Run a focused backend regression set**
 
 Run:
 
@@ -728,7 +729,7 @@ pytest apps/accounts/tests apps/patients/tests/test_patient_baseline_api.py apps
 
 Expected: PASS. If a test creates `role="patient"` and expects a 403 from `IsAdminOrDoctor`, keep that behavior: the new gate must not grant access to non-admin/non-doctor roles.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 Run:
 
