@@ -52,6 +52,7 @@ _ROLE_PERMISSIONS: dict[str, list[str]] = {
         "health.write",
         "crf.read",
         "crf.export",
+        "user.manage",
     ],
 }
 
@@ -107,8 +108,10 @@ class MeView(APIView):
                 "id": user.id,
                 "phone": user.phone,
                 "name": user.name,
+                "gender": user.gender,
                 "role": user.role,
                 "roles": [user.role],
                 "permissions": _permissions_for_role(user.role),
+                "must_change_password": user.must_change_password,
             }
         )

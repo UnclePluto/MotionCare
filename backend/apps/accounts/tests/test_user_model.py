@@ -31,3 +31,15 @@ def test_create_superuser_sets_super_admin_role():
     assert user.is_superuser
     assert user.role == User.Role.SUPER_ADMIN
 
+
+@pytest.mark.django_db
+def test_user_defaults_gender_and_password_change_flag():
+    user = User.objects.create_user(
+        phone="13700000000",
+        password="pass123456",
+        name="默认医生",
+        role=User.Role.DOCTOR,
+    )
+
+    assert user.gender == User.Gender.UNKNOWN
+    assert user.must_change_password is False

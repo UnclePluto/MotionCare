@@ -25,19 +25,25 @@ class User(AbstractUser):
         ADMIN = "admin", "管理员"
         DOCTOR = "doctor", "医生"
 
+    class Gender(models.TextChoices):
+        MALE = "male", "男"
+        FEMALE = "female", "女"
+        UNKNOWN = "unknown", "未知"
+
     phone = models.CharField("手机号", max_length=20, unique=True)
     name = models.CharField("姓名", max_length=80)
+    gender = models.CharField("性别", max_length=16, choices=Gender.choices, default=Gender.UNKNOWN)
     role = models.CharField("角色", max_length=32, choices=Role.choices, default=Role.DOCTOR)
+    must_change_password = models.BooleanField("是否必须修改密码", default=False)
 
     objects = MotionCareUserManager()
     USERNAME_FIELD = "phone"
     REQUIRED_FIELDS = ["name"]
 
     def save(self, *args, **kwargs):
-        if self.phone and not self.username:
+        if self.phone:
             self.username = self.phone
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.name}（{self.phone}）"
-
