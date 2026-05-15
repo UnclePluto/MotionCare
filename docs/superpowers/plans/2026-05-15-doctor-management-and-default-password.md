@@ -10,6 +10,8 @@
 
 ---
 
+执行记录（2026-05-15, codex）：Task 1 已落地于 commits 84d3b94、e5751e5、4d678c9、cd81293。
+
 ## Scope Check
 
 本计划覆盖一个账号管理功能闭环：医生账号建模 -> 医生列表/新建/编辑 API -> 默认密码强制改密后端门禁 -> 前端菜单、页面与全局弹窗。它跨后端和前端，但功能不可独立拆分：前端强制改密依赖 `/api/me/` 新字段，后端门禁依赖改密接口，医生管理页面依赖账号序列化契约。
@@ -94,7 +96,7 @@
 - Modify: `backend/apps/accounts/tests/test_user_model.py`
 - Create: `backend/apps/accounts/tests/test_doctor_management_api.py`
 
-- [ ] **Step 1: Extend the failing user model test**
+- [x] **Step 1: Extend the failing user model test**
 
 Append to `backend/apps/accounts/tests/test_user_model.py`:
 
@@ -112,7 +114,7 @@ def test_user_defaults_gender_and_password_change_flag():
     assert user.must_change_password is False
 ```
 
-- [ ] **Step 2: Add failing doctor management API tests**
+- [x] **Step 2: Add failing doctor management API tests**
 
 Create `backend/apps/accounts/tests/test_doctor_management_api.py`:
 
@@ -245,7 +247,7 @@ def test_update_doctor_basic_profile_does_not_change_password_or_role(auth_clien
     assert target.check_password("pass123456")
 ```
 
-- [ ] **Step 3: Run the backend account tests and verify they fail**
+- [x] **Step 3: Run the backend account tests and verify they fail**
 
 Run:
 
@@ -256,7 +258,7 @@ pytest apps/accounts/tests/test_user_model.py apps/accounts/tests/test_doctor_ma
 
 Expected: FAIL because `User.Gender`, `gender`, `must_change_password`, tightened serializer behavior, and doctor list filtering do not exist.
 
-- [ ] **Step 4: Add user fields to the model**
+- [x] **Step 4: Add user fields to the model**
 
 Modify `backend/apps/accounts/models.py`:
 
@@ -288,7 +290,7 @@ class User(AbstractUser):
         super().save(*args, **kwargs)
 ```
 
-- [ ] **Step 5: Create the migration**
+- [x] **Step 5: Create the migration**
 
 Create `backend/apps/accounts/migrations/0002_user_gender_must_change_password.py`:
 
@@ -323,7 +325,7 @@ class Migration(migrations.Migration):
     ]
 ```
 
-- [ ] **Step 6: Update Django admin fields**
+- [x] **Step 6: Update Django admin fields**
 
 Modify `backend/apps/accounts/admin.py`:
 
@@ -343,7 +345,7 @@ class MotionCareUserAdmin(UserAdmin):
     search_fields = ("phone", "name")
 ```
 
-- [ ] **Step 7: Replace the account serializer**
+- [x] **Step 7: Replace the account serializer**
 
 Replace `backend/apps/accounts/serializers.py` with:
 
@@ -432,7 +434,7 @@ class ChangePasswordSerializer(serializers.Serializer):
         return attrs
 ```
 
-- [ ] **Step 8: Update account viewset behavior**
+- [x] **Step 8: Update account viewset behavior**
 
 Modify `backend/apps/accounts/views.py`:
 
@@ -467,7 +469,7 @@ class UserViewSet(ModelViewSet):
         return Response({"detail": "密码已修改"})
 ```
 
-- [ ] **Step 9: Update `/api/me/` and doctor permissions**
+- [x] **Step 9: Update `/api/me/` and doctor permissions**
 
 Modify `backend/apps/accounts/auth_views.py`:
 
@@ -496,7 +498,7 @@ In `MeView.get`, return the new fields:
                 "must_change_password": user.must_change_password,
 ```
 
-- [ ] **Step 10: Run the backend account tests and verify they pass**
+- [x] **Step 10: Run the backend account tests and verify they pass**
 
 Run:
 
@@ -507,7 +509,7 @@ pytest apps/accounts/tests/test_user_model.py apps/accounts/tests/test_doctor_ma
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit Task 1**
+- [x] **Step 11: Commit Task 1**
 
 Run:
 
