@@ -106,6 +106,57 @@ def test_training_create_ignores_malicious_controlled_foreign_key_ids(
 
 
 @pytest.mark.django_db
+def test_training_create_rejects_invalid_game_result_form_data(active_prescription):
+    game = ActionLibraryItem.objects.create(
+        name="颜色顺序记忆",
+        training_type="认知训练",
+        internal_type=ActionLibraryItem.InternalType.GAME,
+        action_type="记忆力训练",
+    )
+    game_action = active_prescription.add_action_snapshot(game)
+
+    with pytest.raises(ValidationError, match="游戏原始明细必须是对象"):
+        create_training_record(
+            project_patient=active_prescription.project_patient,
+            training_date="2026-05-06",
+            prescription_action=game_action,
+            status=TrainingRecord.Status.COMPLETED,
+            form_data={"raw_detail": []},
+        )
+
+    assert not TrainingRecord.objects.filter(prescription_action=game_action).exists()
+
+
+@pytest.mark.django_db
+def test_training_api_rejects_invalid_game_result_form_data(active_prescription, doctor):
+    game = ActionLibraryItem.objects.create(
+        name="颜色顺序记忆",
+        training_type="认知训练",
+        internal_type=ActionLibraryItem.InternalType.GAME,
+        action_type="记忆力训练",
+    )
+    game_action = active_prescription.add_action_snapshot(game)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        "/api/training/",
+        {
+            "project_patient": active_prescription.project_patient_id,
+            "prescription_action": game_action.id,
+            "training_date": "2026-05-06",
+            "status": TrainingRecord.Status.COMPLETED,
+            "form_data": {"accuracy_rate": True},
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["detail"] == "正确率必须在 0 到 100 之间"
+    assert not TrainingRecord.objects.filter(prescription_action=game_action).exists()
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize("method", ["patch", "put"])
 def test_training_record_update_methods_are_not_allowed(
     method,

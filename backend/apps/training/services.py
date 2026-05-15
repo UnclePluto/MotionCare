@@ -3,6 +3,7 @@ from django.core.exceptions import ValidationError
 from apps.prescriptions.models import Prescription
 from apps.studies.project_status import ensure_project_open
 
+from .game_results import validate_game_result_fields
 from .models import TrainingRecord
 
 TRAINING_RECORD_FIELD_NAMES = {
@@ -33,6 +34,10 @@ def create_training_record(*, project_patient, training_date, prescription_actio
     training_fields = {
         key: value for key, value in fields.items() if key in TRAINING_RECORD_FIELD_NAMES
     }
+    validate_game_result_fields(
+        prescription_action,
+        form_data=training_fields.get("form_data"),
+    )
     return TrainingRecord.objects.create(
         project_patient=project_patient,
         prescription=active,

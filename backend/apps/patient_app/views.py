@@ -12,7 +12,6 @@ from rest_framework.views import APIView
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
 from apps.health.models import DailyHealthRecord
 from apps.prescriptions.models import Prescription, PrescriptionAction
-from apps.training.game_results import validate_game_result_fields
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
@@ -214,10 +213,6 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
                     {"detail": "处方已更新，请返回当前处方重新进入"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            validate_game_result_fields(
-                action,
-                form_data=data.get("form_data"),
-            )
             record = create_training_record(
                 project_patient=project_patient,
                 prescription_action=action,

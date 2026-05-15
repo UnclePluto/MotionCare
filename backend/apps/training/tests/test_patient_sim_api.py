@@ -95,6 +95,36 @@ def test_patient_sim_training_submit_creates_record(
 
 
 @pytest.mark.django_db
+def test_patient_sim_training_submit_rejects_invalid_game_result(
+    client, doctor, active_prescription
+):
+    client.force_login(doctor)
+    game = ActionLibraryItem.objects.create(
+        name="颜色顺序记忆",
+        training_type="认知训练",
+        internal_type=ActionLibraryItem.InternalType.GAME,
+        action_type="记忆力训练",
+    )
+    game_action = active_prescription.add_action_snapshot(game)
+
+    response = client.post(
+        f"/api/patient-sim/project-patients/"
+        f"{active_prescription.project_patient_id}/training-records/",
+        {
+            "prescription_action": game_action.id,
+            "training_date": "2026-05-06",
+            "status": "completed",
+            "form_data": {"difficulty": 1},
+        },
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "游戏难度必须是文本"
+    assert not TrainingRecord.objects.filter(prescription_action=game_action).exists()
+
+
+@pytest.mark.django_db
 def test_patient_sim_training_submit_rejects_too_large_actual_duration(
     client, doctor, active_prescription, prescription_action
 ):
