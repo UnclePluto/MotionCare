@@ -1,4 +1,3 @@
-from django.http import Http404
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -28,8 +27,11 @@ class TrackingPatientDetailView(APIView):
         if project_patient_id:
             try:
                 project_patient_id = int(project_patient_id)
-            except (TypeError, ValueError) as exc:
-                raise Http404 from exc
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "project_patient 必须是数字"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
             project_patient_id = None
 

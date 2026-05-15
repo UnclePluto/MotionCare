@@ -31,7 +31,9 @@ def accessible_project_patients(user):
     qs = ProjectPatient.objects.select_related("patient", "project", "group")
     if _is_admin(user):
         return qs
-    return qs.filter(Q(patient__primary_doctor=user) | Q(project__created_by=user))
+    return qs.filter(
+        Q(patient__primary_doctor=user) | Q(project__created_by=user) | Q(created_by=user)
+    )
 
 
 def serialize_patient(patient) -> dict:

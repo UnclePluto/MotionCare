@@ -238,6 +238,20 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         project_patient,
         active_prescription,
         game_action,
+        training_date=today,
+        status=TrainingRecord.Status.PARTIAL,
+        duration=5,
+        form_data={
+            "accuracy_rate": True,
+            "error_count": True,
+            "difficulty": "布尔指标",
+        },
+        note="部分完成布尔指标",
+    )
+    _record(
+        project_patient,
+        active_prescription,
+        game_action,
         training_date=today - timezone.timedelta(days=10),
         duration=9,
         score=Decimal("80.00"),
@@ -246,6 +260,20 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
             "error_count": 2,
             "difficulty": "普通",
         },
+    )
+    _record(
+        project_patient,
+        active_prescription,
+        game_action,
+        training_date=today - timezone.timedelta(days=20),
+        status=TrainingRecord.Status.COMPLETED,
+        duration=6,
+        form_data={
+            "accuracy_rate": True,
+            "error_count": True,
+            "difficulty": "布尔指标",
+        },
+        note="完成布尔指标",
     )
 
     response = _client(doctor).get(
@@ -288,7 +316,7 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
     assert trend["daily"][-1] == {
         "date": today.isoformat(),
         "completed_count": 3,
-        "duration_minutes": 50,
+        "duration_minutes": 55,
         "game_average_score": 80.0,
     }
     assert trend["moving_average"][-1]["date"] == today.isoformat()
@@ -305,7 +333,7 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         <= item["week_end"]
     )
     assert this_week["completed_count"] == 3
-    assert this_week["duration_minutes"] == 50
+    assert this_week["duration_minutes"] == 55
     assert this_week["game_average_score"] == 80.0
 
     game_summary = response.data["game_summary"]
@@ -316,7 +344,7 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         {
             "prescription_action": game_action.id,
             "action_name": "颜色记忆",
-            "record_count": 3,
+            "record_count": 5,
             "average_score": 80.0,
             "average_accuracy_rate": 80.67,
             "recent_record_at": today.isoformat(),
@@ -324,12 +352,16 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
     ]
 
     recent = response.data["recent_records"]
-    assert len(recent) == 5
+    assert len(recent) == 7
     completed_game = next(item for item in recent if item["note"] == "游戏顺利")
     assert completed_game["score"] == 90.0
     assert completed_game["game_accuracy_rate"] == 92.0
     assert completed_game["game_error_count"] == 3
     assert completed_game["game_difficulty"] == "简单"
+    bool_metric_game = next(item for item in recent if item["note"] == "部分完成布尔指标")
+    assert bool_metric_game["game_accuracy_rate"] is None
+    assert bool_metric_game["game_error_count"] is None
+    assert bool_metric_game["game_difficulty"] == "布尔指标"
 
 
 @pytest.mark.django_db
@@ -406,6 +438,37 @@ def test_tracking_detail_hides_inaccessible_patient_and_rejects_invalid_project_
 
 
 @pytest.mark.django_db
+def test_tracking_allows_project_patient_creator_to_access_patient(doctor):
+    owner_doctor = _doctor(phone="13800007771", name="主管医生")
+    enrolling_doctor = _doctor(phone="13800007772", name="入组医生")
+    patient = _patient(owner_doctor, name="入组可见患者", phone="13900007771")
+    project = StudyProject.objects.create(name="主管项目", created_by=owner_doctor)
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    project_patient = ProjectPatient.objects.create(
+        project=project,
+        patient=patient,
+        group=group,
+        created_by=enrolling_doctor,
+    )
+
+    list_response = _client(enrolling_doctor).get(
+        "/api/training/tracking/patients/",
+        {"q": "入组可见患者"},
+    )
+    assert list_response.status_code == 200, list_response.data
+    assert [item["patient"]["id"] for item in list_response.data] == [patient.id]
+
+    detail_response = _client(enrolling_doctor).get(
+        f"/api/training/tracking/patients/{patient.id}/"
+    )
+    assert detail_response.status_code == 200, detail_response.data
+    assert detail_response.data["selected_project_patient"]["id"] == project_patient.id
+
+    hidden_response = _client(doctor).get(f"/api/training/tracking/patients/{patient.id}/")
+    assert hidden_response.status_code == 404
+
+
+@pytest.mark.django_db
 def test_tracking_detail_validates_range_and_returns_seven_day_trend(
     doctor,
     project_patient,
@@ -416,6 +479,13 @@ def test_tracking_detail_validates_range_and_returns_seven_day_trend(
     )
     assert invalid_response.status_code == 400
 
+    invalid_project_patient_response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/",
+        {"project_patient": "abc"},
+    )
+    assert invalid_project_patient_response.status_code == 400
+    assert invalid_project_patient_response.data["detail"] == "project_patient 必须是数字"
+
     response = _client(doctor).get(
         f"/api/training/tracking/patients/{project_patient.patient_id}/",
         {"range": "7d"},
@@ -424,6 +494,15 @@ def test_tracking_detail_validates_range_and_returns_seven_day_trend(
     assert response.status_code == 200, response.data
     assert len(response.data["trend"]["daily"]) == 7
     assert len(response.data["trend"]["moving_average"]) == 7
+
+    weekly_response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/",
+        {"range": "weekly"},
+    )
+    assert weekly_response.status_code == 200, weekly_response.data
+    assert len(weekly_response.data["trend"]["daily"]) == 30
+    assert len(weekly_response.data["trend"]["moving_average"]) == 30
+    assert weekly_response.data["trend"]["weekly"]
 
 
 @pytest.mark.django_db
