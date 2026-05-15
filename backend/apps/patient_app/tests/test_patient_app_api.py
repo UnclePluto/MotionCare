@@ -181,10 +181,26 @@ def test_patient_app_submits_game_result(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "form_data",
+    [
+        {
+            "accuracy_rate": "",
+            "error_count": "",
+            "raw_detail": "",
+        },
+        {
+            "accuracy_rate": None,
+            "error_count": None,
+            "raw_detail": None,
+        },
+    ],
+)
 def test_patient_app_submits_game_result_with_blank_optional_metrics(
     project_patient,
     doctor,
     active_prescription,
+    form_data,
 ):
     game_action = _game_prescription_action(active_prescription)
     client = _auth_client(project_patient, doctor)
@@ -197,8 +213,7 @@ def test_patient_app_submits_game_result_with_blank_optional_metrics(
             "status": TrainingRecord.Status.COMPLETED,
             "actual_duration_minutes": 8,
             "form_data": {
-                "accuracy_rate": "",
-                "error_count": "",
+                **form_data,
                 "difficulty": "简单",
             },
         },
@@ -208,8 +223,9 @@ def test_patient_app_submits_game_result_with_blank_optional_metrics(
     assert response.status_code == 201, response.data
     record = TrainingRecord.objects.get(pk=response.data["id"])
     assert record.prescription_action == game_action
-    assert record.form_data["accuracy_rate"] == ""
-    assert record.form_data["error_count"] == ""
+    assert record.form_data["accuracy_rate"] == form_data["accuracy_rate"]
+    assert record.form_data["error_count"] == form_data["error_count"]
+    assert record.form_data["raw_detail"] == form_data["raw_detail"]
 
 
 @pytest.mark.django_db
@@ -219,8 +235,12 @@ def test_patient_app_submits_game_result_with_blank_optional_metrics(
         ([], "游戏结果明细必须是对象"),
         ({"accuracy_rate": 101}, "正确率必须在 0 到 100 之间"),
         ({"accuracy_rate": -1}, "正确率必须在 0 到 100 之间"),
+        ({"accuracy_rate": True}, "正确率必须在 0 到 100 之间"),
         ({"error_count": -1}, "错误次数必须是非负整数"),
         ({"error_count": "很多"}, "错误次数必须是非负整数"),
+        ({"error_count": True}, "错误次数必须是非负整数"),
+        ({"difficulty": 1}, "游戏难度必须是文本"),
+        ({"difficulty": []}, "游戏难度必须是文本"),
         ({"raw_detail": []}, "游戏原始明细必须是对象"),
         ({"raw_detail": "bad"}, "游戏原始明细必须是对象"),
     ],
@@ -250,6 +270,40 @@ def test_patient_app_rejects_invalid_game_result_metrics(
     assert response.status_code == 400, response.data
     assert error_text in str(response.data)
     assert not TrainingRecord.objects.filter(prescription_action=game_action).exists()
+
+
+@pytest.mark.django_db
+def test_patient_app_allows_game_metric_shape_for_non_game_action(
+    project_patient,
+    doctor,
+    active_prescription,
+    prescription_action,
+):
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-records/",
+        {
+            "prescription_action": prescription_action.id,
+            "training_date": str(timezone.localdate()),
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 8,
+            "form_data": {
+                "accuracy_rate": True,
+                "raw_detail": [],
+                "difficulty": 1,
+            },
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    record = TrainingRecord.objects.get(pk=response.data["id"])
+    assert record.prescription == active_prescription
+    assert record.prescription_action == prescription_action
+    assert record.form_data["accuracy_rate"] is True
+    assert record.form_data["raw_detail"] == []
+    assert record.form_data["difficulty"] == 1
 
 
 @pytest.mark.django_db
