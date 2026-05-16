@@ -36,6 +36,7 @@ export type GameTrainingPayload = {
       suggested_duration_minutes: number
       completed_units: number
       correct_units: number
+      rounds?: Array<Record<string, unknown>>
     }
   }
   note: string
@@ -43,6 +44,7 @@ export type GameTrainingPayload = {
 
 export type GameActionSummary = {
   id: number
+  source_key: string | null
   action_name: string
   action_type: string
   action_instruction: string
