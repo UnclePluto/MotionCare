@@ -54,7 +54,12 @@ def current_prescription_for(project_patient):
             status=Prescription.Status.ACTIVE,
         )
         .prefetch_related(
-            Prefetch("actions", queryset=PrescriptionAction.objects.order_by("sort_order", "id"))
+            Prefetch(
+                "actions",
+                queryset=PrescriptionAction.objects.select_related("action_library_item").order_by(
+                    "sort_order", "id"
+                ),
+            )
         )
         .order_by("-effective_at", "-id")
         .first()
@@ -119,6 +124,7 @@ def serialize_prescription(project_patient):
             {
                 "id": action.id,
                 "action_library_item": action.action_library_item_id,
+                "source_key": action.action_library_item.source_key or None,
                 "action_name": action.action_name_snapshot,
                 "training_type": action.training_type_snapshot,
                 "internal_type": action.internal_type_snapshot,

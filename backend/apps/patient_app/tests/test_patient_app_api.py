@@ -116,6 +116,22 @@ def test_current_prescription_includes_weekly_progress_and_recent_record(
 
 
 @pytest.mark.django_db
+def test_current_prescription_includes_action_source_key(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    game_action = _game_prescription_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+
+    response = client.get("/api/patient-app/current-prescription/")
+
+    assert response.status_code == 200, response.data
+    action = next(item for item in response.data["actions"] if item["id"] == game_action.id)
+    assert action["source_key"] == "game-memory-color-sequence"
+
+
+@pytest.mark.django_db
 def test_training_record_api_allows_multiple_records_same_day(
     project_patient,
     doctor,

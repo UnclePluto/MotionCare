@@ -26,6 +26,7 @@ export type CurrentPrescription = null | {
   actions: Array<{
     id: number
     action_library_item: number
+    source_key: string | null
     action_name: string
     training_type: string
     internal_type: 'motion' | 'game' | 'video'
