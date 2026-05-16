@@ -174,43 +174,53 @@ def test_training_create_accepts_real_game_raw_detail(active_prescription):
         "game-audiovisual-puzzle",
     ],
 )
-def test_training_create_accepts_remaining_official_game_codes(
+def test_training_api_accepts_remaining_official_game_codes(
     active_prescription,
+    doctor,
     source_key,
 ):
     game = ActionLibraryItem.objects.get(source_key=source_key)
     game_action = active_prescription.add_action_snapshot(game, sort_order=9)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
 
-    record = create_training_record(
-        project_patient=active_prescription.project_patient,
-        training_date="2026-05-16",
-        prescription_action=game_action,
-        status=TrainingRecord.Status.COMPLETED,
-        actual_duration_minutes=10,
-        score=88,
-        form_data={
-            "accuracy_rate": 80,
-            "error_count": 2,
-            "difficulty": "中等",
-            "raw_detail": {
-                "game_code": source_key,
-                "ended_by": "timer",
-                "ended_early": False,
-                "prescribed_difficulty": "中等",
-                "difficulty_adjusted": False,
-                "difficulty_adjust_reason": "",
-                "upload_mode": "direct",
-                "retry_count": 0,
-                "total_retry_count": 0,
-                "session_duration_seconds": 600,
-                "suggested_duration_minutes": 10,
-                "completed_units": 10,
-                "correct_units": 8,
+    response = client.post(
+        "/api/training/",
+        {
+            "project_patient": active_prescription.project_patient_id,
+            "prescription_action": game_action.id,
+            "training_date": "2026-05-16",
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 10,
+            "score": 88,
+            "form_data": {
+                "accuracy_rate": 80,
+                "error_count": 2,
+                "difficulty": "中等",
+                "raw_detail": {
+                    "game_code": source_key,
+                    "ended_by": "timer",
+                    "ended_early": False,
+                    "prescribed_difficulty": "中等",
+                    "difficulty_adjusted": False,
+                    "difficulty_adjust_reason": "",
+                    "upload_mode": "direct",
+                    "retry_count": 0,
+                    "total_retry_count": 0,
+                    "session_duration_seconds": 600,
+                    "suggested_duration_minutes": 10,
+                    "completed_units": 10,
+                    "correct_units": 8,
+                },
             },
+            "note": "",
         },
-        note="",
+        format="json",
     )
 
+    assert response.status_code == 201
+    assert response.data["form_data"]["raw_detail"]["game_code"] == source_key
+    record = TrainingRecord.objects.get(prescription_action=game_action)
     assert record.prescription_action == game_action
     assert record.form_data["raw_detail"]["game_code"] == source_key
 
