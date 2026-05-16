@@ -11,7 +11,7 @@ export type PatternToken = {
 
 export type PatternSequenceRound = {
   patterns: PatternToken[]
-  sequence: PatternTokenId[]
+  sequence: PatternToken[]
   revealMs: number
   inputTimeoutMs: number
 }
@@ -46,7 +46,7 @@ export function createPatternSequenceRound(
   const config = CONFIG[difficulty]
   const patterns = PATTERN_POOL.slice(0, config.patternCount)
   const length = config.minLength + pickIndex(config.maxLength - config.minLength + 1, random)
-  const sequence = Array.from({ length }, () => patterns[pickIndex(patterns.length, random)].id)
+  const sequence = Array.from({ length }, () => patterns[pickIndex(patterns.length, random)])
 
   return {
     patterns,
