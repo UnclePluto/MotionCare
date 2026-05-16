@@ -93,6 +93,11 @@ export type TrackingRecentRecord = {
   game_accuracy_rate: number | null;
   game_error_count: number | null;
   game_difficulty: string | null;
+  game_ended_early: boolean | null;
+  game_difficulty_adjust_reason: string | null;
+  game_upload_mode: string | null;
+  game_retry_count: number | null;
+  game_total_retry_count: number | null;
   note: string;
 };
 

@@ -91,6 +91,28 @@ def _form_difficulty(form_data):
     return value if isinstance(value, str) else None
 
 
+def _form_raw_detail(form_data):
+    value = form_data.get("raw_detail") if isinstance(form_data, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _raw_bool(form_data, key):
+    value = _form_raw_detail(form_data).get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _raw_text(form_data, key):
+    value = _form_raw_detail(form_data).get(key)
+    return value if isinstance(value, str) else None
+
+
+def _raw_int(form_data, key):
+    value = _form_raw_detail(form_data).get(key)
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
 def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[dict]:
     today = today or timezone.localdate()
     last_30_start = today - timezone.timedelta(days=29)
@@ -388,26 +410,53 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
         .select_related("prescription", "prescription_action")
         .order_by("-training_date", "-id")[:30]
     )
-    return [
-        {
-            "id": record.id,
-            "training_date": record.training_date.isoformat(),
-            "status": record.status,
-            "prescription": record.prescription_id,
-            "prescription_version": record.prescription.version,
-            "prescription_action": record.prescription_action_id,
-            "action_name": record.prescription_action.action_name_snapshot,
-            "internal_type": record.prescription_action.internal_type_snapshot,
-            "action_type": record.prescription_action.action_type_snapshot,
-            "actual_duration_minutes": record.actual_duration_minutes,
-            "score": _float_or_none(record.score),
-            "game_accuracy_rate": _form_number(record.form_data, "accuracy_rate"),
-            "game_error_count": _form_error_count(record.form_data),
-            "game_difficulty": _form_difficulty(record.form_data),
-            "note": record.note,
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        is_game = (
+            record.prescription_action.internal_type_snapshot
+            == ActionLibraryItem.InternalType.GAME
+        )
+        game_fields = (
+            {
+                "game_ended_early": _raw_bool(record.form_data, "ended_early"),
+                "game_difficulty_adjust_reason": _raw_text(
+                    record.form_data,
+                    "difficulty_adjust_reason",
+                ),
+                "game_upload_mode": _raw_text(record.form_data, "upload_mode"),
+                "game_retry_count": _raw_int(record.form_data, "retry_count"),
+                "game_total_retry_count": _raw_int(record.form_data, "total_retry_count"),
+            }
+            if is_game
+            else {
+                "game_ended_early": None,
+                "game_difficulty_adjust_reason": None,
+                "game_upload_mode": None,
+                "game_retry_count": None,
+                "game_total_retry_count": None,
+            }
+        )
+        rows.append(
+            {
+                "id": record.id,
+                "training_date": record.training_date.isoformat(),
+                "status": record.status,
+                "prescription": record.prescription_id,
+                "prescription_version": record.prescription.version,
+                "prescription_action": record.prescription_action_id,
+                "action_name": record.prescription_action.action_name_snapshot,
+                "internal_type": record.prescription_action.internal_type_snapshot,
+                "action_type": record.prescription_action.action_type_snapshot,
+                "actual_duration_minutes": record.actual_duration_minutes,
+                "score": _float_or_none(record.score),
+                "game_accuracy_rate": _form_number(record.form_data, "accuracy_rate"),
+                "game_error_count": _form_error_count(record.form_data),
+                "game_difficulty": _form_difficulty(record.form_data),
+                **game_fields,
+                "note": record.note,
+            }
+        )
+    return rows
 
 
 def _project_patients_for_patient(user, patient_id):

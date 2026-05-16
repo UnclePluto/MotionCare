@@ -34,6 +34,15 @@ const RANGE_LABEL: Record<TrainingTrackingRange, string> = {
   weekly: "按周",
 };
 
+const UPLOAD_MODE_LABEL: Record<string, string> = {
+  direct: "实时上传",
+  retry: "补传",
+};
+
+function isGameRecord(record: TrackingRecentRecord) {
+  return record.internal_type === "game";
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "—";
 
@@ -394,6 +403,37 @@ export function TrainingTrackingDetailPage() {
               title: "难度",
               dataIndex: "game_difficulty",
               render: (value: string | null) => value ?? "—",
+            },
+            {
+              title: "结束方式",
+              dataIndex: "game_ended_early",
+              render: (value: boolean | null, record) =>
+                isGameRecord(record) && value != null ? (
+                  value ? (
+                    <Tag color="orange">提前结束</Tag>
+                  ) : (
+                    <Tag color="green">到时完成</Tag>
+                  )
+                ) : (
+                  "—"
+                ),
+            },
+            {
+              title: "上传方式",
+              dataIndex: "game_upload_mode",
+              render: (value: string | null, record) =>
+                isGameRecord(record) && value ? (UPLOAD_MODE_LABEL[value] ?? value) : "—",
+            },
+            {
+              title: "补传次数",
+              dataIndex: "game_total_retry_count",
+              render: (value: number | null, record) =>
+                isGameRecord(record) && value != null ? `${value} 次` : "—",
+            },
+            {
+              title: "调难原因",
+              dataIndex: "game_difficulty_adjust_reason",
+              render: (value: string | null, record) => (isGameRecord(record) ? (value || "—") : "—"),
             },
             {
               title: "备注",
