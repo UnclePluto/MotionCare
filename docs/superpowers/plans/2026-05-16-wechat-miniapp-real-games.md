@@ -1,5 +1,7 @@
 # 微信小程序真实游戏一期 Implementation Plan
 
+执行记录（2026-05-16, codex）：微信小程序真实游戏一期已落地，验证通过。实施 commit：9a0feb3, 4cd6959, 5f6dc11, a5df871, 927ac28, 3fb3a10, 446a50b, fa7e432。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将小程序游戏占位页升级为两款患者可真实使用的认知小游戏：颜色顺序记忆和反应抑制能力训练，并保留现有训练记录回传链路。
@@ -96,7 +98,7 @@
 - Create: `miniapp/src/pages/game-session/scoring.ts`
 - Create: `miniapp/src/pages/game-session/scoring.test.ts`
 
-- [ ] **Step 1: Add Vitest to the miniapp**
+- [x] **Step 1: Add Vitest to the miniapp**
 
 Run:
 
@@ -117,7 +119,7 @@ Then modify `miniapp/package.json` scripts so it includes:
 
 Keep all existing scripts. Expected: `package.json` and `package-lock.json` change.
 
-- [ ] **Step 2: Write failing color sequence tests**
+- [x] **Step 2: Write failing color sequence tests**
 
 Create `miniapp/src/pages/game-session/colorSequence.test.ts`:
 
@@ -161,7 +163,7 @@ describe('evaluateColorSequenceAttempt', () => {
 })
 ```
 
-- [ ] **Step 3: Write failing inhibition tests**
+- [x] **Step 3: Write failing inhibition tests**
 
 Create `miniapp/src/pages/game-session/inhibition.test.ts`:
 
@@ -204,7 +206,7 @@ describe('evaluateInhibitionAttempt', () => {
 })
 ```
 
-- [ ] **Step 4: Write failing scoring tests**
+- [x] **Step 4: Write failing scoring tests**
 
 Create `miniapp/src/pages/game-session/scoring.test.ts`:
 
@@ -278,7 +280,7 @@ describe('buildGameTrainingResult', () => {
 })
 ```
 
-- [ ] **Step 5: Run tests and verify they fail**
+- [x] **Step 5: Run tests and verify they fail**
 
 Run:
 
@@ -288,7 +290,7 @@ cd miniapp && npx vitest run src/pages/game-session/colorSequence.test.ts src/pa
 
 Expected: FAIL with module-not-found errors for `colorSequence`, `inhibition`, and `scoring`.
 
-- [ ] **Step 6: Create shared game types**
+- [x] **Step 6: Create shared game types**
 
 Create `miniapp/src/pages/game-session/gameTypes.ts`:
 
@@ -343,7 +345,7 @@ export type GameActionSummary = {
 }
 ```
 
-- [ ] **Step 7: Implement color sequence logic**
+- [x] **Step 7: Implement color sequence logic**
 
 Create `miniapp/src/pages/game-session/colorSequence.ts`:
 
@@ -391,7 +393,7 @@ export function evaluateColorSequenceAttempt(expected: ColorToken[], actual: Col
 }
 ```
 
-- [ ] **Step 8: Implement inhibition logic**
+- [x] **Step 8: Implement inhibition logic**
 
 Create `miniapp/src/pages/game-session/inhibition.ts`:
 
@@ -437,7 +439,7 @@ export function evaluateInhibitionAttempt(round: Pick<InhibitionRound, 'correctI
 }
 ```
 
-- [ ] **Step 9: Implement scoring logic**
+- [x] **Step 9: Implement scoring logic**
 
 Create `miniapp/src/pages/game-session/scoring.ts`:
 
@@ -510,7 +512,7 @@ export function buildGameTrainingResult(input: BuildGameTrainingResultInput): Om
 }
 ```
 
-- [ ] **Step 10: Run game core tests**
+- [x] **Step 10: Run game core tests**
 
 Run:
 
@@ -520,7 +522,7 @@ cd miniapp && npx vitest run src/pages/game-session/colorSequence.test.ts src/pa
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit game core**
+- [x] **Step 11: Commit game core**
 
 If commit is authorized, run:
 
@@ -537,7 +539,7 @@ git commit -m "feat(miniapp): 新增真实游戏核心逻辑"
 - Create: `miniapp/src/pages/game-session/retryUpload.ts`
 - Create: `miniapp/src/pages/game-session/retryUpload.test.ts`
 
-- [ ] **Step 1: Write failing retry tests**
+- [x] **Step 1: Write failing retry tests**
 
 Create `miniapp/src/pages/game-session/retryUpload.test.ts`:
 
@@ -640,7 +642,7 @@ describe('pending game upload retry state', () => {
 })
 ```
 
-- [ ] **Step 2: Run retry tests and verify they fail**
+- [x] **Step 2: Run retry tests and verify they fail**
 
 Run:
 
@@ -650,7 +652,7 @@ cd miniapp && npx vitest run src/pages/game-session/retryUpload.test.ts
 
 Expected: FAIL with module-not-found for `retryUpload`.
 
-- [ ] **Step 3: Implement retry cache**
+- [x] **Step 3: Implement retry cache**
 
 Create `miniapp/src/pages/game-session/retryUpload.ts`:
 
@@ -743,7 +745,7 @@ export function resetRetryWindowForLaunch(storage: StorageLike): PendingGameUplo
 }
 ```
 
-- [ ] **Step 4: Run retry tests**
+- [x] **Step 4: Run retry tests**
 
 Run:
 
@@ -753,7 +755,7 @@ cd miniapp && npx vitest run src/pages/game-session/retryUpload.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit retry cache**
+- [x] **Step 5: Commit retry cache**
 
 If commit is authorized, run:
 
@@ -771,7 +773,7 @@ git commit -m "feat(miniapp): 新增游戏结果补传缓存"
 - Create generated assets: `miniapp/src/assets/audio/game-session/*.m4a`
 - Create: `miniapp/src/pages/game-session/gameAudio.ts`
 
-- [ ] **Step 1: Add audio generation script**
+- [x] **Step 1: Add audio generation script**
 
 Create `miniapp/scripts/generate-game-audio.mjs`:
 
@@ -810,7 +812,7 @@ for (const [name, text] of clips) {
 }
 ```
 
-- [ ] **Step 2: Generate audio files**
+- [x] **Step 2: Generate audio files**
 
 Run:
 
@@ -820,7 +822,7 @@ cd miniapp && node scripts/generate-game-audio.mjs
 
 Expected: `miniapp/src/assets/audio/game-session/` contains `.m4a` files for each clip in the script.
 
-- [ ] **Step 3: Add audio manifest and playback helper**
+- [x] **Step 3: Add audio manifest and playback helper**
 
 Create `miniapp/src/pages/game-session/gameAudio.ts`:
 
@@ -896,7 +898,7 @@ export function playGameAudio(key: GameAudioKey): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: Build miniapp to verify assets are bundled**
+- [x] **Step 4: Build miniapp to verify assets are bundled**
 
 Run:
 
@@ -906,7 +908,7 @@ cd miniapp && npm run build:weapp
 
 Expected: PASS, and build output includes audio assets under `dist/assets/audio/game-session/` or the Taro equivalent static asset path.
 
-- [ ] **Step 5: Commit audio assets**
+- [x] **Step 5: Commit audio assets**
 
 If commit is authorized, run:
 
@@ -923,7 +925,7 @@ git commit -m "feat(miniapp): 新增游戏语音与音效资源"
 - Modify: `miniapp/src/pages/game-session/index.tsx`
 - Modify: `miniapp/src/app.scss`
 
-- [ ] **Step 1: Replace existing game page with session states**
+- [x] **Step 1: Replace existing game page with session states**
 
 Modify `miniapp/src/pages/game-session/index.tsx` so it imports the new modules:
 
@@ -993,7 +995,7 @@ const [activeInhibitionRound, setActiveInhibitionRound] = useState<InhibitionRou
 const targetSecondsRef = useRef(600)
 ```
 
-- [ ] **Step 2: Add helpers that infer game code and default difficulty**
+- [x] **Step 2: Add helpers that infer game code and default difficulty**
 
 In `index.tsx`, add:
 
@@ -1046,7 +1048,7 @@ function renderGameTopBar() {
 
 This deliberately uses action name fallback because current miniapp action payload does not expose `source_key`.
 
-- [ ] **Step 3: Implement setup and difficulty adjustment behavior**
+- [x] **Step 3: Implement setup and difficulty adjustment behavior**
 
 Replace the first render branch after loaded/action validation with setup UI:
 
@@ -1118,7 +1120,7 @@ async function startIntro() {
 }
 ```
 
-- [ ] **Step 4: Implement play loop dispatch**
+- [x] **Step 4: Implement play loop dispatch**
 
 Use a single interval for remaining seconds:
 
@@ -1194,7 +1196,7 @@ function renderInhibitionGame() {
 }
 ```
 
-- [ ] **Step 5: Implement end and upload behavior**
+- [x] **Step 5: Implement end and upload behavior**
 
 Add upload function:
 
@@ -1249,7 +1251,7 @@ function endSession(reason: GameEndReason) {
 
 The result page must display `score`、`accuracy_rate`、`error_count`、`difficulty`、`textForEndReason` and upload state.
 
-- [ ] **Step 6: Add game page styles**
+- [x] **Step 6: Add game page styles**
 
 Modify `miniapp/src/app.scss` and append:
 
@@ -1344,7 +1346,7 @@ Modify `miniapp/src/app.scss` and append:
 }
 ```
 
-- [ ] **Step 7: Type-check and build miniapp**
+- [x] **Step 7: Type-check and build miniapp**
 
 Run:
 
@@ -1355,7 +1357,7 @@ cd miniapp && npm run build:weapp
 
 Expected: both PASS.
 
-- [ ] **Step 8: Commit real game session page**
+- [x] **Step 8: Commit real game session page**
 
 If commit is authorized, run:
 
@@ -1373,7 +1375,7 @@ git commit -m "feat(miniapp): 实现真实游戏训练页"
 - Modify: `miniapp/src/pages/home/index.tsx`
 - Modify: `miniapp/src/pages/prescription/index.tsx`
 
-- [ ] **Step 1: Add foreground retry helper**
+- [x] **Step 1: Add foreground retry helper**
 
 Modify the import section of `miniapp/src/pages/game-session/retryUpload.ts`:
 
@@ -1415,7 +1417,7 @@ export async function tryUploadPendingGameRecord(storage: StorageLike, now: numb
 }
 ```
 
-- [ ] **Step 2: Use app foreground hook**
+- [x] **Step 2: Use app foreground hook**
 
 Modify `miniapp/src/app.ts`:
 
@@ -1439,7 +1441,7 @@ function App({ children }: PropsWithChildren<any>) {
 export default App
 ```
 
-- [ ] **Step 3: Show pending upload banner on home page**
+- [x] **Step 3: Show pending upload banner on home page**
 
 Modify `miniapp/src/pages/home/index.tsx` to import:
 
@@ -1469,7 +1471,7 @@ Render near the top of the page:
 {hasPendingGameUpload ? <Text className='pending-upload-banner'>有一条游戏训练记录待上传，系统会自动重试。</Text> : null}
 ```
 
-- [ ] **Step 4: Show pending upload banner on prescription page**
+- [x] **Step 4: Show pending upload banner on prescription page**
 
 Modify `miniapp/src/pages/prescription/index.tsx` to import:
 
@@ -1479,7 +1481,7 @@ import { loadPendingGameUpload, tryUploadPendingGameRecord } from '../game-sessi
 
 Add the same `hasPendingGameUpload` state and `useDidShow` retry refresh pattern as the home page. Render the same banner before action cards.
 
-- [ ] **Step 5: Type-check and test retry helper**
+- [x] **Step 5: Type-check and test retry helper**
 
 Run:
 
@@ -1490,7 +1492,7 @@ cd miniapp && npx tsc --noEmit --skipLibCheck
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit foreground retry**
+- [x] **Step 6: Commit foreground retry**
 
 If commit is authorized, run:
 
@@ -1507,7 +1509,7 @@ git commit -m "feat(miniapp): 恢复小程序前台后补传游戏记录"
 - Modify: `backend/apps/training/game_results.py`
 - Modify: `backend/apps/training/tests/test_training_current_prescription.py`
 
-- [ ] **Step 1: Write failing backend validation tests**
+- [x] **Step 1: Write failing backend validation tests**
 
 Append to `backend/apps/training/tests/test_training_current_prescription.py`:
 
@@ -1582,7 +1584,7 @@ def test_training_create_rejects_invalid_real_game_raw_detail(
         )
 ```
 
-- [ ] **Step 2: Run backend tests and verify failure**
+- [x] **Step 2: Run backend tests and verify failure**
 
 Run:
 
@@ -1592,7 +1594,7 @@ cd backend && pytest apps/training/tests/test_training_current_prescription.py -
 
 Expected: FAIL on the newly added invalid `raw_detail` cases because current validation only checks object shape.
 
-- [ ] **Step 3: Implement raw_detail validation**
+- [x] **Step 3: Implement raw_detail validation**
 
 Modify `backend/apps/training/game_results.py`:
 
@@ -1673,7 +1675,7 @@ def validate_game_result_fields(
         _validate_raw_detail(prescription_action, raw_detail)
 ```
 
-- [ ] **Step 4: Run backend validation tests**
+- [x] **Step 4: Run backend validation tests**
 
 Run:
 
@@ -1683,7 +1685,7 @@ cd backend && pytest apps/training/tests/test_training_current_prescription.py -
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit backend validation**
+- [x] **Step 5: Commit backend validation**
 
 If commit is authorized, run:
 
@@ -1703,7 +1705,7 @@ git commit -m "fix(training): 校验真实游戏结果明细"
 - Modify: `frontend/src/pages/training-tracking/TrainingTrackingDetailPage.tsx`
 - Modify: `frontend/src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx`
 
-- [ ] **Step 1: Add backend tracking test expectations**
+- [x] **Step 1: Add backend tracking test expectations**
 
 In `backend/apps/training/tests/test_tracking_api.py`, update the existing recent record fixture that creates a game record so its `form_data` contains:
 
@@ -1732,7 +1734,7 @@ assert completed_game["game_retry_count"] == 2
 assert completed_game["game_total_retry_count"] == 12
 ```
 
-- [ ] **Step 2: Run backend tracking test and verify failure**
+- [x] **Step 2: Run backend tracking test and verify failure**
 
 Run:
 
@@ -1742,7 +1744,7 @@ cd backend && pytest apps/training/tests/test_tracking_api.py -q
 
 Expected: FAIL because the tracking response does not yet include the new fields.
 
-- [ ] **Step 3: Add backend raw_detail extractors**
+- [x] **Step 3: Add backend raw_detail extractors**
 
 Modify `backend/apps/training/tracking.py` and add helpers near `_form_difficulty`:
 
@@ -1779,7 +1781,7 @@ Then update `recent_records()` row serialization with:
 "game_total_retry_count": _raw_int(record.form_data, "total_retry_count"),
 ```
 
-- [ ] **Step 4: Run backend tracking tests**
+- [x] **Step 4: Run backend tracking tests**
 
 Run:
 
@@ -1789,7 +1791,7 @@ cd backend && pytest apps/training/tests/test_tracking_api.py -q
 
 Expected: PASS.
 
-- [ ] **Step 5: Update frontend types**
+- [x] **Step 5: Update frontend types**
 
 Modify `frontend/src/pages/training-tracking/types.ts` `TrackingRecentRecord`:
 
@@ -1818,7 +1820,7 @@ export type TrackingRecentRecord = {
 };
 ```
 
-- [ ] **Step 6: Update frontend detail test fixture and assertions**
+- [x] **Step 6: Update frontend detail test fixture and assertions**
 
 In `frontend/src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx`, update `trackingDetail.recent_records[0]`:
 
@@ -1839,7 +1841,7 @@ expect(screen.getByText("12 次")).toBeInTheDocument();
 expect(screen.getByText("今天状态不佳")).toBeInTheDocument();
 ```
 
-- [ ] **Step 7: Update frontend columns**
+- [x] **Step 7: Update frontend columns**
 
 Modify `frontend/src/pages/training-tracking/TrainingTrackingDetailPage.tsx` near labels:
 
@@ -1876,7 +1878,7 @@ Add columns in 最近训练记录 after 难度:
 },
 ```
 
-- [ ] **Step 8: Run frontend detail test**
+- [x] **Step 8: Run frontend detail test**
 
 Run:
 
@@ -1886,7 +1888,7 @@ cd frontend && npm run test -- src/pages/training-tracking/TrainingTrackingDetai
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit tracking fields**
+- [x] **Step 9: Commit tracking fields**
 
 If commit is authorized, run:
 
@@ -1902,7 +1904,7 @@ git commit -m "feat(training): 展示真实游戏训练摘要"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-16-wechat-miniapp-real-games.md`
 
-- [ ] **Step 1: Run targeted backend tests**
+- [x] **Step 1: Run targeted backend tests**
 
 Run:
 
@@ -1912,7 +1914,7 @@ cd backend && pytest apps/training/tests/test_training_current_prescription.py a
 
 Expected: PASS.
 
-- [ ] **Step 2: Run targeted frontend tests**
+- [x] **Step 2: Run targeted frontend tests**
 
 Run:
 
@@ -1922,7 +1924,7 @@ cd frontend && npm run test -- src/pages/training-tracking/TrainingTrackingDetai
 
 Expected: PASS.
 
-- [ ] **Step 3: Run miniapp tests and type check**
+- [x] **Step 3: Run miniapp tests and type check**
 
 Run:
 
@@ -1934,7 +1936,7 @@ cd miniapp && npm run build:weapp
 
 Expected: PASS.
 
-- [ ] **Step 4: Run broader regression checks**
+- [x] **Step 4: Run broader regression checks**
 
 Run:
 
@@ -1947,7 +1949,7 @@ cd frontend && npm run build
 
 Expected: PASS.
 
-- [ ] **Step 5: Update execution record in this plan**
+- [x] **Step 5: Update execution record in this plan**
 
 At the top of `docs/superpowers/plans/2026-05-16-wechat-miniapp-real-games.md`, add:
 
@@ -1957,7 +1959,7 @@ At the top of `docs/superpowers/plans/2026-05-16-wechat-miniapp-real-games.md`, 
 
 Replace `YYYY-MM-DD` and `<实际 short SHA 列表>` with the real values from execution.
 
-- [ ] **Step 6: Commit plan status**
+- [x] **Step 6: Commit plan status**
 
 If commit is authorized, run:
 
