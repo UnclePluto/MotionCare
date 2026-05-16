@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { createPuzzleRound, evaluatePuzzleCompletion, swapPuzzleTiles } from './puzzle'
 
+function randomSequence(values: number[]) {
+  let index = 0
+  return () => values[Math.min(index++, values.length - 1)]
+}
+
 describe('createPuzzleRound', () => {
   it('creates a simple 2x2 round with four shuffled tiles and long preview', () => {
-    const round = createPuzzleRound('简单', () => 0)
+    const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
 
     expect(round.rows).toBe(2)
     expect(round.cols).toBe(2)
@@ -13,19 +18,48 @@ describe('createPuzzleRound', () => {
     expect(evaluatePuzzleCompletion(round.tiles)).toBe(false)
   })
 
+  it('creates a medium 2x3 round with six tiles and medium preview', () => {
+    const round = createPuzzleRound('中等', randomSequence([0, 0, 0, 0, 0, 0]))
+
+    expect(round.rows).toBe(2)
+    expect(round.cols).toBe(3)
+    expect(round.previewMs).toBe(2800)
+    expect(round.tiles).toHaveLength(6)
+    expect(evaluatePuzzleCompletion(round.tiles)).toBe(false)
+  })
+
   it('creates a difficult 3x3 round with nine tiles and short preview', () => {
-    const round = createPuzzleRound('困难', () => 0)
+    const round = createPuzzleRound('困难', randomSequence([0, 0, 0, 0, 0, 0, 0, 0, 0]))
 
     expect(round.rows).toBe(3)
     expect(round.cols).toBe(3)
     expect(round.previewMs).toBe(2200)
     expect(round.tiles).toHaveLength(9)
   })
+
+  it('uses random to select different images', () => {
+    const beachRound = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
+    const lighthouseRound = createPuzzleRound('简单', randomSequence([0.99, 0, 0, 0]))
+
+    expect(beachRound.imageSrc).toBe('/assets/images/game-session/puzzle_beach.svg')
+    expect(lighthouseRound.imageSrc).toBe('/assets/images/game-session/puzzle_lighthouse.svg')
+  })
+
+  it('uses random to create different tile orders instead of a fixed first-pair swap', () => {
+    const firstRound = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
+    const secondRound = createPuzzleRound('简单', randomSequence([0, 0.99, 0.99, 0.99]))
+    const firstOrder = firstRound.tiles.map((tile) => tile.correctIndex)
+    const secondOrder = secondRound.tiles.map((tile) => tile.correctIndex)
+
+    expect(firstOrder).not.toEqual(secondOrder)
+    expect(firstOrder).not.toEqual([1, 0, 2, 3])
+    expect(secondOrder).not.toEqual([0, 1, 2, 3])
+  })
 })
 
 describe('swapPuzzleTiles', () => {
   it('swaps the first two tiles without mutating the input', () => {
-    const round = createPuzzleRound('简单', () => 0)
+    const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
     const firstTile = round.tiles[0]
     const secondTile = round.tiles[1]
     const swapped = swapPuzzleTiles(round.tiles, firstTile.id, secondTile.id)
@@ -35,11 +69,29 @@ describe('swapPuzzleTiles', () => {
     expect(round.tiles[0]).toBe(firstTile)
     expect(round.tiles[1]).toBe(secondTile)
   })
+
+  it('returns the original array when swapping the same tile id', () => {
+    const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
+    const tilesBefore = [...round.tiles]
+    const swapped = swapPuzzleTiles(round.tiles, round.tiles[0].id, round.tiles[0].id)
+
+    expect(swapped).toBe(round.tiles)
+    expect(round.tiles).toEqual(tilesBefore)
+  })
+
+  it('returns the original array and does not mutate when either tile id is missing', () => {
+    const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
+    const tilesBefore = [...round.tiles]
+    const swapped = swapPuzzleTiles(round.tiles, round.tiles[0].id, 'missing-tile')
+
+    expect(swapped).toBe(round.tiles)
+    expect(round.tiles).toEqual(tilesBefore)
+  })
 })
 
 describe('evaluatePuzzleCompletion', () => {
   it('returns true for the correct tile order', () => {
-    const round = createPuzzleRound('简单', () => 0)
+    const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
     const completedTiles = [...round.tiles].sort((left, right) => left.correctIndex - right.correctIndex)
 
     expect(evaluatePuzzleCompletion(completedTiles)).toBe(true)

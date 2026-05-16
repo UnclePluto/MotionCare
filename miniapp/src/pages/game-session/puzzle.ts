@@ -38,14 +38,27 @@ function createTiles(count: number): PuzzleTile[] {
   }))
 }
 
-function shuffledTiles(count: number): PuzzleTile[] {
+function shuffledTiles(count: number, random: () => number): PuzzleTile[] {
   const tiles = createTiles(count)
 
   if (tiles.length < 2) {
     return tiles
   }
 
-  return swapPuzzleTiles(tiles, tiles[0].id, tiles[1].id)
+  const result = [...tiles]
+
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = pickIndex(index + 1, random)
+    const current = result[index]
+    result[index] = result[swapIndex]
+    result[swapIndex] = current
+  }
+
+  if (evaluatePuzzleCompletion(result)) {
+    return swapPuzzleTiles(result, result[0].id, result[1].id)
+  }
+
+  return result
 }
 
 export function createPuzzleRound(difficulty: GameDifficulty, random: () => number = Math.random): PuzzleRound {
@@ -56,7 +69,7 @@ export function createPuzzleRound(difficulty: GameDifficulty, random: () => numb
     rows: config.rows,
     cols: config.cols,
     previewMs: config.previewMs,
-    tiles: shuffledTiles(config.rows * config.cols),
+    tiles: shuffledTiles(config.rows * config.cols, random),
   }
 }
 
@@ -79,6 +92,6 @@ export function swapPuzzleTiles(tiles: PuzzleTile[], firstTileId: string, second
   return result
 }
 
-export function evaluatePuzzleCompletion(tiles: PuzzleTile[]): boolean {
+export function evaluatePuzzleCompletion(tiles: ReadonlyArray<Pick<PuzzleTile, 'correctIndex'>>): boolean {
   return tiles.every((tile, index) => tile.correctIndex === index)
 }
