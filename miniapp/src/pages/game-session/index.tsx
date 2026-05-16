@@ -1,6 +1,6 @@
 import { Button, Image, Input, Picker, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
 import { request } from '../../api/client'
 import type { CurrentPrescription } from '../../types/patientApp'
@@ -72,6 +72,14 @@ const COLOR_LABEL: Record<ColorToken, string> = {
   yellow: '黄',
   red: '红',
   teal: '青',
+}
+
+const SOUND_CATEGORY_LABEL: Record<SoundCard['category'], string> = {
+  bird: '小鸟',
+  train: '火车',
+  phone: '电话',
+  laugh: '笑声',
+  drum: '鼓声',
 }
 
 function normalizeDifficulty(value: string): GameDifficulty {
@@ -153,6 +161,9 @@ export default function GameSessionPage() {
   const activeCategoryRoundRef = useRef<CategorySwitchRound | null>(null)
   const activeSoundRoundRef = useRef<SoundDiscriminationRound | null>(null)
   const activePuzzleRoundRef = useRef<PuzzleRound | null>(null)
+  const soundPhaseRef = useRef<'preview' | 'choose'>('preview')
+  const soundRoundRunIdRef = useRef(0)
+  const soundPreviewInFlightRef = useRef(false)
   const targetSecondsRef = useRef(600)
   const elapsedSecondsRef = useRef(0)
   const unitResultsRef = useRef<UnitResult[]>([])
@@ -193,6 +204,15 @@ export default function GameSessionPage() {
     setPhase(nextPhase)
   }
 
+  function setSoundRoundPhase(nextPhase: 'preview' | 'choose') {
+    soundPhaseRef.current = nextPhase
+    setSoundPhase(nextPhase)
+  }
+
+  function currentSoundRoundPhase(): 'preview' | 'choose' {
+    return soundPhaseRef.current
+  }
+
   function clearRoundTimers(options: { preserveRevealRemaining?: boolean; preserveRoundTimeoutRemaining?: boolean } = {}) {
     if (revealTimerRef.current) {
       clearTimeout(revealTimerRef.current)
@@ -230,6 +250,9 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
+    soundPhaseRef.current = 'preview'
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     previousCategoryRuleRef.current = undefined
     roundStartedAtRef.current = Date.now()
     introRunIdRef.current += 1
@@ -248,7 +271,7 @@ export default function GameSessionPage() {
     setPatternRevealing(false)
     setActiveCategoryRound(null)
     setActiveSoundRound(null)
-    setSoundPhase('preview')
+    setSoundRoundPhase('preview')
     setSoundPlaybackError('')
     setActivePuzzleRound(null)
     setSelectedPuzzleTileId(null)
@@ -510,6 +533,8 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     setActiveColorRound(round)
     setActiveColorInput([])
     setActiveInhibitionRound(null)
@@ -539,6 +564,8 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     setActiveInhibitionRound(round)
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -568,6 +595,8 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     setActivePatternRound(round)
     setActivePatternInput([])
     setPatternRevealing(true)
@@ -601,6 +630,8 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = round
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     setActiveCategoryRound(round)
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -631,8 +662,10 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = round
     activePuzzleRoundRef.current = null
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     setActiveSoundRound(round)
-    setSoundPhase('preview')
+    setSoundRoundPhase('preview')
     setSoundPlaybackError('')
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -661,6 +694,8 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = round
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
     setActivePuzzleRound(round)
     setSelectedPuzzleTileId(null)
     setPuzzlePreviewing(true)
@@ -961,32 +996,74 @@ export default function GameSessionPage() {
     scheduleNextRound()
   }
 
+  function canUseSoundRound(runId: number, round: SoundDiscriminationRound): boolean {
+    return (
+      soundRoundRunIdRef.current === runId &&
+      activeSoundRoundRef.current === round &&
+      phaseRef.current === 'playing' &&
+      !unitLockedRef.current &&
+      !endStartedRef.current
+    )
+  }
+
   async function previewSoundCard(card: SoundCard) {
-    if (phaseRef.current !== 'playing' || soundPhase !== 'preview' || !activeSoundRound) return
-    setSoundPlaybackError('')
-    void playGameAudio('tap')
-    const previewPlayed = await playAudioSrc(card.audioSrc)
-    if (!previewPlayed) {
-      setSoundPlaybackError('声音播放异常，请重新试听这张卡片')
+    const runId = soundRoundRunIdRef.current
+    const currentRound = activeSoundRoundRef.current
+    if (
+      phaseRef.current !== 'playing' ||
+      soundPhaseRef.current !== 'preview' ||
+      !currentRound ||
+      soundPreviewInFlightRef.current ||
+      !currentRound.cards.some((item) => item.id === card.id)
+    ) {
       return
     }
 
-    const nextRound = markCardPreviewed(activeSoundRound, card.id)
-    activeSoundRoundRef.current = nextRound
-    setActiveSoundRound(nextRound)
-    if (nextRound.previewComplete) {
-      setSoundPhase('choose')
+    soundPreviewInFlightRef.current = true
+    setSoundPlaybackError('')
+    void playGameAudio('tap')
+    try {
+      const previewPlayed = await playAudioSrc(card.audioSrc)
+      if (!canUseSoundRound(runId, currentRound) || currentSoundRoundPhase() !== 'preview') return
+      if (!previewPlayed) {
+        setSoundPlaybackError('声音播放异常，请重新试听这张卡片')
+        return
+      }
+
+      const latestRound = activeSoundRoundRef.current
+      if (!latestRound || latestRound !== currentRound) return
+      const nextRound = markCardPreviewed(latestRound, card.id)
+      activeSoundRoundRef.current = nextRound
+      setActiveSoundRound(nextRound)
+      if (!nextRound.previewComplete) return
+
+      setSoundRoundPhase('choose')
+      soundPreviewInFlightRef.current = false
       roundStartedAtRef.current = Date.now()
       const targetPlayed = await playAudioSrc(nextRound.target.audioSrc)
+      if (
+        soundRoundRunIdRef.current !== runId ||
+        activeSoundRoundRef.current !== nextRound ||
+        currentSoundRoundPhase() !== 'choose' ||
+        phaseRef.current !== 'playing' ||
+        unitLockedRef.current ||
+        endStartedRef.current
+      ) {
+        return
+      }
       if (!targetPlayed) {
         setSoundPlaybackError('目标声音播放异常，请点击重播目标声音')
       }
       startRoundTimeout(nextRound.timeoutMs)
+    } finally {
+      if (soundRoundRunIdRef.current === runId) {
+        soundPreviewInFlightRef.current = false
+      }
     }
   }
 
   async function replayTargetSound() {
-    if (phaseRef.current !== 'playing' || !activeSoundRound || soundPhase !== 'choose') return
+    if (phaseRef.current !== 'playing' || !activeSoundRound || soundPhaseRef.current !== 'choose') return
     setSoundPlaybackError('')
     const played = await playAudioSrc(activeSoundRound.target.audioSrc)
     if (!played) {
@@ -995,7 +1072,7 @@ export default function GameSessionPage() {
   }
 
   function selectSoundCard(card: SoundCard) {
-    if (phaseRef.current !== 'playing' || soundPhase !== 'choose' || unitLockedRef.current || !activeSoundRound) return
+    if (phaseRef.current !== 'playing' || soundPhaseRef.current !== 'choose' || unitLockedRef.current || !activeSoundRound) return
     unitLockedRef.current = true
     void playGameAudio('tap')
     const attempt = evaluateSoundDiscriminationAttempt(activeSoundRound, card.soundId)
@@ -1042,6 +1119,20 @@ export default function GameSessionPage() {
       setFeedback(GAME_AUDIO_TEXT.correct)
       void playGameAudio('correct')
       scheduleNextRound()
+    }
+  }
+
+  function puzzleTileStyle(round: PuzzleRound, tile: PuzzleTile): CSSProperties {
+    const row = Math.floor(tile.correctIndex / round.cols)
+    const col = tile.correctIndex % round.cols
+    const x = round.cols <= 1 ? 0 : (col / (round.cols - 1)) * 100
+    const y = round.rows <= 1 ? 0 : (row / (round.rows - 1)) * 100
+
+    return {
+      backgroundImage: `url(${round.imageSrc})`,
+      backgroundSize: `${round.cols * 100}% ${round.rows * 100}%`,
+      backgroundPosition: `${x}% ${y}%`,
+      backgroundRepeat: 'no-repeat',
     }
   }
 
@@ -1356,7 +1447,7 @@ export default function GameSessionPage() {
                 {revealed ? (
                   <View className='sound-card-face'>
                     <Image className='game-image' src={card.imageSrc} mode='aspectFit' />
-                    <Text>{card.label}</Text>
+                    <Text>{SOUND_CATEGORY_LABEL[card.category]}</Text>
                   </View>
                 ) : (
                   <Text className='card-back'>?</Text>
@@ -1390,8 +1481,7 @@ export default function GameSessionPage() {
                 className={`puzzle-tile ${selectedPuzzleTileId === tile.id ? 'selected' : ''}`}
                 onClick={() => selectPuzzleTile(tile)}
               >
-                <Image className='puzzle-tile-image' src={activePuzzleRound.imageSrc} mode='aspectFill' />
-                <Text className='puzzle-tile-number'>{tile.correctIndex + 1}</Text>
+                <View className='puzzle-tile-slice' style={puzzleTileStyle(activePuzzleRound, tile)} />
               </Button>
             ))}
           </View>
