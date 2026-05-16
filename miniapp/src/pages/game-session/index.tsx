@@ -1060,9 +1060,21 @@ export default function GameSessionPage() {
   }
 
   async function replayTargetSound() {
-    if (phaseRef.current !== 'playing' || !activeSoundRound || soundPhaseRef.current !== 'choose') return
+    const runId = soundRoundRunIdRef.current
+    const currentRound = activeSoundRoundRef.current
+    if (phaseRef.current !== 'playing' || !currentRound || soundPhaseRef.current !== 'choose') return
     setSoundPlaybackError('')
-    const played = await playAudioSrc(activeSoundRound.target.audioSrc)
+    const played = await playAudioSrc(currentRound.target.audioSrc)
+    if (
+      soundRoundRunIdRef.current !== runId ||
+      activeSoundRoundRef.current !== currentRound ||
+      currentSoundRoundPhase() !== 'choose' ||
+      phaseRef.current !== 'playing' ||
+      unitLockedRef.current ||
+      endStartedRef.current
+    ) {
+      return
+    }
     if (!played) {
       setSoundPlaybackError('目标声音播放异常，请再次点击重播')
     }
@@ -1116,17 +1128,15 @@ export default function GameSessionPage() {
     }
   }
 
-  function puzzleTileStyle(round: PuzzleRound, tile: PuzzleTile): CSSProperties {
+  function puzzleTileImageStyle(round: PuzzleRound, tile: PuzzleTile): CSSProperties {
     const row = Math.floor(tile.correctIndex / round.cols)
     const col = tile.correctIndex % round.cols
-    const x = round.cols <= 1 ? 0 : (col / (round.cols - 1)) * 100
-    const y = round.rows <= 1 ? 0 : (row / (round.rows - 1)) * 100
 
     return {
-      backgroundImage: `url(${round.imageSrc})`,
-      backgroundSize: `${round.cols * 100}% ${round.rows * 100}%`,
-      backgroundPosition: `${x}% ${y}%`,
-      backgroundRepeat: 'no-repeat',
+      width: `${round.cols * 100}%`,
+      height: `${round.rows * 100}%`,
+      left: `-${col * 100}%`,
+      top: `-${row * 100}%`,
     }
   }
 
@@ -1475,7 +1485,14 @@ export default function GameSessionPage() {
                 className={`puzzle-tile ${selectedPuzzleTileId === tile.id ? 'selected' : ''}`}
                 onClick={() => selectPuzzleTile(tile)}
               >
-                <View className='puzzle-tile-slice' style={puzzleTileStyle(activePuzzleRound, tile)} />
+                <View className='puzzle-tile-slice'>
+                  <Image
+                    className='puzzle-tile-image'
+                    src={activePuzzleRound.imageSrc}
+                    mode='scaleToFill'
+                    style={puzzleTileImageStyle(activePuzzleRound, tile)}
+                  />
+                </View>
               </Button>
             ))}
           </View>
