@@ -1,17 +1,35 @@
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { request } from '../../api/client'
 import type { CurrentPrescription } from '../../types/patientApp'
+import {
+  loadPendingGameUpload,
+  startPendingGameUploadRetryLoop,
+  subscribePendingGameUploadRetryLoop,
+  tryUploadPendingGameRecord,
+} from '../game-session/retryUpload'
+
+function pendingGameUploadBannerText(): string {
+  const pending = loadPendingGameUpload(Taro)
+  if (!pending) return ''
+  if (pending.retry_paused_until_next_launch) return '有游戏训练结果待补传，已暂停到下次打开后继续。'
+  if (pending.next_retry_at > Date.now()) return '有游戏训练结果待补传，稍后将自动重试。'
+  return '有游戏训练结果待补传，正在尝试自动补传。'
+}
 
 export default function PrescriptionPage() {
   const [data, setData] = useState<CurrentPrescription>(null)
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [pendingUploadBanner, setPendingUploadBanner] = useState('')
 
-  useDidShow(() => {
-    setError('')
+  function refreshPendingUploadBanner() {
+    setPendingUploadBanner(pendingGameUploadBannerText())
+  }
+
+  function loadPrescriptionData() {
     request<CurrentPrescription>('/patient-app/current-prescription/')
       .then((body) => {
         setData(body)
@@ -21,12 +39,38 @@ export default function PrescriptionPage() {
         setError(err instanceof Error ? err.message : '加载失败')
         setLoaded(true)
       })
+  }
+
+  useEffect(() => {
+    return subscribePendingGameUploadRetryLoop((result) => {
+      refreshPendingUploadBanner()
+      if (result === 'uploaded') {
+        loadPrescriptionData()
+      }
+    })
+  }, [])
+
+  useDidShow(() => {
+    setError('')
+    refreshPendingUploadBanner()
+    void tryUploadPendingGameRecord(Taro)
+      .then((result) => {
+        if (result === 'uploaded') {
+          loadPrescriptionData()
+        }
+      })
+      .finally(() => {
+        refreshPendingUploadBanner()
+        startPendingGameUploadRetryLoop(Taro)
+      })
+    loadPrescriptionData()
   })
 
   if (!loaded) {
     return (
       <View className='page prescription-page'>
         <Text className='title'>当前处方</Text>
+        {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
         <Text className='muted'>加载中</Text>
       </View>
     )
@@ -36,6 +80,7 @@ export default function PrescriptionPage() {
     return (
       <View className='page prescription-page'>
         <Text className='title'>当前处方</Text>
+        {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
         {error ? <Text className='error'>{error}</Text> : <Text className='muted'>暂无生效处方</Text>}
       </View>
     )
@@ -44,6 +89,7 @@ export default function PrescriptionPage() {
   return (
     <View className='page prescription-page'>
       <Text className='title'>当前处方 v{data.version}</Text>
+      {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
       <Text className='muted'>
         本周：{data.week_start} 至 {data.week_end}
       </Text>

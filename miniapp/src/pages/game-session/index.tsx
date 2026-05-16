@@ -3,7 +3,6 @@ import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { request } from '../../api/client'
-import { clearPatientAppToken, getPatientAppToken } from '../../auth/token'
 import type { CurrentPrescription } from '../../types/patientApp'
 import { todayLocalDate } from '../../utils/date'
 import {
@@ -15,7 +14,12 @@ import {
 import { GAME_AUDIO_TEXT, isGameAudioMuted, playGameAudio, setGameAudioMuted, type GameAudioKey } from './gameAudio'
 import type { GameActionSummary, GameCode, GameDifficulty, GameEndReason, GameTrainingPayload } from './gameTypes'
 import { createInhibitionRound, evaluateInhibitionAttempt, type InhibitionRound } from './inhibition'
-import { savePendingGameUpload } from './retryUpload'
+import {
+  postGameTrainingRecord,
+  savePendingGameUploadAfterActiveRetry,
+  startPendingGameUploadRetryLoop,
+  type TrainingRecordUploadError,
+} from './retryUpload'
 import { buildGameTrainingResult } from './scoring'
 
 type PrescriptionAction = NonNullable<CurrentPrescription>['actions'][number]
@@ -36,8 +40,6 @@ type UploadState =
   | 'upload_save_failed'
 
 const DIFFICULTY_OPTIONS: GameDifficulty[] = ['简单', '中等', '困难']
-const API_BASE_URL = process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
-const RETRYABLE_STATUS_CODE_MIN = 500
 
 const GAME_CODE_BY_SOURCE: Record<string, GameCode> = {
   'game-memory-color-sequence': 'game-memory-color-sequence',
@@ -83,61 +85,6 @@ function uploadStateText(uploadState: UploadState): string {
   if (uploadState === 'blocked_by_existing_pending') return '未保存，已有旧记录待补传'
   if (uploadState === 'upload_save_failed') return '未保存'
   return '等待上传'
-}
-
-function resolveErrorMessage(data: unknown): string {
-  if (data && typeof data === 'object') {
-    const detail = (data as { detail?: unknown }).detail
-    const message = (data as { message?: unknown }).message
-    if (typeof detail === 'string') return detail
-    if (typeof message === 'string') return message
-  }
-  return '请求失败'
-}
-
-type TrainingRecordUploadError = Error & {
-  retryable: boolean
-  statusCode?: number
-}
-
-function createUploadError(message: string, retryable: boolean, statusCode?: number): TrainingRecordUploadError {
-  const error = new Error(message) as TrainingRecordUploadError
-  error.retryable = retryable
-  if (statusCode !== undefined) {
-    error.statusCode = statusCode
-  }
-  return error
-}
-
-async function postGameTrainingRecord(payload: GameTrainingPayload): Promise<void> {
-  const token = getPatientAppToken()
-  let response: Taro.request.SuccessCallbackResult<Record<string, unknown>>
-  try {
-    response = await Taro.request<Record<string, unknown>>({
-      url: `${API_BASE_URL}/patient-app/training-records/`,
-      method: 'POST',
-      data: payload,
-      header: {
-        'content-type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-  } catch (err) {
-    throw createUploadError(err instanceof Error ? err.message : '网络异常，稍后自动补传', true)
-  }
-
-  const statusCode = Number(response.statusCode)
-  if (!Number.isFinite(statusCode)) {
-    throw createUploadError('网络异常，稍后自动补传', true)
-  }
-  if (statusCode >= 200 && statusCode < 300) return
-  if (statusCode === 401 || statusCode === 403) {
-    clearPatientAppToken()
-    Taro.redirectTo({ url: '/pages/bind/index' })
-    throw createUploadError('登录已失效', false, statusCode)
-  }
-
-  throw createUploadError(resolveErrorMessage(response.data), statusCode <= 0 || statusCode >= RETRYABLE_STATUS_CODE_MIN, statusCode)
 }
 
 function wait(ms: number): Promise<void> {
@@ -622,10 +569,11 @@ export default function GameSessionPage() {
       }
 
       try {
-        const pending = savePendingGameUpload(Taro, payload, Date.now())
+        const pending = await savePendingGameUploadAfterActiveRetry(Taro, payload)
         if (pending.payload === payload) {
           setUploadState('pending_retry')
           setError(`上传失败，已保存待补传记录：${message}`)
+          startPendingGameUploadRetryLoop(Taro)
         } else {
           setUploadState('blocked_by_existing_pending')
           setError('已有待上传记录，本次结果未覆盖旧记录，请先返回后等待或处理旧记录')

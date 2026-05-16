@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('@tarojs/taro', () => ({
+  default: {
+    getStorageSync: vi.fn(),
+    removeStorageSync: vi.fn(),
+    redirectTo: vi.fn(),
+    request: vi.fn(),
+  },
+}))
 
 import type { GameTrainingPayload } from './gameTypes'
 import {
@@ -9,7 +18,12 @@ import {
   loadPendingGameUpload,
   markRetryFailure,
   resetRetryWindowForLaunch,
+  savePendingGameUploadAfterActiveRetry,
   savePendingGameUpload,
+  startPendingGameUploadRetryLoop,
+  stopPendingGameUploadRetryLoop,
+  subscribePendingGameUploadRetryLoop,
+  tryUploadPendingGameRecord,
 } from './retryUpload'
 
 function payload(): GameTrainingPayload {
@@ -64,6 +78,11 @@ function pending(overrides: Partial<PendingGameUpload> = {}): PendingGameUpload 
     ...overrides,
   }
 }
+
+afterEach(() => {
+  stopPendingGameUploadRetryLoop()
+  vi.useRealTimers()
+})
 
 describe('pending game upload retry state', () => {
   it('stores one pending upload and clears it after success', () => {
@@ -243,5 +262,252 @@ describe('pending game upload retry state', () => {
     const storage = memoryStorage()
 
     expect(resetRetryWindowForLaunch(storage)).toBeNull()
+  })
+
+  it('returns none when there is no pending upload to retry', async () => {
+    const storage = memoryStorage()
+    const uploader = vi.fn()
+
+    await expect(tryUploadPendingGameRecord(storage, 1000, uploader)).resolves.toBe('none')
+    expect(uploader).not.toHaveBeenCalled()
+  })
+
+  it('returns waiting without uploading when the next retry time has not arrived', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 5000 }))
+    const uploader = vi.fn()
+
+    await expect(tryUploadPendingGameRecord(storage, 4000, uploader)).resolves.toBe('waiting')
+    expect(uploader).not.toHaveBeenCalled()
+  })
+
+  it('returns waiting without uploading when the pending upload is paused until next launch', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(
+      PENDING_GAME_UPLOAD_KEY,
+      pending({ next_retry_at: 1000, retry_paused_until_next_launch: true })
+    )
+    const uploader = vi.fn()
+
+    await expect(tryUploadPendingGameRecord(storage, 2000, uploader)).resolves.toBe('waiting')
+    expect(uploader).not.toHaveBeenCalled()
+  })
+
+  it('uploads due pending data in retry mode and clears the pending upload after success', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(
+      PENDING_GAME_UPLOAD_KEY,
+      pending({
+        retry_count: 3,
+        total_retry_count: 8,
+        next_retry_at: 1000,
+      })
+    )
+    const uploader = vi.fn().mockResolvedValue(undefined)
+
+    await expect(tryUploadPendingGameRecord(storage, 1000, uploader)).resolves.toBe('uploaded')
+
+    expect(uploader).toHaveBeenCalledTimes(1)
+    expect(uploader.mock.calls[0][0].form_data.raw_detail.upload_mode).toBe('retry')
+    expect(uploader.mock.calls[0][0].form_data.raw_detail.retry_count).toBe(3)
+    expect(uploader.mock.calls[0][0].form_data.raw_detail.total_retry_count).toBe(8)
+    expect(loadPendingGameUpload(storage)).toBeNull()
+  })
+
+  it('marks retry failure and pauses after the tenth retry in the current launch window', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(
+      PENDING_GAME_UPLOAD_KEY,
+      pending({
+        retry_count: 9,
+        total_retry_count: 12,
+        next_retry_at: 1000,
+      })
+    )
+    const uploader = vi.fn().mockRejectedValue(Object.assign(new Error('服务器错误'), { retryable: true, statusCode: 500 }))
+
+    await expect(tryUploadPendingGameRecord(storage, 1000, uploader)).resolves.toBe('failed')
+
+    const pendingUpload = loadPendingGameUpload(storage)
+    expect(pendingUpload?.retry_count).toBe(10)
+    expect(pendingUpload?.total_retry_count).toBe(13)
+    expect(pendingUpload?.last_error).toBe('服务器错误')
+    expect(pendingUpload?.retry_paused_until_next_launch).toBe(true)
+  })
+
+  it('clears pending upload and returns rejected for non-retryable status errors', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const uploader = vi.fn().mockRejectedValue(Object.assign(new Error('参数错误'), { retryable: false, statusCode: 400 }))
+
+    await expect(tryUploadPendingGameRecord(storage, 1000, uploader)).resolves.toBe('rejected')
+
+    expect(loadPendingGameUpload(storage)).toBeNull()
+  })
+
+  it('schedules retry from the failure time instead of the request start time', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const uploader = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          setTimeout(() => reject(Object.assign(new Error('服务器错误'), { retryable: true, statusCode: 500 })), 30000)
+        })
+    )
+
+    const retry = tryUploadPendingGameRecord(storage, 1000, uploader)
+    await vi.advanceTimersByTimeAsync(30000)
+
+    await expect(retry).resolves.toBe('failed')
+    expect(loadPendingGameUpload(storage)?.next_retry_at).toBe(36000)
+  })
+
+  it('saves a new payload after the active old pending retry succeeds', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const nextPayload = { ...payload(), prescription_action: 200 }
+    let resolveUpload: (() => void) | undefined
+    const uploader = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUpload = resolve
+        })
+    )
+
+    const retry = tryUploadPendingGameRecord(storage, 1000, uploader)
+    const saved = savePendingGameUploadAfterActiveRetry(storage, nextPayload, 2000)
+    resolveUpload?.()
+    await retry
+
+    await expect(saved).resolves.toMatchObject({ payload: nextPayload })
+    expect(loadPendingGameUpload(storage)?.payload.prescription_action).toBe(200)
+  })
+
+  it('continues retry loop at next_retry_at after the first retryable failure', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const uploader = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('服务器错误'), { retryable: true, statusCode: 500 }))
+      .mockResolvedValueOnce(undefined)
+
+    startPendingGameUploadRetryLoop(storage, { uploader })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(uploader).toHaveBeenCalledTimes(1)
+    expect(loadPendingGameUpload(storage)?.next_retry_at).toBe(6000)
+
+    await vi.advanceTimersByTimeAsync(4999)
+    expect(uploader).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(uploader).toHaveBeenCalledTimes(2)
+    expect(loadPendingGameUpload(storage)).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('pauses after the tenth retry in the loop and does not schedule another retry in the same launch', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = memoryStorage()
+    storage.setStorageSync(
+      PENDING_GAME_UPLOAD_KEY,
+      pending({
+        retry_count: 9,
+        total_retry_count: 20,
+        next_retry_at: 1000,
+      })
+    )
+    const uploader = vi.fn().mockRejectedValue(Object.assign(new Error('服务器错误'), { retryable: true, statusCode: 500 }))
+
+    startPendingGameUploadRetryLoop(storage, { uploader })
+    await vi.runOnlyPendingTimersAsync()
+
+    const pendingUpload = loadPendingGameUpload(storage)
+    expect(uploader).toHaveBeenCalledTimes(1)
+    expect(pendingUpload?.retry_count).toBe(10)
+    expect(pendingUpload?.retry_paused_until_next_launch).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(600000)
+    expect(uploader).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears pending upload and stops the retry loop after success', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const uploader = vi.fn().mockResolvedValue(undefined)
+
+    startPendingGameUploadRetryLoop(storage, { uploader })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(uploader).toHaveBeenCalledTimes(1)
+    expect(loadPendingGameUpload(storage)).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps the retry loop stable when a listener throws', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = memoryStorage()
+    storage.setStorageSync(
+      PENDING_GAME_UPLOAD_KEY,
+      pending({
+        retry_count: 0,
+        total_retry_count: 0,
+        next_retry_at: 1000,
+      })
+    )
+    const uploader = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('服务器错误'), { retryable: true, statusCode: 500 }))
+      .mockResolvedValueOnce(undefined)
+    const listener = vi.fn(() => {
+      throw new Error('page refresh failed')
+    })
+
+    const unsubscribe = subscribePendingGameUploadRetryLoop(listener)
+    startPendingGameUploadRetryLoop(storage, { uploader })
+    await vi.runOnlyPendingTimersAsync()
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(listener).toHaveBeenCalledWith('failed')
+    expect(uploader).toHaveBeenCalledTimes(2)
+    expect(loadPendingGameUpload(storage)).toBeNull()
+    unsubscribe()
+  })
+
+  it('stops the retry loop when storage failure rejects the retry attempt', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = {
+      getStorageSync: vi.fn(() => pending({ next_retry_at: 1000 })),
+      setStorageSync: vi.fn(),
+      removeStorageSync: vi.fn(() => {
+        throw new Error('storage unavailable')
+      }),
+    }
+    const uploader = vi.fn().mockResolvedValue(undefined)
+
+    startPendingGameUploadRetryLoop(storage, { uploader })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(uploader).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+
+    const healthyStorage = memoryStorage()
+    healthyStorage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const secondUploader = vi.fn().mockResolvedValue(undefined)
+
+    startPendingGameUploadRetryLoop(healthyStorage, { uploader: secondUploader })
+    await vi.runOnlyPendingTimersAsync()
+
+    expect(secondUploader).toHaveBeenCalledTimes(1)
   })
 })
