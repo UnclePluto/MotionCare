@@ -20,8 +20,11 @@ describe('createPuzzleRound', () => {
     expect(round.previewMs).toBe(3500)
     expect(round.tiles).toHaveLength(4)
     expect(round.shuffledTiles).toHaveLength(4)
-    expect(evaluatePuzzleCompletion(round.tiles)).toBe(true)
+    expect(round.solutionTiles).toHaveLength(4)
+    expect(round.tiles).toBe(round.shuffledTiles)
+    expect(evaluatePuzzleCompletion(round.tiles)).toBe(false)
     expect(evaluatePuzzleCompletion(round.shuffledTiles)).toBe(false)
+    expect(evaluatePuzzleCompletion(round.solutionTiles)).toBe(true)
   })
 
   it('creates a medium 2x3 round with six tiles and medium preview', () => {
@@ -34,8 +37,11 @@ describe('createPuzzleRound', () => {
     expect(round.previewMs).toBe(2800)
     expect(round.tiles).toHaveLength(6)
     expect(round.shuffledTiles).toHaveLength(6)
-    expect(evaluatePuzzleCompletion(round.tiles)).toBe(true)
+    expect(round.solutionTiles).toHaveLength(6)
+    expect(round.tiles).toBe(round.shuffledTiles)
+    expect(evaluatePuzzleCompletion(round.tiles)).toBe(false)
     expect(evaluatePuzzleCompletion(round.shuffledTiles)).toBe(false)
+    expect(evaluatePuzzleCompletion(round.solutionTiles)).toBe(true)
   })
 
   it('creates a difficult 3x3 round with nine tiles and short preview', () => {
@@ -48,6 +54,7 @@ describe('createPuzzleRound', () => {
     expect(round.previewMs).toBe(2200)
     expect(round.tiles).toHaveLength(9)
     expect(round.shuffledTiles).toHaveLength(9)
+    expect(round.solutionTiles).toHaveLength(9)
   })
 
   it('uses random to select different images', () => {
@@ -63,12 +70,13 @@ describe('createPuzzleRound', () => {
   it('uses random to create different tile orders instead of a fixed first-pair swap', () => {
     const firstRound = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
     const secondRound = createPuzzleRound('简单', randomSequence([0, 0.99, 0.99, 0.99]))
-    const firstOrder = firstRound.shuffledTiles.map((tile) => tile.correctIndex)
-    const secondOrder = secondRound.shuffledTiles.map((tile) => tile.correctIndex)
+    const firstOrder = firstRound.tiles.map((tile) => tile.correctIndex)
+    const secondOrder = secondRound.tiles.map((tile) => tile.correctIndex)
 
     expect(firstOrder).not.toEqual(secondOrder)
     expect(firstOrder).not.toEqual([1, 0, 2, 3])
     expect(secondOrder).not.toEqual([0, 1, 2, 3])
+    expect(firstRound.shuffledTiles.map((tile) => tile.correctIndex)).toEqual(firstOrder)
   })
 })
 
@@ -108,6 +116,23 @@ describe('evaluatePuzzleCompletion', () => {
   it('returns true for the correct tile order', () => {
     const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
 
-    expect(evaluatePuzzleCompletion(round.tiles)).toBe(true)
+    expect(evaluatePuzzleCompletion(round.solutionTiles)).toBe(true)
+  })
+
+  it('can restore an initial board to completion by swapping tiles into solution order', () => {
+    const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
+    const restoredTiles = [...round.tiles]
+
+    for (let index = 0; index < restoredTiles.length; index += 1) {
+      if (restoredTiles[index].correctIndex !== index) {
+        const targetIndex = restoredTiles.findIndex((tile) => tile.correctIndex === index)
+        const nextTiles = swapPuzzleTiles(restoredTiles, restoredTiles[index].id, restoredTiles[targetIndex].id)
+        restoredTiles.splice(0, restoredTiles.length, ...nextTiles)
+      }
+    }
+
+    expect(evaluatePuzzleCompletion(round.tiles)).toBe(false)
+    expect(restoredTiles.map((tile) => tile.id)).toEqual(round.solutionTiles.map((tile) => tile.id))
+    expect(evaluatePuzzleCompletion(restoredTiles)).toBe(true)
   })
 })

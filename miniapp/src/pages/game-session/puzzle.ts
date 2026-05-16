@@ -20,6 +20,7 @@ export type PuzzleRound = {
   previewMs: number
   tiles: PuzzleTile[]
   shuffledTiles: PuzzleTile[]
+  solutionTiles: PuzzleTile[]
 }
 
 export const PUZZLE_IMAGES = [
@@ -73,8 +74,9 @@ function shuffledTiles(count: number, random: () => number): PuzzleTile[] {
 export function createPuzzleRound(difficulty: GameDifficulty, random: () => number = Math.random): PuzzleRound {
   const config = CONFIG[difficulty]
   const tileCount = config.rows * config.cols
-  const tiles = createTiles(tileCount)
   const image = PUZZLE_IMAGES[pickIndex(PUZZLE_IMAGES.length, random)]
+  const solutionTiles = createTiles(tileCount)
+  const initialTiles = shuffledTiles(tileCount, random)
 
   return {
     imageKey: image.key,
@@ -87,8 +89,9 @@ export function createPuzzleRound(difficulty: GameDifficulty, random: () => numb
     cols: config.cols,
     tileCount,
     previewMs: config.previewMs,
-    tiles,
-    shuffledTiles: shuffledTiles(tileCount, random),
+    tiles: initialTiles,
+    shuffledTiles: initialTiles,
+    solutionTiles,
   }
 }
 
