@@ -1,5 +1,13 @@
 # 微信小程序剩余真实游戏 Implementation Plan
 
+> 状态：implemented
+> 日期：2026-05-16
+> 范围：补齐微信小程序剩余 4 个官方真实认知游戏并接入训练记录上传
+> 关联：`docs/superpowers/specs/2026-05-16-wechat-miniapp-remaining-real-games-design.md`
+> 实施基线 commit：`f26bb97`
+
+执行记录（2026-05-16, Codex）：Tasks 1-9 已落地于 commits `28e890d`, `2b29188`, `a29727d`, `a564b48`, `be3e237`, `33f18ee`, `f5637e7`, `2f36d42`, `599c305`, `3f32575`, `8f7ecb8`, `a24b533`, `4044266`, `d8099dc`, `2decf1d`, `a903f07`, `cc720aa`, `ee59414`, `a8182ff`, `f421c5b`, `88c28f9`, `aed427f`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 补齐微信小程序剩余 4 个官方真实认知游戏，使 6 个官方游戏都能从当前处方进入真实玩法并上传训练记录。
@@ -91,7 +99,7 @@
 - Modify: `miniapp/src/pages/game-session/gameAudio.ts`
 - Modify: `miniapp/src/pages/game-session/gameAudio.test.ts`
 
-- [ ] **Step 1: Add failing audio/catalog tests**
+- [x] **Step 1: Add failing audio/catalog tests**
 
 Modify `miniapp/src/pages/game-session/gameAudio.test.ts` to add tests:
 
@@ -131,7 +139,7 @@ describe('remaining game audio manifest', () => {
 
 If the existing test mock does not expose `audioCallbacks`, extend the current mock with the same callback object already used for `playGameAudio('start')`.
 
-- [ ] **Step 2: Run audio tests and verify failure**
+- [x] **Step 2: Run audio tests and verify failure**
 
 Run:
 
@@ -141,7 +149,7 @@ cd miniapp && npx vitest run src/pages/game-session/gameAudio.test.ts
 
 Expected: FAIL because `pattern_intro`, `SOUND_DISCRIMINATION_AUDIO`, and `playAudioSrc` do not exist.
 
-- [ ] **Step 3: Extend `GameCode`**
+- [x] **Step 3: Extend `GameCode`**
 
 Modify `miniapp/src/pages/game-session/gameTypes.ts`:
 
@@ -155,7 +163,7 @@ export type GameCode =
   | 'game-audiovisual-puzzle'
 ```
 
-- [ ] **Step 4: Add game catalog**
+- [x] **Step 4: Add game catalog**
 
 Create `miniapp/src/pages/game-session/gameCatalog.ts`:
 
@@ -221,7 +229,7 @@ export function gameCodeForActionSource(sourceKey: string | null | undefined): G
 }
 ```
 
-- [ ] **Step 5: Extend audio manifest and generic audio playback**
+- [x] **Step 5: Extend audio manifest and generic audio playback**
 
 Modify `miniapp/src/pages/game-session/gameAudio.ts`:
 
@@ -310,7 +318,7 @@ export function playAudioSrc(src: string): Promise<boolean> {
 
 Keep `playGameAudio(key)` behavior non-blocking by delegating to `playStaticAudio(GAME_AUDIO_SRC[key]).catch(() => undefined)`.
 
-- [ ] **Step 6: Add remaining intro audio clips**
+- [x] **Step 6: Add remaining intro audio clips**
 
 Modify `miniapp/scripts/generate-game-audio.mjs` and add the 4 new intro clips immediately after `color_intro`:
 
@@ -329,7 +337,7 @@ cd miniapp && node scripts/generate-game-audio.mjs
 
 Expected: `miniapp/src/assets/audio/game-session/` contains the existing audio files plus `pattern_intro.m4a`, `category_intro.m4a`, `sound_intro.m4a`, and `puzzle_intro.m4a`.
 
-- [ ] **Step 7: Add image generation script**
+- [x] **Step 7: Add image generation script**
 
 Create `miniapp/scripts/generate-game-images.mjs` with deterministic SVG output:
 
@@ -376,7 +384,7 @@ for (const [filename, label, color] of assets) {
 }
 ```
 
-- [ ] **Step 8: Generate images and copy sound sources**
+- [x] **Step 8: Generate images and copy sound sources**
 
 Run:
 
@@ -401,7 +409,7 @@ cp ../docs/other/sounds/鼓3.m4a src/assets/audio/sound-discrimination/drum_3.m4
 
 Expected: `miniapp/src/assets/images/game-session/` contains SVGs and `miniapp/src/assets/audio/sound-discrimination/` contains 14 m4a files.
 
-- [ ] **Step 9: Update Taro copy config**
+- [x] **Step 9: Update Taro copy config**
 
 Modify `miniapp/config/index.ts` copy patterns:
 
@@ -426,7 +434,7 @@ copy: {
 },
 ```
 
-- [ ] **Step 10: Run audio tests and build asset copy**
+- [x] **Step 10: Run audio tests and build asset copy**
 
 Run:
 
@@ -437,7 +445,7 @@ cd miniapp && npm run build:weapp
 
 Expected: tests PASS and Webpack compiled successfully. Confirm `dist/assets/audio/game-session/pattern_intro.m4a`, `dist/assets/audio/sound-discrimination/bird_1.m4a`, and `dist/assets/images/game-session/pattern_sun.svg` exist.
 
-- [ ] **Step 11: Commit assets and catalog**
+- [x] **Step 11: Commit assets and catalog**
 
 ```bash
 git add miniapp/config/index.ts miniapp/scripts/generate-game-audio.mjs miniapp/scripts/generate-game-images.mjs miniapp/src/assets/images/game-session miniapp/src/assets/audio/game-session miniapp/src/assets/audio/sound-discrimination miniapp/src/pages/game-session/gameTypes.ts miniapp/src/pages/game-session/gameCatalog.ts miniapp/src/pages/game-session/gameAudio.ts miniapp/src/pages/game-session/gameAudio.test.ts
@@ -452,7 +460,7 @@ git commit -m "feat(miniapp): 新增剩余游戏资源与目录"
 - Create: `miniapp/src/pages/game-session/patternSequence.test.ts`
 - Create: `miniapp/src/pages/game-session/patternSequence.ts`
 
-- [ ] **Step 1: Write failing pattern sequence tests**
+- [x] **Step 1: Write failing pattern sequence tests**
 
 Create `miniapp/src/pages/game-session/patternSequence.test.ts`:
 
@@ -496,7 +504,7 @@ describe('evaluatePatternSequenceAttempt', () => {
 })
 ```
 
-- [ ] **Step 2: Run pattern tests and verify failure**
+- [x] **Step 2: Run pattern tests and verify failure**
 
 Run:
 
@@ -506,7 +514,7 @@ cd miniapp && npx vitest run src/pages/game-session/patternSequence.test.ts
 
 Expected: FAIL with module-not-found for `patternSequence`.
 
-- [ ] **Step 3: Implement pattern sequence core**
+- [x] **Step 3: Implement pattern sequence core**
 
 Create `miniapp/src/pages/game-session/patternSequence.ts`:
 
@@ -567,7 +575,7 @@ export function evaluatePatternSequenceAttempt(expected: string[], actual: strin
 }
 ```
 
-- [ ] **Step 4: Run pattern tests**
+- [x] **Step 4: Run pattern tests**
 
 Run:
 
@@ -577,7 +585,7 @@ cd miniapp && npx vitest run src/pages/game-session/patternSequence.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit pattern sequence core**
+- [x] **Step 5: Commit pattern sequence core**
 
 ```bash
 git add miniapp/src/pages/game-session/patternSequence.ts miniapp/src/pages/game-session/patternSequence.test.ts
@@ -592,7 +600,7 @@ git commit -m "feat(miniapp): 新增图案顺序记忆玩法核心"
 - Create: `miniapp/src/pages/game-session/categorySwitch.test.ts`
 - Create: `miniapp/src/pages/game-session/categorySwitch.ts`
 
-- [ ] **Step 1: Write failing category switch tests**
+- [x] **Step 1: Write failing category switch tests**
 
 Create `miniapp/src/pages/game-session/categorySwitch.test.ts`:
 
@@ -644,7 +652,7 @@ describe('evaluateCategorySwitchAttempt', () => {
 })
 ```
 
-- [ ] **Step 2: Run category tests and verify failure**
+- [x] **Step 2: Run category tests and verify failure**
 
 Run:
 
@@ -654,7 +662,7 @@ cd miniapp && npx vitest run src/pages/game-session/categorySwitch.test.ts
 
 Expected: FAIL with module-not-found for `categorySwitch`.
 
-- [ ] **Step 3: Implement category switch core**
+- [x] **Step 3: Implement category switch core**
 
 Create `miniapp/src/pages/game-session/categorySwitch.ts`:
 
@@ -751,7 +759,7 @@ export function evaluateCategorySwitchAttempt(round: Pick<CategorySwitchRound, '
 }
 ```
 
-- [ ] **Step 4: Run category tests**
+- [x] **Step 4: Run category tests**
 
 Run:
 
@@ -761,7 +769,7 @@ cd miniapp && npx vitest run src/pages/game-session/categorySwitch.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit category switch core**
+- [x] **Step 5: Commit category switch core**
 
 ```bash
 git add miniapp/src/pages/game-session/categorySwitch.ts miniapp/src/pages/game-session/categorySwitch.test.ts
@@ -776,7 +784,7 @@ git commit -m "feat(miniapp): 新增分类转换玩法核心"
 - Create: `miniapp/src/pages/game-session/soundDiscrimination.test.ts`
 - Create: `miniapp/src/pages/game-session/soundDiscrimination.ts`
 
-- [ ] **Step 1: Write failing sound discrimination tests**
+- [x] **Step 1: Write failing sound discrimination tests**
 
 Create `miniapp/src/pages/game-session/soundDiscrimination.test.ts`:
 
@@ -835,7 +843,7 @@ describe('evaluateSoundDiscriminationAttempt', () => {
 })
 ```
 
-- [ ] **Step 2: Run sound tests and verify failure**
+- [x] **Step 2: Run sound tests and verify failure**
 
 Run:
 
@@ -845,7 +853,7 @@ cd miniapp && npx vitest run src/pages/game-session/soundDiscrimination.test.ts
 
 Expected: FAIL with module-not-found for `soundDiscrimination`.
 
-- [ ] **Step 3: Implement sound discrimination core**
+- [x] **Step 3: Implement sound discrimination core**
 
 Create `miniapp/src/pages/game-session/soundDiscrimination.ts`:
 
@@ -956,7 +964,7 @@ export function evaluateSoundDiscriminationAttempt(
 }
 ```
 
-- [ ] **Step 4: Run sound tests**
+- [x] **Step 4: Run sound tests**
 
 Run:
 
@@ -966,7 +974,7 @@ cd miniapp && npx vitest run src/pages/game-session/soundDiscrimination.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit sound discrimination core**
+- [x] **Step 5: Commit sound discrimination core**
 
 ```bash
 git add miniapp/src/pages/game-session/soundDiscrimination.ts miniapp/src/pages/game-session/soundDiscrimination.test.ts
@@ -981,7 +989,7 @@ git commit -m "feat(miniapp): 新增声音辨别玩法核心"
 - Create: `miniapp/src/pages/game-session/puzzle.test.ts`
 - Create: `miniapp/src/pages/game-session/puzzle.ts`
 
-- [ ] **Step 1: Write failing puzzle tests**
+- [x] **Step 1: Write failing puzzle tests**
 
 Create `miniapp/src/pages/game-session/puzzle.test.ts`:
 
@@ -1031,7 +1039,7 @@ describe('swapPuzzleTiles', () => {
 })
 ```
 
-- [ ] **Step 2: Run puzzle tests and verify failure**
+- [x] **Step 2: Run puzzle tests and verify failure**
 
 Run:
 
@@ -1041,7 +1049,7 @@ cd miniapp && npx vitest run src/pages/game-session/puzzle.test.ts
 
 Expected: FAIL with module-not-found for `puzzle`.
 
-- [ ] **Step 3: Implement puzzle core**
+- [x] **Step 3: Implement puzzle core**
 
 Create `miniapp/src/pages/game-session/puzzle.ts`:
 
@@ -1113,7 +1121,7 @@ export function evaluatePuzzleCompletion(tiles: Array<Pick<PuzzleTile, 'correctI
 }
 ```
 
-- [ ] **Step 4: Run puzzle tests**
+- [x] **Step 4: Run puzzle tests**
 
 Run:
 
@@ -1123,7 +1131,7 @@ cd miniapp && npx vitest run src/pages/game-session/puzzle.test.ts
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit puzzle core**
+- [x] **Step 5: Commit puzzle core**
 
 ```bash
 git add miniapp/src/pages/game-session/puzzle.ts miniapp/src/pages/game-session/puzzle.test.ts
@@ -1139,7 +1147,7 @@ git commit -m "feat(miniapp): 新增拼图玩法核心"
 - Modify: `backend/apps/patient_app/views.py`
 - Modify: `miniapp/src/types/patientApp.ts`
 
-- [ ] **Step 1: Add failing patient app API test**
+- [x] **Step 1: Add failing patient app API test**
 
 Modify `backend/apps/patient_app/tests/test_patient_app_api.py`:
 
@@ -1160,7 +1168,7 @@ def test_current_prescription_includes_action_source_key(
     assert action["source_key"] == "game-memory-color-sequence"
 ```
 
-- [ ] **Step 2: Run patient app API test and verify failure**
+- [x] **Step 2: Run patient app API test and verify failure**
 
 Run:
 
@@ -1170,7 +1178,7 @@ cd backend && pytest apps/patient_app/tests/test_patient_app_api.py::test_curren
 
 Expected: FAIL with `KeyError: 'source_key'`.
 
-- [ ] **Step 3: Return source_key in current prescription payload**
+- [x] **Step 3: Return source_key in current prescription payload**
 
 Modify `backend/apps/patient_app/views.py` in the current prescription action serializer dict:
 
@@ -1197,7 +1205,7 @@ Modify `backend/apps/patient_app/views.py` in the current prescription action se
 }
 ```
 
-- [ ] **Step 4: Update miniapp current prescription type**
+- [x] **Step 4: Update miniapp current prescription type**
 
 Modify `miniapp/src/types/patientApp.ts` action shape:
 
@@ -1207,7 +1215,7 @@ source_key: string | null
 
 Place it after `action_library_item`.
 
-- [ ] **Step 5: Run patient app API test**
+- [x] **Step 5: Run patient app API test**
 
 Run:
 
@@ -1217,7 +1225,7 @@ cd backend && pytest apps/patient_app/tests/test_patient_app_api.py::test_curren
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit source key contract**
+- [x] **Step 6: Commit source key contract**
 
 ```bash
 git add backend/apps/patient_app/views.py backend/apps/patient_app/tests/test_patient_app_api.py miniapp/src/types/patientApp.ts
@@ -1233,7 +1241,7 @@ git commit -m "feat(patient-app): 当前处方返回动作编码"
 - Modify: `miniapp/src/types/patientApp.ts`
 - Modify: `miniapp/src/app.scss`
 
-- [ ] **Step 1: Import new catalog and gameplay modules**
+- [x] **Step 1: Import new catalog and gameplay modules**
 
 Modify imports in `miniapp/src/pages/game-session/index.tsx`:
 
@@ -1263,7 +1271,7 @@ function gameCodeForAction(actionSourceKey: string | null | undefined): GameCode
 
 Use the `source_key` field added in Task 6 and adjust page lookup to call `gameCodeForAction(action.source_key)`.
 
-- [ ] **Step 2: Add state for the four new games**
+- [x] **Step 2: Add state for the four new games**
 
 Add state and refs near existing color/inhibition state:
 
@@ -1286,7 +1294,7 @@ const [puzzlePreviewing, setPuzzlePreviewing] = useState(false)
 
 In `resetSessionState()`, clear all new state and refs.
 
-- [ ] **Step 3: Add round starters**
+- [x] **Step 3: Add round starters**
 
 Add starters following the existing `startColorRound()` and `startInhibitionRound()` pattern:
 
@@ -1364,7 +1372,7 @@ Implement `startPatternRevealTimer(round)` like `startColorRevealTimer(round)`, 
 
 Implement `startPuzzlePreviewTimer(round)` with `setTimeout(() => setPuzzlePreviewing(false), round.previewMs)`.
 
-- [ ] **Step 4: Dispatch new games in playing effect and next round scheduler**
+- [x] **Step 4: Dispatch new games in playing effect and next round scheduler**
 
 Update the `useEffect` that starts rounds:
 
@@ -1394,7 +1402,7 @@ else if (gameCodeRef.current === 'game-audiovisual-sound-discrimination') startS
 else if (gameCodeRef.current === 'game-audiovisual-puzzle') startPuzzleRound()
 ```
 
-- [ ] **Step 5: Use catalog intro text**
+- [x] **Step 5: Use catalog intro text**
 
 Replace the two-game intro branch:
 
@@ -1408,7 +1416,7 @@ In setup hero muted text:
 <Text className='muted'>{GAME_AUDIO_TEXT[GAME_CATALOG[gameCode].introAudioKey]}</Text>
 ```
 
-- [ ] **Step 6: Add interaction handlers**
+- [x] **Step 6: Add interaction handlers**
 
 Add handlers:
 
@@ -1499,7 +1507,7 @@ function selectPuzzleTile(tile: PuzzleTile) {
 }
 ```
 
-- [ ] **Step 7: Render pattern sequence**
+- [x] **Step 7: Render pattern sequence**
 
 Add `renderPatternSequenceGame()` similar to color sequence:
 
@@ -1543,7 +1551,7 @@ function renderPatternSequenceGame() {
 }
 ```
 
-- [ ] **Step 8: Render category switch**
+- [x] **Step 8: Render category switch**
 
 Add `renderCategorySwitchGame()`:
 
@@ -1572,7 +1580,7 @@ function renderCategorySwitchGame() {
 }
 ```
 
-- [ ] **Step 9: Render sound discrimination**
+- [x] **Step 9: Render sound discrimination**
 
 Add `renderSoundDiscriminationGame()`:
 
@@ -1615,7 +1623,7 @@ function renderSoundDiscriminationGame() {
 }
 ```
 
-- [ ] **Step 10: Render puzzle**
+- [x] **Step 10: Render puzzle**
 
 Add `renderPuzzleGame()`:
 
@@ -1647,7 +1655,7 @@ function renderPuzzleGame() {
 
 This first implementation may show the same source image in every tile with an order number overlay. It still uses image assets and validates ordering by tile positions. Do not implement drag-and-drop.
 
-- [ ] **Step 11: Wire render dispatch**
+- [x] **Step 11: Wire render dispatch**
 
 Add dispatches before result phase:
 
@@ -1666,7 +1674,7 @@ if ((phase === 'playing' || phase === 'paused') && gameCode === 'game-audiovisua
 }
 ```
 
-- [ ] **Step 12: Add styles**
+- [x] **Step 12: Add styles**
 
 Modify `miniapp/src/app.scss` inside/near `.game-session-page`:
 
@@ -1760,7 +1768,7 @@ Modify `miniapp/src/app.scss` inside/near `.game-session-page`:
 }
 ```
 
-- [ ] **Step 13: Run miniapp checks**
+- [x] **Step 13: Run miniapp checks**
 
 Run:
 
@@ -1772,7 +1780,7 @@ cd miniapp && npm run build:weapp
 
 Expected: tests PASS, typecheck PASS, Webpack compiled successfully.
 
-- [ ] **Step 14: Commit page integration**
+- [x] **Step 14: Commit page integration**
 
 ```bash
 git add miniapp/src/pages/game-session/index.tsx miniapp/src/app.scss miniapp/src/types/patientApp.ts
@@ -1786,7 +1794,7 @@ git commit -m "feat(miniapp): 接入剩余真实游戏页面"
 **Files:**
 - Modify: `backend/apps/training/tests/test_training_current_prescription.py`
 
-- [ ] **Step 1: Add parameterized backend test**
+- [x] **Step 1: Add parameterized backend test**
 
 Modify `backend/apps/training/tests/test_training_current_prescription.py` with a new test:
 
@@ -1854,7 +1862,7 @@ Import `TrainingRecord` if missing:
 from apps.training.models import TrainingRecord
 ```
 
-- [ ] **Step 2: Run backend targeted tests**
+- [x] **Step 2: Run backend targeted tests**
 
 Run:
 
@@ -1864,7 +1872,7 @@ cd backend && pytest apps/training/tests/test_training_current_prescription.py -
 
 Expected: PASS.
 
-- [ ] **Step 3: Commit backend test coverage**
+- [x] **Step 3: Commit backend test coverage**
 
 ```bash
 git add backend/apps/training/tests/test_training_current_prescription.py
@@ -1878,7 +1886,7 @@ git commit -m "test(training): 覆盖剩余游戏编码提交"
 **Files:**
 - Modify: `docs/superpowers/plans/2026-05-16-wechat-miniapp-remaining-real-games.md`
 
-- [ ] **Step 1: Run targeted miniapp tests**
+- [x] **Step 1: Run targeted miniapp tests**
 
 Run:
 
@@ -1893,7 +1901,7 @@ cd miniapp && npx vitest run \
 
 Expected: PASS.
 
-- [ ] **Step 2: Run miniapp full checks**
+- [x] **Step 2: Run miniapp full checks**
 
 Run:
 
@@ -1905,7 +1913,7 @@ cd miniapp && npm run build:weapp
 
 Expected: PASS and Webpack compiled successfully.
 
-- [ ] **Step 3: Run backend targeted checks**
+- [x] **Step 3: Run backend targeted checks**
 
 Run:
 
@@ -1915,7 +1923,7 @@ cd backend && pytest apps/training/tests/test_training_current_prescription.py a
 
 Expected: PASS.
 
-- [ ] **Step 4: Run broader regression checks**
+- [x] **Step 4: Run broader regression checks**
 
 Run:
 
@@ -1928,7 +1936,7 @@ cd frontend && npm run build
 
 Expected: all commands exit 0. Existing warnings are acceptable only if they are warnings, not errors.
 
-- [ ] **Step 5: Verify static assets are present in build output**
+- [x] **Step 5: Verify static assets are present in build output**
 
 Run:
 
@@ -1940,7 +1948,7 @@ test -f miniapp/dist/assets/images/game-session/puzzle_beach.svg
 
 Expected: all `test -f` commands exit 0.
 
-- [ ] **Step 6: Update execution record in this plan**
+- [x] **Step 6: Update execution record in this plan**
 
 At the top of this file, below the title, add a concrete execution record using the actual short SHAs from:
 
@@ -1952,7 +1960,7 @@ The line must say that the remaining real games landed and verification passed, 
 
 Then change all completed task checkboxes from `- [ ]` to `- [x]`.
 
-- [ ] **Step 7: Commit plan status**
+- [x] **Step 7: Commit plan status**
 
 ```bash
 git add docs/superpowers/plans/2026-05-16-wechat-miniapp-remaining-real-games.md
