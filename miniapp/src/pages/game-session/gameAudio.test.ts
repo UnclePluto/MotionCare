@@ -20,6 +20,34 @@ import {
   setGameAudioMuted,
 } from './gameAudio'
 
+function createMockAudio() {
+  const callbacks: {
+    ended?: () => void
+    error?: () => void
+    pause?: () => void
+    stop?: () => void
+  } = {}
+  const audio = {
+    src: '',
+    destroy: vi.fn(),
+    onEnded: vi.fn((callback: () => void) => {
+      callbacks.ended = callback
+    }),
+    onError: vi.fn((callback: () => void) => {
+      callbacks.error = callback
+    }),
+    onPause: vi.fn((callback: () => void) => {
+      callbacks.pause = callback
+    }),
+    onStop: vi.fn((callback: () => void) => {
+      callbacks.stop = callback
+    }),
+    play: vi.fn(),
+  }
+
+  return { audio, callbacks }
+}
+
 describe('game audio preferences', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -54,13 +82,7 @@ describe('playGameAudio', () => {
   })
 
   it('resolves and destroys the context when playback never emits terminal events', async () => {
-    const audio = {
-      destroy: vi.fn(),
-      onEnded: vi.fn(),
-      onError: vi.fn(),
-      play: vi.fn(),
-      set src(_value: string) {},
-    }
+    const { audio } = createMockAudio()
     taroMock.createInnerAudioContext.mockReturnValue(audio)
 
     const playback = playGameAudio('start')
@@ -118,29 +140,60 @@ describe('playAudioSrc', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.clearAllMocks()
+    taroMock.getStorageSync.mockReturnValue(false)
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
+  it('sets the provided static src and starts playback', () => {
+    const { audio } = createMockAudio()
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+
+    void playAudioSrc('/assets/audio/sound-discrimination/bird_1.m4a')
+
+    expect(audio.src).toBe('/assets/audio/sound-discrimination/bird_1.m4a')
+    expect(audio.play).toHaveBeenCalledTimes(1)
+  })
+
   it('resolves true when the mocked audio emits ended', async () => {
-    let onEnded: (() => void) | undefined
-    const audio = {
-      destroy: vi.fn(),
-      onEnded: vi.fn((callback: () => void) => {
-        onEnded = callback
-      }),
-      onError: vi.fn(),
-      play: vi.fn(),
-      set src(_value: string) {},
-    }
+    const { audio, callbacks } = createMockAudio()
     taroMock.createInnerAudioContext.mockReturnValue(audio)
 
     const playback = playAudioSrc('/assets/audio/sound-discrimination/bird_1.m4a')
-    onEnded?.()
+    callbacks.ended?.()
 
     await expect(playback).resolves.toBe(true)
     expect(audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves false when the mocked audio emits error', async () => {
+    const { audio, callbacks } = createMockAudio()
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+
+    const playback = playAudioSrc('/assets/audio/sound-discrimination/bird_1.m4a')
+    callbacks.error?.()
+
+    await expect(playback).resolves.toBe(false)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves false when playback times out', async () => {
+    const { audio } = createMockAudio()
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+
+    const playback = playAudioSrc('/assets/audio/sound-discrimination/bird_1.m4a')
+    await vi.advanceTimersByTimeAsync(15_000)
+
+    await expect(playback).resolves.toBe(false)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves true without creating audio context when muted', async () => {
+    taroMock.getStorageSync.mockReturnValue(true)
+
+    await expect(playAudioSrc('/assets/audio/sound-discrimination/bird_1.m4a')).resolves.toBe(true)
+    expect(taroMock.createInnerAudioContext).not.toHaveBeenCalled()
   })
 })

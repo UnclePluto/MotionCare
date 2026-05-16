@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="pattern_sun">
-  <rect width="256" height="256" rx="36" fill="#f8fafc"/>
-  <circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-  
-      <circle cx="128" cy="128" r="48" fill="#facc15"/>
-      <g stroke="#f97316" stroke-width="14" stroke-linecap="round">
-        <path d="M128 34v30M128 192v30M34 128h30M192 128h30M61 61l21 21M174 174l21 21M195 61l-21 21M82 174l-21 21"/>
-      </g>
+<rect width="256" height="256" rx="36" fill="#f8fafc"/>
+<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
+<circle cx="128" cy="128" r="48" fill="#facc15"/>
+<g stroke="#f97316" stroke-width="14" stroke-linecap="round">
+<path d="M128 34v30M128 192v30M34 128h30M192 128h30M61 61l21 21M174 174l21 21M195 61l-21 21M82 174l-21 21"/>
+</g>
 </svg>

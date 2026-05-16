@@ -238,5 +238,6 @@ function playStaticAudio(src: string): Promise<boolean> {
 }
 
 export function playAudioSrc(src: string): Promise<boolean> {
+  if (isGameAudioMuted()) return Promise.resolve(true)
   return playStaticAudio(src)
 }

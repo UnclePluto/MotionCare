@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="category_drum">
-  <rect width="256" height="256" rx="36" fill="#f8fafc"/>
-  <circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-  
-      <ellipse cx="128" cy="78" rx="62" ry="24" fill="#fed7aa" stroke="#7c2d12" stroke-width="8"/>
-      <path d="M66 78v86c0 14 28 26 62 26s62-12 62-26V78" fill="#f97316" stroke="#7c2d12" stroke-width="8"/>
-      <path d="M84 100l88 58M172 100l-88 58" stroke="#fed7aa" stroke-width="8"/>
-      <path d="M62 48l44 36M194 48l-44 36" stroke="#7c2d12" stroke-width="9" stroke-linecap="round"/>
+<rect width="256" height="256" rx="36" fill="#f8fafc"/>
+<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
+<ellipse cx="128" cy="78" rx="62" ry="24" fill="#fed7aa" stroke="#7c2d12" stroke-width="8"/>
+<path d="M66 78v86c0 14 28 26 62 26s62-12 62-26V78" fill="#f97316" stroke="#7c2d12" stroke-width="8"/>
+<path d="M84 100l88 58M172 100l-88 58" stroke="#fed7aa" stroke-width="8"/>
+<path d="M62 48l44 36M194 48l-44 36" stroke="#7c2d12" stroke-width="9" stroke-linecap="round"/>
 </svg>

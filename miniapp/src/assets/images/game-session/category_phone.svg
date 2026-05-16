@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="category_phone">
-  <rect width="256" height="256" rx="36" fill="#f8fafc"/>
-  <circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-  
-      <rect x="83" y="42" width="90" height="172" rx="22" fill="#a78bfa" stroke="#4c1d95" stroke-width="8"/>
-      <rect x="99" y="68" width="58" height="104" rx="8" fill="#f5f3ff"/>
-      <circle cx="128" cy="192" r="9" fill="#f5f3ff"/>
-      <path d="M188 76c14 21 14 51 0 72M207 58c23 34 23 82 0 116" stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
+<rect width="256" height="256" rx="36" fill="#f8fafc"/>
+<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
+<rect x="83" y="42" width="90" height="172" rx="22" fill="#a78bfa" stroke="#4c1d95" stroke-width="8"/>
+<rect x="99" y="68" width="58" height="104" rx="8" fill="#f5f3ff"/>
+<circle cx="128" cy="192" r="9" fill="#f5f3ff"/>
+<path d="M188 76c14 21 14 51 0 72M207 58c23 34 23 82 0 116" stroke="#a78bfa" stroke-width="9" stroke-linecap="round"/>
 </svg>
