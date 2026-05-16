@@ -30,6 +30,14 @@ export default defineConfig<'webpack5'>(async (merge) => {
         {
           from: 'src/assets/audio/game-session',
           to: 'dist/assets/audio/game-session'
+        },
+        {
+          from: 'src/assets/audio/sound-discrimination',
+          to: 'dist/assets/audio/sound-discrimination'
+        },
+        {
+          from: 'src/assets/images/game-session',
+          to: 'dist/assets/images/game-session'
         }
       ],
       options: {
