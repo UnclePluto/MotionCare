@@ -81,9 +81,6 @@ describe("App", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
       if (url === "/prescriptions/actions/") return Promise.resolve({ data: [] });
-      if (url === "/patient-sim/project-patients/9001/current-prescription/") {
-        return Promise.resolve({ data: null });
-      }
       if (url === "/studies/groups/" && params?.project === 1) {
         return Promise.resolve({
           data: [
@@ -513,7 +510,7 @@ describe("App", () => {
     });
   });
 
-  it("opens patient sim route", async () => {
+  it("does not expose patient sim route", async () => {
     window.history.pushState({}, "", "/patient-sim/project-patients/9001");
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -525,7 +522,8 @@ describe("App", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("暂无可执行处方")).toBeInTheDocument();
+    expect(await screen.findByText("张三")).toBeInTheDocument();
+    expect(screen.queryByText("暂无可执行处方")).not.toBeInTheDocument();
   });
 
   it("opens prescription entry route", async () => {

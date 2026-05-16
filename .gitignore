@@ -8,6 +8,7 @@ dist/
 build/
 .superpowers/
 .worktrees/
+.runtime/
 docs/
 
 # Track design/spec docs under docs/superpowers/specs/
@@ -35,4 +36,3 @@ specs/patient-rehab-system/crf/_docx_table_dump.txt
 # Local DB + packaging artifacts
 backend/db.sqlite3
 backend/*.egg-info/
-

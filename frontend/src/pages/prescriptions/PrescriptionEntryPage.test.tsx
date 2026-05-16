@@ -69,10 +69,7 @@ describe("PrescriptionEntryPage", () => {
       "href",
       "/prescriptions/project-patients/9001",
     );
-    expect(screen.getByRole("link", { name: "跟练模拟" })).toHaveAttribute(
-      "href",
-      "/patient-sim/project-patients/9001",
-    );
+    expect(screen.queryByRole("link", { name: "跟练模拟" })).not.toBeInTheDocument();
   });
 
   it("passes patient search params to backend", async () => {

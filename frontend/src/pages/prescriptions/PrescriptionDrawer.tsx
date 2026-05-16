@@ -42,6 +42,13 @@ type ActionParamValues = {
   notes?: string;
 };
 
+const ACTION_TYPE_ORDER = ["平衡训练", "抗阻训练", "有氧训练", "视听力训练", "记忆力训练", "执行力训练"];
+
+function actionTypeOrder(actionType: string) {
+  const index = ACTION_TYPE_ORDER.indexOf(actionType);
+  return index === -1 ? ACTION_TYPE_ORDER.length : index;
+}
+
 function defaultParamsForAction(action: ActionLibraryItem, currentAction?: PrescriptionAction): ActionParamValues {
   return {
     weekly_times:
@@ -75,12 +82,6 @@ function renderDuration(action: ActionLibraryItem) {
   return action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "—";
 }
 
-function internalTypeLabel(type: ActionLibraryItem["internal_type"]) {
-  if (type === "game") return "认知游戏";
-  if (type === "motion") return "运动训练";
-  return "视频训练";
-}
-
 function groupKeyForAction(action: ActionLibraryItem) {
   return `${action.internal_type}:${action.action_type}`;
 }
@@ -101,7 +102,7 @@ export function PrescriptionDrawer({
   }, [currentPrescription]);
 
   const initialSelected = useMemo(
-    () => currentPrescription?.actions.map((item) => item.action_library_item) ?? [],
+    () => (currentPrescription?.actions ?? []).map((item) => item.action_library_item),
     [currentPrescription],
   );
   const initialActionParams = useMemo(() => {
@@ -131,12 +132,13 @@ export function PrescriptionDrawer({
       group.push(action);
       groups.set(key, group);
     }
-    return [...groups.entries()].map(([key, groupActions]) => ({
-      key,
-      internalType: groupActions[0].internal_type,
-      actionType: groupActions[0].action_type,
-      actions: groupActions,
-    }));
+    return [...groups.entries()]
+      .map(([key, groupActions]) => ({
+        key,
+        actionType: groupActions[0].action_type,
+        actions: groupActions,
+      }))
+      .sort((left, right) => actionTypeOrder(left.actionType) - actionTypeOrder(right.actionType));
   }, [actions]);
 
   useEffect(() => {
@@ -203,20 +205,13 @@ export function PrescriptionDrawer({
               defaultActiveKey={groupedActions.map((group) => group.key)}
               items={groupedActions.map((group) => ({
                 key: group.key,
-                label: (
-                  <Space>
-                    <span>{internalTypeLabel(group.internalType)}</span>
-                    <Tag>{group.actionType}</Tag>
-                    <Tag>{group.actions.length} 个动作</Tag>
-                  </Space>
-                ),
+                label: group.actionType,
                 children: (
                   <Space direction="vertical" size={8} style={{ width: "100%" }}>
                     {group.actions.map((action) => (
                       <Checkbox key={action.id} value={action.id} aria-label={action.name} disabled={!action.is_active}>
                         <Space wrap size={8}>
                           <span>{action.name}</span>
-                          <Tag>{action.training_type}</Tag>
                           <Tag>{weeklyFrequencyLabel(action.suggested_frequency)}</Tag>
                           <Tag>{renderDuration(action)}</Tag>
                         </Space>
@@ -316,9 +311,10 @@ export function PrescriptionDrawer({
             ]}
           />
         )}
-        <Form.Item label="预计单次总时长" style={{ marginTop: 16 }}>
-          <Space>
-            <InputNumber disabled value={totalDurationMinutes} />
+        <Form.Item style={{ marginTop: 16, marginBottom: 0 }}>
+          <Space align="center" size={12}>
+            <Typography.Text>预计单次总时长</Typography.Text>
+            <InputNumber disabled value={totalDurationMinutes} aria-label="预计单次总时长" style={{ width: 96 }} />
             <Typography.Text>分钟</Typography.Text>
           </Space>
         </Form.Item>

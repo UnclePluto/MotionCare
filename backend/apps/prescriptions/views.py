@@ -8,6 +8,7 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
 
+from .action_library import official_action_queryset
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
 from .serializers import (
     ActionLibraryItemSerializer,
@@ -23,7 +24,7 @@ class ActionLibraryItemViewSet(ReadOnlyModelViewSet):
     permission_classes = [IsAdminOrDoctor]
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = official_action_queryset(super().get_queryset())
         training_type = self.request.query_params.get("training_type")
         if training_type:
             qs = qs.filter(training_type=training_type)

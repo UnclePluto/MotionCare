@@ -2,6 +2,7 @@ import re
 
 from rest_framework import serializers
 
+from .action_library import official_action_queryset
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
 
 
@@ -84,7 +85,7 @@ class PrescriptionSerializer(serializers.ModelSerializer):
 
 class ActivateNowActionSerializer(serializers.Serializer):
     action_library_item = serializers.PrimaryKeyRelatedField(
-        queryset=ActionLibraryItem.objects.filter(is_active=True)
+        queryset=official_action_queryset(ActionLibraryItem.objects.filter(is_active=True))
     )
     weekly_frequency = serializers.CharField(
         required=False, allow_blank=True, max_length=80, default=""

@@ -28,6 +28,18 @@ function renderPanel() {
   );
 }
 
+function actionGroupHeaderTexts() {
+  return [...document.querySelectorAll(".ant-collapse-header-text")].map((node) =>
+    (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+  );
+}
+
+function actionChoiceTexts() {
+  return [...document.querySelectorAll(".ant-checkbox-label")].map((node) =>
+    (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+  );
+}
+
 const action = {
   id: 101,
   source_key: "motion-aerobic-high-knee",
@@ -92,6 +104,38 @@ const gameAction = {
   is_active: true,
 };
 
+const executiveAction = {
+  id: 202,
+  source_key: "game-executive-inhibition",
+  name: "反应抑制能力训练",
+  training_type: "认知训练",
+  internal_type: "game",
+  action_type: "执行力训练",
+  instruction_text: "根据提示完成反应抑制训练",
+  suggested_frequency: "1 次/周",
+  suggested_duration_minutes: 10,
+  default_difficulty: "",
+  video_url: "",
+  has_ai_supervision: false,
+  is_active: true,
+};
+
+const emptyFrequencyAction = {
+  id: 301,
+  source_key: "motion-balance-sit-stand",
+  name: "坐站转移训练",
+  training_type: "运动训练",
+  internal_type: "motion",
+  action_type: "平衡训练",
+  instruction_text: "",
+  suggested_frequency: "",
+  suggested_duration_minutes: null,
+  default_difficulty: "",
+  video_url: "",
+  has_ai_supervision: false,
+  is_active: true,
+};
+
 const activePrescription = {
   id: 1,
   project_patient: 9001,
@@ -150,7 +194,7 @@ describe("PrescriptionPanel", () => {
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
       if (url === "/prescriptions/actions/") {
         expect(config).toBeUndefined();
-        return Promise.resolve({ data: [action, resistanceAction, legKickbackAction, gameAction] });
+        return Promise.resolve({ data: [action, executiveAction, resistanceAction, legKickbackAction, gameAction] });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -181,6 +225,26 @@ describe("PrescriptionPanel", () => {
     expect(screen.queryByRole("button", { name: "新增动作" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
+  });
+
+  it("treats empty current prescription response as no active prescription", async () => {
+    mockGet.mockImplementation((url: string, config?: unknown) => {
+      if (url === "/prescriptions/current/") return Promise.resolve({ data: "" });
+      if (url === "/prescriptions/") return Promise.resolve({ data: [] });
+      if (url === "/prescriptions/actions/") {
+        expect(config).toBeUndefined();
+        return Promise.resolve({ data: [emptyFrequencyAction, gameAction] });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderPanel();
+
+    expect(await screen.findByText("当前暂无生效处方。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开具处方" }));
+
+    expect(await screen.findByText("平衡训练")).toBeInTheDocument();
+    expect(screen.getByLabelText("坐站转移训练")).toBeInTheDocument();
   });
 
   it("creates an active prescription from selected action", async () => {
@@ -214,7 +278,7 @@ describe("PrescriptionPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
     fireEvent.click(await screen.findByLabelText("椰林步道模拟（原地高抬腿+摆臂）"));
     fireEvent.click(await screen.findByLabelText("颜色顺序记忆"));
-    expect(await screen.findByText("认知游戏")).toBeInTheDocument();
+    expect((await screen.findAllByText("记忆力训练")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
 
     await waitFor(() => {
@@ -304,6 +368,10 @@ describe("PrescriptionPanel", () => {
 
     expect(await screen.findByText("有氧训练")).toBeInTheDocument();
     expect(screen.getByText("抗阻训练")).toBeInTheDocument();
+    expect(actionGroupHeaderTexts()).toEqual(["抗阻训练", "有氧训练", "记忆力训练", "执行力训练"]);
+    expect(actionGroupHeaderTexts().some((text) => text.includes("运动训练") || text.includes("认知游戏"))).toBe(false);
+    expect(actionGroupHeaderTexts().some((text) => text.includes("个动作"))).toBe(false);
+    expect(actionChoiceTexts().some((text) => text.includes("运动训练") || text.includes("认知训练"))).toBe(false);
 
     fireEvent.click(await screen.findByLabelText("坐姿划船"));
     fireEvent.change(screen.getByLabelText("坐姿划船频次"), { target: { value: "4" } });
@@ -427,9 +495,11 @@ describe("PrescriptionPanel", () => {
     renderPanel();
 
     expect(await screen.findByText("当前生效处方 v1")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "打开跟练模拟" })).not.toBeInTheDocument();
     expect(screen.queryByRole("cell", { name: "v0" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "组数" })).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "次数" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "视频" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "历史处方" }));
     expect(await screen.findByRole("cell", { name: "v0" })).toBeInTheDocument();

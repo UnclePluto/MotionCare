@@ -136,7 +136,6 @@ export function PrescriptionEntryPage() {
             render: (_: unknown, r) => (
               <Space>
                 <Link to={`/prescriptions/project-patients/${r.id}`}>处方</Link>
-                <Link to={`/patient-sim/project-patients/${r.id}`}>跟练模拟</Link>
               </Space>
             ),
           },

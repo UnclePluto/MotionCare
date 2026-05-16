@@ -99,6 +99,44 @@ def test_action_library_endpoint_uses_motion_fields(client, doctor):
 
 
 @pytest.mark.django_db
+def test_action_library_endpoint_returns_only_official_seeded_actions(client, doctor):
+    client.force_login(doctor)
+    ActionLibraryItem.objects.create(
+        name="坐立训练",
+        training_type="运动训练",
+        internal_type=ActionLibraryItem.InternalType.MOTION,
+        action_type="平衡训练",
+    )
+    ActionLibraryItem.objects.create(
+        source_key="custom-motion-test",
+        name="测试动作",
+        training_type="运动训练",
+        internal_type=ActionLibraryItem.InternalType.MOTION,
+        action_type="平衡训练",
+    )
+
+    response = client.get("/api/prescriptions/actions/")
+
+    assert response.status_code == 200
+    source_keys = {row["source_key"] for row in response.json()}
+    assert source_keys == {
+        "motion-aerobic-high-knee",
+        "motion-balance-sit-stand",
+        "motion-resistance-leg-kickback",
+        "motion-resistance-row",
+        "motion-resistance-shoulder-press",
+        "game-audiovisual-puzzle",
+        "game-audiovisual-sound-discrimination",
+        "game-executive-category-switch",
+        "game-executive-inhibition",
+        "game-memory-color-sequence",
+        "game-memory-pattern-sequence",
+    }
+    assert "坐立训练" not in {row["name"] for row in response.json()}
+    assert "测试动作" not in {row["name"] for row in response.json()}
+
+
+@pytest.mark.django_db
 def test_prescription_action_endpoint_uses_motion_snapshot_fields(
     client, doctor, project_patient
 ):

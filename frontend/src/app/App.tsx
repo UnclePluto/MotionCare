@@ -6,7 +6,6 @@ import { RequireAuth } from "../auth/RequireAuth";
 import { AccountPage } from "../pages/account/AccountPage";
 import { LoginPage } from "../pages/auth/LoginPage";
 import { AdminLayout } from "./layout/AdminLayout";
-import { PatientSimTrainingPage } from "../pages/patient-sim/PatientSimTrainingPage";
 import { PatientCrfBaselinePage } from "../pages/patients/PatientCrfBaselinePage";
 import { PatientListPage } from "../pages/patients/PatientListPage";
 import { PatientDetailPage } from "../pages/patients/PatientDetailPage";
@@ -67,7 +66,6 @@ export function App() {
               <Route path="/doctors/new" element={<DoctorCreatePage />} />
               <Route path="/doctors/:doctorId/edit" element={<DoctorEditPage />} />
               <Route path="/account" element={<AccountPage />} />
-              <Route path="/patient-sim/project-patients/:projectPatientId" element={<PatientSimTrainingPage />} />
               <Route path="/visits/:visitId" element={<VisitFormPage />} />
               <Route path="/training" element={<TrainingEntryPage />} />
               <Route path="/training-tracking" element={<TrainingTrackingPage />} />

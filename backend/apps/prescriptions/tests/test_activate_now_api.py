@@ -15,8 +15,20 @@ def _client(user):
 
 
 def _action(**overrides):
+    source_key = overrides.get("source_key", "motion-aerobic-high-knee")
+    try:
+        action = ActionLibraryItem.objects.get(source_key=source_key)
+    except ActionLibraryItem.DoesNotExist:
+        action = None
+    if action is not None:
+        for field, value in overrides.items():
+            setattr(action, field, value)
+        if overrides:
+            action.save(update_fields=[*overrides.keys(), "updated_at"])
+        return action
+
     data = {
-        "source_key": "activate-now-action",
+        "source_key": source_key,
         "name": "高抬腿踏步",
         "training_type": "运动训练",
         "internal_type": ActionLibraryItem.InternalType.MOTION,
@@ -198,6 +210,20 @@ def test_activate_now_rejects_duplicate_actions(project_patient, doctor):
 
     assert response.status_code == 400
     assert "重复动作" in str(response.data)
+    assert not Prescription.objects.filter(project_patient=project_patient).exists()
+
+
+@pytest.mark.django_db
+def test_activate_now_rejects_non_official_action_library_item(project_patient, doctor):
+    action = _action(source_key="custom-activate-now-action")
+
+    response = _client(doctor).post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        data=_payload(action),
+        format="json",
+    )
+
+    assert response.status_code == 400
     assert not Prescription.objects.filter(project_patient=project_patient).exists()
 
 

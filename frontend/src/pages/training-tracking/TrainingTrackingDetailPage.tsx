@@ -1,6 +1,6 @@
 import { DualAxes, type DualAxesConfig } from "@ant-design/charts";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, Descriptions, Empty, Select, Space, Spin, Statistic, Table, Tabs, Tag } from "antd";
+import { Alert, Card, Descriptions, Empty, Segmented, Select, Space, Spin, Statistic, Table, Tag } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
@@ -42,6 +42,12 @@ function formatDateTime(value: string | null | undefined) {
   return `${match[1]} ${match[2]}`;
 }
 
+function formatTrendDateLabel(value: string) {
+  const match = value.match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+  return `${match[1]}-${match[2]}`;
+}
+
 function errorMessage(error: unknown) {
   if (error && typeof error === "object" && "response" in error) {
     const data = (error as { response?: { data?: unknown } }).response?.data;
@@ -69,7 +75,7 @@ function buildDailyTrendData(
 ): ChartTrendPoint[] {
   const movingAverageByDate = new Map(movingAverage.map((point) => [point.date, point.completed_count_avg]));
   return daily.map((point) => ({
-    label: point.date,
+    label: formatTrendDateLabel(point.date),
     completed_count: point.completed_count,
     moving_average: movingAverageByDate.get(point.date) ?? point.completed_count,
   }));
@@ -77,7 +83,7 @@ function buildDailyTrendData(
 
 function buildWeeklyTrendData(weekly: TrackingWeeklyTrendPoint[]): ChartTrendPoint[] {
   return weekly.map((point) => ({
-    label: `${point.week_start} 至 ${point.week_end}`,
+    label: `${formatTrendDateLabel(point.week_start)} 至 ${formatTrendDateLabel(point.week_end)}`,
     completed_count: point.completed_count,
     moving_average: point.completed_count,
   }));
@@ -162,7 +168,7 @@ export function TrainingTrackingDetailPage() {
     return params;
   }, [range, selectedProjectPatientId]);
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isFetching, isError, error } = useQuery({
     queryKey: ["training-tracking", "patients", numericPatientId, queryParams],
     queryFn: async () => {
       const response = await apiClient.get<TrackingDetail>(`/training/tracking/patients/${numericPatientId}/`, {
@@ -171,6 +177,7 @@ export function TrainingTrackingDetailPage() {
       return response.data;
     },
     enabled: isValidPatientId,
+    placeholderData: (previousData) => previousData,
   });
 
   if (!isValidPatientId) {
@@ -215,6 +222,7 @@ export function TrainingTrackingDetailPage() {
     range === "weekly"
       ? buildWeeklyTrendData(data.trend.weekly)
       : buildDailyTrendData(data.trend.daily, data.trend.moving_average);
+  const trendChartKey = `${range}:${activeTrendData.map((point) => point.label).join("|")}`;
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -287,21 +295,24 @@ export function TrainingTrackingDetailPage() {
         )}
       </Card>
 
-      <Card title="训练趋势">
-        <Tabs
-          activeKey={range}
-          onChange={(key) => setRange(key as TrainingTrackingRange)}
-          items={(Object.keys(RANGE_LABEL) as TrainingTrackingRange[]).map((key) => ({
-            key,
-            label: RANGE_LABEL[key],
-            children:
-              activeTrendData.length > 0 ? (
-                <DualAxes {...makeTrendChartConfig(activeTrendData, range)} />
-              ) : (
-                <Empty description="暂无趋势数据" />
-              ),
-          }))}
-        />
+      <Card title="训练趋势" extra={isFetching ? <Spin size="small" /> : null}>
+        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Segmented
+            value={range}
+            onChange={(value) => setRange(value as TrainingTrackingRange)}
+            options={(Object.keys(RANGE_LABEL) as TrainingTrackingRange[]).map((key) => ({
+              label: RANGE_LABEL[key],
+              value: key,
+            }))}
+          />
+          <div style={{ width: "100%", minHeight: 280 }}>
+            {activeTrendData.length > 0 ? (
+              <DualAxes key={trendChartKey} {...makeTrendChartConfig(activeTrendData, range)} />
+            ) : (
+              <Empty description="暂无趋势数据" />
+            )}
+          </div>
+        </Space>
       </Card>
 
       <Card title="游戏表现统计">

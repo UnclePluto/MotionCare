@@ -228,11 +228,11 @@ describe("TrainingTrackingDetailPage", () => {
     await waitFor(() => expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0));
     expect(trendChartData()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: "2026-05-14", completed_count: 2, moving_average: 1.1 }),
+        expect.objectContaining({ label: "05-14", completed_count: 2, moving_average: 1.1 }),
       ]),
     );
 
-    fireEvent.click(screen.getByRole("tab", { name: "近 7 天" }));
+    fireEvent.click(screen.getByText("近 7 天"));
 
     await waitFor(() => {
       expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/201/", { params: { range: "7d" } });
@@ -240,11 +240,11 @@ describe("TrainingTrackingDetailPage", () => {
     await waitFor(() => expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0));
     expect(trendChartData()).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ label: "2026-05-14", completed_count: 2, moving_average: 1.1 }),
+        expect.objectContaining({ label: "05-14", completed_count: 2, moving_average: 1.1 }),
       ]),
     );
 
-    fireEvent.click(screen.getByRole("tab", { name: "按周" }));
+    fireEvent.click(screen.getByText("按周"));
 
     await waitFor(() => {
       expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/201/", { params: { range: "weekly" } });
@@ -252,11 +252,37 @@ describe("TrainingTrackingDetailPage", () => {
     await waitFor(() => expect(screen.getAllByTestId("dual-axes-chart").length).toBeGreaterThan(0));
     expect(trendChartData()).toEqual([
       expect.objectContaining({
-        label: "2026-05-11 至 2026-05-17",
+        label: "05-11 至 05-17",
         completed_count: 5,
         moving_average: 5,
       }),
     ]);
+  });
+
+  it("切换日期范围重新请求时保留详情页内容", async () => {
+    let resolveRangeRequest: ((value: { data: typeof trackingDetail }) => void) | undefined;
+    mockGet.mockImplementation((_url: string, config?: unknown) => {
+      const params = (config as { params?: Record<string, unknown> } | undefined)?.params;
+      if (params?.range === "7d") {
+        return new Promise((resolve) => {
+          resolveRangeRequest = resolve;
+        });
+      }
+      return Promise.resolve({ data: trackingDetail });
+    });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("近 7 天"));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/tracking/patients/201/", { params: { range: "7d" } });
+    });
+    expect(screen.getByText("训练患者甲")).toBeInTheDocument();
+    expect(screen.getByText("处方完成情况")).toBeInTheDocument();
+
+    resolveRangeRequest?.({ data: trackingDetail });
   });
 
   it("切换项目后用 project_patient 重新请求", async () => {

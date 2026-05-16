@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Descriptions, Drawer, Empty, Popconfirm, Space, Table, Tabs, Tag, message } from "antd";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
 import { FixedActionLibraryTab } from "./FixedActionLibraryTab";
@@ -15,6 +14,11 @@ type Props = {
 
 function formatDateTime(value: string | null | undefined) {
   return value ? value.replace("T", " ").slice(0, 16) : "—";
+}
+
+function normalizeCurrentPrescription(data: Prescription | null | "" | undefined): Prescription | null {
+  if (!data || typeof data !== "object") return null;
+  return data;
 }
 
 const STATUS_LABEL: Record<Prescription["status"], string> = {
@@ -41,11 +45,6 @@ function PrescriptionActionTable({ actions }: { actions: PrescriptionAction[] })
           dataIndex: "duration_minutes",
           render: (value: number | null) => (value ? `${value} 分钟` : "—"),
         },
-        {
-          title: "视频",
-          dataIndex: "video_url_snapshot",
-          render: (value: string) => (value ? "已配置" : "待配置"),
-        },
       ]}
     />
   );
@@ -63,7 +62,7 @@ export function PrescriptionPanel({ projectPatientId }: Props) {
       const response = await apiClient.get<Prescription | null>("/prescriptions/current/", {
         params: { project_patient: projectPatientId },
       });
-      return response.data;
+      return normalizeCurrentPrescription(response.data);
     },
   });
 
@@ -127,7 +126,6 @@ export function PrescriptionPanel({ projectPatientId }: Props) {
       extra={
         <Space wrap>
           <Button onClick={() => setHistoryOpen(true)}>历史处方</Button>
-          <Link to={`/patient-sim/project-patients/${projectPatientId}`}>打开跟练模拟</Link>
           {current ? (
             <Popconfirm
               title="确认终止当前处方？"
