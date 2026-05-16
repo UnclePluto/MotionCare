@@ -43,6 +43,19 @@ function pickIndex(length: number, random: () => number): number {
   return Math.floor(normalized * length)
 }
 
+function shuffle<T>(items: T[], random: () => number): T[] {
+  const result = [...items]
+
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = pickIndex(index + 1, random)
+    const current = result[index]
+    result[index] = result[swapIndex]
+    result[swapIndex] = current
+  }
+
+  return result
+}
+
 export function groupedByCategory(sources: SoundDiscriminationAudio[]): SoundDiscriminationAudio[][] {
   const groups = new Map<SoundDiscriminationCategory, SoundDiscriminationAudio[]>()
 
@@ -74,13 +87,15 @@ export function createSoundDiscriminationRound(
   random: () => number = Math.random
 ): SoundDiscriminationRound {
   const config = CONFIG[difficulty]
-  const cards = groupedByCategory(sources)
-    .slice(0, config.pairCount)
-    .flatMap((group) => group.slice(0, 2).map(toCard))
+  const groups = groupedByCategory(sources)
 
-  if (cards.length === 0) {
-    throw new Error('Sound discrimination round requires at least one category with two variants')
+  if (groups.length < config.pairCount) {
+    throw new Error('声音辨别资源不足，无法生成当前难度题目')
   }
+
+  const selectedGroups = shuffle(groups, random).slice(0, config.pairCount)
+  const selectedSources = selectedGroups.flatMap((group) => shuffle(group, random).slice(0, 2))
+  const cards = shuffle(selectedSources.map(toCard), random)
 
   return {
     cards,
