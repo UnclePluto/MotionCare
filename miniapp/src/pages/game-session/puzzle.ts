@@ -5,18 +5,27 @@ export type PuzzleTile = {
   correctIndex: number
 }
 
+export type PuzzleImageKey = 'beach' | 'garden' | 'lighthouse'
+
 export type PuzzleRound = {
+  imageKey: PuzzleImageKey
   imageSrc: string
+  gridSize: {
+    rows: number
+    cols: number
+  }
   rows: number
   cols: number
+  tileCount: number
   previewMs: number
   tiles: PuzzleTile[]
+  shuffledTiles: PuzzleTile[]
 }
 
 export const PUZZLE_IMAGES = [
-  '/assets/images/game-session/puzzle_beach.svg',
-  '/assets/images/game-session/puzzle_garden.svg',
-  '/assets/images/game-session/puzzle_lighthouse.svg',
+  { key: 'beach', src: '/assets/images/game-session/puzzle_beach.svg' },
+  { key: 'garden', src: '/assets/images/game-session/puzzle_garden.svg' },
+  { key: 'lighthouse', src: '/assets/images/game-session/puzzle_lighthouse.svg' },
 ] as const
 
 const CONFIG: Record<GameDifficulty, { rows: number; cols: number; previewMs: number }> = {
@@ -63,13 +72,23 @@ function shuffledTiles(count: number, random: () => number): PuzzleTile[] {
 
 export function createPuzzleRound(difficulty: GameDifficulty, random: () => number = Math.random): PuzzleRound {
   const config = CONFIG[difficulty]
+  const tileCount = config.rows * config.cols
+  const tiles = createTiles(tileCount)
+  const image = PUZZLE_IMAGES[pickIndex(PUZZLE_IMAGES.length, random)]
 
   return {
-    imageSrc: PUZZLE_IMAGES[pickIndex(PUZZLE_IMAGES.length, random)],
+    imageKey: image.key,
+    imageSrc: image.src,
+    gridSize: {
+      rows: config.rows,
+      cols: config.cols,
+    },
     rows: config.rows,
     cols: config.cols,
+    tileCount,
     previewMs: config.previewMs,
-    tiles: shuffledTiles(config.rows * config.cols, random),
+    tiles,
+    shuffledTiles: shuffledTiles(tileCount, random),
   }
 }
 
