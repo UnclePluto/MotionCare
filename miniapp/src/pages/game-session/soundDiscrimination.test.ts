@@ -139,6 +139,20 @@ describe('createSoundDiscriminationRound', () => {
     expect(firstRound.cards.map((card) => card.soundId)).not.toEqual(secondRound.cards.map((card) => card.soundId))
   })
 
+  it('creates a medium round with three paired groups and six cards', () => {
+    const round = createSoundDiscriminationRound('中等', SOURCES, () => 0)
+    const categoryCounts = round.cards.reduce<Record<string, number>>((counts, card) => {
+      counts[card.category] = (counts[card.category] ?? 0) + 1
+      return counts
+    }, {})
+
+    expect(round.cards).toHaveLength(6)
+    expect(Object.values(categoryCounts)).toHaveLength(3)
+    expect(Object.values(categoryCounts).every((count) => count === 2)).toBe(true)
+    expect(round.timeoutMs).toBe(6500)
+    expect(round.cards.map((card) => card.soundId)).toContain(round.target.soundId)
+  })
+
   it('creates a difficult round with at least eight cards and target from cards', () => {
     const round = createSoundDiscriminationRound('困难', SOURCES, () => 0.4)
 
