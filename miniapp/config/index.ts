@@ -27,6 +27,10 @@ export default defineConfig<'webpack5'>(async (merge) => {
     },
     copy: {
       patterns: [
+        {
+          from: 'src/assets/audio/game-session',
+          to: 'dist/assets/audio/game-session'
+        }
       ],
       options: {
       }
