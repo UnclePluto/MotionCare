@@ -21,6 +21,11 @@ export type CategorySwitchRound = {
   timeoutMs: number
 }
 
+export type CreateCategorySwitchRoundOptions = {
+  previousRule?: CategoryRule
+  random?: () => number
+}
+
 const ITEMS: CategoryItem[] = [
   {
     id: 'pineapple',
@@ -124,9 +129,10 @@ function buildOptions(rule: CategoryRule, correctOption: string, limit: number, 
 
 export function createCategorySwitchRound(
   difficulty: GameDifficulty,
-  random: () => number = Math.random,
-  previousRule?: CategoryRule
+  options: CreateCategorySwitchRoundOptions = {}
 ): CategorySwitchRound {
+  const random = options.random ?? Math.random
+  const previousRule = options.previousRule
   const config = CONFIG[difficulty]
   const item = ITEMS[pickIndex(ITEMS.length, random)]
   const rule = pickRule(config.rules, random, previousRule)

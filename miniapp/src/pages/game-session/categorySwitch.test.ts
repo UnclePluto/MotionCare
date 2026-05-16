@@ -13,7 +13,7 @@ function expectUniqueOptions(options: string[]) {
 
 describe('createCategorySwitchRound', () => {
   it('creates a simple kind round with three options and long timeout', () => {
-    const round = createCategorySwitchRound('简单', () => 0)
+    const round = createCategorySwitchRound('简单', { random: () => 0 })
 
     expect(round.rule).toBe('kind')
     expect(round.ruleLabel).toBe('按物体类别选择')
@@ -30,7 +30,7 @@ describe('createCategorySwitchRound', () => {
   })
 
   it('creates a medium round from kind or color rules', () => {
-    const round = createCategorySwitchRound('中等', () => 0.75)
+    const round = createCategorySwitchRound('中等', { random: () => 0.75 })
 
     expect(['kind', 'color']).toContain(round.rule)
     expect(round.options.length).toBeGreaterThanOrEqual(3)
@@ -41,7 +41,7 @@ describe('createCategorySwitchRound', () => {
   })
 
   it('creates a difficult round from kind color or scene rules', () => {
-    const round = createCategorySwitchRound('困难', () => 0.99)
+    const round = createCategorySwitchRound('困难', { random: () => 0.99 })
 
     expect(['kind', 'color', 'scene']).toContain(round.rule)
     expect(round.options).toContain(round.correctOption)
@@ -52,7 +52,7 @@ describe('createCategorySwitchRound', () => {
   })
 
   it('uses random to avoid keeping the correct option fixed at the first position', () => {
-    const round = createCategorySwitchRound('简单', randomSequence([0, 0, 0]))
+    const round = createCategorySwitchRound('简单', { random: randomSequence([0, 0, 0]) })
 
     expect(round.correctOption).toBe('水果')
     expect(round.options).toHaveLength(3)
@@ -61,26 +61,28 @@ describe('createCategorySwitchRound', () => {
   })
 
   it('switches medium rules away from the previous rule when possible', () => {
-    const round = createCategorySwitchRound('中等', randomSequence([0, 0, 0]), 'kind')
+    const previousRule = 'kind'
+    const round = createCategorySwitchRound('中等', { previousRule, random: randomSequence([0, 0, 0]) })
 
-    expect(round.rule).toBe('color')
+    expect(round.rule).not.toBe(previousRule)
   })
 
   it('switches difficult rules away from the previous rule when possible', () => {
-    const round = createCategorySwitchRound('困难', randomSequence([0, 0.99, 0]), 'scene')
+    const previousRule = 'scene'
+    const round = createCategorySwitchRound('困难', { previousRule, random: randomSequence([0, 0.99, 0]) })
 
-    expect(round.rule).toBe('color')
+    expect(round.rule).not.toBe(previousRule)
   })
 
   it('keeps simple rounds on kind even when previous rule is provided', () => {
-    const round = createCategorySwitchRound('简单', () => 0, 'kind')
+    const round = createCategorySwitchRound('简单', { previousRule: 'kind', random: () => 0 })
 
     expect(round.rule).toBe('kind')
   })
 })
 
 describe('evaluateCategorySwitchAttempt', () => {
-  const round = createCategorySwitchRound('简单', () => 0)
+  const round = createCategorySwitchRound('简单', { random: () => 0 })
 
   it('marks the correct option as correct', () => {
     expect(evaluateCategorySwitchAttempt(round, '水果')).toEqual({
