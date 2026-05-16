@@ -86,18 +86,6 @@ function normalizeDifficulty(value: string): GameDifficulty {
   return DIFFICULTY_OPTIONS.includes(value as GameDifficulty) ? (value as GameDifficulty) : '简单'
 }
 
-function gameCodeForAction(actionSourceKey: string | null | undefined, actionName = ''): GameCode | null {
-  const sourceGameCode = gameCodeForActionSource(actionSourceKey)
-  if (sourceGameCode) return sourceGameCode
-  if (actionName.includes('颜色顺序记忆')) return 'game-memory-color-sequence'
-  if (actionName.includes('反应抑制')) return 'game-executive-inhibition'
-  if (actionName.includes('图案顺序')) return 'game-memory-pattern-sequence'
-  if (actionName.includes('分类')) return 'game-executive-category-switch'
-  if (actionName.includes('声音辨别')) return 'game-audiovisual-sound-discrimination'
-  if (actionName.includes('拼图')) return 'game-audiovisual-puzzle'
-  return null
-}
-
 function suggestedDurationMinutes(action: GameActionSummary): number {
   return action.duration_minutes && action.duration_minutes > 0 ? action.duration_minutes : 10
 }
@@ -193,7 +181,7 @@ export default function GameSessionPage() {
     return prescription?.actions.find((item) => item.id === actionId) ?? null
   }, [actionId, prescription])
   const actionIsGame = action?.internal_type === 'game'
-  const gameCode = action ? gameCodeForAction(action.source_key, action.action_name) : null
+  const gameCode = action ? gameCodeForActionSource(action.source_key) : null
   const difficulty = DIFFICULTY_OPTIONS[difficultyIndex] ?? '简单'
   const prescribedDifficulty = normalizeDifficulty(action?.difficulty ?? '')
   const adjustedDifficulty = difficulty !== prescribedDifficulty
@@ -800,6 +788,18 @@ export default function GameSessionPage() {
     }
   }
 
+  function soundRoundSummaryDetail(
+    round: SoundDiscriminationRound,
+    detail: { result?: string; correct?: boolean }
+  ): Record<string, unknown> {
+    return withBaseRoundDetail({
+      game_kind: 'sound_discrimination',
+      card_count: round.cards.length,
+      previewed_count: round.cards.filter((card) => card.previewed).length,
+      ...detail,
+    })
+  }
+
   function buildTimeoutRoundDetail(): Record<string, unknown> {
     const colorRound = activeColorRoundRef.current
     const patternRound = activePatternRoundRef.current
@@ -829,11 +829,8 @@ export default function GameSessionPage() {
       })
     }
     if (gameCodeRef.current === 'game-audiovisual-sound-discrimination' && soundRound) {
-      return withBaseRoundDetail({
+      return soundRoundSummaryDetail(soundRound, {
         result: 'timeout',
-        target: soundRound.target.soundId,
-        selected: null,
-        card_count: soundRound.cards.length,
       })
     }
     return withBaseRoundDetail({ result: 'timeout' })
@@ -1078,12 +1075,9 @@ export default function GameSessionPage() {
     const attempt = evaluateSoundDiscriminationAttempt(activeSoundRound, card.soundId)
     appendUnitResult(
       attempt.correct,
-      withBaseRoundDetail({
-        target: activeSoundRound.target.soundId,
-        selected: card.soundId,
-        selected_card: card.id,
+      soundRoundSummaryDetail(activeSoundRound, {
+        result: 'answered',
         correct: attempt.correct,
-        card_count: activeSoundRound.cards.length,
       })
     )
     setFeedback(attempt.correct ? GAME_AUDIO_TEXT.correct : GAME_AUDIO_TEXT.wrong)
@@ -1202,7 +1196,7 @@ export default function GameSessionPage() {
         raw_detail: {
           ...base.form_data.raw_detail,
           rounds: results.map((item, index) => ({
-            index: index + 1,
+            round_index: index + 1,
             correct: item.correct,
             ...(item.detail ?? {}),
           })),
