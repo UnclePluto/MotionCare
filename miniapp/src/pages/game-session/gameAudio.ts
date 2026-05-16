@@ -45,6 +45,7 @@ export type SoundDiscriminationCategory = 'bird' | 'train' | 'phone' | 'laugh' |
 
 export type SoundDiscriminationAudio = {
   id: SoundDiscriminationAudioId
+  label: string
   category: SoundDiscriminationCategory
   imageKey: SoundDiscriminationCategory
   src: string
@@ -86,92 +87,106 @@ export const GAME_AUDIO_SRC: Record<GameAudioKey, string> = {
   tap: '/assets/audio/game-session/tap.m4a',
 }
 
-export const SOUND_DISCRIMINATION_AUDIO: Record<SoundDiscriminationAudioId, SoundDiscriminationAudio> = {
-  bird_1: {
+export const SOUND_DISCRIMINATION_AUDIO: SoundDiscriminationAudio[] = [
+  {
     id: 'bird_1',
+    label: '小鸟1',
     category: 'bird',
     imageKey: 'bird',
     src: '/assets/audio/sound-discrimination/bird_1.m4a',
   },
-  bird_2: {
+  {
     id: 'bird_2',
+    label: '小鸟2',
     category: 'bird',
     imageKey: 'bird',
     src: '/assets/audio/sound-discrimination/bird_2.m4a',
   },
-  bird_3: {
+  {
     id: 'bird_3',
+    label: '小鸟3',
     category: 'bird',
     imageKey: 'bird',
     src: '/assets/audio/sound-discrimination/bird_3.m4a',
   },
-  train_1: {
+  {
     id: 'train_1',
+    label: '火车汽笛声1',
     category: 'train',
     imageKey: 'train',
     src: '/assets/audio/sound-discrimination/train_1.m4a',
   },
-  train_2: {
+  {
     id: 'train_2',
+    label: '火车汽笛声2',
     category: 'train',
     imageKey: 'train',
     src: '/assets/audio/sound-discrimination/train_2.m4a',
   },
-  phone_1: {
+  {
     id: 'phone_1',
+    label: '电话铃声1',
     category: 'phone',
     imageKey: 'phone',
     src: '/assets/audio/sound-discrimination/phone_1.m4a',
   },
-  phone_2: {
+  {
     id: 'phone_2',
+    label: '电话铃声2',
     category: 'phone',
     imageKey: 'phone',
     src: '/assets/audio/sound-discrimination/phone_2.m4a',
   },
-  phone_3: {
+  {
     id: 'phone_3',
+    label: '电话铃声3',
     category: 'phone',
     imageKey: 'phone',
     src: '/assets/audio/sound-discrimination/phone_3.m4a',
   },
-  laugh_1: {
+  {
     id: 'laugh_1',
+    label: '笑声1',
     category: 'laugh',
     imageKey: 'laugh',
     src: '/assets/audio/sound-discrimination/laugh_1.m4a',
   },
-  laugh_2: {
+  {
     id: 'laugh_2',
+    label: '笑声2',
     category: 'laugh',
     imageKey: 'laugh',
     src: '/assets/audio/sound-discrimination/laugh_2.m4a',
   },
-  laugh_3: {
+  {
     id: 'laugh_3',
+    label: '笑声3',
     category: 'laugh',
     imageKey: 'laugh',
     src: '/assets/audio/sound-discrimination/laugh_3.m4a',
   },
-  drum_1: {
+  {
     id: 'drum_1',
+    label: '鼓1',
     category: 'drum',
     imageKey: 'drum',
     src: '/assets/audio/sound-discrimination/drum_1.m4a',
   },
-  drum_2: {
+  {
     id: 'drum_2',
+    label: '鼓2',
     category: 'drum',
     imageKey: 'drum',
     src: '/assets/audio/sound-discrimination/drum_2.m4a',
   },
-  drum_3: {
+  {
     id: 'drum_3',
+    label: '鼓3',
     category: 'drum',
     imageKey: 'drum',
     src: '/assets/audio/sound-discrimination/drum_3.m4a',
   },
-}
+]
 
 export function isGameAudioMuted(): boolean {
   try {

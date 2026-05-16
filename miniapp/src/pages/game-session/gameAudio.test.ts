@@ -115,20 +115,27 @@ describe('game audio catalog', () => {
   })
 
   it('defines sound discrimination clips with ascii static paths', () => {
-    expect(SOUND_DISCRIMINATION_AUDIO.bird_1).toMatchObject({
+    expect(Array.isArray(SOUND_DISCRIMINATION_AUDIO)).toBe(true)
+    expect(SOUND_DISCRIMINATION_AUDIO).toHaveLength(14)
+    expect(new Set(SOUND_DISCRIMINATION_AUDIO.map((item) => item.id)).size).toBe(SOUND_DISCRIMINATION_AUDIO.length)
+
+    expect(SOUND_DISCRIMINATION_AUDIO.find((item) => item.id === 'bird_1')).toMatchObject({
       id: 'bird_1',
+      label: '小鸟1',
       category: 'bird',
       imageKey: 'bird',
       src: '/assets/audio/sound-discrimination/bird_1.m4a',
     })
-    expect(SOUND_DISCRIMINATION_AUDIO.phone_2).toMatchObject({
+    expect(SOUND_DISCRIMINATION_AUDIO.find((item) => item.id === 'phone_2')).toMatchObject({
       id: 'phone_2',
+      label: '电话铃声2',
       category: 'phone',
       imageKey: 'phone',
       src: '/assets/audio/sound-discrimination/phone_2.m4a',
     })
-    expect(SOUND_DISCRIMINATION_AUDIO.drum_3).toMatchObject({
+    expect(SOUND_DISCRIMINATION_AUDIO.find((item) => item.id === 'drum_3')).toMatchObject({
       id: 'drum_3',
+      label: '鼓3',
       category: 'drum',
       imageKey: 'drum',
       src: '/assets/audio/sound-discrimination/drum_3.m4a',
