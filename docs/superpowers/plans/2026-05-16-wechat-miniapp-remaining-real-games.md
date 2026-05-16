@@ -25,6 +25,8 @@
 
 - Modify: `miniapp/config/index.ts`
   - 增加 `src/assets/audio/sound-discrimination` 和 `src/assets/images/game-session` copy pattern。
+- Modify: `miniapp/scripts/generate-game-audio.mjs`
+  - 增加 4 个新游戏 intro 语音片段并重新生成 `pattern_intro.m4a`、`category_intro.m4a`、`sound_intro.m4a`、`puzzle_intro.m4a`。
 - Create: `miniapp/scripts/generate-game-images.mjs`
   - 生成图案顺序、分类转换、拼图使用的静态 SVG 图片资源。
 - Create generated assets under: `miniapp/src/assets/images/game-session/*.svg`
@@ -79,8 +81,10 @@
 
 **Files:**
 - Modify: `miniapp/config/index.ts`
+- Modify: `miniapp/scripts/generate-game-audio.mjs`
 - Create: `miniapp/scripts/generate-game-images.mjs`
 - Create generated assets: `miniapp/src/assets/images/game-session/*.svg`
+- Create generated intro audio: `miniapp/src/assets/audio/game-session/pattern_intro.m4a`, `category_intro.m4a`, `sound_intro.m4a`, `puzzle_intro.m4a`
 - Create copied assets: `miniapp/src/assets/audio/sound-discrimination/*.m4a`
 - Modify: `miniapp/src/pages/game-session/gameTypes.ts`
 - Create: `miniapp/src/pages/game-session/gameCatalog.ts`
@@ -306,7 +310,26 @@ export function playAudioSrc(src: string): Promise<boolean> {
 
 Keep `playGameAudio(key)` behavior non-blocking by delegating to `playStaticAudio(GAME_AUDIO_SRC[key]).catch(() => undefined)`.
 
-- [ ] **Step 6: Add image generation script**
+- [ ] **Step 6: Add remaining intro audio clips**
+
+Modify `miniapp/scripts/generate-game-audio.mjs` and add the 4 new intro clips immediately after `color_intro`:
+
+```js
+  ['pattern_intro', '图案顺序记忆训练开始。请记住图片出现的顺序，随后按相同顺序点击。'],
+  ['category_intro', '分类转换训练开始。请看清当前规则，再选择图片对应的分类。'],
+  ['sound_intro', '声音辨别训练开始。请逐张翻开卡片试听声音，盖回后根据目标声音选择卡片。'],
+  ['puzzle_intro', '拼图训练开始。请先记住完整图片，然后点击两块拼图交换位置，恢复正确顺序。'],
+```
+
+Then run:
+
+```bash
+cd miniapp && node scripts/generate-game-audio.mjs
+```
+
+Expected: `miniapp/src/assets/audio/game-session/` contains the existing audio files plus `pattern_intro.m4a`, `category_intro.m4a`, `sound_intro.m4a`, and `puzzle_intro.m4a`.
+
+- [ ] **Step 7: Add image generation script**
 
 Create `miniapp/scripts/generate-game-images.mjs` with deterministic SVG output:
 
@@ -353,7 +376,7 @@ for (const [filename, label, color] of assets) {
 }
 ```
 
-- [ ] **Step 7: Generate images and copy sound sources**
+- [ ] **Step 8: Generate images and copy sound sources**
 
 Run:
 
@@ -378,7 +401,7 @@ cp ../docs/other/sounds/鼓3.m4a src/assets/audio/sound-discrimination/drum_3.m4
 
 Expected: `miniapp/src/assets/images/game-session/` contains SVGs and `miniapp/src/assets/audio/sound-discrimination/` contains 14 m4a files.
 
-- [ ] **Step 8: Update Taro copy config**
+- [ ] **Step 9: Update Taro copy config**
 
 Modify `miniapp/config/index.ts` copy patterns:
 
@@ -403,7 +426,7 @@ copy: {
 },
 ```
 
-- [ ] **Step 9: Run audio tests and build asset copy**
+- [ ] **Step 10: Run audio tests and build asset copy**
 
 Run:
 
@@ -412,12 +435,12 @@ cd miniapp && npx vitest run src/pages/game-session/gameAudio.test.ts
 cd miniapp && npm run build:weapp
 ```
 
-Expected: tests PASS and Webpack compiled successfully. Confirm `dist/assets/audio/sound-discrimination/bird_1.m4a` and `dist/assets/images/game-session/pattern_sun.svg` exist.
+Expected: tests PASS and Webpack compiled successfully. Confirm `dist/assets/audio/game-session/pattern_intro.m4a`, `dist/assets/audio/sound-discrimination/bird_1.m4a`, and `dist/assets/images/game-session/pattern_sun.svg` exist.
 
-- [ ] **Step 10: Commit assets and catalog**
+- [ ] **Step 11: Commit assets and catalog**
 
 ```bash
-git add miniapp/config/index.ts miniapp/scripts/generate-game-images.mjs miniapp/src/assets/images/game-session miniapp/src/assets/audio/sound-discrimination miniapp/src/pages/game-session/gameTypes.ts miniapp/src/pages/game-session/gameCatalog.ts miniapp/src/pages/game-session/gameAudio.ts miniapp/src/pages/game-session/gameAudio.test.ts
+git add miniapp/config/index.ts miniapp/scripts/generate-game-audio.mjs miniapp/scripts/generate-game-images.mjs miniapp/src/assets/images/game-session miniapp/src/assets/audio/game-session miniapp/src/assets/audio/sound-discrimination miniapp/src/pages/game-session/gameTypes.ts miniapp/src/pages/game-session/gameCatalog.ts miniapp/src/pages/game-session/gameAudio.ts miniapp/src/pages/game-session/gameAudio.test.ts
 git commit -m "feat(miniapp): 新增剩余游戏资源与目录"
 ```
 
