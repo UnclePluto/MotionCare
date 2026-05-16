@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest'
 
 import { createCategorySwitchRound, evaluateCategorySwitchAttempt } from './categorySwitch'
 
+function randomSequence(values: number[]) {
+  let index = 0
+  return () => values[Math.min(index++, values.length - 1)]
+}
+
+function expectUniqueOptions(options: string[]) {
+  expect(new Set(options).size).toBe(options.length)
+}
+
 describe('createCategorySwitchRound', () => {
   it('creates a simple kind round with three options and long timeout', () => {
     const round = createCategorySwitchRound('简单', () => 0)
@@ -14,7 +23,9 @@ describe('createCategorySwitchRound', () => {
       kind: '水果',
     })
     expect(round.correctOption).toBe('水果')
-    expect(round.options).toEqual(['水果', '动物', '交通'])
+    expect(round.options).toHaveLength(3)
+    expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
+    expectUniqueOptions(round.options)
     expect(round.timeoutMs).toBe(7000)
   })
 
@@ -23,6 +34,9 @@ describe('createCategorySwitchRound', () => {
 
     expect(['kind', 'color']).toContain(round.rule)
     expect(round.options.length).toBeGreaterThanOrEqual(3)
+    expect(round.options).toHaveLength(4)
+    expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
+    expectUniqueOptions(round.options)
     expect(round.timeoutMs).toBe(5500)
   })
 
@@ -31,7 +45,37 @@ describe('createCategorySwitchRound', () => {
 
     expect(['kind', 'color', 'scene']).toContain(round.rule)
     expect(round.options).toContain(round.correctOption)
+    expect(round.options).toHaveLength(4)
+    expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
+    expectUniqueOptions(round.options)
     expect(round.timeoutMs).toBe(4200)
+  })
+
+  it('uses random to avoid keeping the correct option fixed at the first position', () => {
+    const round = createCategorySwitchRound('简单', randomSequence([0, 0, 0]))
+
+    expect(round.correctOption).toBe('水果')
+    expect(round.options).toHaveLength(3)
+    expect(round.options).toContain(round.correctOption)
+    expect(round.options[0]).not.toBe(round.correctOption)
+  })
+
+  it('switches medium rules away from the previous rule when possible', () => {
+    const round = createCategorySwitchRound('中等', randomSequence([0, 0, 0]), 'kind')
+
+    expect(round.rule).toBe('color')
+  })
+
+  it('switches difficult rules away from the previous rule when possible', () => {
+    const round = createCategorySwitchRound('困难', randomSequence([0, 0.99, 0]), 'scene')
+
+    expect(round.rule).toBe('color')
+  })
+
+  it('keeps simple rounds on kind even when previous rule is provided', () => {
+    const round = createCategorySwitchRound('简单', () => 0, 'kind')
+
+    expect(round.rule).toBe('kind')
   })
 })
 

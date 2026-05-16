@@ -99,26 +99,44 @@ function correctFor(item: CategoryItem, rule: CategoryRule): string {
   return item.scene
 }
 
-function buildOptions(rule: CategoryRule, correctOption: string, limit: number): string[] {
+function shuffle<T>(values: T[], random: () => number): T[] {
+  const result = [...values]
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = pickIndex(index + 1, random)
+    const current = result[index]
+    result[index] = result[swapIndex]
+    result[swapIndex] = current
+  }
+  return result
+}
+
+function pickRule(rules: CategoryRule[], random: () => number, previousRule?: CategoryRule): CategoryRule {
+  const candidates = previousRule === undefined ? rules : rules.filter((rule) => rule !== previousRule)
+  const availableRules = candidates.length > 0 ? candidates : rules
+  return availableRules[pickIndex(availableRules.length, random)]
+}
+
+function buildOptions(rule: CategoryRule, correctOption: string, limit: number, random: () => number): string[] {
   const values = OPTIONS[rule]
-  const result = [correctOption, ...values.filter((item) => item !== correctOption)]
-  return result.slice(0, limit)
+  const result = [correctOption, ...values.filter((item) => item !== correctOption)].slice(0, limit)
+  return shuffle(result, random)
 }
 
 export function createCategorySwitchRound(
   difficulty: GameDifficulty,
-  random: () => number = Math.random
+  random: () => number = Math.random,
+  previousRule?: CategoryRule
 ): CategorySwitchRound {
   const config = CONFIG[difficulty]
   const item = ITEMS[pickIndex(ITEMS.length, random)]
-  const rule = config.rules[pickIndex(config.rules.length, random)]
+  const rule = pickRule(config.rules, random, previousRule)
   const correctOption = correctFor(item, rule)
 
   return {
     item,
     rule,
     ruleLabel: RULE_LABEL[rule],
-    options: buildOptions(rule, correctOption, config.optionLimit),
+    options: buildOptions(rule, correctOption, config.optionLimit, random),
     correctOption,
     timeoutMs: config.timeoutMs,
   }
