@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createPuzzleRound, evaluatePuzzleCompletion, swapPuzzleTiles } from './puzzle'
+import { createPuzzleRound, evaluatePuzzleCompletion, puzzleTileImageStyle, swapPuzzleTiles } from './puzzle'
 
 function randomSequence(values: number[]) {
   let index = 0
@@ -12,7 +12,7 @@ describe('createPuzzleRound', () => {
     const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
 
     expect(round.imageKey).toBe('beach')
-    expect(round.imageSrc).toBe('/assets/images/game-session/puzzle_beach.svg')
+    expect(round.imageSrc).toBe('/pages/game-session/assets/images/game-session/puzzle_beach.png')
     expect(round.gridSize).toEqual({ rows: 2, cols: 2 })
     expect(round.rows).toBe(2)
     expect(round.cols).toBe(2)
@@ -62,9 +62,9 @@ describe('createPuzzleRound', () => {
     const lighthouseRound = createPuzzleRound('简单', randomSequence([0.99, 0, 0, 0]))
 
     expect(beachRound.imageKey).toBe('beach')
-    expect(beachRound.imageSrc).toBe('/assets/images/game-session/puzzle_beach.svg')
+    expect(beachRound.imageSrc).toBe('/pages/game-session/assets/images/game-session/puzzle_beach.png')
     expect(lighthouseRound.imageKey).toBe('lighthouse')
-    expect(lighthouseRound.imageSrc).toBe('/assets/images/game-session/puzzle_lighthouse.svg')
+    expect(lighthouseRound.imageSrc).toBe('/pages/game-session/assets/images/game-session/puzzle_lighthouse.png')
   })
 
   it('uses random to create different tile orders instead of a fixed first-pair swap', () => {
@@ -134,5 +134,21 @@ describe('evaluatePuzzleCompletion', () => {
     expect(evaluatePuzzleCompletion(round.tiles)).toBe(false)
     expect(restoredTiles.map((tile) => tile.id)).toEqual(round.solutionTiles.map((tile) => tile.id))
     expect(evaluatePuzzleCompletion(restoredTiles)).toBe(true)
+  })
+})
+
+describe('puzzleTileImageStyle', () => {
+  it('positions the source image slice for a tile in a 2x3 puzzle', () => {
+    const round = createPuzzleRound('中等', randomSequence([0, 0, 0, 0, 0, 0]))
+    const style = puzzleTileImageStyle({ rows: round.rows, cols: round.cols }, { correctIndex: 4 })
+
+    expect(style).toEqual({
+      position: 'absolute',
+      display: 'block',
+      width: '300%',
+      height: '200%',
+      left: '-100%',
+      top: '-100%',
+    })
   })
 })

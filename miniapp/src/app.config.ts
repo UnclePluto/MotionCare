@@ -4,9 +4,14 @@ export default defineAppConfig({
     'pages/home/index',
     'pages/prescription/index',
     'pages/training/index',
-    'pages/game-session/index',
     'pages/action-history/index',
     'pages/daily-health/index'
+  ],
+  subPackages: [
+    {
+      root: 'pages/game-session',
+      pages: ['index']
+    }
   ],
   window: {
     backgroundTextStyle: 'light',

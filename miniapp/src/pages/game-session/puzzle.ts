@@ -23,10 +23,19 @@ export type PuzzleRound = {
   solutionTiles: PuzzleTile[]
 }
 
+export type PuzzleTileImageStyle = {
+  position: 'absolute'
+  display: 'block'
+  width: string
+  height: string
+  left: string
+  top: string
+}
+
 export const PUZZLE_IMAGES = [
-  { key: 'beach', src: '/assets/images/game-session/puzzle_beach.svg' },
-  { key: 'garden', src: '/assets/images/game-session/puzzle_garden.svg' },
-  { key: 'lighthouse', src: '/assets/images/game-session/puzzle_lighthouse.svg' },
+  { key: 'beach', src: '/pages/game-session/assets/images/game-session/puzzle_beach.png' },
+  { key: 'garden', src: '/pages/game-session/assets/images/game-session/puzzle_garden.png' },
+  { key: 'lighthouse', src: '/pages/game-session/assets/images/game-session/puzzle_lighthouse.png' },
 ] as const
 
 const CONFIG: Record<GameDifficulty, { rows: number; cols: number; previewMs: number }> = {
@@ -116,4 +125,21 @@ export function swapPuzzleTiles(tiles: PuzzleTile[], firstTileId: string, second
 
 export function evaluatePuzzleCompletion(tiles: ReadonlyArray<Pick<PuzzleTile, 'correctIndex'>>): boolean {
   return tiles.every((tile, index) => tile.correctIndex === index)
+}
+
+export function puzzleTileImageStyle(
+  grid: Pick<PuzzleRound, 'rows' | 'cols'>,
+  tile: Pick<PuzzleTile, 'correctIndex'>
+): PuzzleTileImageStyle {
+  const row = Math.floor(tile.correctIndex / grid.cols)
+  const col = tile.correctIndex % grid.cols
+
+  return {
+    position: 'absolute',
+    display: 'block',
+    width: `${grid.cols * 100}%`,
+    height: `${grid.rows * 100}%`,
+    left: `-${col * 100}%`,
+    top: `-${row * 100}%`,
+  }
 }

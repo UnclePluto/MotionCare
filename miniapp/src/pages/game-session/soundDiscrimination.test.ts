@@ -4,6 +4,7 @@ import {
   createSoundDiscriminationRound,
   evaluateSoundDiscriminationAttempt,
   markCardPreviewed,
+  nextSoundPreviewCard,
 } from './soundDiscrimination'
 import type { SoundDiscriminationAudio } from './gameAudio'
 
@@ -13,56 +14,56 @@ const SOURCES: SoundDiscriminationAudio[] = [
     label: '小鸟1',
     category: 'bird',
     imageKey: 'bird',
-    src: '/assets/audio/sound-discrimination/bird_1.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/bird_1.m4a',
   },
   {
     id: 'bird_2',
     label: '小鸟2',
     category: 'bird',
     imageKey: 'bird',
-    src: '/assets/audio/sound-discrimination/bird_2.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/bird_2.m4a',
   },
   {
     id: 'train_1',
     label: '火车汽笛声1',
     category: 'train',
     imageKey: 'train',
-    src: '/assets/audio/sound-discrimination/train_1.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/train_1.m4a',
   },
   {
     id: 'train_2',
     label: '火车汽笛声2',
     category: 'train',
     imageKey: 'train',
-    src: '/assets/audio/sound-discrimination/train_2.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/train_2.m4a',
   },
   {
     id: 'phone_1',
     label: '电话铃声1',
     category: 'phone',
     imageKey: 'phone',
-    src: '/assets/audio/sound-discrimination/phone_1.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/phone_1.m4a',
   },
   {
     id: 'phone_2',
     label: '电话铃声2',
     category: 'phone',
     imageKey: 'phone',
-    src: '/assets/audio/sound-discrimination/phone_2.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/phone_2.m4a',
   },
   {
     id: 'laugh_1',
     label: '笑声1',
     category: 'laugh',
     imageKey: 'laugh',
-    src: '/assets/audio/sound-discrimination/laugh_1.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/laugh_1.m4a',
   },
   {
     id: 'laugh_2',
     label: '笑声2',
     category: 'laugh',
     imageKey: 'laugh',
-    src: '/assets/audio/sound-discrimination/laugh_2.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/laugh_2.m4a',
   },
 ]
 
@@ -73,7 +74,7 @@ const THREE_VARIANT_SOURCES: SoundDiscriminationAudio[] = [
     label: '小鸟3',
     category: 'bird',
     imageKey: 'bird',
-    src: '/assets/audio/sound-discrimination/bird_3.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/bird_3.m4a',
   },
   ...SOURCES.slice(4, 6),
   {
@@ -81,7 +82,7 @@ const THREE_VARIANT_SOURCES: SoundDiscriminationAudio[] = [
     label: '电话铃声3',
     category: 'phone',
     imageKey: 'phone',
-    src: '/assets/audio/sound-discrimination/phone_3.m4a',
+    src: '/pages/game-session/assets/audio/sound-discrimination/phone_3.m4a',
   },
 ]
 
@@ -112,6 +113,12 @@ describe('createSoundDiscriminationRound', () => {
 
     expect(new Set(birds.map((card) => card.imageSrc)).size).toBe(1)
     expect(new Set(birds.map((card) => card.soundId))).toEqual(new Set(['bird_1', 'bird_2']))
+  })
+
+  it('uses png artwork for every card', () => {
+    const round = createSoundDiscriminationRound('简单', SOURCES, () => 0)
+
+    expect(round.cards.every((card) => card.imageSrc.endsWith('.png'))).toBe(true)
   })
 
   it('creates paired categories from shuffled source input', () => {
@@ -189,6 +196,24 @@ describe('markCardPreviewed', () => {
     const previewedTwice = markCardPreviewed(previewedOnce, cardId)
 
     expect(previewedTwice).toEqual(previewedOnce)
+  })
+})
+
+describe('nextSoundPreviewCard', () => {
+  it('returns cards in display order until every card is previewed', () => {
+    const initialRound = createSoundDiscriminationRound('简单', SOURCES, () => 0)
+    const first = nextSoundPreviewCard(initialRound)
+    const afterFirst = first ? markCardPreviewed(initialRound, first.id) : initialRound
+    const second = nextSoundPreviewCard(afterFirst)
+
+    expect(first?.id).toBe(initialRound.cards[0].id)
+    expect(second?.id).toBe(initialRound.cards[1].id)
+
+    const completeRound = initialRound.cards.reduce(
+      (currentRound, card) => markCardPreviewed(currentRound, card.id),
+      initialRound
+    )
+    expect(nextSoundPreviewCard(completeRound)).toBeNull()
   })
 })
 

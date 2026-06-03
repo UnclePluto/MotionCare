@@ -37,32 +37,38 @@ export default function ActionHistoryPage() {
 
   return (
     <View className='page action-history-page'>
-      <Text className='title'>训练历史</Text>
+      <View className='page-hero'>
+        <Text className='eyebrow'>训练回顾</Text>
+        <Text className='title'>训练历史</Text>
+        <Text className='muted'>查看近期完成情况。</Text>
+      </View>
       {error ? <Text className='error'>{error}</Text> : null}
       {data ? (
-        <View>
-          <View className='panel'>
-            <View className='row'>
+        <View className='history-content'>
+          <View className='stat-grid history-stats'>
+            <View className='stat-card'>
               <Text className='label'>近 7 天</Text>
               <Text className='value'>{data.last_7_days_completed_count} 次</Text>
             </View>
-            <View className='row'>
+            <View className='stat-card'>
               <Text className='label'>近 30 天</Text>
               <Text className='value'>{data.last_30_days_completed_count} 次</Text>
             </View>
           </View>
-          {data.records.map((record) => (
-            <View key={record.id} className='history-row'>
-              <Text className='value'>
-                {record.training_date} · {STATUS_LABEL[record.status]}
-              </Text>
-              <Text className='muted'>{record.actual_duration_minutes ?? '-'} 分钟</Text>
-              {record.note ? <Text className='muted'>{record.note}</Text> : null}
-            </View>
-          ))}
+          <View className='history-list'>
+            {data.records.map((record) => (
+              <View key={record.id} className='history-row'>
+                <Text className='value'>
+                  {record.training_date} · {STATUS_LABEL[record.status]}
+                </Text>
+                <Text className='muted'>{record.actual_duration_minutes ?? '-'} 分钟</Text>
+                {record.note ? <Text className='muted'>{record.note}</Text> : null}
+              </View>
+            ))}
+          </View>
         </View>
       ) : (
-        <Text className='muted'>加载中</Text>
+        <Text className='muted loading-text'>加载中</Text>
       )}
     </View>
   )

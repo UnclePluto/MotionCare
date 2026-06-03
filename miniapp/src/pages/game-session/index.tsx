@@ -1,6 +1,6 @@
 import { Button, Image, Input, Picker, Text, View } from '@tarojs/components'
-import Taro, { useDidShow, useRouter } from '@tarojs/taro'
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { request } from '../../api/client'
 import type { CurrentPrescription } from '../../types/patientApp'
@@ -12,14 +12,17 @@ import {
   type ColorToken,
 } from './colorSequence'
 import { createCategorySwitchRound, evaluateCategorySwitchAttempt, type CategoryRule, type CategorySwitchRound } from './categorySwitch'
+import { createGameIntroSteps } from './gameIntro'
 import { GAME_CATALOG, gameCodeForActionSource } from './gameCatalog'
 import {
   GAME_AUDIO_TEXT,
   isGameAudioMuted,
   playAudioSrc,
   playGameAudio,
+  playGameFeedback,
   setGameAudioMuted,
   SOUND_DISCRIMINATION_AUDIO,
+  stopActiveGameAudio,
   type GameAudioKey,
 } from './gameAudio'
 import type { GameActionSummary, GameCode, GameDifficulty, GameEndReason, GameTrainingPayload } from './gameTypes'
@@ -30,7 +33,14 @@ import {
   type PatternSequenceRound,
   type PatternToken,
 } from './patternSequence'
-import { createPuzzleRound, evaluatePuzzleCompletion, swapPuzzleTiles, type PuzzleRound, type PuzzleTile } from './puzzle'
+import {
+  createPuzzleRound,
+  evaluatePuzzleCompletion,
+  puzzleTileImageStyle,
+  swapPuzzleTiles,
+  type PuzzleRound,
+  type PuzzleTile,
+} from './puzzle'
 import {
   postGameTrainingRecord,
   savePendingGameUploadAfterActiveRetry,
@@ -42,6 +52,7 @@ import {
   createSoundDiscriminationRound,
   evaluateSoundDiscriminationAttempt,
   markCardPreviewed,
+  nextSoundPreviewCard,
   type SoundCard,
   type SoundDiscriminationRound,
 } from './soundDiscrimination'
@@ -108,6 +119,10 @@ function uploadStateText(uploadState: UploadState): string {
   return '等待上传'
 }
 
+function feedbackKind(correct: boolean): 'correct' | 'wrong' {
+  return correct ? 'correct' : 'wrong'
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -138,6 +153,7 @@ export default function GameSessionPage() {
   const [activeCategoryRound, setActiveCategoryRound] = useState<CategorySwitchRound | null>(null)
   const [activeSoundRound, setActiveSoundRound] = useState<SoundDiscriminationRound | null>(null)
   const [soundPhase, setSoundPhase] = useState<'preview' | 'choose'>('preview')
+  const [soundPreviewingCardId, setSoundPreviewingCardId] = useState<string | null>(null)
   const [soundPlaybackError, setSoundPlaybackError] = useState('')
   const [activePuzzleRound, setActivePuzzleRound] = useState<PuzzleRound | null>(null)
   const [selectedPuzzleTileId, setSelectedPuzzleTileId] = useState<string | null>(null)
@@ -195,6 +211,11 @@ export default function GameSessionPage() {
   function setSoundRoundPhase(nextPhase: 'preview' | 'choose') {
     soundPhaseRef.current = nextPhase
     setSoundPhase(nextPhase)
+  }
+
+  function showAttemptFeedback(correct: boolean) {
+    const feedbackClip = playGameFeedback(feedbackKind(correct))
+    setFeedback(feedbackClip.text)
   }
 
   function currentSoundRoundPhase(): 'preview' | 'choose' {
@@ -260,6 +281,7 @@ export default function GameSessionPage() {
     setActiveCategoryRound(null)
     setActiveSoundRound(null)
     setSoundRoundPhase('preview')
+    setSoundPreviewingCardId(null)
     setSoundPlaybackError('')
     setActivePuzzleRound(null)
     setSelectedPuzzleTileId(null)
@@ -306,6 +328,10 @@ export default function GameSessionPage() {
       .finally(() => {
         loadingPrescriptionRef.current = false
       })
+  })
+
+  useDidHide(() => {
+    stopActiveGameAudio()
   })
 
   useEffect(() => {
@@ -386,6 +412,7 @@ export default function GameSessionPage() {
     return () => {
       introRunIdRef.current += 1
       clearRoundTimers()
+      stopActiveGameAudio()
     }
   }, [])
 
@@ -401,8 +428,7 @@ export default function GameSessionPage() {
 
     unitLockedRef.current = true
     appendUnitResult(false, buildTimeoutRoundDetail())
-    setFeedback(GAME_AUDIO_TEXT.wrong)
-    void playGameAudio('wrong')
+    showAttemptFeedback(false)
     scheduleNextRound()
   }
 
@@ -651,9 +677,11 @@ export default function GameSessionPage() {
     activeSoundRoundRef.current = round
     activePuzzleRoundRef.current = null
     soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    const runId = soundRoundRunIdRef.current
+    soundPreviewInFlightRef.current = true
     setActiveSoundRound(round)
     setSoundRoundPhase('preview')
+    setSoundPreviewingCardId(null)
     setSoundPlaybackError('')
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -666,6 +694,7 @@ export default function GameSessionPage() {
     setActivePuzzleRound(null)
     setPuzzlePreviewing(false)
     setFeedback('')
+    void autoPreviewSoundRound(runId)
   }
 
   function startPuzzleRound() {
@@ -740,6 +769,7 @@ export default function GameSessionPage() {
   }
 
   async function startIntro() {
+    if (phaseRef.current !== 'setup') return
     if (!actionIsGame || !action) {
       setError('游戏动作无效，请返回当前处方重新进入')
       return
@@ -759,13 +789,7 @@ export default function GameSessionPage() {
     setError('')
     setSessionPhase('intro')
     const introKey: GameAudioKey = GAME_CATALOG[gameCode].introAudioKey
-    const steps: Array<{ key: GameAudioKey; minMs: number }> = [
-      { key: introKey, minMs: 1200 },
-      { key: 'count_3', minMs: 700 },
-      { key: 'count_2', minMs: 700 },
-      { key: 'count_1', minMs: 700 },
-      { key: 'start', minMs: 700 },
-    ]
+    const steps = createGameIntroSteps(introKey)
     for (const { key, minMs } of steps) {
       if (!isIntroRunActive(runId)) return
       await playIntroTimedStep(key, minMs)
@@ -854,6 +878,8 @@ export default function GameSessionPage() {
 
   function pauseGame() {
     if (phaseRef.current !== 'playing') return
+    stopActiveGameAudio()
+    setSoundPreviewingCardId(null)
     if (colorRevealing || patternRevealing || puzzlePreviewing) {
       pauseRevealTimer()
     }
@@ -900,6 +926,11 @@ export default function GameSessionPage() {
       resumeRoundTimeout(activeCategoryRound.timeoutMs)
       return
     }
+    if (gameCodeRef.current === 'game-audiovisual-sound-discrimination' && activeSoundRound && soundPhase === 'preview') {
+      soundPreviewInFlightRef.current = true
+      void autoPreviewSoundRound(soundRoundRunIdRef.current)
+      return
+    }
     if (gameCodeRef.current === 'game-audiovisual-sound-discrimination' && activeSoundRound && soundPhase === 'choose') {
       resumeRoundTimeout(activeSoundRound.timeoutMs)
     }
@@ -924,8 +955,7 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
-    setFeedback(attempt.correct ? GAME_AUDIO_TEXT.correct : GAME_AUDIO_TEXT.wrong)
-    void playGameAudio(attempt.correct ? 'correct' : 'wrong')
+    showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
@@ -943,8 +973,7 @@ export default function GameSessionPage() {
         options: activeInhibitionRound.options,
       })
     )
-    setFeedback(attempt.correct ? GAME_AUDIO_TEXT.correct : GAME_AUDIO_TEXT.wrong)
-    void playGameAudio(attempt.correct ? 'correct' : 'wrong')
+    showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
@@ -968,8 +997,7 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
-    setFeedback(attempt.correct ? GAME_AUDIO_TEXT.correct : GAME_AUDIO_TEXT.wrong)
-    void playGameAudio(attempt.correct ? 'correct' : 'wrong')
+    showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
@@ -988,59 +1016,52 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
-    setFeedback(attempt.correct ? GAME_AUDIO_TEXT.correct : GAME_AUDIO_TEXT.wrong)
-    void playGameAudio(attempt.correct ? 'correct' : 'wrong')
+    showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
-  function canUseSoundRound(runId: number, round: SoundDiscriminationRound): boolean {
+  function canUseSoundPreviewRun(runId: number): boolean {
     return (
       soundRoundRunIdRef.current === runId &&
-      activeSoundRoundRef.current === round &&
       phaseRef.current === 'playing' &&
+      soundPhaseRef.current === 'preview' &&
       !unitLockedRef.current &&
       !endStartedRef.current
     )
   }
 
-  async function previewSoundCard(card: SoundCard) {
-    const runId = soundRoundRunIdRef.current
-    const currentRound = activeSoundRoundRef.current
-    if (
-      phaseRef.current !== 'playing' ||
-      soundPhaseRef.current !== 'preview' ||
-      !currentRound ||
-      soundPreviewInFlightRef.current ||
-      !currentRound.cards.some((item) => item.id === card.id)
-    ) {
-      return
-    }
-
-    soundPreviewInFlightRef.current = true
+  async function autoPreviewSoundRound(runId: number) {
     setSoundPlaybackError('')
-    void playGameAudio('tap')
     try {
-      const previewPlayed = await playAudioSrc(card.audioSrc)
-      if (!canUseSoundRound(runId, currentRound) || currentSoundRoundPhase() !== 'preview') return
-      if (!previewPlayed) {
-        setSoundPlaybackError('声音播放异常，请重新试听这张卡片')
-        return
+      while (canUseSoundPreviewRun(runId)) {
+        const latestRound = activeSoundRoundRef.current
+        if (!latestRound) return
+        const card = nextSoundPreviewCard(latestRound)
+        if (!card) break
+
+        const nextRound = markCardPreviewed(latestRound, card.id)
+        activeSoundRoundRef.current = nextRound
+        setActiveSoundRound(nextRound)
+        setSoundPreviewingCardId(card.id)
+
+        const previewPlayed = await playAudioSrc(card.audioSrc)
+        if (!canUseSoundPreviewRun(runId)) return
+        if (!previewPlayed) {
+          setSoundPlaybackError('声音播放异常，已继续播放下一张')
+        }
       }
 
       const latestRound = activeSoundRoundRef.current
-      if (!latestRound || latestRound !== currentRound) return
-      const nextRound = markCardPreviewed(latestRound, card.id)
-      activeSoundRoundRef.current = nextRound
-      setActiveSoundRound(nextRound)
-      if (!nextRound.previewComplete) return
+      if (!latestRound || !latestRound.previewComplete || !canUseSoundPreviewRun(runId)) return
 
       setSoundRoundPhase('choose')
+      setSoundPreviewingCardId(null)
       soundPreviewInFlightRef.current = false
       roundStartedAtRef.current = Date.now()
-      const targetPlayed = await playAudioSrc(nextRound.target.audioSrc)
+      const targetPlayed = await playAudioSrc(latestRound.target.audioSrc)
       if (
         soundRoundRunIdRef.current !== runId ||
-        activeSoundRoundRef.current !== nextRound ||
+        activeSoundRoundRef.current !== latestRound ||
         currentSoundRoundPhase() !== 'choose' ||
         phaseRef.current !== 'playing' ||
         unitLockedRef.current ||
@@ -1051,10 +1072,11 @@ export default function GameSessionPage() {
       if (!targetPlayed) {
         setSoundPlaybackError('目标声音播放异常，请点击重播目标声音')
       }
-      startRoundTimeout(nextRound.timeoutMs)
+      startRoundTimeout(latestRound.timeoutMs)
     } finally {
       if (soundRoundRunIdRef.current === runId) {
         soundPreviewInFlightRef.current = false
+        setSoundPreviewingCardId(null)
       }
     }
   }
@@ -1092,8 +1114,7 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
-    setFeedback(attempt.correct ? GAME_AUDIO_TEXT.correct : GAME_AUDIO_TEXT.wrong)
-    void playGameAudio(attempt.correct ? 'correct' : 'wrong')
+    showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
@@ -1122,21 +1143,8 @@ export default function GameSessionPage() {
           correct: true,
         })
       )
-      setFeedback(GAME_AUDIO_TEXT.correct)
-      void playGameAudio('correct')
+      showAttemptFeedback(true)
       scheduleNextRound()
-    }
-  }
-
-  function puzzleTileImageStyle(round: PuzzleRound, tile: PuzzleTile): CSSProperties {
-    const row = Math.floor(tile.correctIndex / round.cols)
-    const col = tile.correctIndex % round.cols
-
-    return {
-      width: `${round.cols * 100}%`,
-      height: `${round.rows * 100}%`,
-      left: `-${col * 100}%`,
-      top: `-${row * 100}%`,
     }
   }
 
@@ -1180,6 +1188,7 @@ export default function GameSessionPage() {
     endStartedRef.current = true
     introRunIdRef.current += 1
     clearRoundTimers()
+    stopActiveGameAudio()
     const finalDurationSeconds =
       reason === 'timer'
         ? targetSecondsRef.current
@@ -1227,7 +1236,7 @@ export default function GameSessionPage() {
 
   function renderGameTopBar() {
     return (
-      <View className='game-topbar'>
+      <View className='game-topbar game-control-bar'>
         <Text className='game-stat'>剩余 {formatNumber(remainingSeconds, '0')} 秒</Text>
         <Button className='secondary-button compact-button' onClick={phase === 'paused' ? resumeGame : pauseGame}>
           {phase === 'paused' ? '继续' : '暂停'}
@@ -1252,7 +1261,7 @@ export default function GameSessionPage() {
   function renderColorSequenceGame() {
     if (!activeColorRound) {
       return (
-        <View className='page game-session-page hainan-game-page'>
+        <View className='page game-session-page hainan-game-page game-play-page'>
           {renderGameTopBar()}
           <Text className='muted'>正在生成本轮题目</Text>
         </View>
@@ -1260,7 +1269,7 @@ export default function GameSessionPage() {
     }
 
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>
@@ -1281,7 +1290,7 @@ export default function GameSessionPage() {
                 ))}
           </View>
         ) : null}
-        <View className='color-grid'>
+        <View className='game-stage color-grid'>
           {activeColorRound.colors.map((color) => (
             <Button
               key={color}
@@ -1301,7 +1310,7 @@ export default function GameSessionPage() {
   function renderInhibitionGame() {
     if (!activeInhibitionRound) {
       return (
-        <View className='page game-session-page hainan-game-page'>
+        <View className='page game-session-page hainan-game-page game-play-page'>
           {renderGameTopBar()}
           <Text className='muted'>正在生成本轮题目</Text>
         </View>
@@ -1309,11 +1318,11 @@ export default function GameSessionPage() {
     }
 
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>请选择不一样的数字</Text>
-        <View className='number-grid'>
+        <View className='game-stage number-grid'>
           {activeInhibitionRound.options.map((value, index) => (
             <Button
               key={`${value}-${index}`}
@@ -1332,7 +1341,7 @@ export default function GameSessionPage() {
 
   function renderLoadingRound() {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         <Text className='muted'>正在生成本轮题目</Text>
       </View>
@@ -1343,7 +1352,7 @@ export default function GameSessionPage() {
     if (!activePatternRound) return renderLoadingRound()
 
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>
@@ -1365,16 +1374,19 @@ export default function GameSessionPage() {
                 ))}
           </View>
         ) : null}
-        <View className='pattern-grid'>
+        <View className='game-stage pattern-grid'>
           {activePatternRound.patterns.map((pattern) => (
             <Button
               key={pattern.id}
               className='image-tile'
+              hoverClass='game-card-pressed'
               disabled={phase !== 'playing' || patternRevealing || unitLockedRef.current}
               onClick={() => selectPattern(pattern)}
             >
-              <Image className='game-image' src={pattern.imageSrc} mode='aspectFit' />
-              <Text>{pattern.label}</Text>
+              <View className='game-card-face'>
+                <Image className='game-image game-card-image' src={pattern.imageSrc} mode='aspectFit' />
+                <Text className='game-card-label'>{pattern.label}</Text>
+              </View>
             </Button>
           ))}
         </View>
@@ -1387,11 +1399,11 @@ export default function GameSessionPage() {
     if (!activeCategoryRound) return renderLoadingRound()
 
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>{phase === 'paused' ? '训练已暂停' : activeCategoryRound.ruleLabel}</Text>
-        <View className='category-card'>
+        <View className='game-stage category-card'>
           <Image className='category-image' src={activeCategoryRound.item.imageSrc} mode='aspectFit' />
           <Text className='category-label'>{activeCategoryRound.item.label}</Text>
         </View>
@@ -1400,6 +1412,7 @@ export default function GameSessionPage() {
             <Button
               key={option}
               className='category-option'
+              hoverClass='game-card-pressed'
               disabled={phase !== 'playing' || unitLockedRef.current}
               onClick={() => selectCategory(option)}
             >
@@ -1416,15 +1429,15 @@ export default function GameSessionPage() {
     if (!activeSoundRound) return renderLoadingRound()
 
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>
           {phase === 'paused'
             ? '训练已暂停'
             : soundPhase === 'preview'
-              ? '请逐张翻开卡片试听声音'
-              : '请听目标声音，然后选择对应的背面卡片'}
+              ? '正在依次试听卡片'
+              : '请听目标声音，选择对应卡片'}
         </Text>
         {soundPhase === 'choose' ? (
           <Button className='secondary-button replay-button' disabled={phase !== 'playing'} onClick={replayTargetSound}>
@@ -1432,26 +1445,26 @@ export default function GameSessionPage() {
           </Button>
         ) : null}
         {soundPlaybackError ? <Text className='error'>{soundPlaybackError}</Text> : null}
-        <View className='sound-card-grid'>
+        <View className='game-stage sound-card-grid'>
           {activeSoundRound.cards.map((card) => {
-            const revealed = soundPhase === 'preview' && card.previewed
+            const revealed = card.previewed
+            const previewing = soundPreviewingCardId === card.id
             return (
               <Button
                 key={card.id}
-                className={`sound-card ${revealed ? 'revealed' : ''}`}
-                disabled={phase !== 'playing' || unitLockedRef.current}
+                className={`sound-card ${revealed ? 'revealed' : ''} ${previewing ? 'previewing' : ''}`}
+                hoverClass='game-card-pressed'
+                disabled={phase !== 'playing' || unitLockedRef.current || soundPhase === 'preview'}
                 onClick={() => {
-                  if (soundPhase === 'preview') {
-                    void previewSoundCard(card)
-                  } else {
+                  if (soundPhase === 'choose') {
                     selectSoundCard(card)
                   }
                 }}
               >
                 {revealed ? (
                   <View className='sound-card-face'>
-                    <Image className='game-image' src={card.imageSrc} mode='aspectFit' />
-                    <Text>{SOUND_CATEGORY_LABEL[card.category]}</Text>
+                    <Image className='game-image game-card-image' src={card.imageSrc} mode='aspectFit' />
+                    <Text className='game-card-label'>{SOUND_CATEGORY_LABEL[card.category]}</Text>
                   </View>
                 ) : (
                   <Text className='card-back'>?</Text>
@@ -1469,7 +1482,7 @@ export default function GameSessionPage() {
     if (!activePuzzleRound) return renderLoadingRound()
 
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>
@@ -1478,11 +1491,12 @@ export default function GameSessionPage() {
         {puzzlePreviewing || phase === 'paused' ? (
           <Image className='puzzle-preview-image' src={activePuzzleRound.imageSrc} mode='aspectFit' />
         ) : (
-          <View className={`puzzle-grid puzzle-grid-${activePuzzleRound.cols}`}>
+          <View className={`game-stage puzzle-grid puzzle-grid-${activePuzzleRound.cols}`}>
             {activePuzzleRound.tiles.map((tile) => (
               <Button
                 key={tile.id}
                 className={`puzzle-tile ${selectedPuzzleTileId === tile.id ? 'selected' : ''}`}
+                hoverClass='game-card-pressed'
                 onClick={() => selectPuzzleTile(tile)}
               >
                 <View className='puzzle-tile-slice'>
@@ -1504,7 +1518,7 @@ export default function GameSessionPage() {
 
   if (!loaded || phase === 'loading') {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
         <Text className='muted'>加载当前处方中</Text>
       </View>
@@ -1513,7 +1527,7 @@ export default function GameSessionPage() {
 
   if (!prescription && error) {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
         <Text className='error'>{error}</Text>
       </View>
@@ -1522,7 +1536,7 @@ export default function GameSessionPage() {
 
   if (!prescription) {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
         <Text className='muted'>暂无生效处方，暂时无法开始游戏训练</Text>
       </View>
@@ -1531,7 +1545,7 @@ export default function GameSessionPage() {
 
   if (!action || !actionIsGame) {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
         <Text className='error'>游戏动作无效，请返回当前处方重新进入</Text>
       </View>
@@ -1540,7 +1554,7 @@ export default function GameSessionPage() {
 
   if (!gameCode) {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>{action.action_name}</Text>
         <Text className='error'>该游戏暂未上线，请返回当前处方选择已上线游戏</Text>
       </View>
@@ -1549,7 +1563,7 @@ export default function GameSessionPage() {
 
   if (phase === 'setup') {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-setup-page'>
         <View className='game-hero'>
           <Text className='eyebrow'>海南康复训练</Text>
           <Text className='title'>{action.action_name}</Text>
@@ -1557,7 +1571,7 @@ export default function GameSessionPage() {
           <Text className='muted'>{GAME_AUDIO_TEXT[GAME_CATALOG[gameCode].introAudioKey]}</Text>
         </View>
 
-        <View className='panel'>
+        <View className='panel game-summary-panel'>
           <View className='row'>
             <Text className='label'>本周进度</Text>
             <Text className='value'>
@@ -1601,7 +1615,7 @@ export default function GameSessionPage() {
 
         {error ? <Text className='error'>{error}</Text> : null}
 
-        <Button className='primary-button' onClick={startIntro}>
+        <Button className='primary-button full-button' disabled={phase !== 'setup'} onClick={startIntro}>
           开始游戏
         </Button>
       </View>
@@ -1610,7 +1624,7 @@ export default function GameSessionPage() {
 
   if (phase === 'intro') {
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-intro-page'>
         <View className='game-hero intro-hero'>
           <Text className='eyebrow'>海南康复训练</Text>
           <Text className='title'>{action.action_name}</Text>
@@ -1648,7 +1662,7 @@ export default function GameSessionPage() {
   if (phase === 'result') {
     const rawDetail = resultPayload?.form_data.raw_detail
     return (
-      <View className='page game-session-page hainan-game-page'>
+      <View className='page game-session-page hainan-game-page game-result-page'>
         <View className='game-hero'>
           <Text className='eyebrow'>训练结果</Text>
           <Text className='title'>{resultPayload?.status === 'completed' ? '本次训练已完成' : '本次训练已提前结束'}</Text>
@@ -1660,7 +1674,7 @@ export default function GameSessionPage() {
         ) : null}
         {uploadState !== 'pending_retry' && error ? <Text className='error'>{error}</Text> : null}
 
-        <View className='panel result-panel'>
+        <View className='panel result-panel result-metrics'>
           <View className='row'>
             <Text className='label'>得分</Text>
             <Text className='value'>{formatNumber(resultPayload?.score)}</Text>
@@ -1697,7 +1711,7 @@ export default function GameSessionPage() {
           </View>
         </View>
 
-        <Button className='primary-button' onClick={() => Taro.navigateBack()}>
+        <Button className='primary-button full-button' onClick={() => Taro.navigateBack()}>
           返回处方
         </Button>
       </View>
@@ -1705,7 +1719,7 @@ export default function GameSessionPage() {
   }
 
   return (
-    <View className='page game-session-page hainan-game-page'>
+    <View className='page game-session-page hainan-game-page game-state-page'>
       <Text className='title'>游戏训练</Text>
       <Text className='error'>当前训练状态异常，请返回当前处方重新进入</Text>
     </View>

@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="puzzle_beach">
-<rect width="256" height="256" rx="36" fill="#f8fafc"/>
-<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-<path d="M28 94c47-32 102-31 200 0v134H28z" fill="#38bdf8"/>
-<path d="M28 150c58-24 119-25 200 0v78H28z" fill="#facc15"/>
-<circle cx="58" cy="54" r="23" fill="#f97316"/>
-<path d="M72 194c33-16 68-16 112 0" stroke="#0f766e" stroke-width="10" stroke-linecap="round"/>
-</svg>

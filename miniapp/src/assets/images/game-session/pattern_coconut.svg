@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="pattern_coconut">
-<rect width="256" height="256" rx="36" fill="#f8fafc"/>
-<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-<path d="M82 78c18-29 57-39 84-20 28 19 35 60 17 90-19 30-58 43-88 25-30-18-33-66-13-95z" fill="#854d0e"/>
-<circle cx="112" cy="108" r="8" fill="#22c55e"/><circle cx="139" cy="102" r="8" fill="#22c55e"/><circle cx="128" cy="130" r="8" fill="#22c55e"/>
-<path d="M112 52c-8-19-2-35 18-47 9 20 5 36-18 47zM139 54c8-23 26-34 52-31-8 25-26 36-52 31z" fill="#22c55e"/>
-</svg>

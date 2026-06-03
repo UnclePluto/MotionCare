@@ -28,16 +28,16 @@ export default defineConfig<'webpack5'>(async (merge) => {
     copy: {
       patterns: [
         {
-          from: 'src/assets/audio/game-session',
-          to: 'dist/assets/audio/game-session'
+          from: 'src/pages/game-session/assets/audio/game-session',
+          to: 'dist/pages/game-session/assets/audio/game-session'
         },
         {
-          from: 'src/assets/audio/sound-discrimination',
-          to: 'dist/assets/audio/sound-discrimination'
+          from: 'src/pages/game-session/assets/audio/sound-discrimination',
+          to: 'dist/pages/game-session/assets/audio/sound-discrimination'
         },
         {
-          from: 'src/assets/images/game-session',
-          to: 'dist/assets/images/game-session'
+          from: 'src/pages/game-session/assets/images/game-session',
+          to: 'dist/pages/game-session/assets/images/game-session'
         }
       ],
       options: {

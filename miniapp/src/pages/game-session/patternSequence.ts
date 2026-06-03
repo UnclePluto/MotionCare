@@ -17,11 +17,11 @@ export type PatternSequenceRound = {
 }
 
 const PATTERN_POOL: PatternToken[] = [
-  { id: 'sun', label: '太阳', imageSrc: '/assets/images/game-session/pattern_sun.svg', fallback: '日' },
-  { id: 'coconut', label: '椰子树', imageSrc: '/assets/images/game-session/pattern_coconut.svg', fallback: '椰' },
-  { id: 'boat', label: '小船', imageSrc: '/assets/images/game-session/pattern_boat.svg', fallback: '船' },
-  { id: 'lighthouse', label: '灯塔', imageSrc: '/assets/images/game-session/pattern_lighthouse.svg', fallback: '塔' },
-  { id: 'shell', label: '贝壳', imageSrc: '/assets/images/game-session/pattern_shell.svg', fallback: '贝' },
+  { id: 'sun', label: '太阳', imageSrc: '/pages/game-session/assets/images/game-session/pattern_sun.png', fallback: '日' },
+  { id: 'coconut', label: '椰子树', imageSrc: '/pages/game-session/assets/images/game-session/pattern_coconut.png', fallback: '椰' },
+  { id: 'boat', label: '小船', imageSrc: '/pages/game-session/assets/images/game-session/pattern_boat.png', fallback: '船' },
+  { id: 'lighthouse', label: '灯塔', imageSrc: '/pages/game-session/assets/images/game-session/pattern_lighthouse.png', fallback: '塔' },
+  { id: 'shell', label: '贝壳', imageSrc: '/pages/game-session/assets/images/game-session/pattern_shell.png', fallback: '贝' },
 ]
 
 const CONFIG: Record<

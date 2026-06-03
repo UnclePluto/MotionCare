@@ -30,7 +30,7 @@ const ITEMS: CategoryItem[] = [
   {
     id: 'pineapple',
     label: '菠萝',
-    imageSrc: '/assets/images/game-session/category_pineapple.svg',
+    imageSrc: '/pages/game-session/assets/images/game-session/category_pineapple.png',
     fallback: '果',
     kind: '水果',
     color: '黄色',
@@ -39,7 +39,7 @@ const ITEMS: CategoryItem[] = [
   {
     id: 'bird',
     label: '小鸟',
-    imageSrc: '/assets/images/game-session/category_bird.svg',
+    imageSrc: '/pages/game-session/assets/images/game-session/category_bird.png',
     fallback: '鸟',
     kind: '动物',
     color: '蓝色',
@@ -48,7 +48,7 @@ const ITEMS: CategoryItem[] = [
   {
     id: 'train',
     label: '火车',
-    imageSrc: '/assets/images/game-session/category_train.svg',
+    imageSrc: '/pages/game-session/assets/images/game-session/category_train.png',
     fallback: '车',
     kind: '交通',
     color: '灰色',
@@ -57,7 +57,7 @@ const ITEMS: CategoryItem[] = [
   {
     id: 'drum',
     label: '鼓',
-    imageSrc: '/assets/images/game-session/category_drum.svg',
+    imageSrc: '/pages/game-session/assets/images/game-session/category_drum.png',
     fallback: '鼓',
     kind: '乐器',
     color: '红色',
@@ -66,7 +66,7 @@ const ITEMS: CategoryItem[] = [
   {
     id: 'phone',
     label: '电话',
-    imageSrc: '/assets/images/game-session/category_phone.svg',
+    imageSrc: '/pages/game-session/assets/images/game-session/category_phone.png',
     fallback: '话',
     kind: '工具',
     color: '蓝色',

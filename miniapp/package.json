@@ -30,6 +30,8 @@
     "dev:qq": "npm run build:qq -- --watch",
     "dev:jd": "npm run build:jd -- --watch",
     "dev:harmony-hybrid": "npm run build:harmony-hybrid -- --watch",
+    "generate-game-audio": "node scripts/generate-game-audio.mjs",
+    "generate-game-audio:dry-run": "node scripts/generate-game-audio.mjs --dry-run",
     "test": "vitest run",
     "test:watch": "vitest"
   },

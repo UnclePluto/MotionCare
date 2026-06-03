@@ -24,11 +24,11 @@ export type SoundDiscriminationRound = {
 }
 
 export const CATEGORY_IMAGE_SRC: Record<SoundDiscriminationCategory, string> = {
-  bird: '/assets/images/game-session/sound_bird.svg',
-  train: '/assets/images/game-session/sound_train.svg',
-  phone: '/assets/images/game-session/sound_phone.svg',
-  laugh: '/assets/images/game-session/sound_laugh.svg',
-  drum: '/assets/images/game-session/sound_drum.svg',
+  bird: '/pages/game-session/assets/images/game-session/sound_bird.png',
+  train: '/pages/game-session/assets/images/game-session/sound_train.png',
+  phone: '/pages/game-session/assets/images/game-session/sound_phone.png',
+  laugh: '/pages/game-session/assets/images/game-session/sound_laugh.png',
+  drum: '/pages/game-session/assets/images/game-session/sound_drum.png',
 }
 
 const CONFIG: Record<GameDifficulty, { pairCount: number; timeoutMs: number }> = {
@@ -113,6 +113,10 @@ export function markCardPreviewed(round: SoundDiscriminationRound, cardId: strin
     cards,
     previewComplete: cards.every((card) => card.previewed),
   }
+}
+
+export function nextSoundPreviewCard(round: SoundDiscriminationRound): SoundCard | null {
+  return round.cards.find((card) => !card.previewed) ?? null
 }
 
 export function evaluateSoundDiscriminationAttempt(round: SoundDiscriminationRound, selectedSoundId: string) {

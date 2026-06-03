@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="pattern_boat">
-<rect width="256" height="256" rx="36" fill="#f8fafc"/>
-<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-<path d="M50 156h156l-24 34H76z" fill="#ef4444"/>
-<path d="M128 42v104" stroke="#334155" stroke-width="10" stroke-linecap="round"/>
-<path d="M134 52v84h58c-12-42-32-68-58-84z" fill="#38bdf8"/>
-<path d="M122 66v70H70c10-34 27-57 52-70z" fill="#f8fafc"/>
-<path d="M42 202c22-10 42-10 64 0s42 10 64 0 33-9 48-3" fill="none" stroke="#38bdf8" stroke-width="10" stroke-linecap="round"/>
-</svg>

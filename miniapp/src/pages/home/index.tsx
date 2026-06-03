@@ -71,28 +71,33 @@ export default function HomePage() {
 
   return (
     <View className='page home-page'>
-      <Text className='title'>今日工作台</Text>
+      <View className='page-hero home-hero'>
+        <Text className='eyebrow'>MotionCare</Text>
+        <Text className='title'>今日康复</Text>
+        <Text className='muted'>按处方完成训练，记录每天的身体状态。</Text>
+      </View>
       {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
       {error ? <Text className='error'>{error}</Text> : null}
       {data ? (
-        <View>
-          <View className='panel'>
-            <Text className='value'>{data.patient.name}</Text>
-            <Text className='muted'>{data.project.name}</Text>
+        <View className='home-content'>
+          <View className='panel profile-panel'>
+            <Text className='label'>当前账户</Text>
+            <Text className='value profile-name'>{data.patient.name}</Text>
+            <Text className='muted project-name'>{data.project.name}</Text>
           </View>
-          <View className='panel'>
-            <View className='row'>
+          <View className='stat-grid'>
+            <View className='stat-card'>
               <Text className='label'>本周训练</Text>
               <Text className='value'>
                 {completed ?? 0}/{target ?? 0} 次
               </Text>
             </View>
-            <View className='row'>
+            <View className='stat-card'>
               <Text className='label'>健康数据</Text>
               <Text className='value'>{data.has_daily_health_today ? '已填写' : '待填写'}</Text>
             </View>
           </View>
-          <View className='button-row'>
+          <View className='action-stack'>
             <Button
               className='primary-button'
               onClick={() => Taro.navigateTo({ url: '/pages/prescription/index' })}
@@ -105,18 +110,18 @@ export default function HomePage() {
             >
               健康填报
             </Button>
+            {firstAction ? (
+              <Button
+                className='primary-button full-button'
+                onClick={() => Taro.navigateTo({ url: `/pages/training/index?actionId=${firstAction.id}` })}
+              >
+                继续训练
+              </Button>
+            ) : null}
           </View>
-          {firstAction ? (
-            <Button
-              className='primary-button'
-              onClick={() => Taro.navigateTo({ url: `/pages/training/index?actionId=${firstAction.id}` })}
-            >
-              继续训练
-            </Button>
-          ) : null}
         </View>
       ) : (
-        <Text className='muted'>加载中</Text>
+        <Text className='muted loading-text'>加载中</Text>
       )}
     </View>
   )

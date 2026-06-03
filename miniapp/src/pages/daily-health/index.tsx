@@ -53,37 +53,43 @@ export default function DailyHealthPage() {
 
   return (
     <View className='page daily-health-page'>
-      <Text className='title'>今日健康数据</Text>
-      <View className='field-card'>
-        <Text className='label'>步数</Text>
-        <Input className='input' type='number' value={steps} onInput={(event) => setSteps(event.detail.value)} />
+      <View className='page-hero'>
+        <Text className='eyebrow'>每日记录</Text>
+        <Text className='title'>今日健康数据</Text>
+        <Text className='muted'>填写当天状态，方便医生跟进训练效果。</Text>
       </View>
-      <View className='field-card'>
-        <Text className='label'>运动时长</Text>
-        <Input
-          className='input'
-          type='number'
-          value={exerciseMinutes}
-          placeholder='分钟'
-          onInput={(event) => setExerciseMinutes(event.detail.value)}
-        />
-      </View>
-      <View className='field-card'>
-        <Text className='label'>睡眠时长</Text>
-        <Input
-          className='input'
-          type='digit'
-          value={sleepHours}
-          placeholder='小时'
-          onInput={(event) => setSleepHours(event.detail.value)}
-        />
-      </View>
-      <View className='field-card'>
-        <Text className='label'>备注</Text>
-        <Input className='input' value={note} onInput={(event) => setNote(event.detail.value)} />
+      <View className='form-stack'>
+        <View className='field-card'>
+          <Text className='label'>步数</Text>
+          <Input className='input' type='number' value={steps} onInput={(event) => setSteps(event.detail.value)} />
+        </View>
+        <View className='field-card'>
+          <Text className='label'>运动时长</Text>
+          <Input
+            className='input'
+            type='number'
+            value={exerciseMinutes}
+            placeholder='分钟'
+            onInput={(event) => setExerciseMinutes(event.detail.value)}
+          />
+        </View>
+        <View className='field-card'>
+          <Text className='label'>睡眠时长</Text>
+          <Input
+            className='input'
+            type='digit'
+            value={sleepHours}
+            placeholder='小时'
+            onInput={(event) => setSleepHours(event.detail.value)}
+          />
+        </View>
+        <View className='field-card'>
+          <Text className='label'>备注</Text>
+          <Input className='input' value={note} onInput={(event) => setNote(event.detail.value)} />
+        </View>
       </View>
       {error ? <Text className='error'>{error}</Text> : null}
-      <Button className='primary-button' loading={loading} onClick={submit}>
+      <Button className='primary-button full-button' loading={loading} onClick={submit}>
         保存
       </Button>
     </View>

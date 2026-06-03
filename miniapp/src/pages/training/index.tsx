@@ -48,39 +48,45 @@ export default function TrainingPage() {
 
   return (
     <View className='page training-page'>
-      <Text className='title'>训练记录</Text>
-      <View className='field-card'>
-        <Text className='label'>完成状态</Text>
-        <Picker
-          mode='selector'
-          range={STATUS_OPTIONS.map((item) => item.label)}
-          value={statusIndex}
-          onChange={(event) => setStatusIndex(Number(event.detail.value))}
-        >
-          <Text className='value'>{STATUS_OPTIONS[statusIndex].label}</Text>
-        </Picker>
+      <View className='page-hero'>
+        <Text className='eyebrow'>训练打卡</Text>
+        <Text className='title'>训练记录</Text>
+        <Text className='muted'>记录本次训练完成情况。</Text>
       </View>
-      <View className='field-card'>
-        <Text className='label'>实际时长</Text>
-        <Input
-          className='input'
-          type='number'
-          value={duration}
-          placeholder='分钟'
-          onInput={(event) => setDuration(event.detail.value)}
-        />
-      </View>
-      <View className='field-card'>
-        <Text className='label'>备注</Text>
-        <Input
-          className='input'
-          value={note}
-          placeholder='可选'
-          onInput={(event) => setNote(event.detail.value)}
-        />
+      <View className='form-stack'>
+        <View className='field-card picker-field'>
+          <Text className='label'>完成状态</Text>
+          <Picker
+            mode='selector'
+            range={STATUS_OPTIONS.map((item) => item.label)}
+            value={statusIndex}
+            onChange={(event) => setStatusIndex(Number(event.detail.value))}
+          >
+            <Text className='value picker-value'>{STATUS_OPTIONS[statusIndex].label}</Text>
+          </Picker>
+        </View>
+        <View className='field-card'>
+          <Text className='label'>实际时长</Text>
+          <Input
+            className='input'
+            type='number'
+            value={duration}
+            placeholder='分钟'
+            onInput={(event) => setDuration(event.detail.value)}
+          />
+        </View>
+        <View className='field-card'>
+          <Text className='label'>备注</Text>
+          <Input
+            className='input'
+            value={note}
+            placeholder='可选'
+            onInput={(event) => setNote(event.detail.value)}
+          />
+        </View>
       </View>
       {error ? <Text className='error'>{error}</Text> : null}
-      <Button className='primary-button' loading={loading} onClick={submit}>
+      <Button className='primary-button full-button' loading={loading} onClick={submit}>
         提交
       </Button>
     </View>

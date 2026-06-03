@@ -53,8 +53,12 @@ export default function BindPage() {
 
   return (
     <View className='page bind-page'>
-      <Text className='title'>绑定 MotionCare</Text>
-      <View className='panel'>
+      <View className='page-hero bind-hero'>
+        <Text className='eyebrow'>欢迎使用</Text>
+        <Text className='title'>绑定 MotionCare</Text>
+        <Text className='muted'>输入医生提供的绑定码，开始你的康复训练。</Text>
+      </View>
+      <View className='panel bind-card'>
         <Text className='label'>绑定码</Text>
         <Text className='muted'>请输入医生提供的 4 位数字绑定码</Text>
         <View className='code-input-wrap'>

@@ -10,6 +10,7 @@ import {
   subscribePendingGameUploadRetryLoop,
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
+import { gameSessionUrl, loadGameSessionSubpackage } from './gameSubpackage'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -24,6 +25,9 @@ export default function PrescriptionPage() {
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [pendingUploadBanner, setPendingUploadBanner] = useState('')
+  const [gameLoadingActionId, setGameLoadingActionId] = useState<number | null>(null)
+  const [gameLoadProgress, setGameLoadProgress] = useState(0)
+  const [gameLoadError, setGameLoadError] = useState('')
 
   function refreshPendingUploadBanner() {
     setPendingUploadBanner(pendingGameUploadBannerText())
@@ -39,6 +43,26 @@ export default function PrescriptionPage() {
         setError(err instanceof Error ? err.message : '加载失败')
         setLoaded(true)
       })
+  }
+
+  async function startAction(action: NonNullable<CurrentPrescription>['actions'][number]) {
+    setGameLoadError('')
+    if (action.internal_type !== 'game') {
+      Taro.navigateTo({ url: `/pages/training/index?actionId=${action.id}` })
+      return
+    }
+    if (gameLoadingActionId !== null) return
+
+    setGameLoadingActionId(action.id)
+    setGameLoadProgress(0)
+    try {
+      await loadGameSessionSubpackage((event) => setGameLoadProgress(event.progress))
+      Taro.navigateTo({ url: gameSessionUrl(action.id) })
+    } catch (err) {
+      setGameLoadError(err instanceof Error ? err.message : '游戏资源加载失败，请稍后重试')
+    } finally {
+      setGameLoadingActionId(null)
+    }
   }
 
   useEffect(() => {
@@ -69,9 +93,12 @@ export default function PrescriptionPage() {
   if (!loaded) {
     return (
       <View className='page prescription-page'>
-        <Text className='title'>当前处方</Text>
+        <View className='page-hero'>
+          <Text className='eyebrow'>康复安排</Text>
+          <Text className='title'>当前处方</Text>
+        </View>
         {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
-        <Text className='muted'>加载中</Text>
+        <Text className='muted loading-text'>加载中</Text>
       </View>
     )
   }
@@ -79,7 +106,10 @@ export default function PrescriptionPage() {
   if (!data) {
     return (
       <View className='page prescription-page'>
-        <Text className='title'>当前处方</Text>
+        <View className='page-hero'>
+          <Text className='eyebrow'>康复安排</Text>
+          <Text className='title'>当前处方</Text>
+        </View>
         {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
         {error ? <Text className='error'>{error}</Text> : <Text className='muted'>暂无生效处方</Text>}
       </View>
@@ -88,15 +118,37 @@ export default function PrescriptionPage() {
 
   return (
     <View className='page prescription-page'>
-      <Text className='title'>当前处方 v{data.version}</Text>
+      <View className='page-hero prescription-hero'>
+        <Text className='eyebrow'>康复安排</Text>
+        <Text className='title'>当前处方 v{data.version}</Text>
+        <Text className='muted'>
+          本周：{data.week_start} 至 {data.week_end}
+        </Text>
+      </View>
       {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
-      <Text className='muted'>
-        本周：{data.week_start} 至 {data.week_end}
-      </Text>
+      {gameLoadError ? <Text className='error'>{gameLoadError}</Text> : null}
+      {gameLoadingActionId !== null ? (
+        <View className='subpackage-loader'>
+          <View className='row'>
+            <Text className='label'>正在加载游戏资源</Text>
+            <Text className='value'>{gameLoadProgress}%</Text>
+          </View>
+          <View className='progress-track'>
+            <View className='progress-fill' style={{ width: `${gameLoadProgress}%` }} />
+          </View>
+        </View>
+      ) : null}
       {data.actions.map((action) => (
-        <View key={action.id} className='action-card'>
-          <Text className='value'>{action.action_name}</Text>
-          <Text className='muted'>{action.action_type}</Text>
+        <View key={action.id} className='action-card prescription-action-card'>
+          <View className='row action-card-header'>
+            <View>
+              <Text className='value action-title'>{action.action_name}</Text>
+              <Text className='muted'>{action.action_type}</Text>
+            </View>
+            <Text className={`pill ${action.internal_type === 'game' ? 'pill-game' : 'pill-training'}`}>
+              {action.internal_type === 'game' ? '游戏' : '训练'}
+            </Text>
+          </View>
           <View className='row'>
             <Text className='label'>本周进度</Text>
             <Text className='value'>
@@ -107,19 +159,17 @@ export default function PrescriptionPage() {
           <View className='button-row'>
             <Button
               className='primary-button'
-              onClick={() =>
-                Taro.navigateTo({
-                  url:
-                    action.internal_type === 'game'
-                      ? `/pages/game-session/index?actionId=${action.id}`
-                      : `/pages/training/index?actionId=${action.id}`
-                })
-              }
+              loading={gameLoadingActionId === action.id}
+              disabled={gameLoadingActionId !== null}
+              onClick={() => {
+                void startAction(action)
+              }}
             >
               {action.internal_type === 'game' ? '开始游戏' : '开始训练'}
             </Button>
             <Button
               className='secondary-button'
+              disabled={gameLoadingActionId !== null}
               onClick={() => Taro.navigateTo({ url: `/pages/action-history/index?actionId=${action.id}` })}
             >
               训练历史

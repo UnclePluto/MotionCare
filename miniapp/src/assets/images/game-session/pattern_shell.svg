@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="pattern_shell">
-<rect width="256" height="256" rx="36" fill="#f8fafc"/>
-<circle cx="206" cy="50" r="18" fill="#e2e8f0"/>
-<path d="M58 174c17-64 43-100 70-100s53 36 70 100c-35 20-105 20-140 0z" fill="#f9a8d4" stroke="#fb7185" stroke-width="8"/>
-<path d="M128 78v107M90 100l28 87M166 100l-28 87M70 140l39 52M186 140l-39 52" stroke="#fb7185" stroke-width="6" stroke-linecap="round"/>
-</svg>
