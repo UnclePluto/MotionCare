@@ -76,6 +76,9 @@ export default function PrescriptionPage() {
 
   useDidShow(() => {
     setError('')
+    setLoaded(false)
+    setData(null)
+    setGameLoadError('')
     refreshPendingUploadBanner()
     void tryUploadPendingGameRecord(Taro)
       .then((result) => {
@@ -98,7 +101,7 @@ export default function PrescriptionPage() {
           <Text className='title'>当前处方</Text>
         </View>
         {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
-        <Text className='muted loading-text'>加载中</Text>
+        <Text className='muted loading-text'>正在加载当前处方</Text>
       </View>
     )
   }
@@ -111,7 +114,14 @@ export default function PrescriptionPage() {
           <Text className='title'>当前处方</Text>
         </View>
         {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
-        {error ? <Text className='error'>{error}</Text> : <Text className='muted'>暂无生效处方</Text>}
+        {error ? (
+          <Text className='error'>{error}</Text>
+        ) : (
+          <View className='empty-state'>
+            <Text className='value'>暂无生效处方</Text>
+            <Text className='muted'>医生开具处方后，这里会展示动作、本周目标和训练入口。</Text>
+          </View>
+        )}
       </View>
     )
   }
@@ -138,45 +148,62 @@ export default function PrescriptionPage() {
           </View>
         </View>
       ) : null}
-      {data.actions.map((action) => (
-        <View key={action.id} className='action-card prescription-action-card'>
-          <View className='row action-card-header'>
-            <View>
-              <Text className='value action-title'>{action.action_name}</Text>
-              <Text className='muted'>{action.action_type}</Text>
-            </View>
-            <Text className={`pill ${action.internal_type === 'game' ? 'pill-game' : 'pill-training'}`}>
-              {action.internal_type === 'game' ? '游戏' : '训练'}
-            </Text>
-          </View>
-          <View className='row'>
-            <Text className='label'>本周进度</Text>
-            <Text className='value'>
-              {action.weekly_completed_count}/{action.weekly_target_count} 次
-            </Text>
-          </View>
-          <Text className='muted'>最近：{action.recent_record?.training_date ?? '暂无记录'}</Text>
-          <View className='button-row'>
-            <Button
-              className='primary-button'
-              loading={gameLoadingActionId === action.id}
-              disabled={gameLoadingActionId !== null}
-              onClick={() => {
-                void startAction(action)
-              }}
-            >
-              {action.internal_type === 'game' ? '开始游戏' : '开始训练'}
-            </Button>
-            <Button
-              className='secondary-button'
-              disabled={gameLoadingActionId !== null}
-              onClick={() => Taro.navigateTo({ url: `/pages/action-history/index?actionId=${action.id}` })}
-            >
-              训练历史
-            </Button>
-          </View>
+      {data.actions.length === 0 ? (
+        <View className='empty-state'>
+          <Text className='value'>处方暂未配置动作</Text>
+          <Text className='muted'>请联系医生补充训练动作后再开始训练。</Text>
         </View>
-      ))}
+      ) : null}
+      {data.actions.map((action) => {
+        const progressPercent = action.weekly_target_count > 0
+          ? Math.min(100, Math.round((action.weekly_completed_count / action.weekly_target_count) * 100))
+          : 0
+
+        return (
+          <View key={action.id} className='action-card prescription-action-card'>
+            <View className='row action-card-header'>
+              <View>
+                <Text className='value action-title'>{action.action_name}</Text>
+                <Text className='muted'>{action.action_type}</Text>
+              </View>
+              <Text className={`pill ${action.internal_type === 'game' ? 'pill-game' : 'pill-training'}`}>
+                {action.internal_type === 'game' ? '游戏' : '训练'}
+              </Text>
+            </View>
+            <View className='action-progress'>
+              <View className='row'>
+                <Text className='label'>本周进度</Text>
+                <Text className='value'>
+                  {action.weekly_completed_count}/{action.weekly_target_count} 次
+                </Text>
+              </View>
+              <View className='progress-track mini-progress-track'>
+                <View className='progress-fill' style={{ width: `${progressPercent}%` }} />
+              </View>
+            </View>
+            <Text className='muted'>最近：{action.recent_record?.training_date ?? '暂无记录'}</Text>
+            <View className='button-row'>
+              <Button
+                className='primary-button'
+                loading={gameLoadingActionId === action.id}
+                disabled={gameLoadingActionId !== null}
+                onClick={() => {
+                  void startAction(action)
+                }}
+              >
+                {action.internal_type === 'game' ? '开始游戏' : '开始训练'}
+              </Button>
+              <Button
+                className='secondary-button'
+                disabled={gameLoadingActionId !== null}
+                onClick={() => Taro.navigateTo({ url: `/pages/action-history/index?actionId=${action.id}` })}
+              >
+                查看历史
+              </Button>
+            </View>
+          </View>
+        )
+      })}
     </View>
   )
 }

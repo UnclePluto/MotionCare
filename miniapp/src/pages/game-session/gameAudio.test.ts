@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 const taroMock = vi.hoisted(() => ({
   getStorageSync: vi.fn(),
@@ -51,6 +52,53 @@ function createMockAudio() {
   }
 
   return { audio, callbacks }
+}
+
+function findMp4Box(
+  buffer: Buffer,
+  type: string,
+  start = 0,
+  end = buffer.length
+): { start: number; end: number; headerSize: number } | null {
+  let offset = start
+  while (offset + 8 <= end) {
+    let size = buffer.readUInt32BE(offset)
+    const boxType = buffer.toString('ascii', offset + 4, offset + 8)
+    let headerSize = 8
+    if (size === 1) {
+      size = Number(buffer.readBigUInt64BE(offset + 8))
+      headerSize = 16
+    } else if (size === 0) {
+      size = end - offset
+    }
+    if (size < headerSize || offset + size > end) {
+      return null
+    }
+    if (boxType === type) {
+      return { start: offset, end: offset + size, headerSize }
+    }
+    offset += size
+  }
+  return null
+}
+
+function mp4DurationSeconds(buffer: Buffer): number {
+  const moov = findMp4Box(buffer, 'moov')
+  if (!moov) throw new Error('moov box not found')
+  const mvhd = findMp4Box(buffer, 'mvhd', moov.start + moov.headerSize, moov.end)
+  if (!mvhd) throw new Error('mvhd box not found')
+
+  const contentStart = mvhd.start + mvhd.headerSize
+  const version = buffer[contentStart]
+  if (version === 1) {
+    const timescale = buffer.readUInt32BE(contentStart + 20)
+    const duration = Number(buffer.readBigUInt64BE(contentStart + 24))
+    return duration / timescale
+  }
+
+  const timescale = buffer.readUInt32BE(contentStart + 12)
+  const duration = buffer.readUInt32BE(contentStart + 16)
+  return duration / timescale
 }
 
 describe('game audio preferences', () => {
@@ -140,6 +188,12 @@ describe('game audio catalog', () => {
     expect(GAME_AUDIO_TEXT.count_3).toBe('3')
     expect(GAME_AUDIO_TEXT.count_2).toBe('2')
     expect(GAME_AUDIO_TEXT.count_1).toBe('1')
+  })
+
+  it('keeps the start cue short enough to be a single utterance', () => {
+    const audio = readFileSync(new URL('./assets/audio/game-session/start.m4a', import.meta.url))
+
+    expect(mp4DurationSeconds(audio)).toBeLessThanOrEqual(1.2)
   })
 
   it('defines sound discrimination clips with ascii static paths', () => {

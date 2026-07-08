@@ -22,17 +22,27 @@ export default function ActionHistoryPage() {
   const router = useRouter()
   const actionId = Number(router.params.actionId)
   const [data, setData] = useState<History | null>(null)
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
 
   useDidShow(() => {
+    setLoaded(false)
+    setData(null)
     if (!Number.isFinite(actionId)) {
       setError('训练动作无效')
+      setLoaded(true)
       return
     }
     setError('')
     request<History>(`/patient-app/actions/${actionId}/history/`)
-      .then(setData)
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .then((body) => {
+        setData(body)
+        setLoaded(true)
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : '加载失败')
+        setLoaded(true)
+      })
   })
 
   return (
@@ -56,19 +66,31 @@ export default function ActionHistoryPage() {
             </View>
           </View>
           <View className='history-list'>
-            {data.records.map((record) => (
-              <View key={record.id} className='history-row'>
-                <Text className='value'>
-                  {record.training_date} · {STATUS_LABEL[record.status]}
-                </Text>
-                <Text className='muted'>{record.actual_duration_minutes ?? '-'} 分钟</Text>
-                {record.note ? <Text className='muted'>{record.note}</Text> : null}
+            {data.records.length === 0 ? (
+              <View className='empty-state'>
+                <Text className='value'>暂无训练记录</Text>
+                <Text className='muted'>完成本动作后，最近记录会显示在这里。</Text>
               </View>
-            ))}
+            ) : (
+              data.records.map((record) => (
+                <View key={record.id} className='history-row'>
+                  <Text className='value'>
+                    {record.training_date} · {STATUS_LABEL[record.status]}
+                  </Text>
+                  <Text className='muted'>{record.actual_duration_minutes ?? '-'} 分钟</Text>
+                  {record.note ? <Text className='muted'>{record.note}</Text> : null}
+                </View>
+              ))
+            )}
           </View>
         </View>
+      ) : loaded ? (
+        <View className='state-card'>
+          <Text className='value'>训练历史暂时无法加载</Text>
+          <Text className='muted'>请稍后从处方页重新进入。</Text>
+        </View>
       ) : (
-        <Text className='muted loading-text'>加载中</Text>
+        <Text className='muted loading-text'>正在加载训练历史</Text>
       )}
     </View>
   )

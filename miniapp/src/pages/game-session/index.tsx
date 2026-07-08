@@ -109,6 +109,14 @@ function formatNumber(value: number | null | undefined, fallback = '-'): string 
   return value === null || value === undefined || !Number.isFinite(value) ? fallback : String(value)
 }
 
+function formatClock(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds))
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const seconds = safeSeconds % 60
+  return [hours, minutes, seconds].map((item) => String(item).padStart(2, '0')).join(':')
+}
+
 function uploadStateText(uploadState: UploadState): string {
   if (uploadState === 'uploading') return '正在上传'
   if (uploadState === 'uploaded') return '已上传'
@@ -1236,24 +1244,29 @@ export default function GameSessionPage() {
 
   function renderGameTopBar() {
     return (
-      <View className='game-topbar game-control-bar'>
-        <Text className='game-stat'>剩余 {formatNumber(remainingSeconds, '0')} 秒</Text>
-        <Button className='secondary-button compact-button' onClick={phase === 'paused' ? resumeGame : pauseGame}>
-          {phase === 'paused' ? '继续' : '暂停'}
-        </Button>
-        <Button
-          className='secondary-button compact-button'
-          onClick={() => {
-            const nextMuted = !muted
-            setMuted(nextMuted)
-            setGameAudioMuted(nextMuted)
-          }}
-        >
-          {muted ? '开启声音' : '关闭声音'}
-        </Button>
-        <Button className='secondary-button compact-button danger-button' onClick={() => endSession('manual')}>
-          提前结束
-        </Button>
+      <View className='game-topbar'>
+        <View className='game-timer-strip'>
+          <Text className='game-timer-label'>剩余时间</Text>
+          <Text className='game-timer-value'>{formatClock(remainingSeconds)}</Text>
+        </View>
+        <View className='game-control-bar'>
+          <Button className='secondary-button compact-button' onClick={phase === 'paused' ? resumeGame : pauseGame}>
+            {phase === 'paused' ? '继续' : '暂停'}
+          </Button>
+          <Button
+            className='secondary-button compact-button'
+            onClick={() => {
+              const nextMuted = !muted
+              setMuted(nextMuted)
+              setGameAudioMuted(nextMuted)
+            }}
+          >
+            {muted ? '开启声音' : '关闭声音'}
+          </Button>
+          <Button className='secondary-button compact-button danger-button' onClick={() => endSession('manual')}>
+            提前结束
+          </Button>
+        </View>
       </View>
     )
   }
@@ -1321,7 +1334,7 @@ export default function GameSessionPage() {
       <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
-        <Text className='section-title'>请选择不一样的数字</Text>
+        <Text className='section-title game-task-title inhibition-task-title'>请选择不一样的数字</Text>
         <View className='game-stage number-grid'>
           {activeInhibitionRound.options.map((value, index) => (
             <Button
@@ -1489,7 +1502,9 @@ export default function GameSessionPage() {
           {phase === 'paused' ? '训练已暂停' : puzzlePreviewing ? '请记住完整图片' : '点击两块拼图交换位置'}
         </Text>
         {puzzlePreviewing || phase === 'paused' ? (
-          <Image className='puzzle-preview-image' src={activePuzzleRound.imageSrc} mode='aspectFit' />
+          <View className='game-stage puzzle-preview-board'>
+            <Image className='puzzle-preview-image' src={activePuzzleRound.imageSrc} mode='aspectFill' />
+          </View>
         ) : (
           <View className={`game-stage puzzle-grid puzzle-grid-${activePuzzleRound.cols}`}>
             {activePuzzleRound.tiles.map((tile) => (
@@ -1565,7 +1580,6 @@ export default function GameSessionPage() {
     return (
       <View className='page game-session-page hainan-game-page game-setup-page'>
         <View className='game-hero'>
-          <Text className='eyebrow'>海南康复训练</Text>
           <Text className='title'>{action.action_name}</Text>
           <Text className='paragraph'>{action.action_instruction || '按提示完成本次认知游戏训练。'}</Text>
           <Text className='muted'>{GAME_AUDIO_TEXT[GAME_CATALOG[gameCode].introAudioKey]}</Text>
@@ -1626,7 +1640,6 @@ export default function GameSessionPage() {
     return (
       <View className='page game-session-page hainan-game-page game-intro-page'>
         <View className='game-hero intro-hero'>
-          <Text className='eyebrow'>海南康复训练</Text>
           <Text className='title'>{action.action_name}</Text>
           <Text className='countdown-text'>{introText || '准备开始'}</Text>
         </View>

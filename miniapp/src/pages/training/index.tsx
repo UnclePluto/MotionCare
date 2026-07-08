@@ -21,6 +21,8 @@ export default function TrainingPage() {
   const [loading, setLoading] = useState(false)
 
   async function submit() {
+    if (loading) return
+
     if (!Number.isFinite(actionId)) {
       setError('训练动作无效')
       return
@@ -87,7 +89,7 @@ export default function TrainingPage() {
       </View>
       {error ? <Text className='error'>{error}</Text> : null}
       <Button className='primary-button full-button' loading={loading} onClick={submit}>
-        提交
+        提交训练记录
       </Button>
     </View>
   )

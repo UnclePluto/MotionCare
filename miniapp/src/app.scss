@@ -6,12 +6,17 @@ $mc-action: #11a36a;
 $mc-sun: #ffb84d;
 $mc-coral: #ff6b5a;
 $mc-danger: #c2412d;
-$mc-panel: rgba(255, 255, 255, 0.86);
+$mc-page: #e9fbff;
+$mc-panel: rgba(255, 255, 255, 0.92);
+$mc-panel-strong: rgba(255, 255, 255, 0.96);
 $mc-border: rgba(7, 59, 76, 0.12);
-$mc-shadow: 0 18px 44px rgba(7, 59, 76, 0.1);
+$mc-shadow: 0 6px 14px rgba(7, 59, 76, 0.08);
+$mc-button-shadow: 0 8px 14px rgba(17, 163, 106, 0.18);
+$mc-selection-ring: 0 0 0 6px rgba(255, 107, 90, 0.16);
+$mc-focus-ring: 0 0 0 5px rgba(7, 152, 178, 0.18);
 
 page {
-  background: #e9fbff;
+  background: $mc-page;
 }
 
 button {
@@ -19,15 +24,20 @@ button {
   border: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
   letter-spacing: 0;
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
 }
 
 button::after {
   border: 0;
 }
 
+button:active {
+  transform: scale(0.98);
+}
+
 .page {
   min-height: 100vh;
-  padding: 30px 28px 48px;
+  padding: 38px 28px 64px;
   box-sizing: border-box;
   color: $mc-ink;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -44,7 +54,7 @@ button::after {
 .subpackage-loader {
   box-sizing: border-box;
   border: 1px solid $mc-border;
-  border-radius: 24px;
+  border-radius: 16px;
   background: $mc-panel;
   box-shadow: $mc-shadow;
 }
@@ -52,9 +62,10 @@ button::after {
 .page-hero {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-bottom: 22px;
-  padding: 30px 28px;
+  gap: 14px;
+  margin-bottom: 30px;
+  padding: 38px 30px;
+  border-radius: 16px;
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(233, 251, 255, 0.86) 54%, rgba(255, 244, 214, 0.82));
 }
@@ -62,11 +73,11 @@ button::after {
 .eyebrow {
   display: inline-flex;
   align-self: flex-start;
-  padding: 8px 18px;
+  padding: 9px 18px;
   border-radius: 999px;
   color: #056271;
   background: rgba(7, 152, 178, 0.12);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
   line-height: 1.25;
 }
@@ -74,16 +85,26 @@ button::after {
 .title {
   display: block;
   color: $mc-ink;
-  font-size: 38px;
+  font-size: 36px;
   font-weight: 900;
-  line-height: 1.22;
+  line-height: 1.24;
+}
+
+.page-hero .title {
+  color: $mc-ink;
+  font-size: 42px;
+  line-height: 1.18;
+}
+
+.page-hero .muted {
+  color: $mc-muted;
 }
 
 .section-title {
   display: block;
   margin: 20px 0 14px;
   color: $mc-ink;
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 900;
   line-height: 1.35;
 }
@@ -92,8 +113,8 @@ button::after {
 .muted {
   display: block;
   color: $mc-muted;
-  font-size: 25px;
-  line-height: 1.55;
+  font-size: 24px;
+  line-height: 1.5;
 }
 
 .paragraph {
@@ -104,15 +125,15 @@ button::after {
 .label {
   display: block;
   color: $mc-muted;
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 800;
   line-height: 1.35;
 }
 
 .value {
   display: block;
   color: $mc-ink;
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 900;
   line-height: 1.35;
 }
@@ -141,10 +162,33 @@ button::after {
 }
 
 .loading-text {
+  display: block;
   margin-top: 24px;
-  padding: 20px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
+  padding: 26px;
+  border-radius: 16px;
+  color: $mc-text;
+  background: $mc-panel-strong;
+  box-shadow: $mc-shadow;
+}
+
+.state-card,
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 22px 0;
+  padding: 28px;
+  box-sizing: border-box;
+  border: 1px solid rgba(7, 152, 178, 0.14);
+  border-radius: 16px;
+  color: $mc-ink;
+  background: $mc-panel-strong;
+  box-shadow: $mc-shadow;
+}
+
+.state-card .muted,
+.empty-state .muted {
+  color: $mc-text;
 }
 
 .panel,
@@ -153,9 +197,9 @@ button::after {
 .field-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin: 18px 0;
-  padding: 24px;
+  gap: 16px;
+  margin: 22px 0;
+  padding: 28px;
 }
 
 .row {
@@ -172,29 +216,40 @@ button::after {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin: 18px 0;
+  gap: 18px;
+  margin: 24px 0;
 }
 
 .stat-card {
   display: flex;
-  min-height: 126px;
+  min-height: 150px;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
-  padding: 22px;
+  gap: 10px;
+  padding: 26px 22px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.92), rgba(234, 251, 240, 0.9));
 }
 
+.stat-grid .stat-card:first-child {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(233, 251, 255, 0.88));
+}
+
+.stat-grid .stat-card:nth-child(2) {
+  background: linear-gradient(135deg, #fff8df, #eafbf0);
+}
+
 .profile-panel {
-  gap: 8px;
+  gap: 10px;
+  padding: 30px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(233, 251, 255, 0.86));
 }
 
 .profile-name {
-  font-size: 36px;
+  font-size: 38px;
+  line-height: 1.22;
 }
 
 .project-name {
@@ -205,8 +260,8 @@ button::after {
 .action-stack {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  margin-top: 16px;
+  gap: 18px;
+  margin-top: 22px;
 }
 
 .action-stack .full-button,
@@ -218,12 +273,12 @@ button::after {
 .secondary-button,
 .danger-button {
   display: flex;
-  min-height: 88px;
+  min-height: 94px;
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
   border-radius: 999px;
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 900;
   line-height: 1.25;
 }
@@ -231,13 +286,14 @@ button::after {
 .primary-button {
   color: #ffffff;
   background: linear-gradient(135deg, $mc-action, $mc-primary);
-  box-shadow: 0 14px 28px rgba(17, 163, 106, 0.24);
+  box-shadow: $mc-button-shadow;
 }
 
 .secondary-button {
   color: $mc-ink;
-  background: rgba(255, 255, 255, 0.84);
-  box-shadow: 0 10px 22px rgba(7, 59, 76, 0.08);
+  border: 0;
+  background: $mc-panel-strong;
+  box-shadow: $mc-shadow;
 }
 
 .danger-button {
@@ -249,6 +305,8 @@ button::after {
 .secondary-button[disabled],
 .danger-button[disabled] {
   opacity: 0.58;
+  box-shadow: none;
+  transform: none;
 }
 
 .compact-button {
@@ -258,15 +316,20 @@ button::after {
 }
 
 .input {
-  min-height: 88px;
-  padding: 0 20px;
+  min-height: 94px;
+  padding: 0 22px;
   box-sizing: border-box;
   border: 2px solid rgba(7, 152, 178, 0.18);
-  border-radius: 20px;
+  border-radius: 16px;
   color: $mc-ink;
   background: rgba(255, 255, 255, 0.9);
-  font-size: 28px;
+  font-size: 27px;
   font-weight: 700;
+}
+
+.input:focus {
+  border-color: rgba(7, 152, 178, 0.42);
+  box-shadow: $mc-focus-ring;
 }
 
 .form-stack {
@@ -284,38 +347,47 @@ button::after {
 
 .code-input-wrap {
   position: relative;
-  margin: 16px 0 4px;
+  margin: 22px 0 8px;
 }
 
 .code-input {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
   z-index: 2;
-  width: 100%;
-  min-height: 112px;
+  width: 1px;
+  height: 1px;
+  min-height: 1px;
   opacity: 0;
+  color: transparent;
+  background: transparent;
+  pointer-events: none;
 }
 
 .code-slots {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 18px;
 }
 
 .code-slot {
   display: flex;
-  min-height: 112px;
+  min-height: 122px;
   align-items: center;
   justify-content: center;
   border: 2px solid rgba(7, 152, 178, 0.22);
-  border-radius: 22px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.92);
 }
 
 .code-slot.filled {
   border-color: $mc-action;
   background: rgba(234, 251, 240, 0.98);
-  box-shadow: 0 10px 20px rgba(17, 163, 106, 0.12);
+  box-shadow: 0 6px 12px rgba(17, 163, 106, 0.12);
+}
+
+.code-slot.filled .code-slot-text {
+  color: $mc-ink;
 }
 
 .code-slot-text {
@@ -328,7 +400,7 @@ button::after {
 .pill {
   display: inline-flex;
   flex: 0 0 auto;
-  padding: 8px 16px;
+  padding: 10px 18px;
   border-radius: 999px;
   font-size: 22px;
   font-weight: 900;
@@ -347,11 +419,24 @@ button::after {
 
 .action-card-header {
   align-items: flex-start;
+  padding-bottom: 18px;
+  border-bottom: 1px solid $mc-border;
 }
 
 .action-title {
   margin-bottom: 4px;
-  font-size: 31px;
+  font-size: 32px;
+}
+
+.prescription-action-card {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(233, 251, 255, 0.82));
+}
+
+.action-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .subpackage-loader {
@@ -360,6 +445,7 @@ button::after {
   gap: 16px;
   margin: 18px 0;
   padding: 22px;
+  border-radius: 18px;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(255, 244, 214, 0.82));
 }
@@ -370,6 +456,10 @@ button::after {
   overflow: hidden;
   border-radius: 999px;
   background: rgba(7, 59, 76, 0.1);
+}
+
+.mini-progress-track {
+  height: 14px;
 }
 
 .progress-fill {
@@ -407,68 +497,164 @@ button::after {
   background:
     linear-gradient(180deg, #e5fbff 0%, #fff4d6 54%, #eafbf0 100%);
 
+  &.game-play-page {
+    padding-bottom: 190px;
+  }
+
+  &.game-setup-page {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+    justify-content: center;
+  }
+
   .game-hero {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-bottom: 18px;
-    padding: 24px;
+    gap: 14px;
+    margin-bottom: 24px;
+    padding: 30px;
     border: 1px solid $mc-border;
-    border-radius: 28px;
+    border-radius: 16px;
     background:
       linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(255, 244, 214, 0.84));
     box-shadow: $mc-shadow;
   }
 
   .game-hero .title {
-    font-size: 34px;
-    line-height: 1.24;
+    color: $mc-ink;
+    font-size: 36px;
+    line-height: 1.22;
+  }
+
+  &.game-setup-page .game-hero {
+    align-items: center;
+    text-align: center;
+  }
+
+  &.game-setup-page .game-hero .title {
+    font-size: 42px;
+    line-height: 1.18;
   }
 
   .game-hero .paragraph,
   .game-hero .muted {
+    color: $mc-muted;
     font-size: 23px;
-    line-height: 1.48;
+    line-height: 1.5;
   }
 
   .intro-hero {
-    min-height: 420px;
+    min-height: 56vh;
     align-items: center;
     justify-content: center;
     text-align: center;
   }
 
-  .intro-hero .eyebrow {
-    align-self: center;
+  &.game-intro-page {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  &.game-intro-page .intro-hero {
+    margin-bottom: 28px;
+  }
+
+  &.game-intro-page .intro-hero .title {
+    font-size: 46px;
+    line-height: 1.18;
+  }
+
+  &.game-intro-page > .muted {
+    color: $mc-text;
+    font-size: 22px;
+    line-height: 1.45;
+    text-align: center;
+  }
+
+  .game-topbar {
+    margin-bottom: 28px;
+  }
+
+  .game-timer-strip {
+    display: flex;
+    width: 360px;
+    max-width: 100%;
+    min-width: 320px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    margin: 0 auto;
+    padding: 18px 30px;
+    box-sizing: border-box;
+    border: 1px solid rgba(7, 152, 178, 0.16);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: $mc-shadow;
+  }
+
+  .game-timer-label {
+    display: block;
+    color: $mc-muted;
+    font-size: 21px;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+
+  .game-timer-value {
+    display: block;
+    color: $mc-ink;
+    font-size: 58px;
+    font-weight: 900;
+    line-height: 1.06;
   }
 
   .game-control-bar {
+    position: fixed;
+    right: 28px;
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    left: 28px;
+    z-index: 20;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-    margin-bottom: 20px;
-    padding: 16px;
+    gap: 14px;
+    padding: 14px;
+    box-sizing: border-box;
     border: 1px solid $mc-border;
-    border-radius: 24px;
-    background: rgba(255, 255, 255, 0.76);
-    box-shadow: 0 14px 32px rgba(7, 59, 76, 0.08);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: $mc-shadow;
   }
 
-  .game-stat {
-    grid-column: 1 / -1;
-    color: $mc-ink;
-    font-size: 30px;
-    font-weight: 900;
-    line-height: 1.3;
+  .game-control-bar .compact-button {
+    min-height: 82px;
+    padding: 0 12px;
+    font-size: 24px;
   }
 
   .countdown-text {
     display: block;
     margin-top: 18px;
-    color: #b05f00;
-    font-size: 64px;
+    max-width: 100%;
+    color: #9a5400;
+    font-size: 44px;
     font-weight: 900;
-    line-height: 1.15;
+    line-height: 1.28;
+  }
+
+  .game-task-title {
+    margin: 12px 0 22px;
+    color: $mc-ink;
+    font-size: 36px;
+    line-height: 1.22;
+  }
+
+  .inhibition-task-title {
+    font-size: 44px;
+    line-height: 1.18;
   }
 
   .sequence-preview {
@@ -483,11 +669,11 @@ button::after {
     min-height: 76px;
     align-items: center;
     justify-content: center;
-    border-radius: 20px;
+    border-radius: 16px;
     color: #ffffff;
     font-size: 26px;
     font-weight: 900;
-    box-shadow: 0 12px 24px rgba(7, 59, 76, 0.1);
+    box-shadow: $mc-shadow;
   }
 
   .hidden-chip {
@@ -509,7 +695,7 @@ button::after {
   .number-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
+    gap: 18px;
   }
 
   .color-tile,
@@ -524,13 +710,13 @@ button::after {
     justify-content: center;
     box-sizing: border-box;
     border: 2px solid rgba(7, 152, 178, 0.18);
-    border-radius: 24px;
+    border-radius: 16px;
     color: $mc-ink;
     background: rgba(255, 255, 255, 0.88);
-    font-size: 28px;
+    font-size: 27px;
     font-weight: 900;
     line-height: 1.25;
-    box-shadow: 0 14px 30px rgba(7, 59, 76, 0.1);
+    box-shadow: $mc-shadow;
   }
 
   .color-tile {
@@ -560,8 +746,9 @@ button::after {
   }
 
   .number-tile {
-    min-height: 156px;
-    font-size: 48px;
+    min-height: 172px;
+    font-size: 78px;
+    line-height: 1;
   }
 
   .game-image,
@@ -603,7 +790,7 @@ button::after {
 
   .image-tile {
     padding: 18px 12px;
-    transition: transform 180ms ease;
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
     transform-style: preserve-3d;
   }
 
@@ -618,10 +805,10 @@ button::after {
     align-items: center;
     justify-content: center;
     padding: 12px;
-    border-radius: 20px;
+    border-radius: 14px;
     color: $mc-ink;
     background: rgba(255, 255, 255, 0.88);
-    box-shadow: 0 10px 22px rgba(7, 59, 76, 0.08);
+    box-shadow: $mc-shadow;
     text-align: center;
     font-size: 22px;
     font-weight: 800;
@@ -634,8 +821,8 @@ button::after {
     align-items: center;
     justify-content: center;
     gap: 12px;
-    margin: 12px 0 18px;
-    padding: 28px;
+    margin: 16px 0 22px;
+    padding: 32px;
   }
 
   .category-label {
@@ -656,11 +843,12 @@ button::after {
     animation: card-flip-in 260ms ease-out;
     border-color: rgba(17, 163, 106, 0.42);
     background: rgba(234, 251, 240, 0.96);
+    box-shadow: 0 6px 14px rgba(17, 163, 106, 0.12);
   }
 
   .sound-card.previewing {
     border-color: rgba(255, 184, 77, 0.78);
-    box-shadow: 0 0 0 6px rgba(255, 184, 77, 0.2), 0 16px 34px rgba(7, 59, 76, 0.12);
+    box-shadow: 0 0 0 6px rgba(255, 184, 77, 0.2), $mc-shadow;
     transform: scale(1.02);
   }
 
@@ -679,13 +867,22 @@ button::after {
     line-height: 1;
   }
 
-  .puzzle-preview-image {
+  .puzzle-preview-board {
+    position: relative;
+    overflow: hidden;
     width: 100%;
-    height: 380px;
+    padding: 0 0 100%;
     border: 2px solid rgba(7, 152, 178, 0.16);
-    border-radius: 26px;
+    border-radius: 16px;
     background: rgba(255, 255, 255, 0.84);
     box-shadow: $mc-shadow;
+  }
+
+  .puzzle-preview-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .puzzle-grid {
@@ -713,7 +910,7 @@ button::after {
   .puzzle-tile.selected {
     border-color: $mc-coral;
     background: rgba(255, 244, 214, 0.96);
-    box-shadow: 0 0 0 6px rgba(255, 107, 90, 0.16);
+    box-shadow: $mc-selection-ring;
   }
 
   .puzzle-tile-slice {
@@ -740,12 +937,24 @@ button::after {
     font-size: 30px;
     font-weight: 900;
     text-align: center;
-    box-shadow: 0 10px 24px rgba(17, 163, 106, 0.12);
+    box-shadow: 0 6px 14px rgba(17, 163, 106, 0.12);
   }
 
   .result-panel,
   .result-metrics {
     gap: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .image-tile,
+  .sound-card,
+  .puzzle-tile,
+  .sound-card.revealed,
+  .sound-card.revealed .sound-card-face {
+    animation: none;
+    transition: none;
   }
 }
 

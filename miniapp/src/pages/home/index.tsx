@@ -21,6 +21,7 @@ function pendingGameUploadBannerText(): string {
 
 export default function HomePage() {
   const [data, setData] = useState<HomeData | null>(null)
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [pendingUploadBanner, setPendingUploadBanner] = useState('')
 
@@ -30,8 +31,14 @@ export default function HomePage() {
 
   function loadHomeData() {
     request<HomeData>('/patient-app/home/')
-      .then(setData)
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .then((body) => {
+        setData(body)
+        setLoaded(true)
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : '加载失败')
+        setLoaded(true)
+      })
   }
 
   useEffect(() => {
@@ -45,6 +52,8 @@ export default function HomePage() {
 
   useDidShow(() => {
     setError('')
+    setLoaded(false)
+    setData(null)
     refreshPendingUploadBanner()
     void tryUploadPendingGameRecord(Taro)
       .then((result) => {
@@ -59,15 +68,26 @@ export default function HomePage() {
     loadHomeData()
   })
 
-  const firstAction = data?.current_prescription?.actions[0]
-  const completed = data?.current_prescription?.actions.reduce(
+  const currentPrescription = data?.current_prescription
+  const prescriptionActions = currentPrescription?.actions ?? []
+  const firstAction = prescriptionActions[0]
+  const completed = prescriptionActions.reduce(
     (sum, action) => sum + action.weekly_completed_count,
     0
   )
-  const target = data?.current_prescription?.actions.reduce(
+  const target = prescriptionActions.reduce(
     (sum, action) => sum + action.weekly_target_count,
     0
   )
+
+  function continueFirstAction() {
+    if (!firstAction) return
+    if (firstAction.internal_type === 'game') {
+      Taro.navigateTo({ url: '/pages/prescription/index' })
+      return
+    }
+    Taro.navigateTo({ url: `/pages/training/index?actionId=${firstAction.id}` })
+  }
 
   return (
     <View className='page home-page'>
@@ -89,7 +109,7 @@ export default function HomePage() {
             <View className='stat-card'>
               <Text className='label'>本周训练</Text>
               <Text className='value'>
-                {completed ?? 0}/{target ?? 0} 次
+                {currentPrescription ? `${completed}/${target} 次` : '暂无处方'}
               </Text>
             </View>
             <View className='stat-card'>
@@ -102,26 +122,37 @@ export default function HomePage() {
               className='primary-button'
               onClick={() => Taro.navigateTo({ url: '/pages/prescription/index' })}
             >
-              当前处方
+              查看处方
             </Button>
             <Button
               className='secondary-button'
               onClick={() => Taro.navigateTo({ url: '/pages/daily-health/index' })}
             >
-              健康填报
+              填写健康数据
             </Button>
             {firstAction ? (
               <Button
                 className='primary-button full-button'
-                onClick={() => Taro.navigateTo({ url: `/pages/training/index?actionId=${firstAction.id}` })}
+                onClick={continueFirstAction}
               >
-                继续训练
+                {firstAction.internal_type === 'game' ? '前往游戏训练' : '继续训练'}
               </Button>
+            ) : null}
+            {!currentPrescription ? (
+              <View className='empty-state full-button'>
+                <Text className='value'>暂无生效处方</Text>
+                <Text className='muted'>医生开具处方后，这里会显示训练入口和本周进度。</Text>
+              </View>
             ) : null}
           </View>
         </View>
+      ) : loaded ? (
+        <View className='state-card'>
+          <Text className='value'>首页暂时无法加载</Text>
+          <Text className='muted'>请稍后返回重试，或联系医生确认绑定状态。</Text>
+        </View>
       ) : (
-        <Text className='muted loading-text'>加载中</Text>
+        <Text className='muted loading-text'>正在加载今日康复安排</Text>
       )}
     </View>
   )

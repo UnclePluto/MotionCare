@@ -18,6 +18,7 @@ export default function BindPage() {
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [inputFocused, setInputFocused] = useState(true)
   const codeDigits = Array.from({ length: 4 }, (_, index) => code[index] ?? '')
   const canSubmit = code.length === 4 && !loading
 
@@ -61,13 +62,17 @@ export default function BindPage() {
       <View className='panel bind-card'>
         <Text className='label'>绑定码</Text>
         <Text className='muted'>请输入医生提供的 4 位数字绑定码</Text>
-        <View className='code-input-wrap'>
+        <View className='code-input-wrap' onClick={() => setInputFocused(true)}>
           <Input
             className='code-input'
             value={code}
             type='number'
-            placeholder='请输入4位绑定码'
-            focus
+            maxlength={4}
+            focus={inputFocused}
+            placeholder=''
+            confirmType='done'
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             onInput={(event) => setCode(normalizeBindingCode(event.detail.value))}
           />
           <View className='code-slots'>
@@ -85,7 +90,7 @@ export default function BindPage() {
           disabled={!canSubmit}
           onClick={submit}
         >
-          绑定
+          绑定账号
         </Button>
       </View>
     </View>

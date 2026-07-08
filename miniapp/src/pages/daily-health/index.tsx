@@ -15,22 +15,34 @@ export default function DailyHealthPage() {
   const [sleepHours, setSleepHours] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
+  const [loaded, setLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
 
   useDidShow(() => {
     setError('')
+    setLoaded(false)
+    setSteps('')
+    setExerciseMinutes('')
+    setSleepHours('')
+    setNote('')
     request<DailyHealth | null>('/patient-app/daily-health/today/')
       .then((data) => {
+        setLoaded(true)
         if (!data) return
         setSteps(data.steps ? String(data.steps) : '')
         setExerciseMinutes(data.exercise_minutes ? String(data.exercise_minutes) : '')
         setSleepHours(data.sleep_hours ?? '')
         setNote(data.note ?? '')
       })
-      .catch((err) => setError(err instanceof Error ? err.message : '加载失败'))
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : '加载失败')
+        setLoaded(true)
+      })
   })
 
   async function submit() {
+    if (loading) return
+
     setLoading(true)
     setError('')
     try {
@@ -58,40 +70,51 @@ export default function DailyHealthPage() {
         <Text className='title'>今日健康数据</Text>
         <Text className='muted'>填写当天状态，方便医生跟进训练效果。</Text>
       </View>
-      <View className='form-stack'>
-        <View className='field-card'>
-          <Text className='label'>步数</Text>
-          <Input className='input' type='number' value={steps} onInput={(event) => setSteps(event.detail.value)} />
+      {loaded && !error ? (
+        <View className='form-stack'>
+          <View className='field-card'>
+            <Text className='label'>步数</Text>
+            <Input className='input' type='number' value={steps} onInput={(event) => setSteps(event.detail.value)} />
+          </View>
+          <View className='field-card'>
+            <Text className='label'>运动时长</Text>
+            <Input
+              className='input'
+              type='number'
+              value={exerciseMinutes}
+              placeholder='分钟'
+              onInput={(event) => setExerciseMinutes(event.detail.value)}
+            />
+          </View>
+          <View className='field-card'>
+            <Text className='label'>睡眠时长</Text>
+            <Input
+              className='input'
+              type='digit'
+              value={sleepHours}
+              placeholder='小时'
+              onInput={(event) => setSleepHours(event.detail.value)}
+            />
+          </View>
+          <View className='field-card'>
+            <Text className='label'>备注</Text>
+            <Input className='input' value={note} placeholder='可选' onInput={(event) => setNote(event.detail.value)} />
+          </View>
         </View>
-        <View className='field-card'>
-          <Text className='label'>运动时长</Text>
-          <Input
-            className='input'
-            type='number'
-            value={exerciseMinutes}
-            placeholder='分钟'
-            onInput={(event) => setExerciseMinutes(event.detail.value)}
-          />
+      ) : loaded ? (
+        <View className='state-card'>
+          <Text className='value'>健康数据暂时无法加载</Text>
+          <Text className='muted'>请稍后返回重试。</Text>
         </View>
-        <View className='field-card'>
-          <Text className='label'>睡眠时长</Text>
-          <Input
-            className='input'
-            type='digit'
-            value={sleepHours}
-            placeholder='小时'
-            onInput={(event) => setSleepHours(event.detail.value)}
-          />
-        </View>
-        <View className='field-card'>
-          <Text className='label'>备注</Text>
-          <Input className='input' value={note} onInput={(event) => setNote(event.detail.value)} />
-        </View>
-      </View>
+      ) : (
+        <Text className='muted loading-text'>正在加载今日健康数据</Text>
+      )}
       {error ? <Text className='error'>{error}</Text> : null}
-      <Button className='primary-button full-button' loading={loading} onClick={submit}>
-        保存
-      </Button>
+      {loaded && !error ? (
+        <Button className='primary-button full-button' loading={loading} onClick={submit}>
+          保存健康数据
+        </Button>
+      ) : null}
     </View>
   )
 }
