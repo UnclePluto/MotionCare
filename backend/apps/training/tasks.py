@@ -22,6 +22,25 @@ URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 TOKEN_PATTERN = re.compile(r"(?i)(token=)[^&\s]+")
 
 
+def _remaining_deadline_timeout(deadline, configured_timeout):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("视频下载超过整体下载时限")
+    return min(configured_timeout, remaining)
+
+
+def _set_urllib_response_socket_timeout(response, timeout):
+    """Set urlopen's HTTPResponse socket timeout before a blocking read.
+
+    urllib.request.urlopen() returns http.client.HTTPResponse. Its ``fp`` is a
+    buffered reader, whose raw SocketIO keeps the actual socket at ``_sock``.
+    """
+    try:
+        response.fp.raw._sock.settimeout(timeout)
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("无法设置 urllib HTTPResponse 的 socket timeout") from exc
+
+
 def download_private_video(
     url,
     destination,
@@ -35,10 +54,13 @@ def download_private_video(
         raise ValueError("视频下载允许大小必须大于 0")
     if deadline_seconds <= 0:
         raise ValueError("视频整体下载时限必须大于 0")
+    if timeout <= 0:
+        raise ValueError("视频下载 socket timeout 必须大于 0")
 
     destination = Path(destination)
     deadline = time.monotonic() + deadline_seconds
-    with opener(url, timeout=timeout) as response:
+    connect_timeout = _remaining_deadline_timeout(deadline, timeout)
+    with opener(url, timeout=connect_timeout) as response:
         if time.monotonic() >= deadline:
             raise TimeoutError("视频下载超过整体下载时限")
 
@@ -53,8 +75,8 @@ def download_private_video(
         downloaded_bytes = 0
         with destination.open("wb") as output:
             while True:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("视频下载超过整体下载时限")
+                read_timeout = _remaining_deadline_timeout(deadline, timeout)
+                _set_urllib_response_socket_timeout(response, read_timeout)
                 chunk = response.read(DOWNLOAD_CHUNK_SIZE_BYTES)
                 if time.monotonic() >= deadline:
                     raise TimeoutError("视频下载超过整体下载时限")

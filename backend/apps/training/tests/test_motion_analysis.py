@@ -1,7 +1,9 @@
 import io
 import os
+import time
 import uuid
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -333,15 +335,27 @@ def _analysis_job(project_patient, active_prescription):
 
 
 class _DownloadResponse(io.BytesIO):
-    def __init__(self, content, *, headers=None):
+    def __init__(self, content, *, headers=None, socket_timeout=None):
         super().__init__(content)
         self.headers = headers or {}
+        self.socket = _TimeoutAwareSocket(socket_timeout)
+        self.fp = SimpleNamespace(raw=SimpleNamespace(_sock=self.socket))
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, traceback):
         self.close()
+
+
+class _TimeoutAwareSocket:
+    def __init__(self, timeout):
+        self.timeout = timeout
+        self.timeouts = []
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+        self.timeouts.append(timeout)
 
 
 def test_private_video_download_uses_timeout_and_destination(tmp_path):
@@ -418,6 +432,109 @@ def test_private_video_download_stops_at_overall_deadline(tmp_path):
             max_bytes=1024,
             deadline_seconds=1,
             opener=Mock(return_value=SlowResponse(b"")),
+        )
+
+
+def test_private_video_download_limits_connect_timeout_to_remaining_deadline(tmp_path):
+    class SlowOpener:
+        def __init__(self):
+            self.timeouts = []
+
+        def __call__(self, url, *, timeout):
+            self.timeouts.append(timeout)
+            time.sleep(timeout)
+            raise TimeoutError("模拟连接超时")
+
+    opener = SlowOpener()
+    started_at = time.monotonic()
+
+    with pytest.raises(TimeoutError, match="模拟连接超时"):
+        download_private_video(
+            "https://cdn.example.com/private.mp4?token=secret",
+            tmp_path / "video.mp4",
+            timeout=0.4,
+            max_bytes=1024,
+            deadline_seconds=0.08,
+            opener=opener,
+        )
+
+    elapsed = time.monotonic() - started_at
+    assert opener.timeouts == [pytest.approx(0.08, abs=0.03)]
+    assert 0.04 <= elapsed < 0.2
+
+
+def test_private_video_download_limits_blocking_read_to_remaining_deadline(tmp_path):
+    class SlowReadResponse(_DownloadResponse):
+        def read(self, size=-1):
+            time.sleep(self.socket.timeout)
+            raise TimeoutError("模拟读取超时")
+
+    response = SlowReadResponse(b"", socket_timeout=0.4)
+    started_at = time.monotonic()
+
+    with pytest.raises(TimeoutError, match="模拟读取超时"):
+        download_private_video(
+            "https://cdn.example.com/private.mp4?token=secret",
+            tmp_path / "video.mp4",
+            timeout=0.4,
+            max_bytes=1024,
+            deadline_seconds=0.08,
+            opener=Mock(return_value=response),
+        )
+
+    elapsed = time.monotonic() - started_at
+    assert response.socket.timeouts == [pytest.approx(0.08, abs=0.03)]
+    assert 0.04 <= elapsed < 0.2
+
+
+def test_private_video_download_reduces_socket_timeout_before_each_read(tmp_path):
+    class ChunkedResponse(_DownloadResponse):
+        def __init__(self):
+            super().__init__(b"", socket_timeout=None)
+            self.chunks = iter((b"first", b"second", b""))
+
+        def read(self, size=-1):
+            if self.socket.timeout is None:
+                raise AssertionError("读取前未设置 socket timeout")
+            time.sleep(min(self.socket.timeout, 0.015))
+            return next(self.chunks)
+
+    response = ChunkedResponse()
+
+    download_private_video(
+        "https://cdn.example.com/private.mp4?token=secret",
+        tmp_path / "video.mp4",
+        timeout=0.4,
+        max_bytes=1024,
+        deadline_seconds=0.2,
+        opener=Mock(return_value=response),
+    )
+
+    assert len(response.socket.timeouts) == 3
+    assert all(
+        later < earlier
+        for earlier, later in zip(response.socket.timeouts, response.socket.timeouts[1:])
+    )
+
+
+def test_private_video_download_rejects_response_without_controllable_socket(tmp_path):
+    class UncontrollableResponse(io.BytesIO):
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            self.close()
+
+    with pytest.raises(RuntimeError, match="无法设置.*socket timeout"):
+        download_private_video(
+            "https://cdn.example.com/private.mp4?token=secret",
+            tmp_path / "video.mp4",
+            timeout=0.4,
+            max_bytes=1024,
+            deadline_seconds=0.2,
+            opener=Mock(return_value=UncontrollableResponse(b"")),
         )
 
 
