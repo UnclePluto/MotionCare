@@ -169,7 +169,7 @@ def _confirmed_events(measurements):
                 }
             )
             last_confirmed_index = events[-1]["index"]
-        elif last_confirmed_index is not None and _is_attempt(
+        elif state == "down" and last_confirmed_index is not None and _is_attempt(
             measurements[last_confirmed_index + 1 : index - len(candidate_run) + 1]
         ):
             events.append(

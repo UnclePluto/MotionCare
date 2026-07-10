@@ -98,6 +98,28 @@ def test_counts_only_debounced_down_up_down_repetitions():
     assert result["total_count"] == result["standard_count"] + result["nonstandard_count"]
 
 
+def test_sustained_up_state_is_confirmed_only_once():
+    frames = _sequence(
+        [
+            (0, "down", {}),
+            (100, "down", {}),
+            (500, "up", {}),
+            (600, "up", {}),
+            (700, "up", {}),
+            (800, "up", {}),
+            (900, "up", {}),
+            (1000, "up", {}),
+            (1400, "down", {}),
+            (1500, "down", {}),
+        ]
+    )
+
+    result = analyze_shoulder_press_keypoints(frames)
+
+    assert result["total_count"] == 1
+    assert result["standard_count"] == 1
+
+
 def test_uses_the_more_stable_side_when_other_side_has_low_confidence():
     frames = _sequence(
         [
