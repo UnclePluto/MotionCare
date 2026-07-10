@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
 from apps.patients.models import Patient
-from apps.prescriptions.models import ActionLibraryItem
+from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 from apps.training.models import TrainingVideo, TrainingVideoSegment
 
@@ -100,12 +100,8 @@ def test_create_session_is_idempotent(project_patient, doctor, active_prescripti
     client = _auth_client(project_patient, doctor)
     payload = _session_payload(action)
 
-    first = client.post(
-        "/api/patient-app/training-video-sessions/", payload, format="json"
-    )
-    second = client.post(
-        "/api/patient-app/training-video-sessions/", payload, format="json"
-    )
+    first = client.post("/api/patient-app/training-video-sessions/", payload, format="json")
+    second = client.post("/api/patient-app/training-video-sessions/", payload, format="json")
 
     assert first.status_code == 201, first.data
     assert second.status_code == 200, second.data
@@ -117,6 +113,70 @@ def test_create_session_is_idempotent(project_patient, doctor, active_prescripti
     assert video.training_date.isoformat() == "2026-07-11"
     assert video.expected_duration_seconds == 180
     assert video.status == TrainingVideo.Status.RECORDING
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("changed_prerequisite", ["ffmpeg", "disk", "prescription"])
+def test_existing_session_recovers_before_mutable_prerequisite_checks(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    changed_prerequisite,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    payload = _session_payload(action)
+    first = client.post("/api/patient-app/training-video-sessions/", payload, format="json")
+    assert first.status_code == 201, first.data
+
+    if changed_prerequisite == "ffmpeg":
+        settings.FFMPEG_PATH = "/missing/ffmpeg"
+    elif changed_prerequisite == "disk":
+        settings.TRAINING_VIDEO_MIN_FREE_BYTES = 10**30
+    else:
+        active_prescription.status = Prescription.Status.ARCHIVED
+        active_prescription.save(update_fields=["status", "updated_at"])
+
+    recovered = client.post("/api/patient-app/training-video-sessions/", payload, format="json")
+
+    assert recovered.status_code == 200, recovered.data
+    assert recovered.data["video_id"] == first.data["video_id"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("payload_override", "expected_fragment"),
+    [
+        ({"prescription_action": 999999}, "动作"),
+        ({"training_date": "2026-07-12"}, "日期"),
+        ({"expected_duration_seconds": 181}, "时长"),
+    ],
+)
+def test_existing_session_rejects_immutable_payload_conflict(
+    project_patient,
+    doctor,
+    active_prescription,
+    payload_override,
+    expected_fragment,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    first = client.post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action),
+        format="json",
+    )
+    assert first.status_code == 201, first.data
+
+    conflict = client.post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action, **payload_override),
+        format="json",
+    )
+
+    assert conflict.status_code == 409, conflict.data
+    assert expected_fragment in str(conflict.data)
 
 
 @pytest.mark.django_db
@@ -175,6 +235,39 @@ def test_create_session_rejects_low_staging_disk_space(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("expected_duration_seconds", "expected_status"),
+    [(2, 201), (3, 400)],
+)
+def test_create_session_expected_duration_boundary(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    tmp_path,
+    expected_duration_seconds,
+    expected_status,
+):
+    settings.TRAINING_VIDEO_MAX_DURATION_SECONDS = 2
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(
+            action,
+            expected_duration_seconds=expected_duration_seconds,
+        ),
+        format="json",
+    )
+
+    assert response.status_code == expected_status, response.data
+    assert TrainingVideo.objects.exists() is (expected_status == 201)
+    assert list(tmp_path.rglob("*.mp4")) == []
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
 def test_upload_segment_streams_to_server_and_is_idempotent(
     project_patient, doctor, active_prescription, settings, tmp_path
 ):
@@ -193,18 +286,11 @@ def test_upload_segment_streams_to_server_and_is_idempotent(
     assert first.data["size_bytes"] == 11
     assert first.data["duration_ms"] == 30000
     assert first.data["uploaded_segment_count"] == 1
-    path = (
-        tmp_path
-        / "8cf99c309b034bdab4d3b492f3a2db12"
-        / "segments"
-        / "000000.mp4"
-    )
+    path = tmp_path / "8cf99c309b034bdab4d3b492f3a2db12" / "segments" / "000000.mp4"
     assert path.read_bytes() == b"video-bytes"
     _assert_no_partial_files(tmp_path)
     segment = TrainingVideoSegment.objects.get()
-    assert segment.relative_path == (
-        "8cf99c309b034bdab4d3b492f3a2db12/segments/000000.mp4"
-    )
+    assert segment.relative_path == ("8cf99c309b034bdab4d3b492f3a2db12/segments/000000.mp4")
     assert segment.status == TrainingVideoSegment.Status.UPLOADED
 
 
@@ -324,20 +410,142 @@ def test_upload_segment_total_size_limit_leaves_rejected_segment_no_residue(
 
 
 @pytest.mark.django_db
-def test_status_returns_real_uploaded_segment_indexes(
-    project_patient, doctor, active_prescription
+@pytest.mark.parametrize(
+    ("index", "expected_status"),
+    [(1, 201), (2, 400)],
+)
+def test_upload_segment_index_boundary_leaves_no_rejected_file(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    tmp_path,
+    index,
+    expected_status,
 ):
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 2
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
     session = _create_session(client, action)
-    assert client.post(
-        _segment_url(session.data["video_id"], 2),
-        _segment_payload(b"third"),
-    ).status_code == 201
-    assert client.post(
-        _segment_url(session.data["video_id"], 0),
-        _segment_payload(b"first"),
-    ).status_code == 201
+
+    response = client.post(
+        _segment_url(session.data["video_id"], index),
+        _segment_payload(b"index-boundary", duration_ms=1000),
+    )
+
+    assert response.status_code == expected_status, response.data
+    destination = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / f"{index:06d}.mp4"
+    assert destination.exists() is (expected_status == 201)
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("existing_count", "expected_status"),
+    [(1, 201), (2, 400)],
+)
+def test_upload_segment_count_boundary_leaves_no_rejected_file(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    tmp_path,
+    existing_count,
+    expected_status,
+):
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 2
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    for offset in range(existing_count):
+        TrainingVideoSegment.objects.create(
+            training_video=video,
+            index=10 + offset,
+            duration_ms=100,
+            size_bytes=1,
+            sha256=f"existing-{offset}",
+            relative_path=f"existing-{offset}.mp4",
+            status=TrainingVideoSegment.Status.UPLOADED,
+            uploaded_at=timezone.now(),
+        )
+
+    response = client.post(
+        _segment_url(video.id, 0),
+        _segment_payload(b"count-boundary", duration_ms=1000),
+    )
+
+    assert response.status_code == expected_status, response.data
+    destination = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / "000000.mp4"
+    assert destination.exists() is (expected_status == 201)
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("new_duration_ms", "expected_status"),
+    [(1000, 201), (1001, 400)],
+)
+def test_upload_segment_total_duration_boundary_leaves_no_rejected_file(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    tmp_path,
+    new_duration_ms,
+    expected_status,
+):
+    settings.TRAINING_VIDEO_MAX_DURATION_SECONDS = 2
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = client.post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action, expected_duration_seconds=2),
+        format="json",
+    )
+    assert session.status_code == 201, session.data
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    TrainingVideoSegment.objects.create(
+        training_video=video,
+        index=1,
+        duration_ms=1000,
+        size_bytes=1,
+        sha256="existing",
+        relative_path="existing.mp4",
+        status=TrainingVideoSegment.Status.UPLOADED,
+        uploaded_at=timezone.now(),
+    )
+
+    response = client.post(
+        _segment_url(video.id, 0),
+        _segment_payload(b"duration-boundary", duration_ms=new_duration_ms),
+    )
+
+    assert response.status_code == expected_status, response.data
+    destination = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / "000000.mp4"
+    assert destination.exists() is (expected_status == 201)
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
+def test_status_returns_real_uploaded_segment_indexes(project_patient, doctor, active_prescription):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    assert (
+        client.post(
+            _segment_url(session.data["video_id"], 2),
+            _segment_payload(b"third"),
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            _segment_url(session.data["video_id"], 0),
+            _segment_payload(b"first"),
+        ).status_code
+        == 201
+    )
 
     response = client.get(
         f"/api/patient-app/training-video-sessions/{session.data['video_id']}/status/"

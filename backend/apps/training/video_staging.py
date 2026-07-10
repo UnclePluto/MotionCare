@@ -1,5 +1,7 @@
+import fcntl
 import hashlib
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from django.conf import settings
@@ -9,6 +11,10 @@ from .models import TrainingVideo
 
 
 class SegmentConflict(Exception):
+    pass
+
+
+class SessionConflict(Exception):
     pass
 
 
@@ -26,6 +32,22 @@ def segment_path(video: TrainingVideo, index: int) -> Path:
     if not candidate.is_relative_to(root):
         raise ValidationError("训练视频分段路径无效")
     return candidate
+
+
+@contextmanager
+def segment_install_lock(video: TrainingVideo, index: int):
+    root = session_root(video)
+    lock_directory = (root / "locks").resolve()
+    lock_path = (lock_directory / f"{index:06d}.lock").resolve()
+    if not lock_path.is_relative_to(root):
+        raise ValidationError("训练视频分段锁路径无效")
+    lock_directory.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def write_uploaded_segment(video, index, uploaded_file) -> tuple[Path, int, str]:

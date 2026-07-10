@@ -17,6 +17,7 @@ from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
 from apps.training.video_services import (
     SegmentConflict,
+    SessionConflict,
     SHOULDER_PRESS_SOURCE_KEY,
     create_training_video_session,
     store_training_video_segment,
@@ -261,14 +262,12 @@ class PatientAppTrainingVideoSessionView(PatientAppBaseView):
                 client_session_id=serializer.validated_data["client_session_id"],
                 prescription_action_id=serializer.validated_data["prescription_action"],
                 training_date=serializer.validated_data["training_date"],
-                expected_duration_seconds=serializer.validated_data[
-                    "expected_duration_seconds"
-                ],
+                expected_duration_seconds=serializer.validated_data["expected_duration_seconds"],
             )
+        except SessionConflict as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except DjangoValidationError as exc:
-            return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST)
         data = training_video_session_status(
             project_patient=self.project_patient(),
             video_id=video.id,
@@ -291,13 +290,9 @@ class PatientAppTrainingVideoSegmentView(PatientAppBaseView):
                 declared_size_bytes=serializer.validated_data["size_bytes"],
             )
         except SegmentConflict as exc:
-            return Response(
-                {"detail": str(exc)}, status=status.HTTP_409_CONFLICT
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except DjangoValidationError as exc:
-            return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST)
         response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(
             {

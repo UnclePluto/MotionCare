@@ -21,6 +21,8 @@ from .models import (
 from .qiniu import private_download_url
 from .video_staging import (
     SegmentConflict,
+    SessionConflict,
+    segment_install_lock,
     segment_path,
     write_uploaded_segment,
 )
@@ -65,6 +67,21 @@ def _ensure_staging_available():
         raise ValidationError("训练视频临时磁盘空间不足")
 
 
+def _ensure_session_payload_matches(
+    video,
+    *,
+    prescription_action_id,
+    training_date,
+    expected_duration_seconds,
+):
+    if video.prescription_action_id != prescription_action_id:
+        raise SessionConflict("客户端会话动作与已创建会话冲突")
+    if video.training_date != training_date:
+        raise SessionConflict("客户端会话训练日期与已创建会话冲突")
+    if video.expected_duration_seconds != expected_duration_seconds:
+        raise SessionConflict("客户端会话计划时长与已创建会话冲突")
+
+
 def create_training_video_session(
     *,
     project_patient,
@@ -73,24 +90,48 @@ def create_training_video_session(
     training_date,
     expected_duration_seconds,
 ):
+    lookup = {
+        "project_patient": project_patient,
+        "client_session_id": client_session_id,
+    }
+    existing = TrainingVideo.objects.filter(**lookup).first()
+    if existing is not None:
+        _ensure_session_payload_matches(
+            existing,
+            prescription_action_id=prescription_action_id,
+            training_date=training_date,
+            expected_duration_seconds=expected_duration_seconds,
+        )
+        return existing, False
+
     if expected_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
         raise ValidationError("训练视频时长超过限制")
     _ensure_staging_available()
     active, action = _get_current_shoulder_action(
         project_patient, prescription_action_id
     )
-    video, created = TrainingVideo.objects.get_or_create(
-        project_patient=project_patient,
-        client_session_id=client_session_id,
-        defaults={
-            "prescription": active,
-            "prescription_action": action,
-            "training_date": training_date,
-            "expected_duration_seconds": expected_duration_seconds,
-            "status": TrainingVideo.Status.RECORDING,
-        },
-    )
-    return video, created
+    try:
+        with transaction.atomic():
+            video = TrainingVideo.objects.create(
+                **lookup,
+                prescription=active,
+                prescription_action=action,
+                training_date=training_date,
+                expected_duration_seconds=expected_duration_seconds,
+                status=TrainingVideo.Status.RECORDING,
+            )
+    except IntegrityError:
+        winner = TrainingVideo.objects.filter(**lookup).first()
+        if winner is None:
+            raise
+        _ensure_session_payload_matches(
+            winner,
+            prescription_action_id=prescription_action_id,
+            training_date=training_date,
+            expected_duration_seconds=expected_duration_seconds,
+        )
+        return winner, False
+    return video, True
 
 
 def _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes):
@@ -135,86 +176,91 @@ def store_training_video_segment(
         preliminary_video, index, uploaded_file
     )
     destination = segment_path(preliminary_video, index)
-    destination_was_installed = False
     try:
         if actual_size_bytes != declared_size_bytes:
             raise ValidationError("训练视频分段实际大小与声明不一致")
 
-        with transaction.atomic():
-            video = (
-                TrainingVideo.objects.select_for_update(of=("self",))
-                .filter(pk=video_id, project_patient=project_patient)
-                .first()
-            )
-            if video is None:
-                raise Http404
-            if video.status not in {
-                TrainingVideo.Status.RECORDING,
-                TrainingVideo.Status.UPLOADING_SEGMENTS,
-            }:
-                raise ValidationError("训练视频会话当前不可上传分段")
+        with segment_install_lock(preliminary_video, index):
+            destination_was_installed = False
+            try:
+                with transaction.atomic():
+                    video = (
+                        TrainingVideo.objects.select_for_update(of=("self",))
+                        .filter(pk=video_id, project_patient=project_patient)
+                        .first()
+                    )
+                    if video is None:
+                        raise Http404
+                    if video.status not in {
+                        TrainingVideo.Status.RECORDING,
+                        TrainingVideo.Status.UPLOADING_SEGMENTS,
+                    }:
+                        raise ValidationError("训练视频会话当前不可上传分段")
 
-            existing = TrainingVideoSegment.objects.filter(
-                training_video=video,
-                index=index,
-            ).first()
-            if existing is not None:
-                if _segment_matches(
-                    existing,
-                    duration_ms=duration_ms,
-                    size_bytes=actual_size_bytes,
-                    sha256=sha256,
-                ):
-                    return existing, False
-                raise SegmentConflict("重复分段与已上传内容冲突")
+                    existing = TrainingVideoSegment.objects.filter(
+                        training_video=video,
+                        index=index,
+                    ).first()
+                    if existing is not None:
+                        if _segment_matches(
+                            existing,
+                            duration_ms=duration_ms,
+                            size_bytes=actual_size_bytes,
+                            sha256=sha256,
+                        ):
+                            return existing, False
+                        raise SegmentConflict("重复分段与已上传内容冲突")
 
-            totals = TrainingVideoSegment.objects.filter(
-                training_video=video,
-                status=TrainingVideoSegment.Status.UPLOADED,
-            ).aggregate(
-                segment_count=Count("id"),
-                total_size_bytes=Sum("size_bytes"),
-                total_duration_ms=Sum("duration_ms"),
-            )
-            segment_count = totals["segment_count"] or 0
-            total_size_bytes = totals["total_size_bytes"] or 0
-            total_duration_ms = totals["total_duration_ms"] or 0
-            if segment_count + 1 > settings.TRAINING_VIDEO_MAX_SEGMENTS:
-                raise ValidationError("训练视频分段数量超过限制")
-            if total_size_bytes + actual_size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
-                raise ValidationError("训练视频总大小超过限制")
-            if (
-                total_duration_ms + duration_ms
-                > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000
-            ):
-                raise ValidationError("训练视频总时长超过限制")
+                    totals = TrainingVideoSegment.objects.filter(
+                        training_video=video,
+                        status=TrainingVideoSegment.Status.UPLOADED,
+                    ).aggregate(
+                        segment_count=Count("id"),
+                        total_size_bytes=Sum("size_bytes"),
+                        total_duration_ms=Sum("duration_ms"),
+                    )
+                    segment_count = totals["segment_count"] or 0
+                    total_size_bytes = totals["total_size_bytes"] or 0
+                    total_duration_ms = totals["total_duration_ms"] or 0
+                    if segment_count + 1 > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+                        raise ValidationError("训练视频分段数量超过限制")
+                    if (
+                        total_size_bytes + actual_size_bytes
+                        > settings.TRAINING_VIDEO_MAX_SIZE_BYTES
+                    ):
+                        raise ValidationError("训练视频总大小超过限制")
+                    if (
+                        total_duration_ms + duration_ms
+                        > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000
+                    ):
+                        raise ValidationError("训练视频总时长超过限制")
 
-            destination = segment_path(video, index)
-            os.replace(temporary, destination)
-            destination_was_installed = True
-            relative_path = destination.relative_to(
-                Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
-            ).as_posix()
-            segment = TrainingVideoSegment.objects.create(
-                training_video=video,
-                index=index,
-                duration_ms=duration_ms,
-                size_bytes=actual_size_bytes,
-                sha256=sha256,
-                relative_path=relative_path,
-                status=TrainingVideoSegment.Status.UPLOADED,
-                uploaded_at=timezone.now(),
-            )
-            video.status = TrainingVideo.Status.UPLOADING_SEGMENTS
-            video.uploaded_segment_count = segment_count + 1
-            video.save(
-                update_fields=["status", "uploaded_segment_count", "updated_at"]
-            )
-            return segment, True
-    except Exception:
-        if destination_was_installed:
-            destination.unlink(missing_ok=True)
-        raise
+                    destination = segment_path(video, index)
+                    os.replace(temporary, destination)
+                    destination_was_installed = True
+                    relative_path = destination.relative_to(
+                        Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
+                    ).as_posix()
+                    segment = TrainingVideoSegment.objects.create(
+                        training_video=video,
+                        index=index,
+                        duration_ms=duration_ms,
+                        size_bytes=actual_size_bytes,
+                        sha256=sha256,
+                        relative_path=relative_path,
+                        status=TrainingVideoSegment.Status.UPLOADED,
+                        uploaded_at=timezone.now(),
+                    )
+                    video.status = TrainingVideo.Status.UPLOADING_SEGMENTS
+                    video.uploaded_segment_count = segment_count + 1
+                    video.save(
+                        update_fields=["status", "uploaded_segment_count", "updated_at"]
+                    )
+                    return segment, True
+            except Exception:
+                if destination_was_installed:
+                    destination.unlink(missing_ok=True)
+                raise
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -285,9 +331,7 @@ def create_private_download_url(video):
         ]
     ):
         raise ValidationError("七牛下载配置不完整")
-    expires_at = timezone.now() + timedelta(
-        seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS
-    )
+    expires_at = timezone.now() + timedelta(seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS)
     base_url = f"{settings.QINIU_DOWNLOAD_DOMAIN.rstrip('/')}/{video.object_key}"
     return private_download_url(base_url, expires_at=int(expires_at.timestamp()))
 
@@ -302,15 +346,9 @@ def create_analysis_job(*, video, requested_by):
         )
         .get(pk=video.pk)
     )
-    if (
-        locked_video.status != TrainingVideo.Status.ATTACHED
-        or not locked_video.training_record_id
-    ):
+    if locked_video.status != TrainingVideo.Status.ATTACHED or not locked_video.training_record_id:
         raise ValidationError("训练视频尚未绑定训练记录")
-    if (
-        locked_video.prescription_action.action_library_item.source_key
-        != SHOULDER_PRESS_SOURCE_KEY
-    ):
+    if locked_video.prescription_action.action_library_item.source_key != SHOULDER_PRESS_SOURCE_KEY:
         raise ValidationError("当前仅支持肩部推举动作分析")
     if MotionAnalysisJob.objects.filter(
         training_video=locked_video,
