@@ -6,14 +6,14 @@ REQUIRED_JOINTS = ("shoulder", "elbow", "wrist", "hip")
 MIN_CONFIDENCE_SCORE = 0.4
 MIN_STATE_CONSECUTIVE_FRAMES = 2
 MIN_STATE_DURATION_MS = 120
-MIN_ATTEMPT_CONSECUTIVE_FRAMES = 2
-MIN_ATTEMPT_DURATION_MS = 120
 BILATERAL_STABILITY_TOLERANCE = 0.08
 UP_WRIST_LIFT_TORSO_RATIO = 0.55
 UP_ELBOW_EXTENSION_DEGREES = 150.0
 DOWN_WRIST_LIFT_MAX_TORSO_RATIO = 0.12
 DOWN_ELBOW_FLEXION_MAX_DEGREES = 145.0
-MIN_ATTEMPT_WRIST_LIFT_TORSO_RATIO = 0.2
+MIN_ATTEMPT_PEAK_RISE_TORSO_RATIO = 0.2
+MIN_ATTEMPT_ASCENT_HYSTERESIS_TORSO_RATIO = 0.08
+MIN_ATTEMPT_RETURN_HYSTERESIS_TORSO_RATIO = 0.08
 MIN_REPETITION_DURATION_MS = 800
 MAX_REPETITION_DURATION_MS = 8000
 
@@ -124,18 +124,22 @@ def _is_confirmed(run):
     return len(run) >= MIN_STATE_CONSECUTIVE_FRAMES or duration >= MIN_STATE_DURATION_MS
 
 
-def _is_attempt(measurements):
-    lifted = [
-        item
-        for item in measurements
-        if item["wrist_lift"] >= MIN_ATTEMPT_WRIST_LIFT_TORSO_RATIO
-    ]
-    if not lifted:
+def _is_attempt(measurements, *, down_baseline):
+    if len(measurements) < 3:
         return False
-    duration = lifted[-1]["timestamp_ms"] - lifted[0]["timestamp_ms"]
+
+    wrist_lifts = [item["wrist_lift"] for item in measurements]
+    peak_index = max(range(len(wrist_lifts)), key=wrist_lifts.__getitem__)
+    if peak_index == 0 or peak_index == len(wrist_lifts) - 1:
+        return False
+
+    peak = wrist_lifts[peak_index]
     return (
-        len(lifted) >= MIN_ATTEMPT_CONSECUTIVE_FRAMES
-        or duration >= MIN_ATTEMPT_DURATION_MS
+        peak - down_baseline >= MIN_ATTEMPT_PEAK_RISE_TORSO_RATIO
+        and peak - min(wrist_lifts[:peak_index])
+        >= MIN_ATTEMPT_ASCENT_HYSTERESIS_TORSO_RATIO
+        and peak - min(wrist_lifts[peak_index + 1 :])
+        >= MIN_ATTEMPT_RETURN_HYSTERESIS_TORSO_RATIO
     )
 
 
@@ -143,7 +147,6 @@ def _confirmed_events(measurements):
     events = []
     candidate_state = None
     candidate_run = []
-    last_confirmed_index = None
 
     for index, item in enumerate(measurements):
         state = item["state"]
@@ -159,27 +162,25 @@ def _confirmed_events(measurements):
         if not _is_confirmed(candidate_run):
             continue
 
+        run_start_index = index - len(candidate_run) + 1
+        event = {
+            "state": state,
+            "run_start_index": run_start_index,
+            "confirmed_index": index,
+            "run_start_ms": candidate_run[0]["timestamp_ms"],
+            "confirmed_ms": candidate_run[-1]["timestamp_ms"],
+            "wrist_lift_baseline": mean(
+                measurement["wrist_lift"] for measurement in candidate_run
+            ),
+        }
         previous = events[-1] if events else None
         if previous is None or previous["state"] != state:
-            events.append(
-                {
-                    "state": state,
-                    "index": index - len(candidate_run) + 1,
-                    "timestamp_ms": candidate_run[0]["timestamp_ms"],
-                }
-            )
-            last_confirmed_index = events[-1]["index"]
-        elif state == "down" and last_confirmed_index is not None and _is_attempt(
-            measurements[last_confirmed_index + 1 : index - len(candidate_run) + 1]
+            events.append(event)
+        elif state == "down" and _is_attempt(
+            measurements[previous["confirmed_index"] + 1 : run_start_index + 1],
+            down_baseline=previous["wrist_lift_baseline"],
         ):
-            events.append(
-                {
-                    "state": state,
-                    "index": index - len(candidate_run) + 1,
-                    "timestamp_ms": candidate_run[0]["timestamp_ms"],
-                }
-            )
-            last_confirmed_index = events[-1]["index"]
+            events.append(event)
         candidate_run = []
 
     return events
@@ -217,14 +218,14 @@ def analyze_shoulder_press_keypoints(frames):
             if second["state"] == "up" and third["state"] == "down":
                 flags = _flags_for_segment(
                     measurements,
-                    first["index"],
-                    third["index"],
+                    first["run_start_index"],
+                    third["confirmed_index"],
                 )
                 rep_details.append(
                     {
                         "index": len(rep_details) + 1,
-                        "start_ms": first["timestamp_ms"],
-                        "end_ms": third["timestamp_ms"],
+                        "start_ms": first["run_start_ms"],
+                        "end_ms": third["confirmed_ms"],
                         "is_standard": not flags,
                         "flags": flags,
                         "side": side,
@@ -234,20 +235,18 @@ def analyze_shoulder_press_keypoints(frames):
                 continue
 
         second = events[index + 1]
-        if second["state"] == "down" and _is_attempt(
-            measurements[first["index"] + 1 : second["index"]]
-        ):
+        if second["state"] == "down":
             flags = _flags_for_segment(
                 measurements,
-                first["index"],
-                second["index"],
+                first["run_start_index"],
+                second["confirmed_index"],
                 range_too_small=True,
             )
             rep_details.append(
                 {
                     "index": len(rep_details) + 1,
-                    "start_ms": first["timestamp_ms"],
-                    "end_ms": second["timestamp_ms"],
+                    "start_ms": first["run_start_ms"],
+                    "end_ms": second["confirmed_ms"],
                     "is_standard": False,
                     "flags": flags,
                     "side": side,

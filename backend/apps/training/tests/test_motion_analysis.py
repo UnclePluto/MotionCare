@@ -1,17 +1,20 @@
 import io
 import os
 import uuid
+from datetime import timedelta
 from unittest.mock import Mock, patch
 
 import pytest
+from django.conf import settings
 from django.test import override_settings
 from django.utils import timezone
 
 from apps.prescriptions.models import ActionLibraryItem
+from apps.training import tasks as training_tasks
 from apps.training.analysis import analyze_shoulder_press_keypoints
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 from apps.training.tasks import download_private_video, run_motion_analysis_job
-from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY
+from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY, create_analysis_job
 
 
 def _frame(
@@ -35,6 +38,18 @@ def _frame(
             "left_wrist": (0.32, 0.39),
             "right_elbow": (0.64, 0.44),
             "right_wrist": (0.68, 0.39),
+        },
+        "partial_low": {
+            "left_elbow": (0.36, 0.45),
+            "left_wrist": (0.32, 0.44),
+            "right_elbow": (0.64, 0.45),
+            "right_wrist": (0.68, 0.44),
+        },
+        "partial_peak": {
+            "left_elbow": (0.39, 0.40),
+            "left_wrist": (0.36, 0.35),
+            "right_elbow": (0.61, 0.40),
+            "right_wrist": (0.64, 0.35),
         },
         "up": {
             "left_elbow": (0.40, 0.37),
@@ -176,13 +191,34 @@ def test_ignores_incomplete_leading_and_trailing_half_repetitions():
     assert result["rep_details"] == []
 
 
-def test_marks_a_low_amplitude_attempt_as_range_too_small():
+def test_does_not_count_a_stationary_partial_pose_as_an_attempt():
     frames = _sequence(
         [
             (0, "down", {}),
             (100, "down", {}),
             (500, "partial", {}),
             (600, "partial", {}),
+            (700, "partial", {}),
+            (800, "partial", {}),
+            (1200, "down", {}),
+            (1300, "down", {}),
+        ]
+    )
+
+    result = analyze_shoulder_press_keypoints(frames)
+
+    assert result["total_count"] == 0
+    assert result["rep_details"] == []
+
+
+def test_marks_a_rising_and_returning_low_amplitude_attempt_as_range_too_small():
+    frames = _sequence(
+        [
+            (0, "down", {}),
+            (100, "down", {}),
+            (400, "partial_low", {}),
+            (600, "partial_peak", {}),
+            (800, "partial_low", {}),
             (1200, "down", {}),
             (1300, "down", {}),
         ]
@@ -235,6 +271,27 @@ def test_marks_repetition_with_low_joint_confidence_nonstandard():
     assert result["quality_flags"] == ["camera_angle_unverified"]
 
 
+def test_includes_the_terminal_down_confirmation_frame_in_rep_quality():
+    frames = _sequence(
+        [
+            (0, "down", {}),
+            (100, "down", {}),
+            (500, "up", {}),
+            (600, "up", {}),
+            (1200, "down", {}),
+            (1300, "down", {"left_score": 0.1, "right_score": 0.1}),
+        ]
+    )
+
+    result = analyze_shoulder_press_keypoints(frames)
+
+    assert result["total_count"] == 1
+    assert result["standard_count"] == 0
+    assert result["rep_details"][0]["start_ms"] == 0
+    assert result["rep_details"][0]["end_ms"] == 1300
+    assert "low_confidence" in result["rep_details"][0]["flags"]
+
+
 def _analysis_job(project_patient, active_prescription):
     item = ActionLibraryItem.objects.get(source_key=SHOULDER_PRESS_SOURCE_KEY)
     action = active_prescription.add_action_snapshot(
@@ -276,6 +333,10 @@ def _analysis_job(project_patient, active_prescription):
 
 
 class _DownloadResponse(io.BytesIO):
+    def __init__(self, content, *, headers=None):
+        super().__init__(content)
+        self.headers = headers or {}
+
     def __enter__(self):
         return self
 
@@ -291,6 +352,8 @@ def test_private_video_download_uses_timeout_and_destination(tmp_path):
         "https://cdn.example.com/private.mp4?token=secret",
         destination,
         timeout=17,
+        max_bytes=1024,
+        deadline_seconds=30,
         opener=opener,
     )
 
@@ -301,10 +364,69 @@ def test_private_video_download_uses_timeout_and_destination(tmp_path):
     assert destination.read_bytes() == b"video-bytes"
 
 
+def test_private_video_download_rejects_declared_content_length_over_limit(tmp_path):
+    opener = Mock(
+        return_value=_DownloadResponse(
+            b"",
+            headers={"Content-Length": "11"},
+        )
+    )
+
+    with pytest.raises(ValueError, match="超过允许大小"):
+        download_private_video(
+            "https://cdn.example.com/private.mp4?token=secret",
+            tmp_path / "video.mp4",
+            timeout=17,
+            max_bytes=10,
+            deadline_seconds=30,
+            opener=opener,
+        )
+
+
+def test_private_video_download_stops_when_streamed_bytes_exceed_limit(tmp_path):
+    destination = tmp_path / "video.mp4"
+
+    with pytest.raises(ValueError, match="超过允许大小"):
+        download_private_video(
+            "https://cdn.example.com/private.mp4?token=secret",
+            destination,
+            timeout=17,
+            max_bytes=10,
+            deadline_seconds=30,
+            opener=Mock(return_value=_DownloadResponse(b"01234567890")),
+        )
+
+    assert destination.read_bytes() == b""
+
+
+def test_private_video_download_stops_at_overall_deadline(tmp_path):
+    clock = [0.0]
+
+    class SlowResponse(_DownloadResponse):
+        def read(self, size=-1):
+            clock[0] += 0.6
+            return b"x" if clock[0] < 1.8 else b""
+
+    with (
+        patch("apps.training.tasks.time.monotonic", side_effect=lambda: clock[0]),
+        pytest.raises(TimeoutError, match="超过整体下载时限"),
+    ):
+        download_private_video(
+            "https://cdn.example.com/private.mp4?token=secret",
+            tmp_path / "video.mp4",
+            timeout=17,
+            max_bytes=1024,
+            deadline_seconds=1,
+            opener=Mock(return_value=SlowResponse(b"")),
+        )
+
+
 @pytest.mark.django_db
 @override_settings(
     MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS=17,
+    MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS=41,
     MOTION_ANALYSIS_SAMPLE_FPS=4,
+    TRAINING_VIDEO_MAX_SIZE_BYTES=900,
 )
 def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     project_patient,
@@ -320,9 +442,19 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
         "quality_flags": ["camera_angle_unverified"],
     }
 
-    def fake_download(url, destination, *, timeout, opener=None):
+    def fake_download(
+        url,
+        destination,
+        *,
+        timeout,
+        max_bytes,
+        deadline_seconds,
+        opener=None,
+    ):
         assert url == "https://cdn.example.com/private.mp4?token=sensitive"
         assert timeout == 17
+        assert max_bytes == 900
+        assert deadline_seconds == 41
         destination.write_bytes(b"video")
         seen_paths.append(str(destination))
 
@@ -373,7 +505,15 @@ def test_task_persists_sanitized_failure_and_cleans_temp_without_touching_video(
     job, video, record = _analysis_job(project_patient, active_prescription)
     seen_paths = []
 
-    def failing_download(url, destination, *, timeout, opener=None):
+    def failing_download(
+        url,
+        destination,
+        *,
+        timeout,
+        max_bytes,
+        deadline_seconds,
+        opener=None,
+    ):
         destination.write_bytes(b"partial")
         seen_paths.append(str(destination))
         raise RuntimeError(
@@ -408,6 +548,45 @@ def test_task_persists_sanitized_failure_and_cleans_temp_without_touching_video(
 
 
 @pytest.mark.django_db
+def test_task_cleans_temporary_file_when_download_exceeds_limit(
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    seen_paths = []
+
+    def oversized_download(
+        url,
+        destination,
+        *,
+        timeout,
+        max_bytes,
+        deadline_seconds,
+        opener=None,
+    ):
+        destination.write_bytes(b"partial")
+        seen_paths.append(str(destination))
+        raise ValueError("响应内容超过允许大小")
+
+    with (
+        patch(
+            "apps.training.tasks.create_private_download_url",
+            return_value="https://cdn.example.com/private.mp4?token=sensitive",
+        ),
+        patch(
+            "apps.training.tasks.download_private_video",
+            side_effect=oversized_download,
+        ),
+    ):
+        run_motion_analysis_job.run(job.id)
+
+    job.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert "超过允许大小" in job.failure_reason
+    assert seen_paths and all(not os.path.exists(path) for path in seen_paths)
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "terminal_status",
     [
@@ -434,3 +613,153 @@ def test_repeated_terminal_or_running_task_is_idempotent(
     assert returned.pk == job.pk
     assert returned.status == terminal_status
     download_url.assert_not_called()
+
+
+def _mark_job_running(job, *, started_at):
+    job.status = MotionAnalysisJob.Status.RUNNING
+    job.started_at = started_at
+    job.finished_at = None
+    job.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
+
+
+@pytest.mark.django_db
+@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=300)
+def test_recovery_marks_stale_running_job_failed_with_audit_reason(
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    _mark_job_running(job, started_at=timezone.now() - timedelta(seconds=301))
+
+    recovered_count = training_tasks.recover_stale_motion_analysis_jobs.run()
+
+    job.refresh_from_db()
+    assert recovered_count == 1
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert job.finished_at is not None
+    assert "阶段=running_stale_recovery" in job.failure_reason
+    assert "原因=running_timeout" in job.failure_reason
+
+
+@pytest.mark.django_db
+@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=300)
+def test_recovery_leaves_recent_running_job_unchanged(
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    _mark_job_running(job, started_at=timezone.now() - timedelta(seconds=299))
+
+    recovered_count = training_tasks.recover_stale_motion_analysis_jobs.run()
+
+    job.refresh_from_db()
+    assert recovered_count == 0
+    assert job.status == MotionAnalysisJob.Status.RUNNING
+    assert job.finished_at is None
+    assert job.failure_reason == ""
+
+
+@pytest.mark.django_db
+@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=300)
+def test_recovery_allows_doctor_to_create_a_new_job(
+    project_patient,
+    active_prescription,
+):
+    stale_job, video, _ = _analysis_job(project_patient, active_prescription)
+    _mark_job_running(
+        stale_job,
+        started_at=timezone.now() - timedelta(seconds=301),
+    )
+    training_tasks.recover_stale_motion_analysis_jobs.run()
+
+    with patch("apps.training.tasks.run_motion_analysis_job.delay"):
+        new_job = create_analysis_job(video=video, requested_by=None)
+
+    stale_job.refresh_from_db()
+    assert stale_job.status == MotionAnalysisJob.Status.FAILED
+    assert new_job.status == MotionAnalysisJob.Status.PENDING
+    assert new_job.training_video_id == video.id
+
+
+@pytest.mark.django_db
+@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=60)
+def test_old_worker_success_does_not_overwrite_recovered_failure(
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    result_payload = {
+        "total_count": 1,
+        "standard_count": 1,
+        "nonstandard_count": 0,
+        "rep_details": [],
+        "quality_flags": ["camera_angle_unverified"],
+    }
+
+    def fake_download(
+        url,
+        destination,
+        *,
+        timeout,
+        max_bytes,
+        deadline_seconds,
+        opener=None,
+    ):
+        destination.write_bytes(b"video")
+
+    def recover_during_analysis(frames):
+        MotionAnalysisJob.objects.filter(pk=job.pk).update(
+            started_at=timezone.now() - timedelta(seconds=61)
+        )
+        assert training_tasks.recover_stale_motion_analysis_jobs.run() == 1
+        return result_payload
+
+    with (
+        patch(
+            "apps.training.tasks.create_private_download_url",
+            return_value="https://cdn.example.com/private.mp4?token=sensitive",
+        ),
+        patch("apps.training.tasks.download_private_video", side_effect=fake_download),
+        patch(
+            "apps.training.tasks.extract_video_keypoint_frames",
+            return_value=[{"timestamp_ms": 0, "keypoints": {}}],
+        ),
+        patch(
+            "apps.training.tasks.analyze_shoulder_press_keypoints",
+            side_effect=recover_during_analysis,
+        ),
+    ):
+        run_motion_analysis_job.run(job.id)
+
+    job.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert "原因=running_timeout" in job.failure_reason
+    assert job.total_count is None
+    assert job.result_payload == {}
+
+
+@pytest.mark.django_db
+@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=60)
+def test_old_worker_failure_does_not_overwrite_recovered_failure(
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    _mark_job_running(job, started_at=timezone.now() - timedelta(seconds=61))
+    training_tasks.recover_stale_motion_analysis_jobs.run()
+
+    training_tasks._persist_failure(job.id, "旧 worker 失败结果")
+
+    job.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert "原因=running_timeout" in job.failure_reason
+    assert "旧 worker" not in job.failure_reason
+
+
+def test_stale_recovery_task_is_scheduled_in_celery_beat():
+    schedule = settings.CELERY_BEAT_SCHEDULE["recover-stale-motion-analysis-jobs"]
+
+    assert schedule["task"] == (
+        "apps.training.tasks.recover_stale_motion_analysis_jobs"
+    )
+    assert schedule["schedule"] == settings.MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS

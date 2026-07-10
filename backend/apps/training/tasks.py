@@ -1,6 +1,7 @@
 import re
-import shutil
 import tempfile
+import time
+from datetime import timedelta
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -16,14 +17,53 @@ from .video_services import create_private_download_url
 
 
 FAILURE_REASON_MAX_LENGTH = 2000
+DOWNLOAD_CHUNK_SIZE_BYTES = 64 * 1024
 URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 TOKEN_PATTERN = re.compile(r"(?i)(token=)[^&\s]+")
 
 
-def download_private_video(url, destination, *, timeout, opener=urlopen):
+def download_private_video(
+    url,
+    destination,
+    *,
+    timeout,
+    max_bytes,
+    deadline_seconds,
+    opener=urlopen,
+):
+    if max_bytes <= 0:
+        raise ValueError("视频下载允许大小必须大于 0")
+    if deadline_seconds <= 0:
+        raise ValueError("视频整体下载时限必须大于 0")
+
     destination = Path(destination)
-    with opener(url, timeout=timeout) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output)
+    deadline = time.monotonic() + deadline_seconds
+    with opener(url, timeout=timeout) as response:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("视频下载超过整体下载时限")
+
+        declared_length = response.headers.get("Content-Length")
+        try:
+            declared_length = int(declared_length) if declared_length is not None else None
+        except (TypeError, ValueError):
+            declared_length = None
+        if declared_length is not None and declared_length > max_bytes:
+            raise ValueError("视频响应声明大小超过允许大小")
+
+        downloaded_bytes = 0
+        with destination.open("wb") as output:
+            while True:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("视频下载超过整体下载时限")
+                chunk = response.read(DOWNLOAD_CHUNK_SIZE_BYTES)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("视频下载超过整体下载时限")
+                if not chunk:
+                    break
+                downloaded_bytes += len(chunk)
+                if downloaded_bytes > max_bytes:
+                    raise ValueError("视频流式内容超过允许大小")
+                output.write(chunk)
 
 
 def _safe_failure_reason(stage, exc):
@@ -77,48 +117,58 @@ def _validated_counts(result):
     return total, standard, nonstandard
 
 
-@transaction.atomic
 def _persist_success(job_id, result):
     total, standard, nonstandard = _validated_counts(result)
-    job = MotionAnalysisJob.objects.select_for_update(of=("self",)).get(pk=job_id)
-    if job.status != MotionAnalysisJob.Status.RUNNING:
-        return job
-    job.status = MotionAnalysisJob.Status.SUCCEEDED
-    job.algorithm_version = PP_TINYPOSE_MODEL_NAME
-    job.total_count = total
-    job.standard_count = standard
-    job.nonstandard_count = nonstandard
-    job.result_payload = result
-    job.failure_reason = ""
-    job.finished_at = timezone.now()
-    job.save(
-        update_fields=[
-            "status",
-            "algorithm_version",
-            "total_count",
-            "standard_count",
-            "nonstandard_count",
-            "result_payload",
-            "failure_reason",
-            "finished_at",
-            "updated_at",
-        ]
+    now = timezone.now()
+    MotionAnalysisJob.objects.filter(
+        pk=job_id,
+        status=MotionAnalysisJob.Status.RUNNING,
+    ).update(
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+        algorithm_version=PP_TINYPOSE_MODEL_NAME,
+        total_count=total,
+        standard_count=standard,
+        nonstandard_count=nonstandard,
+        result_payload=result,
+        failure_reason="",
+        finished_at=now,
+        updated_at=now,
     )
-    return job
+    return MotionAnalysisJob.objects.get(pk=job_id)
 
 
-@transaction.atomic
 def _persist_failure(job_id, reason):
-    job = MotionAnalysisJob.objects.select_for_update(of=("self",)).get(pk=job_id)
-    if job.status != MotionAnalysisJob.Status.RUNNING:
-        return job
-    job.status = MotionAnalysisJob.Status.FAILED
-    job.failure_reason = reason
-    job.finished_at = timezone.now()
-    job.save(
-        update_fields=["status", "failure_reason", "finished_at", "updated_at"]
+    now = timezone.now()
+    MotionAnalysisJob.objects.filter(
+        pk=job_id,
+        status=MotionAnalysisJob.Status.RUNNING,
+    ).update(
+        status=MotionAnalysisJob.Status.FAILED,
+        failure_reason=reason,
+        finished_at=now,
+        updated_at=now,
     )
-    return job
+    return MotionAnalysisJob.objects.get(pk=job_id)
+
+
+@shared_task(ignore_result=True)
+def recover_stale_motion_analysis_jobs():
+    timeout_seconds = settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS
+    now = timezone.now()
+    cutoff = now - timedelta(seconds=timeout_seconds)
+    failure_reason = (
+        "阶段=running_stale_recovery；原因=running_timeout；"
+        f"任务运行超过 {timeout_seconds} 秒未完成"
+    )
+    return MotionAnalysisJob.objects.filter(
+        status=MotionAnalysisJob.Status.RUNNING,
+        started_at__lt=cutoff,
+    ).update(
+        status=MotionAnalysisJob.Status.FAILED,
+        failure_reason=failure_reason,
+        finished_at=now,
+        updated_at=now,
+    )
 
 
 @shared_task(ignore_result=True)
@@ -144,6 +194,11 @@ def run_motion_analysis_job(job_id):
             private_url,
             temporary_path,
             timeout=settings.MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS,
+            max_bytes=min(
+                job.training_video.size_bytes,
+                settings.TRAINING_VIDEO_MAX_SIZE_BYTES,
+            ),
+            deadline_seconds=settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS,
         )
         stage = "关键点推理"
         frames = extract_video_keypoint_frames(
