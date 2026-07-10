@@ -1,4 +1,3 @@
-import os
 import threading
 import uuid
 from contextlib import contextmanager
@@ -11,15 +10,15 @@ from unittest.mock import patch
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import close_old_connections, connection
 from django.db.models.query import QuerySet
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from apps.accounts.models import User
 from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
-from apps.training.models import TrainingVideo, TrainingVideoSegment
 from apps.training import video_services
+from apps.training.models import TrainingVideo, TrainingVideoSegment
 from apps.training.video_services import (
     SessionConflict,
     create_training_video_session,
@@ -28,71 +27,73 @@ from apps.training.video_services import (
 from apps.training.video_staging import segment_install_lock, segment_path
 
 
+def _start_database_thread(name, operation, results, errors, backend_pids=None):
+    def runner():
+        close_old_connections()
+        try:
+            if backend_pids is not None:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT pg_backend_pid()")
+                    backend_pids[name] = cursor.fetchone()[0]
+            results[name] = operation()
+        except Exception as exc:  # pragma: no branch - thread result capture
+            errors[name] = exc
+        finally:
+            close_old_connections()
+
+    return threading.Thread(target=runner, name=name)
+
+
+def _join_threads(test_case, *threads):
+    for thread in threads:
+        thread.join(10)
+        test_case.assertFalse(thread.is_alive())
+
+
 class SegmentInstallLockTests(SimpleTestCase):
-    def test_failed_install_cleanup_cannot_delete_a_waiting_retry_file(self):
-        with TemporaryDirectory() as staging_root:
-            video = SimpleNamespace(
-                client_session_id=uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db12")
-            )
-            destination = Path(staging_root) / video.client_session_id.hex / "segments" / "000000.mp4"
-            failed_install_ready = threading.Event()
-            retry_attempted = threading.Event()
-            retry_installed = threading.Event()
-            allow_cleanup = threading.Event()
-            errors = []
+    def test_second_thread_waits_for_first_lock_holder(self):
+        video = SimpleNamespace(
+            pk=1,
+            client_session_id=uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db12"),
+        )
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_entered = threading.Event()
+        errors = []
 
-            def failed_upload():
-                try:
-                    temporary = destination.with_suffix(".failed.part")
-                    temporary.parent.mkdir(parents=True, exist_ok=True)
-                    temporary.write_bytes(b"failed-content")
-                    with segment_install_lock(video, 0):
-                        os.replace(temporary, destination)
-                        failed_install_ready.set()
-                        self.assertTrue(retry_attempted.wait(5))
-                        self.assertTrue(allow_cleanup.wait(5))
-                        self.assertFalse(retry_installed.is_set())
-                        destination.unlink()
-                except Exception as exc:  # pragma: no branch - thread result capture
-                    errors.append(exc)
+        def first_holder():
+            try:
+                with segment_install_lock(video, 0):
+                    first_entered.set()
+                    self.assertTrue(release_first.wait(5))
+            except Exception as exc:  # pragma: no branch - thread result capture
+                errors.append(exc)
 
-            def retry_upload():
-                try:
-                    self.assertTrue(failed_install_ready.wait(5))
-                    retry_attempted.set()
-                    with segment_install_lock(video, 0):
-                        temporary = destination.with_suffix(".retry.part")
-                        temporary.write_bytes(b"successful-content")
-                        os.replace(temporary, destination)
-                        retry_installed.set()
-                except Exception as exc:  # pragma: no branch - thread result capture
-                    errors.append(exc)
+        def second_holder():
+            try:
+                self.assertTrue(first_entered.wait(5))
+                with segment_install_lock(video, 0):
+                    second_entered.set()
+            except Exception as exc:  # pragma: no branch - thread result capture
+                errors.append(exc)
 
-            with override_settings(TRAINING_VIDEO_STAGING_ROOT=staging_root):
-                failing = threading.Thread(target=failed_upload)
-                retrying = threading.Thread(target=retry_upload)
-                failing.start()
-                self.assertTrue(failed_install_ready.wait(5))
-                retrying.start()
-                self.assertTrue(retry_attempted.wait(5))
-                allow_cleanup.set()
-                failing.join(10)
-                retrying.join(10)
+        with TemporaryDirectory() as staging_root, override_settings(
+            TRAINING_VIDEO_STAGING_ROOT=staging_root
+        ):
+            first = threading.Thread(target=first_holder)
+            second = threading.Thread(target=second_holder)
+            first.start()
+            self.assertTrue(first_entered.wait(5))
+            second.start()
+            self.assertFalse(second_entered.wait(0.25))
+            release_first.set()
+            _join_threads(self, first, second)
 
-            self.assertFalse(failing.is_alive())
-            self.assertFalse(retrying.is_alive())
-            self.assertEqual(errors, [])
-            self.assertTrue(retry_installed.is_set())
-            self.assertEqual(destination.read_bytes(), b"successful-content")
+        self.assertEqual(errors, [])
+        self.assertTrue(second_entered.is_set())
 
 
-@skipUnless(
-    connection.vendor == "postgresql",
-    "需要 PostgreSQL 验证 select_for_update 行锁语义",
-)
-class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
-    serialized_rollback = True
-
+class VideoSegmentServiceFixture:
     def setUp(self):
         super().setUp()
         self.staging_directory = TemporaryDirectory()
@@ -123,11 +124,7 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
             primary_doctor=doctor,
         )
         project = StudyProject.objects.create(name="并发测试项目", created_by=doctor)
-        group = StudyGroup.objects.create(
-            project=project,
-            name="干预组",
-            target_ratio=1,
-        )
+        group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
         self.project_patient = ProjectPatient.objects.create(
             project=project,
             patient=patient,
@@ -140,9 +137,10 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
             status=Prescription.Status.ACTIVE,
             effective_at=timezone.now(),
         )
-        item = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
         action = prescription.add_action_snapshot(
-            item,
+            ActionLibraryItem.objects.get(
+                source_key="motion-resistance-shoulder-press"
+            ),
             weekly_frequency="2 次/周",
             weekly_target_count=2,
             duration_minutes=10,
@@ -157,6 +155,69 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
             status=TrainingVideo.Status.RECORDING,
         )
 
+    def store_segment(self, index, content):
+        return store_training_video_segment(
+            project_patient=ProjectPatient.objects.get(pk=self.project_patient.pk),
+            video_id=self.video.pk,
+            index=index,
+            uploaded_file=SimpleUploadedFile(
+                f"segment-{index}.mp4", content, content_type="video/mp4"
+            ),
+            duration_ms=1000,
+            declared_size_bytes=len(content),
+        )
+
+
+class SegmentInstallCleanupTests(VideoSegmentServiceFixture, TestCase):
+    def test_failed_segment_save_unlinks_while_install_lock_is_active(self):
+        destination = segment_path(self.video, 0)
+        lock_active = False
+        original_lock = video_services.segment_install_lock
+        original_unlink = Path.unlink
+
+        @contextmanager
+        def observed_lock(video, index):
+            nonlocal lock_active
+            with original_lock(video, index):
+                lock_active = True
+                try:
+                    yield
+                finally:
+                    lock_active = False
+
+        def fail_segment_create(**kwargs):
+            raise RuntimeError("模拟分段数据库保存失败")
+
+        def assert_cleanup_holds_lock(path, *args, **kwargs):
+            if path == destination:
+                self.assertTrue(lock_active)
+            return original_unlink(path, *args, **kwargs)
+
+        with (
+            patch.object(video_services, "segment_install_lock", observed_lock),
+            patch.object(
+                TrainingVideoSegment.objects,
+                "create",
+                side_effect=fail_segment_create,
+            ),
+            patch.object(Path, "unlink", new=assert_cleanup_holds_lock),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "数据库保存失败"):
+                self.store_segment(0, b"failed-content")
+
+        self.assertFalse(destination.exists())
+        self.assertFalse(TrainingVideoSegment.objects.exists())
+
+
+@skipUnless(
+    connection.vendor == "postgresql",
+    "需要 PostgreSQL 验证 select_for_update 行锁语义",
+)
+class TrainingVideoPostgresConcurrencyTests(
+    VideoSegmentServiceFixture, TransactionTestCase
+):
+    serialized_rollback = True
+
     def test_two_connections_serialize_segment_totals_on_video_row_lock(self):
         first_inserted = threading.Event()
         release_first = threading.Event()
@@ -170,53 +231,33 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
 
         def blocking_create(**kwargs):
             segment = original_create(**kwargs)
-            if threading.current_thread().name == "first-segment":
+            if threading.current_thread().name == "first":
                 first_inserted.set()
-                if not release_first.wait(10):
-                    raise TimeoutError("未收到释放首个事务的信号")
+                self.assertTrue(release_first.wait(10))
             return segment
 
         def observed_fetch_all(queryset):
             if (
-                threading.current_thread().name == "second-segment"
+                threading.current_thread().name == "second"
                 and queryset.model is TrainingVideo
                 and queryset.query.select_for_update
             ):
                 second_select_started.set()
             return original_fetch_all(queryset)
 
-        def upload(name, index, content):
-            close_old_connections()
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT pg_backend_pid()")
-                    backend_pids[name] = cursor.fetchone()[0]
-                results[name] = store_training_video_segment(
-                    project_patient=ProjectPatient.objects.get(pk=self.project_patient.pk),
-                    video_id=self.video.pk,
-                    index=index,
-                    uploaded_file=SimpleUploadedFile(
-                        f"{name}.mp4", content, content_type="video/mp4"
-                    ),
-                    duration_ms=1000,
-                    declared_size_bytes=len(content),
-                )
-            except Exception as exc:  # pragma: no branch - thread result capture
-                errors[name] = exc
-            finally:
-                if name == "second":
-                    second_done.set()
-                close_old_connections()
-
-        first = threading.Thread(
-            target=upload,
-            args=("first", 0, b"first"),
-            name="first-segment",
+        first = _start_database_thread(
+            "first",
+            lambda: self.store_segment(0, b"first"),
+            results,
+            errors,
+            backend_pids,
         )
-        second = threading.Thread(
-            target=upload,
-            args=("second", 1, b"second"),
-            name="second-segment",
+        second = _start_database_thread(
+            "second",
+            lambda: self._store_second_segment(second_done),
+            results,
+            errors,
+            backend_pids,
         )
 
         with (
@@ -235,11 +276,8 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
                 self.assertFalse(second_done.wait(0.25))
             finally:
                 release_first.set()
-                first.join(10)
-                second.join(10)
+                _join_threads(self, first, second)
 
-        self.assertFalse(first.is_alive())
-        self.assertFalse(second.is_alive())
         self.assertEqual(errors, {})
         self.assertEqual(set(results), {"first", "second"})
         self.assertEqual(len(set(backend_pids.values())), 2)
@@ -254,6 +292,12 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
             {0, 1},
         )
 
+    def _store_second_segment(self, second_done):
+        try:
+            return self.store_segment(1, b"second")
+        finally:
+            second_done.set()
+
     def test_two_connections_losing_session_create_checks_winner_payload(self):
         create_barrier = threading.Barrier(2)
         results = {}
@@ -266,34 +310,35 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
             create_barrier.wait(10)
             return original_create(**kwargs)
 
-        def create_session(name, expected_duration_seconds):
-            close_old_connections()
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT pg_backend_pid()")
-                    backend_pids[name] = cursor.fetchone()[0]
-                results[name] = create_training_video_session(
-                    project_patient=ProjectPatient.objects.get(pk=self.project_patient.pk),
-                    client_session_id=session_id,
-                    prescription_action_id=self.video.prescription_action_id,
-                    training_date=self.video.training_date,
-                    expected_duration_seconds=expected_duration_seconds,
-                )
-            except Exception as exc:  # pragma: no branch - thread result capture
-                errors[name] = exc
-            finally:
-                close_old_connections()
+        def create_session(expected_duration_seconds):
+            return create_training_video_session(
+                project_patient=ProjectPatient.objects.get(pk=self.project_patient.pk),
+                client_session_id=session_id,
+                prescription_action_id=self.video.prescription_action_id,
+                training_date=self.video.training_date,
+                expected_duration_seconds=expected_duration_seconds,
+            )
+
+        first = _start_database_thread(
+            "first",
+            lambda: create_session(4),
+            results,
+            errors,
+            backend_pids,
+        )
+        second = _start_database_thread(
+            "second",
+            lambda: create_session(5),
+            results,
+            errors,
+            backend_pids,
+        )
 
         with patch.object(TrainingVideo.objects, "create", side_effect=synchronized_create):
-            first = threading.Thread(target=create_session, args=("first", 4))
-            second = threading.Thread(target=create_session, args=("second", 5))
             first.start()
             second.start()
-            first.join(10)
-            second.join(10)
+            _join_threads(self, first, second)
 
-        self.assertFalse(first.is_alive())
-        self.assertFalse(second.is_alive())
         self.assertEqual(len(set(backend_pids.values())), 2)
         self.assertEqual(len(results), 1)
         self.assertEqual(len(errors), 1)
@@ -301,99 +346,9 @@ class TrainingVideoPostgresConcurrencyTests(TransactionTestCase):
         winner, created = next(iter(results.values()))
         self.assertTrue(created)
         self.assertEqual(
-            TrainingVideo.objects.filter(
+            TrainingVideo.objects.get(
                 project_patient=self.project_patient,
                 client_session_id=session_id,
-            ).get(),
+            ),
             winner,
-        )
-
-    def test_failed_segment_save_cleans_up_before_retry_can_install(self):
-        first_create_entered = threading.Event()
-        second_attempted_lock = threading.Event()
-        second_acquired_lock = threading.Event()
-        errors = {}
-        results = {}
-        original_create = TrainingVideoSegment.objects.create
-        original_install_lock = video_services.segment_install_lock
-        original_unlink = Path.unlink
-        destination = segment_path(self.video, 0)
-
-        @contextmanager
-        def observed_install_lock(video, index):
-            if threading.current_thread().name == "retry-segment":
-                second_attempted_lock.set()
-            with original_install_lock(video, index):
-                if threading.current_thread().name == "retry-segment":
-                    second_acquired_lock.set()
-                yield
-
-        def fail_first_create(**kwargs):
-            if threading.current_thread().name == "failing-segment":
-                first_create_entered.set()
-                self.assertTrue(second_attempted_lock.wait(10))
-                raise RuntimeError("模拟分段数据库保存失败")
-            return original_create(**kwargs)
-
-        def assert_cleanup_holds_install_lock(path, *args, **kwargs):
-            if path == destination and threading.current_thread().name == "failing-segment":
-                self.assertFalse(second_acquired_lock.is_set())
-            return original_unlink(path, *args, **kwargs)
-
-        def upload(name, content):
-            close_old_connections()
-            try:
-                results[name] = store_training_video_segment(
-                    project_patient=ProjectPatient.objects.get(pk=self.project_patient.pk),
-                    video_id=self.video.pk,
-                    index=0,
-                    uploaded_file=SimpleUploadedFile(
-                        f"{name}.mp4", content, content_type="video/mp4"
-                    ),
-                    duration_ms=1000,
-                    declared_size_bytes=len(content),
-                )
-            except Exception as exc:  # pragma: no branch - thread result capture
-                errors[name] = exc
-            finally:
-                close_old_connections()
-
-        with (
-            patch.object(
-                video_services,
-                "segment_install_lock",
-                observed_install_lock,
-            ),
-            patch.object(
-                TrainingVideoSegment.objects,
-                "create",
-                side_effect=fail_first_create,
-            ),
-            patch.object(Path, "unlink", new=assert_cleanup_holds_install_lock),
-        ):
-            failing = threading.Thread(
-                target=upload,
-                args=("failing", b"failed-content"),
-                name="failing-segment",
-            )
-            retrying = threading.Thread(
-                target=upload,
-                args=("retry", b"successful-content"),
-                name="retry-segment",
-            )
-            failing.start()
-            self.assertTrue(first_create_entered.wait(10))
-            retrying.start()
-            failing.join(10)
-            retrying.join(10)
-
-        self.assertFalse(failing.is_alive())
-        self.assertFalse(retrying.is_alive())
-        self.assertIsInstance(errors.get("failing"), RuntimeError)
-        self.assertNotIn("retry", errors)
-        self.assertTrue(results["retry"][1])
-        self.assertTrue(second_acquired_lock.is_set())
-        self.assertEqual(destination.read_bytes(), b"successful-content")
-        self.assertTrue(
-            TrainingVideoSegment.objects.filter(training_video=self.video, index=0).exists()
         )

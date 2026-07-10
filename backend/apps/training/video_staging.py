@@ -20,7 +20,9 @@ class SessionConflict(Exception):
 
 def session_root(video: TrainingVideo) -> Path:
     root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
-    candidate = (root / video.client_session_id.hex).resolve()
+    if video.pk is None:
+        raise ValidationError("训练视频会话尚未保存")
+    candidate = (root / f"{video.pk}-{video.client_session_id.hex}").resolve()
     if not candidate.is_relative_to(root):
         raise ValidationError("训练视频临时目录无效")
     return candidate

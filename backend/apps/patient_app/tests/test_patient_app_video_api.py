@@ -63,6 +63,19 @@ def _segment_url(video_id, index):
     return f"/api/patient-app/training-video-sessions/{video_id}/segments/{index}/"
 
 
+def _staged_segment_path(root: Path, video_id, index):
+    return (
+        root
+        / f"{video_id}-{CLIENT_SESSION_ID.replace('-', '')}"
+        / "segments"
+        / f"{index:06d}.mp4"
+    )
+
+
+def _staged_relative_path(video_id, index):
+    return f"{video_id}-{CLIENT_SESSION_ID.replace('-', '')}/segments/{index:06d}.mp4"
+
+
 def _segment_payload(content=b"video-bytes", *, duration_ms=30000, size_bytes=None):
     return {
         "file": SimpleUploadedFile(
@@ -286,12 +299,65 @@ def test_upload_segment_streams_to_server_and_is_idempotent(
     assert first.data["size_bytes"] == 11
     assert first.data["duration_ms"] == 30000
     assert first.data["uploaded_segment_count"] == 1
-    path = tmp_path / "8cf99c309b034bdab4d3b492f3a2db12" / "segments" / "000000.mp4"
+    path = _staged_segment_path(tmp_path, session.data["video_id"], 0)
     assert path.read_bytes() == b"video-bytes"
     _assert_no_partial_files(tmp_path)
     segment = TrainingVideoSegment.objects.get()
-    assert segment.relative_path == ("8cf99c309b034bdab4d3b492f3a2db12/segments/000000.mp4")
+    assert segment.relative_path == _staged_relative_path(session.data["video_id"], 0)
     assert segment.status == TrainingVideoSegment.Status.UPLOADED
+
+
+@pytest.mark.django_db
+def test_same_client_session_id_isolated_between_patients(
+    project_patient, doctor, active_prescription, tmp_path
+):
+    first_action = _shoulder_press_action(active_prescription)
+    first_client = _auth_client(project_patient, doctor)
+    first_session = _create_session(first_client, first_action)
+
+    other_project_patient = _other_project_patient(project_patient, doctor)
+    other_prescription = Prescription.objects.create(
+        project_patient=other_project_patient,
+        version=1,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+    second_action = _shoulder_press_action(other_prescription)
+    second_client = _auth_client(
+        other_project_patient,
+        doctor,
+        wx_openid="openid-same-session-id",
+    )
+    second_session = _create_session(second_client, second_action)
+
+    first_upload = first_client.post(
+        _segment_url(first_session.data["video_id"], 0),
+        _segment_payload(b"first-patient-video"),
+    )
+    second_upload = second_client.post(
+        _segment_url(second_session.data["video_id"], 0),
+        _segment_payload(b"second-patient-video"),
+    )
+
+    assert first_upload.status_code == 201, first_upload.data
+    assert second_upload.status_code == 201, second_upload.data
+    first_video = TrainingVideo.objects.get(pk=first_session.data["video_id"])
+    second_video = TrainingVideo.objects.get(pk=second_session.data["video_id"])
+    first_path = _staged_segment_path(tmp_path, first_video.pk, 0)
+    second_path = _staged_segment_path(tmp_path, second_video.pk, 0)
+
+    assert first_path != second_path
+    assert first_path.read_bytes() == b"first-patient-video"
+    assert second_path.read_bytes() == b"second-patient-video"
+    assert (first_path.parents[1] / "locks" / "000000.lock").exists()
+    assert (second_path.parents[1] / "locks" / "000000.lock").exists()
+    assert TrainingVideoSegment.objects.get(training_video=first_video).relative_path == (
+        _staged_relative_path(first_video.pk, 0)
+    )
+    assert TrainingVideoSegment.objects.get(training_video=second_video).relative_path == (
+        _staged_relative_path(second_video.pk, 0)
+    )
 
 
 @pytest.mark.django_db
@@ -309,7 +375,7 @@ def test_upload_segment_returns_conflict_for_reused_index_with_different_content
     assert first.status_code == 201, first.data
     assert conflict.status_code == 409, conflict.data
     assert "冲突" in str(conflict.data)
-    path = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / "000000.mp4"
+    path = _staged_segment_path(tmp_path, session.data["video_id"], 0)
     assert path.read_bytes() == b"first-video"
     assert TrainingVideoSegment.objects.count() == 1
     _assert_no_partial_files(tmp_path)
@@ -403,7 +469,7 @@ def test_upload_segment_total_size_limit_leaves_rejected_segment_no_residue(
     assert first.status_code == 201, first.data
     assert response.status_code == 400, response.data
     assert TrainingVideoSegment.objects.count() == 1
-    session_root = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments"
+    session_root = _staged_segment_path(tmp_path, session.data["video_id"], 0).parent
     assert (session_root / "000000.mp4").read_bytes() == b"123456"
     assert not (session_root / "000001.mp4").exists()
     _assert_no_partial_files(tmp_path)
@@ -434,7 +500,7 @@ def test_upload_segment_index_boundary_leaves_no_rejected_file(
     )
 
     assert response.status_code == expected_status, response.data
-    destination = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / f"{index:06d}.mp4"
+    destination = _staged_segment_path(tmp_path, session.data["video_id"], index)
     assert destination.exists() is (expected_status == 201)
     _assert_no_partial_files(tmp_path)
 
@@ -476,7 +542,7 @@ def test_upload_segment_count_boundary_leaves_no_rejected_file(
     )
 
     assert response.status_code == expected_status, response.data
-    destination = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / "000000.mp4"
+    destination = _staged_segment_path(tmp_path, video.id, 0)
     assert destination.exists() is (expected_status == 201)
     _assert_no_partial_files(tmp_path)
 
@@ -522,7 +588,7 @@ def test_upload_segment_total_duration_boundary_leaves_no_rejected_file(
     )
 
     assert response.status_code == expected_status, response.data
-    destination = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / "000000.mp4"
+    destination = _staged_segment_path(tmp_path, video.id, 0)
     assert destination.exists() is (expected_status == 201)
     _assert_no_partial_files(tmp_path)
 
