@@ -26,4 +26,9 @@ class TrainingRecord(UserStampedModel):
     note = models.TextField("备注", blank=True)
 
 
-from .video_models import MotionAnalysisJob, TrainingVideo  # noqa: E402,F401
+from .video_models import (  # noqa: E402,F401
+    MotionAnalysisJob,
+    TrainingVideo,
+    TrainingVideoSegment,
+    VideoAssemblyJob,
+)

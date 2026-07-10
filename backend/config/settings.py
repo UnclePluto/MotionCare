@@ -98,6 +98,26 @@ TRAINING_VIDEO_MAX_SIZE_BYTES = int(
 TRAINING_VIDEO_MAX_DURATION_SECONDS = int(
     os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "600")
 )
+TRAINING_VIDEO_STAGING_ROOT = Path(os.getenv(
+    "TRAINING_VIDEO_STAGING_ROOT",
+    "/var/lib/motioncare/training-video-staging",
+))
+TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = int(os.getenv(
+    "TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES", str(32 * 1024 * 1024)
+))
+TRAINING_VIDEO_MAX_SEGMENTS = int(os.getenv("TRAINING_VIDEO_MAX_SEGMENTS", "120"))
+TRAINING_VIDEO_STAGING_TTL_SECONDS = int(os.getenv(
+    "TRAINING_VIDEO_STAGING_TTL_SECONDS", "86400"
+))
+TRAINING_VIDEO_MIN_FREE_BYTES = int(os.getenv(
+    "TRAINING_VIDEO_MIN_FREE_BYTES", str(5 * 1024 * 1024 * 1024)
+))
+VIDEO_ASSEMBLY_TIMEOUT_SECONDS = int(os.getenv("VIDEO_ASSEMBLY_TIMEOUT_SECONDS", "1800"))
+VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS = int(os.getenv(
+    "VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS", "3600"
+))
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
+FFPROBE_PATH = os.getenv("FFPROBE_PATH", "/usr/bin/ffprobe")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Task 2 will switch to custom user model ("accounts.User").
 AUTH_USER_MODEL = "accounts.User"

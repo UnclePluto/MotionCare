@@ -152,7 +152,6 @@ def test_training_video_and_analysis_job_models_are_available(
         content_type="video/mp4",
         size_bytes=100,
         duration_seconds=30,
-        upload_token_expires_at="2026-07-10T10:00:00+08:00",
     )
     job = MotionAnalysisJob.objects.create(
         training_video=video,
