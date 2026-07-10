@@ -10,7 +10,13 @@ import {
   subscribePendingGameUploadRetryLoop,
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
-import { gameSessionUrl, loadGameSessionSubpackage } from './gameSubpackage'
+import {
+  buildShoulderPressUploadUrl,
+  loadPendingShoulderPressUpload,
+  SHOULDER_PRESS_SOURCE_KEY
+} from '../shoulder-press/session'
+import { actionButtonLabel, actionEntryUrl } from './actionRouting'
+import { loadGameSessionSubpackage } from './gameSubpackage'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -47,8 +53,8 @@ export default function PrescriptionPage() {
 
   async function startAction(action: NonNullable<CurrentPrescription>['actions'][number]) {
     setGameLoadError('')
-    if (action.internal_type !== 'game') {
-      Taro.navigateTo({ url: `/pages/training/index?actionId=${action.id}` })
+    if (action.internal_type !== 'game' || action.source_key === SHOULDER_PRESS_SOURCE_KEY) {
+      Taro.navigateTo({ url: actionEntryUrl(action) })
       return
     }
     if (gameLoadingActionId !== null) return
@@ -57,7 +63,7 @@ export default function PrescriptionPage() {
     setGameLoadProgress(0)
     try {
       await loadGameSessionSubpackage((event) => setGameLoadProgress(event.progress))
-      Taro.navigateTo({ url: gameSessionUrl(action.id) })
+      Taro.navigateTo({ url: actionEntryUrl(action) })
     } catch (err) {
       setGameLoadError(err instanceof Error ? err.message : '游戏资源加载失败，请稍后重试')
     } finally {
@@ -75,6 +81,10 @@ export default function PrescriptionPage() {
   }, [])
 
   useDidShow(() => {
+    if (loadPendingShoulderPressUpload(Taro)) {
+      Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
+      return
+    }
     setError('')
     setLoaded(false)
     setData(null)
@@ -191,7 +201,7 @@ export default function PrescriptionPage() {
                   void startAction(action)
                 }}
               >
-                {action.internal_type === 'game' ? '开始游戏' : '开始训练'}
+                {actionButtonLabel(action)}
               </Button>
               <Button
                 className='secondary-button'

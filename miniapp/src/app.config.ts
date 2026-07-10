@@ -4,6 +4,8 @@ export default defineAppConfig({
     'pages/home/index',
     'pages/prescription/index',
     'pages/training/index',
+    'pages/shoulder-press/index',
+    'pages/shoulder-press/upload',
     'pages/action-history/index',
     'pages/daily-health/index'
   ],
