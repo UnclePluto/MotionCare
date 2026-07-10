@@ -3,14 +3,20 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from django.http import Http404
 from django.utils import timezone
 
 from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.studies.models import ProjectPatient
 
-from .models import TrainingRecord, TrainingVideo
-from .qiniu import generate_upload_token, stat_object_metadata, validate_object_metadata
+from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
+from .qiniu import (
+    generate_upload_token,
+    private_download_url,
+    stat_object_metadata,
+    validate_object_metadata,
+)
 from .services import create_training_record
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
@@ -222,3 +228,85 @@ def _validate_attached_request(
     )
     if not matches:
         raise ValidationError("重复完成请求与已绑定训练记录冲突")
+
+
+def get_training_video_for_user(user, video_id):
+    from .tracking import accessible_project_patients
+
+    video = (
+        TrainingVideo.objects.select_related(
+            "project_patient",
+            "training_record",
+            "prescription_action__action_library_item",
+        )
+        .filter(
+            pk=video_id,
+            project_patient__in=accessible_project_patients(user),
+        )
+        .first()
+    )
+    if video is None:
+        raise Http404
+    return video
+
+
+def create_private_download_url(video):
+    if video.status != TrainingVideo.Status.ATTACHED or not video.training_record_id:
+        raise ValidationError("训练视频尚未绑定训练记录")
+    if not all(
+        [
+            settings.QINIU_ACCESS_KEY,
+            settings.QINIU_SECRET_KEY,
+            settings.QINIU_DOWNLOAD_DOMAIN,
+        ]
+    ):
+        raise ValidationError("七牛下载配置不完整")
+    expires_at = timezone.now() + timedelta(
+        seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS
+    )
+    base_url = f"{settings.QINIU_DOWNLOAD_DOMAIN.rstrip('/')}/{video.object_key}"
+    return private_download_url(base_url, expires_at=int(expires_at.timestamp()))
+
+
+@transaction.atomic
+def create_analysis_job(*, video, requested_by):
+    locked_video = (
+        TrainingVideo.objects.select_for_update(of=("self",))
+        .select_related(
+            "training_record",
+            "prescription_action__action_library_item",
+        )
+        .get(pk=video.pk)
+    )
+    if (
+        locked_video.status != TrainingVideo.Status.ATTACHED
+        or not locked_video.training_record_id
+    ):
+        raise ValidationError("训练视频尚未绑定训练记录")
+    if (
+        locked_video.prescription_action.action_library_item.source_key
+        != SHOULDER_PRESS_SOURCE_KEY
+    ):
+        raise ValidationError("当前仅支持肩部推举动作分析")
+    if MotionAnalysisJob.objects.filter(
+        training_video=locked_video,
+        status__in=[MotionAnalysisJob.Status.PENDING, MotionAnalysisJob.Status.RUNNING],
+    ).exists():
+        raise ValidationError("已有进行中的分析任务")
+
+    try:
+        with transaction.atomic():
+            job = MotionAnalysisJob.objects.create(
+                training_video=locked_video,
+                training_record=locked_video.training_record,
+                project_patient=locked_video.project_patient,
+                prescription_action=locked_video.prescription_action,
+                requested_by=requested_by,
+            )
+    except IntegrityError as exc:
+        raise ValidationError("已有进行中的分析任务") from exc
+
+    from .tasks import run_motion_analysis_job
+
+    transaction.on_commit(lambda: run_motion_analysis_job.delay(job.id))
+    return job

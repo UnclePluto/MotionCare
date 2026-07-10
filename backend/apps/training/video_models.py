@@ -95,3 +95,12 @@ class MotionAnalysisJob(UserStampedModel):
     )
     started_at = models.DateTimeField("开始时间", null=True, blank=True)
     finished_at = models.DateTimeField("完成时间", null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["training_video"],
+                condition=models.Q(status__in=["pending", "running"]),
+                name="unique_active_motion_analysis_job_per_video",
+            )
+        ]
