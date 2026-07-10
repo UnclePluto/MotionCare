@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
-from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY
+from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY, create_analysis_job
 
 
 def _client(user):
@@ -292,5 +292,24 @@ def test_service_validation_failure_registers_no_enqueue_callback(
 
     assert response.status_code == 400
     assert callbacks == []
+    delay.assert_not_called()
+    assert MotionAnalysisJob.objects.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rolled_back_job_creation_never_enqueues(
+    doctor,
+    project_patient,
+    active_prescription,
+):
+    action = _shoulder_press_action(active_prescription)
+    video = _video(project_patient, active_prescription, action)
+
+    with patch("apps.training.tasks.run_motion_analysis_job.delay") as delay:
+        with pytest.raises(RuntimeError, match="force rollback"):
+            with transaction.atomic():
+                create_analysis_job(video=video, requested_by=doctor)
+                raise RuntimeError("force rollback")
+
     delay.assert_not_called()
     assert MotionAnalysisJob.objects.count() == 0

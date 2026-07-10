@@ -1,4 +1,17 @@
+import io
+import os
+import uuid
+from unittest.mock import Mock, patch
+
+import pytest
+from django.test import override_settings
+from django.utils import timezone
+
+from apps.prescriptions.models import ActionLibraryItem
 from apps.training.analysis import analyze_shoulder_press_keypoints
+from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
+from apps.training.tasks import download_private_video, run_motion_analysis_job
+from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY
 
 
 def _frame(
@@ -198,3 +211,204 @@ def test_marks_repetition_with_low_joint_confidence_nonstandard():
     assert result["nonstandard_count"] == 1
     assert "low_confidence" in result["rep_details"][0]["flags"]
     assert result["quality_flags"] == ["camera_angle_unverified"]
+
+
+def _analysis_job(project_patient, active_prescription):
+    item = ActionLibraryItem.objects.get(source_key=SHOULDER_PRESS_SOURCE_KEY)
+    action = active_prescription.add_action_snapshot(
+        item,
+        weekly_frequency="2 次/周",
+        weekly_target_count=2,
+        duration_minutes=2,
+    )
+    record = TrainingRecord.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_date=timezone.localdate(),
+        status=TrainingRecord.Status.COMPLETED,
+        actual_duration_minutes=2,
+    )
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_record=record,
+        bucket="motioncare-training",
+        object_key=f"training-videos/{project_patient.id}/{uuid.uuid4().hex}.mp4",
+        object_hash="hash-a",
+        content_type="video/mp4",
+        size_bytes=1024,
+        duration_seconds=120,
+        status=TrainingVideo.Status.ATTACHED,
+        upload_token_expires_at=timezone.now(),
+        uploaded_at=timezone.now(),
+    )
+    job = MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=action,
+    )
+    return job, video, record
+
+
+class _DownloadResponse(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+
+
+def test_private_video_download_uses_timeout_and_destination(tmp_path):
+    opener = Mock(return_value=_DownloadResponse(b"video-bytes"))
+    destination = tmp_path / "video.mp4"
+
+    download_private_video(
+        "https://cdn.example.com/private.mp4?token=secret",
+        destination,
+        timeout=17,
+        opener=opener,
+    )
+
+    opener.assert_called_once_with(
+        "https://cdn.example.com/private.mp4?token=secret",
+        timeout=17,
+    )
+    assert destination.read_bytes() == b"video-bytes"
+
+
+@pytest.mark.django_db
+@override_settings(
+    MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS=17,
+    MOTION_ANALYSIS_SAMPLE_FPS=4,
+)
+def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
+    project_patient,
+    active_prescription,
+):
+    job, video, record = _analysis_job(project_patient, active_prescription)
+    seen_paths = []
+    result_payload = {
+        "total_count": 2,
+        "standard_count": 1,
+        "nonstandard_count": 1,
+        "rep_details": [],
+        "quality_flags": ["camera_angle_unverified"],
+    }
+
+    def fake_download(url, destination, *, timeout, opener=None):
+        assert url == "https://cdn.example.com/private.mp4?token=sensitive"
+        assert timeout == 17
+        destination.write_bytes(b"video")
+        seen_paths.append(str(destination))
+
+    def fake_extract(path, *, sample_fps):
+        assert os.path.exists(path)
+        assert sample_fps == 4
+        return [{"timestamp_ms": 0, "keypoints": {}}]
+
+    with (
+        patch(
+            "apps.training.tasks.create_private_download_url",
+            return_value="https://cdn.example.com/private.mp4?token=sensitive",
+        ),
+        patch("apps.training.tasks.download_private_video", side_effect=fake_download),
+        patch(
+            "apps.training.tasks.extract_video_keypoint_frames",
+            side_effect=fake_extract,
+        ),
+        patch(
+            "apps.training.tasks.analyze_shoulder_press_keypoints",
+            return_value=result_payload,
+        ),
+    ):
+        returned = run_motion_analysis_job.run(job.id)
+
+    job.refresh_from_db()
+    video.refresh_from_db()
+    record.refresh_from_db()
+    assert returned.pk == job.pk
+    assert job.status == MotionAnalysisJob.Status.SUCCEEDED
+    assert job.started_at is not None
+    assert job.finished_at is not None
+    assert job.total_count == 2
+    assert job.standard_count == 1
+    assert job.nonstandard_count == 1
+    assert job.result_payload == result_payload
+    assert job.failure_reason == ""
+    assert seen_paths and all(not os.path.exists(path) for path in seen_paths)
+    assert video.status == TrainingVideo.Status.ATTACHED
+    assert record.status == TrainingRecord.Status.COMPLETED
+
+
+@pytest.mark.django_db
+def test_task_persists_sanitized_failure_and_cleans_temp_without_touching_video(
+    project_patient,
+    active_prescription,
+):
+    job, video, record = _analysis_job(project_patient, active_prescription)
+    seen_paths = []
+
+    def failing_download(url, destination, *, timeout, opener=None):
+        destination.write_bytes(b"partial")
+        seen_paths.append(str(destination))
+        raise RuntimeError(
+            "download failed: https://cdn.example.com/private.mp4?e=1&token=ak:secret"
+        )
+
+    with (
+        patch(
+            "apps.training.tasks.create_private_download_url",
+            return_value="https://cdn.example.com/private.mp4?e=1&token=ak:secret",
+        ),
+        patch("apps.training.tasks.download_private_video", side_effect=failing_download),
+    ):
+        returned = run_motion_analysis_job.run(job.id)
+
+    job.refresh_from_db()
+    video.refresh_from_db()
+    record.refresh_from_db()
+    assert returned.pk == job.pk
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert job.started_at is not None
+    assert job.finished_at is not None
+    assert "下载视频" in job.failure_reason
+    assert "RuntimeError" in job.failure_reason
+    assert "https://" not in job.failure_reason
+    assert "ak:secret" not in job.failure_reason
+    assert seen_paths and all(not os.path.exists(path) for path in seen_paths)
+    assert TrainingVideo.objects.filter(pk=video.pk).exists()
+    assert TrainingRecord.objects.filter(pk=record.pk).exists()
+    assert video.status == TrainingVideo.Status.ATTACHED
+    assert record.status == TrainingRecord.Status.COMPLETED
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "terminal_status",
+    [
+        MotionAnalysisJob.Status.SUCCEEDED,
+        MotionAnalysisJob.Status.FAILED,
+        MotionAnalysisJob.Status.RUNNING,
+    ],
+)
+def test_repeated_terminal_or_running_task_is_idempotent(
+    terminal_status,
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    job.status = terminal_status
+    job.started_at = timezone.now()
+    if terminal_status != MotionAnalysisJob.Status.RUNNING:
+        job.finished_at = timezone.now()
+    job.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
+
+    with patch("apps.training.tasks.create_private_download_url") as download_url:
+        returned = run_motion_analysis_job.run(job.id)
+
+    assert returned.pk == job.pk
+    assert returned.status == terminal_status
+    download_url.assert_not_called()
