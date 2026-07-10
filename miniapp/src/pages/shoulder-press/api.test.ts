@@ -27,25 +27,25 @@ describe('shoulder press segmented upload api', () => {
 
   it('creates, finalizes, and reads video sessions through the patient app API', async () => {
     taroMock.request
-      .mockResolvedValueOnce({ statusCode: 201, data: { video_id: 9, status: 'created' } })
-      .mockResolvedValueOnce({ statusCode: 202, data: { video_id: 9, status: 'assembling', assembly_job_id: 'job-1' } })
-      .mockResolvedValueOnce({ statusCode: 200, data: { video_id: 9, status: 'assembled', uploaded_segments: [0, 1] } })
+      .mockResolvedValueOnce({ statusCode: 201, data: { video_id: 9, status: 'recording', uploaded_segments: [] } })
+      .mockResolvedValueOnce({ statusCode: 202, data: { video_id: 9, status: 'queued', assembly_job_id: 1 } })
+      .mockResolvedValueOnce({ statusCode: 200, data: { video_id: 9, status: 'attached', uploaded_segments: [0, 1] } })
 
     await expect(createVideoSession({
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
       expectedDurationSeconds: 180
-    })).resolves.toEqual({ video_id: 9, status: 'created' })
+    })).resolves.toEqual({ video_id: 9, status: 'recording', uploaded_segments: [] })
     await expect(finalizeVideoSession({
       videoId: 9,
       segmentCount: 2,
       actualDurationSeconds: 60,
       note: ''
-    })).resolves.toEqual({ video_id: 9, status: 'assembling', assembly_job_id: 'job-1' })
+    })).resolves.toEqual({ video_id: 9, status: 'queued', assembly_job_id: 1 })
     await expect(getVideoSessionStatus(9)).resolves.toEqual({
       video_id: 9,
-      status: 'assembled',
+      status: 'attached',
       uploaded_segments: [0, 1]
     })
 
@@ -177,6 +177,89 @@ describe('shoulder press segmented upload api', () => {
       trainingDate: '2026-07-11',
       expectedDurationSeconds: 180
     })).rejects.toThrow('服务端忙，请稍后重试')
+  })
+
+  it.each([
+    ['body is not an object', 'not-an-object'],
+    ['video_id is missing', { status: 'recording' }],
+    ['video_id is zero', { video_id: 0, status: 'recording' }],
+    ['video_id is fractional', { video_id: 1.2, status: 'recording' }],
+    ['status is not a backend video status', { video_id: 9, status: 'created' }]
+  ])('rejects malformed create success responses when %s', async (_caseName, data) => {
+    taroMock.request.mockResolvedValueOnce({ statusCode: 201, data })
+
+    await expect(createVideoSession({
+      actionId: 42,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180
+    })).rejects.toThrow('视频会话响应格式无效')
+  })
+
+  it.each([
+    ['body is not an object', 'not-an-object'],
+    ['video_id is invalid', { video_id: -1, status: 'recording', uploaded_segments: [] }],
+    ['status is invalid', { video_id: 9, status: 'assembled', uploaded_segments: [] }],
+    ['uploaded_segments is missing', { video_id: 9, status: 'recording' }],
+    ['uploaded_segments is not an array', { video_id: 9, status: 'recording', uploaded_segments: '0,1' }],
+    ['uploaded_segments contains a fractional index', { video_id: 9, status: 'recording', uploaded_segments: [0, 1.5] }],
+    ['uploaded_segments contains a negative index', { video_id: 9, status: 'recording', uploaded_segments: [0, -1] }]
+  ])('rejects malformed status success responses when %s', async (_caseName, data) => {
+    taroMock.request.mockResolvedValueOnce({ statusCode: 200, data })
+
+    await expect(getVideoSessionStatus(9)).rejects.toThrow('视频会话响应格式无效')
+  })
+
+  it.each([
+    ['video_id is missing', { status: 'queued', assembly_job_id: 1 }],
+    ['video_id is not positive', { video_id: 0, status: 'queued', assembly_job_id: 1 }],
+    ['status is invalid', { video_id: 9, status: 'assembled', assembly_job_id: 1 }],
+    ['assembly_job_id is a string', { video_id: 9, status: 'queued', assembly_job_id: 'job-1' }],
+    ['assembly_job_id is not positive', { video_id: 9, status: 'queued', assembly_job_id: 0 }]
+  ])('rejects malformed finalize success responses when %s', async (_caseName, data) => {
+    taroMock.request.mockResolvedValueOnce({ statusCode: 202, data })
+
+    await expect(finalizeVideoSession({
+      videoId: 9,
+      segmentCount: 2,
+      actualDurationSeconds: 60,
+      note: ''
+    })).rejects.toThrow('视频会话响应格式无效')
+  })
+
+  it.each([
+    ['create', () => createVideoSession({
+      actionId: 42,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180
+    })],
+    ['status', () => getVideoSessionStatus(9)],
+    ['finalize', () => finalizeVideoSession({
+      videoId: 9,
+      segmentCount: 2,
+      actualDurationSeconds: 60,
+      note: ''
+    })]
+  ])('reports %s network rejects as a safe Chinese error', async (_caseName, requestAction) => {
+    taroMock.request
+      .mockRejectedValueOnce(new Error('Authorization Bearer patient-token secret request header leaked'))
+      .mockRejectedValueOnce(new Error('Authorization Bearer patient-token secret request header leaked'))
+
+    await expect(requestAction()).rejects.toThrow('请求失败，请检查网络后重试')
+    await expect(requestAction()).rejects.not.toThrow(/Authorization|Bearer|patient-token|token|secret/i)
+  })
+
+  it('keeps JSON 401 handling by clearing the patient token and redirecting to bind page', async () => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 401,
+      data: { detail: 'Authorization Bearer patient-token expired' }
+    })
+
+    await expect(getVideoSessionStatus(9)).rejects.toThrow('登录已失效')
+
+    expect(taroMock.removeStorageSync).toHaveBeenCalled()
+    expect(taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/bind/index' })
   })
 
   it('uses safe string error fields from multipart upload failures', async () => {

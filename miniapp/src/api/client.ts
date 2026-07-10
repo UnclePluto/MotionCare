@@ -45,15 +45,20 @@ export function safeApiErrorMessage(data: unknown): string {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const response = await Taro.request<T>({
-    url: apiUrl(path),
-    method: options.method ?? 'GET',
-    data: options.data,
-    header: {
-      'content-type': 'application/json',
-      ...patientAuthorizationHeader()
-    }
-  })
+  let response: Taro.request.SuccessCallbackResult<T>
+  try {
+    response = await Taro.request<T>({
+      url: apiUrl(path),
+      method: options.method ?? 'GET',
+      data: options.data,
+      header: {
+        'content-type': 'application/json',
+        ...patientAuthorizationHeader()
+      }
+    })
+  } catch {
+    throw new Error('请求失败，请检查网络后重试')
+  }
 
   if (response.statusCode === 401 || response.statusCode === 403) {
     handlePatientUnauthorized()

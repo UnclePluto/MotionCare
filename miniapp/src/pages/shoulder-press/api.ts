@@ -9,11 +9,24 @@ import {
 } from '../../api/client'
 import { createClientSessionId } from './session'
 
+const TRAINING_VIDEO_STATUSES = new Set([
+  'recording',
+  'uploading_segments',
+  'queued',
+  'assembling',
+  'uploading_qiniu',
+  'attached',
+  'failed',
+  'expired'
+] as const)
+
+type TrainingVideoStatus = typeof TRAINING_VIDEO_STATUSES extends Set<infer T> ? T : never
+
 export type VideoSessionStatus = {
   video_id: number
-  status: string
+  status: TrainingVideoStatus
   uploaded_segments?: number[]
-  assembly_job_id?: string
+  assembly_job_id?: number | null
 }
 
 export type UploadedVideoSegment = {
@@ -49,13 +62,63 @@ function parseUploadedSegment(data: string, expectedIndex: number): UploadedVide
   return { index: expectedIndex, sha256: parsed.sha256 }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0
+}
+
+function isTrainingVideoStatus(value: unknown): value is TrainingVideoStatus {
+  return typeof value === 'string' && TRAINING_VIDEO_STATUSES.has(value as TrainingVideoStatus)
+}
+
+function parseUploadedSegments(value: unknown): number[] {
+  if (!Array.isArray(value)) throw new Error('视频会话响应格式无效')
+  if (!value.every((index) => Number.isInteger(index) && Number(index) >= 0)) {
+    throw new Error('视频会话响应格式无效')
+  }
+  return value as number[]
+}
+
+function parseVideoSessionStatus(
+  value: unknown,
+  options: { requireUploadedSegments?: boolean; validateAssemblyJobId?: boolean } = {}
+): VideoSessionStatus {
+  if (!isObject(value) || !isPositiveInteger(value.video_id) || !isTrainingVideoStatus(value.status)) {
+    throw new Error('视频会话响应格式无效')
+  }
+
+  const parsed: VideoSessionStatus = {
+    video_id: value.video_id,
+    status: value.status
+  }
+
+  if (options.requireUploadedSegments || value.uploaded_segments !== undefined) {
+    parsed.uploaded_segments = parseUploadedSegments(value.uploaded_segments)
+  }
+
+  if (options.validateAssemblyJobId || value.assembly_job_id !== undefined) {
+    if (value.assembly_job_id === null || value.assembly_job_id === undefined) {
+      parsed.assembly_job_id = value.assembly_job_id
+    } else if (isPositiveInteger(value.assembly_job_id)) {
+      parsed.assembly_job_id = value.assembly_job_id
+    } else {
+      throw new Error('视频会话响应格式无效')
+    }
+  }
+
+  return parsed
+}
+
 export async function createVideoSession(input: {
   actionId: number
   clientSessionId: string
   trainingDate: string
   expectedDurationSeconds: number
 }): Promise<VideoSessionStatus> {
-  return request<VideoSessionStatus>('/patient-app/training-video-sessions/', {
+  const response = await request<unknown>('/patient-app/training-video-sessions/', {
     method: 'POST',
     data: {
       prescription_action: input.actionId,
@@ -64,6 +127,7 @@ export async function createVideoSession(input: {
       expected_duration_seconds: input.expectedDurationSeconds
     }
   })
+  return parseVideoSessionStatus(response)
 }
 
 export async function uploadVideoSegment(input: {
@@ -140,7 +204,7 @@ export async function finalizeVideoSession(input: {
   actualDurationSeconds: number
   note: string
 }): Promise<VideoSessionStatus> {
-  return request<VideoSessionStatus>(`/patient-app/training-video-sessions/${input.videoId}/finalize/`, {
+  const response = await request<unknown>(`/patient-app/training-video-sessions/${input.videoId}/finalize/`, {
     method: 'POST',
     data: {
       segment_count: input.segmentCount,
@@ -148,10 +212,12 @@ export async function finalizeVideoSession(input: {
       note: input.note
     }
   })
+  return parseVideoSessionStatus(response, { validateAssemblyJobId: true })
 }
 
 export async function getVideoSessionStatus(videoId: number): Promise<VideoSessionStatus> {
-  return request<VideoSessionStatus>(`/patient-app/training-video-sessions/${videoId}/status/`)
+  const response = await request<unknown>(`/patient-app/training-video-sessions/${videoId}/status/`)
+  return parseVideoSessionStatus(response, { requireUploadedSegments: true })
 }
 
 export async function createShoulderPressUploadIntent(input: {
