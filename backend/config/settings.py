@@ -85,6 +85,19 @@ USE_TZ = True
 STATIC_URL = "static/"
 MEDIA_URL = "media/"
 MEDIA_ROOT = ROOT_DIR / "media"
+QINIU_ACCESS_KEY = os.getenv("QINIU_ACCESS_KEY", "")
+QINIU_SECRET_KEY = os.getenv("QINIU_SECRET_KEY", "")
+QINIU_BUCKET = os.getenv("QINIU_BUCKET", "motioncare-training")
+QINIU_UPLOAD_HOST = os.getenv("QINIU_UPLOAD_HOST", "https://upload.qiniup.com")
+QINIU_DOWNLOAD_DOMAIN = os.getenv("QINIU_DOWNLOAD_DOMAIN", "")
+QINIU_UPLOAD_TOKEN_TTL_SECONDS = int(os.getenv("QINIU_UPLOAD_TOKEN_TTL_SECONDS", "1800"))
+QINIU_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv("QINIU_DOWNLOAD_TOKEN_TTL_SECONDS", "600"))
+TRAINING_VIDEO_MAX_SIZE_BYTES = int(
+    os.getenv("TRAINING_VIDEO_MAX_SIZE_BYTES", str(200 * 1024 * 1024))
+)
+TRAINING_VIDEO_MAX_DURATION_SECONDS = int(
+    os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "600")
+)
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Task 2 will switch to custom user model ("accounts.User").
 AUTH_USER_MODEL = "accounts.User"
