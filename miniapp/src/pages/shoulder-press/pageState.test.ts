@@ -3,7 +3,12 @@ import { describe, expect, it } from 'vitest'
 import type { CurrentPrescription } from '../../types/patientApp'
 import {
   canStartShoulderPressRecording,
+  canCompleteShoulderPressTraining,
+  formatShoulderPressTimer,
+  isServerSafeFinalizeStatus,
   resolveShoulderPressAction,
+  shoulderPressUploadCounters,
+  shouldAutoFinishShoulderPressTraining,
   uploadStageStates
 } from './pageState'
 
@@ -64,5 +69,44 @@ describe('shoulder press page state', () => {
       .toEqual(['done', 'done', 'active'])
     expect(uploadStageStates({ hasIntent: true, hasHash: true, activePhase: null }))
       .toEqual(['done', 'done', 'pending'])
+  })
+
+  it('allows finishing only after the prescribed shoulder press duration', () => {
+    expect(canCompleteShoulderPressTraining({
+      actualDurationMs: 119_000,
+      expectedDurationSeconds: 120
+    })).toBe(false)
+    expect(canCompleteShoulderPressTraining({
+      actualDurationMs: 120_000,
+      expectedDurationSeconds: 120
+    })).toBe(true)
+  })
+
+  it('auto finishes at the hard ten minute limit', () => {
+    expect(shouldAutoFinishShoulderPressTraining(599_999)).toBe(false)
+    expect(shouldAutoFinishShoulderPressTraining(600_000)).toBe(true)
+  })
+
+  it('formats the fixed-size recording timer', () => {
+    expect(formatShoulderPressTimer(0)).toBe('00:00')
+    expect(formatShoulderPressTimer(61_400)).toBe('01:01')
+    expect(formatShoulderPressTimer(600_000)).toBe('10:00')
+  })
+
+  it('counts uploaded and pending segments for stable page status', () => {
+    expect(shoulderPressUploadCounters([
+      { uploadState: 'uploaded' },
+      { uploadState: 'uploading' },
+      { uploadState: 'pending' }
+    ])).toEqual({ uploaded: 1, total: 3, percent: 33 })
+  })
+
+  it('treats queued server processing as safe final receipt but keeps failed states on page', () => {
+    expect(isServerSafeFinalizeStatus('queued')).toBe(true)
+    expect(isServerSafeFinalizeStatus('assembling')).toBe(true)
+    expect(isServerSafeFinalizeStatus('uploading_qiniu')).toBe(true)
+    expect(isServerSafeFinalizeStatus('attached')).toBe(true)
+    expect(isServerSafeFinalizeStatus('failed')).toBe(false)
+    expect(isServerSafeFinalizeStatus('expired')).toBe(false)
   })
 })

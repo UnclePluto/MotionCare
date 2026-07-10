@@ -10,6 +10,7 @@ import {
   subscribePendingGameUploadRetryLoop,
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
+import { actionEntryUrl } from '../prescription/actionRouting'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -82,11 +83,7 @@ export default function HomePage() {
 
   function continueFirstAction() {
     if (!firstAction) return
-    if (firstAction.internal_type === 'game') {
-      Taro.navigateTo({ url: '/pages/prescription/index' })
-      return
-    }
-    Taro.navigateTo({ url: `/pages/training/index?actionId=${firstAction.id}` })
+    Taro.navigateTo({ url: actionEntryUrl(firstAction) })
   }
 
   return (

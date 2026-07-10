@@ -575,6 +575,65 @@ button:active {
   line-height: 1.45;
 }
 
+.recording-dashboard {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 22px;
+}
+
+.recording-metric {
+  display: flex;
+  min-width: 0;
+  min-height: 132px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px 16px;
+  box-sizing: border-box;
+  border: 1px solid rgba(7, 152, 178, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: $mc-shadow;
+}
+
+.recording-metric-wide {
+  min-height: 116px;
+  grid-column: 1 / -1;
+}
+
+.recording-timer,
+.recording-count {
+  display: block;
+  width: 100%;
+  color: $mc-ink;
+  font-size: 36px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.recording-state-text {
+  display: block;
+  color: $mc-text;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.shoulder-press-action-row {
+  width: 100%;
+}
+
+.shoulder-press-action-row .primary-button,
+.shoulder-press-action-row .secondary-button {
+  min-width: 0;
+  padding: 0 14px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
 .upload-progress-panel {
   margin: 0 0 22px;
   padding: 12px 28px 28px;
@@ -582,6 +641,10 @@ button:active {
   border-radius: 16px;
   background: $mc-panel-strong;
   box-shadow: $mc-shadow;
+}
+
+.segment-upload-panel {
+  min-height: 360px;
 }
 
 .upload-stage {
@@ -619,9 +682,21 @@ button:active {
 
 .upload-meter {
   display: flex;
+  min-height: 116px;
   flex-direction: column;
+  justify-content: center;
   gap: 14px;
   padding-top: 26px;
+}
+
+.upload-counter-row .label,
+.upload-counter-row .value {
+  min-width: 0;
+}
+
+.upload-counter-row .value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .upload-lock-note,
@@ -642,6 +717,36 @@ button:active {
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+
+@media (max-width: 360px) {
+  .shoulder-press-page,
+  .shoulder-press-upload-page {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
+
+  .training-stage {
+    gap: 10px;
+  }
+
+  .recording-dashboard {
+    gap: 10px;
+  }
+
+  .recording-metric {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .upload-progress-panel {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .shoulder-press-action-row {
+    gap: 12px;
+  }
 }
 
 .game-session-page {

@@ -12,7 +12,7 @@ import {
 } from '../game-session/retryUpload'
 import {
   buildShoulderPressUploadUrl,
-  loadPendingShoulderPressUpload,
+  loadPendingShoulderPressSession,
   SHOULDER_PRESS_SOURCE_KEY
 } from '../shoulder-press/session'
 import { actionButtonLabel, actionEntryUrl } from './actionRouting'
@@ -81,7 +81,8 @@ export default function PrescriptionPage() {
   }, [])
 
   useDidShow(() => {
-    if (loadPendingShoulderPressUpload(Taro)) {
+    const pendingShoulderPress = loadPendingShoulderPressSession(Taro)
+    if (pendingShoulderPress && !pendingShoulderPress.finalized) {
       Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
       return
     }
