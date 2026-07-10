@@ -7,9 +7,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.studies.models import ProjectPatient
 
 from .models import TrainingRecord, TrainingVideo
-from .qiniu import generate_upload_token
+from .qiniu import generate_upload_token, stat_object_metadata, validate_object_metadata
 from .services import create_training_record
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
@@ -100,7 +101,6 @@ def create_upload_intent(
     }
 
 
-@transaction.atomic
 def complete_training_video(
     *,
     project_patient,
@@ -111,47 +111,114 @@ def complete_training_video(
     actual_duration_minutes,
     note="",
 ):
-    video = (
-        TrainingVideo.objects.select_for_update(of=("self",))
-        .select_related("prescription_action", "training_record")
+    object_hash = object_hash.strip() if object_hash else ""
+    if not object_hash:
+        raise ValidationError("训练视频 Hash 不能为空")
+
+    preliminary_video = (
+        TrainingVideo.objects.select_related("training_record")
         .filter(pk=video_id, project_patient=project_patient)
         .first()
     )
-    if video is None:
+    if preliminary_video is None:
         raise ValidationError("训练视频不存在")
-    if video.object_key != key:
+    if not preliminary_video.training_record_id and preliminary_video.object_key != key:
         raise ValidationError("训练视频对象不匹配")
-    if not object_hash or not object_hash.strip():
-        raise ValidationError("训练视频 Hash 不能为空")
 
-    active, action = _get_current_shoulder_action(
-        project_patient, video.prescription_action_id
-    )
-    if video.training_record_id:
-        return video, False
+    metadata = None
+    if not preliminary_video.training_record_id:
+        metadata = stat_object_metadata(
+            bucket=preliminary_video.bucket,
+            key=preliminary_video.object_key,
+        )
 
-    record = create_training_record(
-        project_patient=project_patient,
-        prescription_action=action,
-        training_date=training_date,
-        status=TrainingRecord.Status.COMPLETED,
-        actual_duration_minutes=actual_duration_minutes,
-        form_data={"video_id": video.id, "video_object_key": video.object_key},
-        note=note,
+    with transaction.atomic():
+        locked_project_patient = (
+            ProjectPatient.objects.select_for_update(of=("self",))
+            .select_related("project")
+            .filter(pk=project_patient.pk)
+            .first()
+        )
+        if locked_project_patient is None:
+            raise ValidationError("患者项目绑定不存在")
+
+        video = (
+            TrainingVideo.objects.select_for_update(of=("self",))
+            .select_related("prescription_action", "training_record")
+            .filter(pk=video_id, project_patient=locked_project_patient)
+            .first()
+        )
+        if video is None:
+            raise ValidationError("训练视频不存在")
+
+        if video.training_record_id:
+            _validate_attached_request(
+                video,
+                key=key,
+                object_hash=object_hash,
+                training_date=training_date,
+                actual_duration_minutes=actual_duration_minutes,
+                note=note,
+            )
+            return video, False
+
+        if video.object_key != key:
+            raise ValidationError("训练视频对象不匹配")
+        if metadata is None:
+            raise ValidationError("训练视频状态已变化，请重试")
+        validate_object_metadata(
+            metadata,
+            expected_hash=object_hash,
+            expected_size_bytes=video.size_bytes,
+            expected_content_type=video.content_type,
+        )
+
+        active, action = _get_current_shoulder_action(
+            locked_project_patient, video.prescription_action_id
+        )
+        record = create_training_record(
+            project_patient=locked_project_patient,
+            prescription_action=action,
+            training_date=training_date,
+            status=TrainingRecord.Status.COMPLETED,
+            actual_duration_minutes=actual_duration_minutes,
+            form_data={"video_id": video.id, "video_object_key": video.object_key},
+            note=note,
+        )
+        video.prescription = active
+        video.object_hash = object_hash
+        video.status = TrainingVideo.Status.ATTACHED
+        video.uploaded_at = timezone.now()
+        video.training_record = record
+        video.save(
+            update_fields=[
+                "prescription",
+                "object_hash",
+                "status",
+                "uploaded_at",
+                "training_record",
+                "updated_at",
+            ]
+        )
+        return video, True
+
+
+def _validate_attached_request(
+    video,
+    *,
+    key,
+    object_hash,
+    training_date,
+    actual_duration_minutes,
+    note,
+):
+    record = video.training_record
+    matches = (
+        video.object_key == key
+        and video.object_hash == object_hash
+        and record.training_date == training_date
+        and record.actual_duration_minutes == actual_duration_minutes
+        and record.note == note
     )
-    video.prescription = active
-    video.object_hash = object_hash
-    video.status = TrainingVideo.Status.ATTACHED
-    video.uploaded_at = timezone.now()
-    video.training_record = record
-    video.save(
-        update_fields=[
-            "prescription",
-            "object_hash",
-            "status",
-            "uploaded_at",
-            "training_record",
-            "updated_at",
-        ]
-    )
-    return video, True
+    if not matches:
+        raise ValidationError("重复完成请求与已绑定训练记录冲突")

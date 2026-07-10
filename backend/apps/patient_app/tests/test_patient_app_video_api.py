@@ -1,6 +1,10 @@
 import pytest
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 from django.test import override_settings
 from django.utils import timezone
+from qiniu import BucketManager
 from rest_framework.test import APIClient
 
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
@@ -8,6 +12,28 @@ from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 from apps.training.models import TrainingRecord, TrainingVideo
+
+
+def _stat_response(*, status_code=200, error=None):
+    return SimpleNamespace(status_code=status_code, error=error)
+
+
+@pytest.fixture(autouse=True)
+def qiniu_stat(monkeypatch):
+    def trusted_metadata(bucket, key):
+        video = TrainingVideo.objects.get(bucket=bucket, object_key=key)
+        return (
+            {
+                "hash": "qiniu-hash",
+                "fsize": video.size_bytes,
+                "mimeType": video.content_type,
+            },
+            _stat_response(),
+        )
+
+    stat = Mock(side_effect=trusted_metadata)
+    monkeypatch.setattr(BucketManager, "stat", stat)
+    return stat
 
 
 def _auth_client(project_patient, doctor, *, wx_openid="openid-video"):
@@ -283,6 +309,220 @@ def test_patient_app_complete_upload_creates_training_record_once(
     assert video.status == TrainingVideo.Status.ATTACHED
     assert video.object_hash == "qiniu-hash"
     assert video.training_record_id == first.data["training_record"]["id"]
+
+
+@pytest.mark.django_db
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_BUCKET="motioncare-training",
+    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
+)
+def test_patient_app_complete_retry_remains_idempotent_after_prescription_changes(
+    project_patient,
+    doctor,
+    active_prescription,
+    qiniu_stat,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    intent = client.post(
+        "/api/patient-app/training-videos/upload-intent/",
+        _upload_payload(action),
+        format="json",
+    )
+    payload = _complete_payload(intent)
+    first = client.post(
+        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
+        payload,
+        format="json",
+    )
+    active_prescription.status = Prescription.Status.ARCHIVED
+    active_prescription.save(update_fields=["status", "updated_at"])
+    replacement = Prescription.objects.create(
+        project_patient=project_patient,
+        version=2,
+        opened_by=doctor,
+        status=Prescription.Status.ACTIVE,
+        effective_at=timezone.now(),
+    )
+    _shoulder_press_action(replacement)
+
+    retry = client.post(
+        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
+        payload,
+        format="json",
+    )
+
+    assert first.status_code == 201, first.data
+    assert retry.status_code == 200, retry.data
+    assert retry.data["training_record"]["id"] == first.data["training_record"]["id"]
+    assert TrainingRecord.objects.filter(project_patient=project_patient).count() == 1
+    assert qiniu_stat.call_count == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("key", "training-videos/other.mp4"),
+        ("hash", "different-hash"),
+        ("training_date", "2026-07-09"),
+        ("actual_duration_minutes", 3),
+        ("note", "不同备注"),
+    ],
+)
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_BUCKET="motioncare-training",
+    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
+)
+def test_patient_app_rejects_attached_retry_with_conflicting_payload(
+    project_patient,
+    doctor,
+    active_prescription,
+    field,
+    value,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    intent = client.post(
+        "/api/patient-app/training-videos/upload-intent/",
+        _upload_payload(action),
+        format="json",
+    )
+    payload = _complete_payload(intent)
+    first = client.post(
+        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
+        payload,
+        format="json",
+    )
+
+    retry = client.post(
+        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
+        {**payload, field: value},
+        format="json",
+    )
+
+    assert first.status_code == 201, first.data
+    assert retry.status_code == 400, retry.data
+    assert "冲突" in str(retry.data)
+    record = TrainingRecord.objects.get(project_patient=project_patient)
+    assert record.training_date == timezone.localdate()
+    assert record.actual_duration_minutes == 2
+    assert record.note == "完成肩部推举"
+    assert TrainingVideo.objects.get(pk=intent.data["video_id"]).object_hash == "qiniu-hash"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("remote_metadata", "expected_detail"),
+    [
+        (None, "对象不存在"),
+        (
+            {"hash": "random-hash", "fsize": 1024, "mimeType": "video/mp4"},
+            "Hash 不匹配",
+        ),
+        (
+            {"hash": "qiniu-hash", "fsize": 2048, "mimeType": "video/mp4"},
+            "大小不匹配",
+        ),
+        (
+            {"hash": "qiniu-hash", "fsize": 1024, "mimeType": "image/png"},
+            "类型不匹配",
+        ),
+    ],
+)
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_BUCKET="motioncare-training",
+    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
+)
+def test_patient_app_rejects_complete_when_qiniu_metadata_is_untrusted(
+    project_patient,
+    doctor,
+    active_prescription,
+    qiniu_stat,
+    remote_metadata,
+    expected_detail,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    intent = client.post(
+        "/api/patient-app/training-videos/upload-intent/",
+        _upload_payload(action),
+        format="json",
+    )
+    status_code = 200 if remote_metadata is not None else 612
+    qiniu_stat.side_effect = None
+    qiniu_stat.return_value = (
+        remote_metadata,
+        _stat_response(status_code=status_code, error="no such file"),
+    )
+
+    response = client.post(
+        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
+        _complete_payload(intent),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert expected_detail in str(response.data)
+    assert TrainingRecord.objects.count() == 0
+    video = TrainingVideo.objects.get(pk=intent.data["video_id"])
+    assert video.status == TrainingVideo.Status.UPLOADING
+    assert video.object_hash == ""
+
+
+@pytest.mark.django_db
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_BUCKET="motioncare-training",
+    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
+)
+def test_patient_app_complete_stats_before_project_patient_and_video_locks(
+    project_patient,
+    doctor,
+    active_prescription,
+    qiniu_stat,
+    monkeypatch,
+):
+    from django.db.models.query import QuerySet
+
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    intent = client.post(
+        "/api/patient-app/training-videos/upload-intent/",
+        _upload_payload(action),
+        format="json",
+    )
+    events = []
+    original_select_for_update = QuerySet.select_for_update
+    original_stat_side_effect = qiniu_stat.side_effect
+
+    def record_lock(queryset, *args, **kwargs):
+        if queryset.model in {ProjectPatient, TrainingVideo}:
+            events.append(queryset.model.__name__)
+        return original_select_for_update(queryset, *args, **kwargs)
+
+    def record_stat(bucket, key):
+        events.append("qiniu_stat")
+        return original_stat_side_effect(bucket, key)
+
+    monkeypatch.setattr(QuerySet, "select_for_update", record_lock)
+    qiniu_stat.side_effect = record_stat
+
+    response = client.post(
+        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
+        _complete_payload(intent),
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    assert events[:3] == ["qiniu_stat", "ProjectPatient", "TrainingVideo"]
 
 
 @pytest.mark.django_db
