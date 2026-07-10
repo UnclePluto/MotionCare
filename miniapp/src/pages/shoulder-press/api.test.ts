@@ -184,7 +184,10 @@ describe('shoulder press segmented upload api', () => {
     ['video_id is missing', { status: 'recording' }],
     ['video_id is zero', { video_id: 0, status: 'recording' }],
     ['video_id is fractional', { video_id: 1.2, status: 'recording' }],
-    ['status is not a backend video status', { video_id: 9, status: 'created' }]
+    ['status is not a backend video status', { video_id: 9, status: 'created' }],
+    ['uploaded_segments is missing', { video_id: 9, status: 'recording' }],
+    ['uploaded_segments is null', { video_id: 9, status: 'recording', uploaded_segments: null }],
+    ['uploaded_segments is not an array', { video_id: 9, status: 'recording', uploaded_segments: '0,1' }]
   ])('rejects malformed create success responses when %s', async (_caseName, data) => {
     taroMock.request.mockResolvedValueOnce({ statusCode: 201, data })
 
@@ -201,6 +204,7 @@ describe('shoulder press segmented upload api', () => {
     ['video_id is invalid', { video_id: -1, status: 'recording', uploaded_segments: [] }],
     ['status is invalid', { video_id: 9, status: 'assembled', uploaded_segments: [] }],
     ['uploaded_segments is missing', { video_id: 9, status: 'recording' }],
+    ['video_id does not match the requested video id', { video_id: 10, status: 'recording', uploaded_segments: [] }],
     ['uploaded_segments is not an array', { video_id: 9, status: 'recording', uploaded_segments: '0,1' }],
     ['uploaded_segments contains a fractional index', { video_id: 9, status: 'recording', uploaded_segments: [0, 1.5] }],
     ['uploaded_segments contains a negative index', { video_id: 9, status: 'recording', uploaded_segments: [0, -1] }]
@@ -213,8 +217,12 @@ describe('shoulder press segmented upload api', () => {
   it.each([
     ['video_id is missing', { status: 'queued', assembly_job_id: 1 }],
     ['video_id is not positive', { video_id: 0, status: 'queued', assembly_job_id: 1 }],
+    ['video_id does not match the requested video id', { video_id: 10, status: 'queued', assembly_job_id: 1 }],
     ['status is invalid', { video_id: 9, status: 'assembled', assembly_job_id: 1 }],
+    ['assembly_job_id is missing', { video_id: 9, status: 'queued' }],
+    ['assembly_job_id is null', { video_id: 9, status: 'queued', assembly_job_id: null }],
     ['assembly_job_id is a string', { video_id: 9, status: 'queued', assembly_job_id: 'job-1' }],
+    ['assembly_job_id is fractional', { video_id: 9, status: 'queued', assembly_job_id: 1.2 }],
     ['assembly_job_id is not positive', { video_id: 9, status: 'queued', assembly_job_id: 0 }]
   ])('rejects malformed finalize success responses when %s', async (_caseName, data) => {
     taroMock.request.mockResolvedValueOnce({ statusCode: 202, data })

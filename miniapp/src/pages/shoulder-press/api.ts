@@ -26,7 +26,7 @@ export type VideoSessionStatus = {
   video_id: number
   status: TrainingVideoStatus
   uploaded_segments?: number[]
-  assembly_job_id?: number | null
+  assembly_job_id?: number
 }
 
 export type UploadedVideoSegment = {
@@ -82,11 +82,18 @@ function parseUploadedSegments(value: unknown): number[] {
   return value as number[]
 }
 
-function parseVideoSessionStatus(
-  value: unknown,
-  options: { requireUploadedSegments?: boolean; validateAssemblyJobId?: boolean } = {}
-): VideoSessionStatus {
+type ParseVideoSessionStatusOptions = {
+  requireUploadedSegments?: boolean
+  requireAssemblyJobId?: boolean
+  expectedVideoId?: number
+}
+
+function parseVideoSessionStatus(value: unknown, options: ParseVideoSessionStatusOptions = {}): VideoSessionStatus {
   if (!isObject(value) || !isPositiveInteger(value.video_id) || !isTrainingVideoStatus(value.status)) {
+    throw new Error('视频会话响应格式无效')
+  }
+
+  if (options.expectedVideoId !== undefined && value.video_id !== options.expectedVideoId) {
     throw new Error('视频会话响应格式无效')
   }
 
@@ -99,10 +106,8 @@ function parseVideoSessionStatus(
     parsed.uploaded_segments = parseUploadedSegments(value.uploaded_segments)
   }
 
-  if (options.validateAssemblyJobId || value.assembly_job_id !== undefined) {
-    if (value.assembly_job_id === null || value.assembly_job_id === undefined) {
-      parsed.assembly_job_id = value.assembly_job_id
-    } else if (isPositiveInteger(value.assembly_job_id)) {
+  if (options.requireAssemblyJobId || value.assembly_job_id !== undefined) {
+    if (isPositiveInteger(value.assembly_job_id)) {
       parsed.assembly_job_id = value.assembly_job_id
     } else {
       throw new Error('视频会话响应格式无效')
@@ -127,7 +132,7 @@ export async function createVideoSession(input: {
       expected_duration_seconds: input.expectedDurationSeconds
     }
   })
-  return parseVideoSessionStatus(response)
+  return parseVideoSessionStatus(response, { requireUploadedSegments: true })
 }
 
 export async function uploadVideoSegment(input: {
@@ -212,12 +217,18 @@ export async function finalizeVideoSession(input: {
       note: input.note
     }
   })
-  return parseVideoSessionStatus(response, { validateAssemblyJobId: true })
+  return parseVideoSessionStatus(response, {
+    requireAssemblyJobId: true,
+    expectedVideoId: input.videoId
+  })
 }
 
 export async function getVideoSessionStatus(videoId: number): Promise<VideoSessionStatus> {
   const response = await request<unknown>(`/patient-app/training-video-sessions/${videoId}/status/`)
-  return parseVideoSessionStatus(response, { requireUploadedSegments: true })
+  return parseVideoSessionStatus(response, {
+    requireUploadedSegments: true,
+    expectedVideoId: videoId
+  })
 }
 
 export async function createShoulderPressUploadIntent(input: {
