@@ -15,6 +15,7 @@ from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
+from apps.training.video_services import complete_training_video, create_upload_intent
 from apps.training.views import validation_detail
 
 from .authentication import PatientAppTokenAuthentication
@@ -22,6 +23,8 @@ from .serializers import (
     PatientAppBindSerializer,
     PatientAppDailyHealthSerializer,
     PatientAppTrainingRecordCreateSerializer,
+    PatientAppTrainingVideoCompleteSerializer,
+    PatientAppTrainingVideoUploadIntentSerializer,
 )
 from .services import bind_project_patient_with_code
 
@@ -235,6 +238,56 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(TrainingRecordSerializer(record).data, status=status.HTTP_201_CREATED)
+
+
+class PatientAppTrainingVideoUploadIntentView(PatientAppBaseView):
+    def post(self, request):
+        serializer = PatientAppTrainingVideoUploadIntentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            data = create_upload_intent(
+                project_patient=self.project_patient(),
+                prescription_action_id=serializer.validated_data["prescription_action"],
+                content_type=serializer.validated_data["content_type"],
+                size_bytes=serializer.validated_data["size_bytes"],
+                duration_seconds=serializer.validated_data["duration_seconds"],
+            )
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+class PatientAppTrainingVideoCompleteView(PatientAppBaseView):
+    def post(self, request, video_id):
+        serializer = PatientAppTrainingVideoCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            video, created = complete_training_video(
+                project_patient=self.project_patient(),
+                video_id=video_id,
+                key=serializer.validated_data["key"],
+                object_hash=serializer.validated_data["hash"],
+                training_date=serializer.validated_data["training_date"],
+                actual_duration_minutes=serializer.validated_data[
+                    "actual_duration_minutes"
+                ],
+                note=serializer.validated_data.get("note", ""),
+            )
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(
+            {
+                "video_id": video.id,
+                "status": video.status,
+                "training_record": serialize_training_record(video.training_record),
+            },
+            status=response_status,
+        )
 
 
 class PatientAppActionHistoryView(PatientAppBaseView):

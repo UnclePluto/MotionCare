@@ -8,6 +8,8 @@ from .views import (
     PatientAppHomeView,
     PatientAppMeView,
     PatientAppTrainingRecordView,
+    PatientAppTrainingVideoCompleteView,
+    PatientAppTrainingVideoUploadIntentView,
 )
 
 urlpatterns = [
@@ -23,6 +25,16 @@ urlpatterns = [
         "training-records/",
         PatientAppTrainingRecordView.as_view(),
         name="patient-app-training-records",
+    ),
+    path(
+        "training-videos/upload-intent/",
+        PatientAppTrainingVideoUploadIntentView.as_view(),
+        name="patient-app-training-video-upload-intent",
+    ),
+    path(
+        "training-videos/<int:video_id>/complete/",
+        PatientAppTrainingVideoCompleteView.as_view(),
+        name="patient-app-training-video-complete",
     ),
     path(
         "actions/<int:prescription_action_id>/history/",
