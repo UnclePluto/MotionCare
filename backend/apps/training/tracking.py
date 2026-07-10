@@ -2,7 +2,7 @@ from collections import defaultdict
 from decimal import Decimal
 from statistics import mean
 
-from django.db.models import Count, F, Max, Q
+from django.db.models import Count, F, Max, Prefetch, Q
 from django.http import Http404
 from django.utils import timezone
 
@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
-from .models import TrainingRecord
+from .models import MotionAnalysisJob, TrainingRecord
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
 
@@ -407,11 +407,20 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
 def recent_records(project_patient: ProjectPatient) -> list[dict]:
     records = (
         TrainingRecord.objects.filter(project_patient=project_patient)
-        .select_related("prescription", "prescription_action")
+        .select_related("prescription", "prescription_action", "video")
+        .prefetch_related(
+            Prefetch(
+                "motion_analysis_jobs",
+                queryset=MotionAnalysisJob.objects.order_by("-created_at", "-id"),
+                to_attr="ordered_analysis_jobs",
+            )
+        )
         .order_by("-training_date", "-id")[:30]
     )
     rows = []
     for record in records:
+        video = getattr(record, "video", None)
+        latest_job = record.ordered_analysis_jobs[0] if record.ordered_analysis_jobs else None
         is_game = (
             record.prescription_action.internal_type_snapshot
             == ActionLibraryItem.InternalType.GAME
@@ -454,6 +463,12 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "game_difficulty": _form_difficulty(record.form_data),
                 **game_fields,
                 "note": record.note,
+                "video_id": video.id if video else None,
+                "video_status": video.status if video else None,
+                "latest_analysis_status": latest_job.status if latest_job else None,
+                "analysis_total_count": latest_job.total_count if latest_job else None,
+                "analysis_standard_count": latest_job.standard_count if latest_job else None,
+                "analysis_nonstandard_count": latest_job.nonstandard_count if latest_job else None,
             }
         )
     return rows
