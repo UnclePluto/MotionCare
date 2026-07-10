@@ -17,10 +17,14 @@ def test_generate_upload_token_contains_fixed_bucket_key_scope():
         expires_at=1783692000,
     )
 
+    assert token == (
+        "ak-test:H1S1eXs9gKrJf9xztDGLb3R4fPE=:"
+        "eyJzY29wZSI6Im1vdGlvbmNhcmU6dHJhaW5pbmctdmlkZW9zLzEvMjAyNi8wNy8xMC92aWRlby5tcDQiLCJkZWFkbGluZSI6MTc4MzY5MjAwMCwicmV0dXJuQm9keSI6IntcImtleVwiOlwiJChrZXkpXCIsXCJoYXNoXCI6XCIkKGV0YWcpXCIsXCJzaXplXCI6JChmc2l6ZSl9In0="
+    )
     access_key, encoded_sign, encoded_policy = token.split(":")
     assert access_key == "ak-test"
     assert encoded_sign
-    policy = json.loads(base64.urlsafe_b64decode(encoded_policy + "==").decode("utf-8"))
+    policy = json.loads(base64.urlsafe_b64decode(encoded_policy).decode("utf-8"))
     assert policy["scope"] == "motioncare:training-videos/1/2026/07/10/video.mp4"
     assert policy["deadline"] == 1783692000
 
@@ -32,8 +36,9 @@ def test_private_download_url_adds_deadline_and_token():
         expires_at=1783692000,
     )
 
-    assert url.startswith(
-        "https://cdn.example.com/training-videos/a.mp4?e=1783692000&token=ak-test:"
+    assert url == (
+        "https://cdn.example.com/training-videos/a.mp4?e=1783692000&"
+        "token=ak-test:A5Sdr1PWsR-H9KVvZFsLggKOKSc%3D"
     )
 
 

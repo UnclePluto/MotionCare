@@ -8,7 +8,7 @@ from django.conf import settings
 
 
 def _urlsafe_base64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+    return base64.urlsafe_b64encode(data).decode("utf-8")
 
 
 def _sign(data: str) -> str:
