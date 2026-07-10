@@ -21,25 +21,43 @@ function resolveErrorMessage(data: unknown): string {
   return '请求失败'
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export function apiUrl(path: string): string {
+  return `${API_BASE_URL}${path}`
+}
+
+export function patientAuthorizationHeader(): Record<string, string> {
   const token = getPatientAppToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export function handlePatientUnauthorized(): never {
+  clearPatientAppToken()
+  Taro.redirectTo({ url: '/pages/bind/index' })
+  throw new Error('登录已失效')
+}
+
+export function safeApiErrorMessage(data: unknown): string {
+  const message = resolveErrorMessage(data)
+  if (/authorization|bearer|token|secret/i.test(message)) return '请求失败'
+  return message
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await Taro.request<T>({
-    url: `${API_BASE_URL}${path}`,
+    url: apiUrl(path),
     method: options.method ?? 'GET',
     data: options.data,
     header: {
       'content-type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+      ...patientAuthorizationHeader()
     }
   })
 
   if (response.statusCode === 401 || response.statusCode === 403) {
-    clearPatientAppToken()
-    Taro.redirectTo({ url: '/pages/bind/index' })
-    throw new Error('登录已失效')
+    handlePatientUnauthorized()
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(resolveErrorMessage(response.data))
+    throw new Error(safeApiErrorMessage(response.data))
   }
   return response.data
 }

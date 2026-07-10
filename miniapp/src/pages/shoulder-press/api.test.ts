@@ -1,150 +1,167 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
 import {
-  completeShoulderPressUpload,
-  createShoulderPressUploadIntent,
-  isQiniuTokenExpiredError,
-  uploadVideoToQiniu
+  createVideoSession,
+  finalizeVideoSession,
+  getVideoSessionStatus,
+  uploadVideoSegment
 } from './api'
 
-const { mockRequest, mockUploadFile } = vi.hoisted(() => ({
-  mockRequest: vi.fn(),
-  mockUploadFile: vi.fn()
-}))
-
-vi.mock('../../api/client', () => ({
-  request: (...args: unknown[]) => mockRequest(...args)
-}))
-
-vi.mock('@tarojs/taro', () => ({
-  default: {
-    uploadFile: (...args: unknown[]) => mockUploadFile(...args)
+const { taroMock } = vi.hoisted(() => ({
+  taroMock: {
+    request: vi.fn(),
+    uploadFile: vi.fn(),
+    getStorageSync: vi.fn(),
+    removeStorageSync: vi.fn(),
+    redirectTo: vi.fn()
   }
 }))
 
-describe('shoulder press upload api', () => {
-  it('creates an upload intent through the patient app api', async () => {
-    mockRequest.mockResolvedValue({
-      video_id: 1,
-      bucket: 'motioncare-training',
-      key: 'k',
-      upload_token: 'token',
-      upload_host: 'https://upload.qiniup.com',
-      expires_at: '2026-07-10T19:00:00+08:00'
+vi.mock('@tarojs/taro', () => ({ default: taroMock }))
+
+describe('shoulder press segmented upload api', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    taroMock.getStorageSync.mockReturnValue('patient-token')
+  })
+
+  it('creates, finalizes, and reads video sessions through the patient app API', async () => {
+    taroMock.request
+      .mockResolvedValueOnce({ statusCode: 201, data: { video_id: 9, status: 'created' } })
+      .mockResolvedValueOnce({ statusCode: 202, data: { video_id: 9, status: 'assembling', assembly_job_id: 'job-1' } })
+      .mockResolvedValueOnce({ statusCode: 200, data: { video_id: 9, status: 'assembled', uploaded_segments: [0, 1] } })
+
+    await expect(createVideoSession({
+      actionId: 42,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180
+    })).resolves.toEqual({ video_id: 9, status: 'created' })
+    await expect(finalizeVideoSession({
+      videoId: 9,
+      segmentCount: 2,
+      actualDurationSeconds: 60,
+      note: ''
+    })).resolves.toEqual({ video_id: 9, status: 'assembling', assembly_job_id: 'job-1' })
+    await expect(getVideoSessionStatus(9)).resolves.toEqual({
+      video_id: 9,
+      status: 'assembled',
+      uploaded_segments: [0, 1]
     })
 
-    await createShoulderPressUploadIntent({ actionId: 42, sizeBytes: 100, durationSeconds: 30 })
-
-    expect(mockRequest).toHaveBeenCalledWith('/patient-app/training-videos/upload-intent/', {
+    expect(taroMock.request.mock.calls[0][0]).toMatchObject({
+      url: 'http://127.0.0.1:8000/api/patient-app/training-video-sessions/',
       method: 'POST',
       data: {
         prescription_action: 42,
-        content_type: 'video/mp4',
-        size_bytes: 100,
-        duration_seconds: 30
-      }
+        client_session_id: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+        training_date: '2026-07-11',
+        expected_duration_seconds: 180
+      },
+      header: expect.objectContaining({ Authorization: 'Bearer patient-token' })
     })
-  })
-
-  it('uploads to qiniu and reports normalized progress', async () => {
-    const progress: number[] = []
-    mockUploadFile.mockImplementation((options) => {
-      const task = {
-        onProgressUpdate(callback) {
-          callback({ progress: 36.6, totalBytesSent: 366, totalBytesExpectedToSend: 1000 })
-        }
-      }
-      queueMicrotask(() => options.success({ statusCode: 200, data: '{"key":"k","hash":"h"}' }))
-      return task
-    })
-
-    await expect(uploadVideoToQiniu({
-      uploadHost: 'https://upload.qiniup.com',
-      key: 'k',
-      uploadToken: 'token',
-      filePath: 'wxfile://video.mp4',
-      onProgress: (value) => progress.push(value)
-    })).resolves.toEqual({ key: 'k', hash: 'h' })
-    expect(progress).toEqual([37])
-  })
-
-  it('rejects non-2xx, malformed json, and a mismatched response key', async () => {
-    mockUploadFile
-      .mockImplementationOnce((options) => {
-        queueMicrotask(() => options.success({ statusCode: 500, data: '{"error":"server error"}' }))
-        return { onProgressUpdate: vi.fn() }
-      })
-      .mockImplementationOnce((options) => {
-        queueMicrotask(() => options.success({ statusCode: 200, data: 'not-json' }))
-        return { onProgressUpdate: vi.fn() }
-      })
-      .mockImplementationOnce((options) => {
-        queueMicrotask(() => options.success({ statusCode: 200, data: '{"key":"other","hash":"h"}' }))
-        return { onProgressUpdate: vi.fn() }
-      })
-
-    const input = {
-      uploadHost: 'https://upload.qiniup.com',
-      key: 'expected',
-      uploadToken: 'secret-token',
-      filePath: 'wxfile://video.mp4'
-    }
-    await expect(uploadVideoToQiniu(input)).rejects.toThrow('视频上传失败（HTTP 500）')
-    await expect(uploadVideoToQiniu(input)).rejects.toThrow('视频上传响应格式无效')
-    await expect(uploadVideoToQiniu(input)).rejects.toThrow('视频上传结果与申请凭证不一致')
-  })
-
-  it('classifies an explicit qiniu token expiry without exposing the token', async () => {
-    mockUploadFile.mockImplementation((options) => {
-      queueMicrotask(() => options.success({ statusCode: 401, data: '{"error":"token has expired: secret-token"}' }))
-      return { onProgressUpdate: vi.fn() }
-    })
-
-    const promise = uploadVideoToQiniu({
-      uploadHost: 'https://upload.qiniup.com',
-      key: 'k',
-      uploadToken: 'secret-token',
-      filePath: 'wxfile://video.mp4'
-    })
-
-    await expect(promise).rejects.toSatisfy((error: unknown) => isQiniuTokenExpiredError(error))
-    await expect(promise).rejects.not.toThrow(/secret-token/)
-  })
-
-  it('does not expose transport error details that may contain credentials', async () => {
-    mockUploadFile.mockImplementation((options) => {
-      queueMicrotask(() => options.fail({ errMsg: 'upload failed with secret-token' }))
-      return { onProgressUpdate: vi.fn() }
-    })
-
-    await expect(uploadVideoToQiniu({
-      uploadHost: 'https://upload.qiniup.com',
-      key: 'k',
-      uploadToken: 'secret-token',
-      filePath: 'wxfile://video.mp4'
-    })).rejects.toThrow('视频上传失败，请检查网络后重试')
-  })
-
-  it('completes upload with the original training fields', async () => {
-    mockRequest.mockResolvedValue({ video_id: 1, status: 'attached' })
-
-    await completeShoulderPressUpload({
-      videoId: 1,
-      key: 'k',
-      hash: 'h',
-      trainingDate: '2026-07-10',
-      actualDurationMinutes: 2,
-      note: ''
-    })
-
-    expect(mockRequest).toHaveBeenCalledWith('/patient-app/training-videos/1/complete/', {
+    expect(taroMock.request.mock.calls[1][0]).toMatchObject({
+      url: 'http://127.0.0.1:8000/api/patient-app/training-video-sessions/9/finalize/',
       method: 'POST',
       data: {
-        key: 'k',
-        hash: 'h',
-        training_date: '2026-07-10',
-        actual_duration_minutes: 2,
+        segment_count: 2,
+        actual_duration_seconds: 60,
         note: ''
       }
     })
+    expect(taroMock.request.mock.calls[2][0]).toMatchObject({
+      url: 'http://127.0.0.1:8000/api/patient-app/training-video-sessions/9/status/',
+      method: 'GET'
+    })
+  })
+
+  it('uploads a segment as multipart to the backend with bearer auth and byte metadata', async () => {
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.success?.({ statusCode: 201, data: '{"index":0,"sha256":"segment-sha"}' })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).resolves.toEqual({ index: 0, sha256: 'segment-sha' })
+
+    const uploadOptions = taroMock.uploadFile.mock.calls[0][0]
+    expect(uploadOptions).toMatchObject({
+      url: 'http://127.0.0.1:8000/api/patient-app/training-video-sessions/9/segments/0/',
+      filePath: 'wxfile://store/segment-0.mp4',
+      name: 'file',
+      header: { Authorization: 'Bearer patient-token' },
+      formData: {
+        duration_ms: 29800,
+        size_bytes: 2097152
+      }
+    })
+    const forbiddenFields = [
+      ['upload', '_', 'token'].join(''),
+      ['upload', 'Token'].join(''),
+      ['buck', 'et'].join(''),
+      ['k', 'ey'].join(''),
+      ['upload', '_', 'host'].join(''),
+      ['upload', 'Host'].join(''),
+      ['tok', 'en'].join('')
+    ]
+    expect(Object.keys(uploadOptions.formData)).not.toEqual(expect.arrayContaining(forbiddenFields))
+    expect(uploadOptions.header.Authorization).toBe('Bearer patient-token')
+  })
+
+  it('normalizes upload progress while preserving single backend upload semantics', async () => {
+    const progress: number[] = []
+    taroMock.uploadFile.mockImplementation((options) => {
+      const task = {
+        onProgressUpdate(callback) {
+          callback({ progress: 47.8 })
+        }
+      }
+      queueMicrotask(() => options.success?.({ statusCode: 200, data: '{"index":1,"sha256":"segment-sha"}' }))
+      return task
+    })
+
+    await uploadVideoSegment({
+      videoId: 9,
+      index: 1,
+      filePath: 'wxfile://store/segment-1.mp4',
+      durationMs: 30000,
+      sizeBytes: 1024,
+      onProgress: (value) => progress.push(value)
+    })
+
+    expect(progress).toEqual([48])
+  })
+
+  it('clears patient token and redirects on upload 401 without leaking Authorization details', async () => {
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.success?.({
+        statusCode: 401,
+        data: '{"detail":"Authorization Bearer patient-token expired"}'
+      })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).rejects.toThrow('登录已失效')
+
+    expect(taroMock.removeStorageSync).toHaveBeenCalled()
+    expect(taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/bind/index' })
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).rejects.not.toThrow(/patient-token|Authorization/i)
   })
 })

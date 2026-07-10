@@ -1,17 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  PENDING_SHOULDER_PRESS_UPLOAD_KEY,
-  buildPendingShoulderPressUpload,
+  PENDING_SHOULDER_PRESS_SESSION_KEY,
+  appendPendingSegment,
   buildShoulderPressSessionUrl,
   buildShoulderPressUploadUrl,
-  clearPendingShoulderPressUpload,
-  loadPendingShoulderPressUpload,
-  savePendingShoulderPressUpload
+  clearPendingShoulderPressSession,
+  createPendingShoulderPressSession,
+  isSegmentReadyForLocalDeletion,
+  loadPendingShoulderPressSession,
+  markServerUploadedSegments,
+  savePendingShoulderPressSession
 } from './session'
 
-function memoryStorage() {
+function memoryStorage(initial?: unknown) {
   const store = new Map<string, unknown>()
+  if (initial !== undefined) store.set(PENDING_SHOULDER_PRESS_SESSION_KEY, initial)
   return {
     getStorageSync: vi.fn((key: string) => store.get(key)),
     setStorageSync: vi.fn((key: string, value: unknown) => store.set(key, value)),
@@ -19,120 +23,136 @@ function memoryStorage() {
   }
 }
 
-describe('shoulder press session helpers', () => {
+describe('shoulder press segmented session helpers', () => {
   it('builds session and upload urls', () => {
     expect(buildShoulderPressSessionUrl(42)).toBe('/pages/shoulder-press/index?actionId=42')
     expect(buildShoulderPressUploadUrl()).toBe('/pages/shoulder-press/upload')
   })
 
-  it('builds pending state from getVideoInfo metadata', () => {
-    expect(buildPendingShoulderPressUpload({
+  it('persists multiple saved segments and converts getVideoInfo kB to bytes', () => {
+    const session = createPendingShoulderPressSession({
       actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      videoInfo: { duration: 119.6, size: 2048 },
-      createdAt: 1783692000000
-    })).toEqual({
-      actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      durationSeconds: 120,
-      sizeBytes: 2048,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-07-11',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       createdAt: 1783692000000
     })
+    const updated = appendPendingSegment(session, {
+      savedFilePath: 'wxfile://store/segment-0.mp4',
+      durationSeconds: 29.8,
+      sizeKb: 2048
+    })
+
+    expect(updated.segments[0]).toMatchObject({
+      index: 0,
+      durationMs: 29800,
+      sizeBytes: 2097152,
+      uploadState: 'pending'
+    })
+    expect(updated.actualDurationMs).toBe(29800)
+    expect(updated.trainingDate).toBe('2026-07-11')
   })
 
-  it('rejects an unusable temporary path or invalid video metadata', () => {
-    expect(() => buildPendingShoulderPressUpload({
-      actionId: 42,
-      tempFilePath: '   ',
-      videoInfo: { duration: 20, size: 2048 },
-      createdAt: 1783692000000
-    })).toThrow('录像文件路径无效')
-    expect(() => buildPendingShoulderPressUpload({
-      actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      videoInfo: { duration: 0, size: 2048 },
-      createdAt: 1783692000000
-    })).toThrow('录像时长无效')
-  })
-
-  it('stores and restores all successful upload stages', () => {
+  it('keeps the original training date when a session is restored on the next day', () => {
     const storage = memoryStorage()
-    const pending = {
+    const session = appendPendingSegment(createPendingShoulderPressSession({
       actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      durationSeconds: 120,
-      sizeBytes: 2048,
-      createdAt: 1783692000000,
-      videoId: 7,
-      key: 'training-videos/7/video.mp4',
-      uploadToken: 'token',
-      uploadHost: 'https://upload.qiniup.com',
-      expiresAt: 1783695600000,
-      hash: 'qiniu-hash'
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-07-11',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    }), {
+      savedFilePath: 'wxfile://store/segment-0.mp4',
+      durationSeconds: 30,
+      sizeKb: 1000
+    })
+
+    savePendingShoulderPressSession(storage, session)
+
+    expect(loadPendingShoulderPressSession(storage)?.trainingDate).toBe('2026-07-11')
+  })
+
+  it('rejects damaged segment metadata and non-contiguous indexes during cold recovery', () => {
+    const validBase = {
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180,
+      actualDurationMs: 60000,
+      finalized: false,
+      createdAt: 1783692000000
     }
 
-    savePendingShoulderPressUpload(storage, pending)
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      ...validBase,
+      segments: [{
+        index: 0,
+        savedFilePath: '',
+        durationMs: 30000,
+        sizeBytes: 1024,
+        uploadState: 'pending'
+      }]
+    }))).toBeNull()
 
-    expect(storage.setStorageSync).toHaveBeenCalledWith(PENDING_SHOULDER_PRESS_UPLOAD_KEY, pending)
-    expect(loadPendingShoulderPressUpload(storage)).toEqual(pending)
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      ...validBase,
+      segments: [
+        {
+          index: 0,
+          savedFilePath: 'wxfile://store/segment-0.mp4',
+          durationMs: 30000,
+          sizeBytes: 1024,
+          uploadState: 'pending'
+        },
+        {
+          index: 2,
+          savedFilePath: 'wxfile://store/segment-2.mp4',
+          durationMs: 30000,
+          sizeBytes: 1024,
+          uploadState: 'pending'
+        }
+      ]
+    }))).toBeNull()
   })
 
-  it('drops malformed diagnostic data while restoring a complete upload stage', () => {
-    const storage = memoryStorage()
-    storage.setStorageSync(PENDING_SHOULDER_PRESS_UPLOAD_KEY, {
+  it('validates the RFC4122 v4 client session id shape', () => {
+    expect(() => createPendingShoulderPressSession({
       actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      durationSeconds: 120,
-      sizeBytes: 2048,
-      createdAt: 1783692000000,
-      videoId: 7,
-      key: 'training-videos/7/video.mp4',
-      uploadToken: 'token',
-      uploadHost: 'https://upload.qiniup.com',
-      expiresAt: 1783695600000,
-      hash: 'qiniu-hash',
-      lastError: 42
-    })
-
-    expect(loadPendingShoulderPressUpload(storage)).toEqual(expect.objectContaining({
-      videoId: 7,
-      hash: 'qiniu-hash'
-    }))
-    expect(loadPendingShoulderPressUpload(storage)).not.toHaveProperty('lastError')
-  })
-
-  it('recovers a valid recording by discarding a partial upload intent', () => {
-    const storage = memoryStorage()
-    storage.setStorageSync(PENDING_SHOULDER_PRESS_UPLOAD_KEY, {
-      actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      durationSeconds: 120,
-      sizeBytes: 2048,
-      createdAt: 1783692000000,
-      videoId: 7,
-      key: 'training-videos/7/video.mp4'
-    })
-    expect(loadPendingShoulderPressUpload(storage)).toEqual({
-      actionId: 42,
-      tempFilePath: 'wxfile://video.mp4',
-      durationSeconds: 120,
-      sizeBytes: 2048,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-07-11',
+      clientSessionId: 'not-a-v4-id',
       createdAt: 1783692000000
-    })
+    })).toThrow('录像会话标识无效')
   })
 
-  it('treats damaged base recording data as invalid', () => {
-    const storage = memoryStorage()
+  it('marks server-confirmed segment indexes without allowing premature local deletion', () => {
+    const session = [
+      { savedFilePath: 'wxfile://store/segment-0.mp4', durationSeconds: 30, sizeKb: 1000 },
+      { savedFilePath: 'wxfile://store/segment-1.mp4', durationSeconds: 30, sizeKb: 1000 }
+    ].reduce((current, segment) => appendPendingSegment(current, segment), createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-07-11',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    }))
 
-    storage.setStorageSync(PENDING_SHOULDER_PRESS_UPLOAD_KEY, { actionId: '42' })
-    expect(loadPendingShoulderPressUpload(storage)).toBeNull()
+    const recovered = markServerUploadedSegments(session, [0])
+
+    expect(recovered.segments[0].uploadState).toBe('uploaded')
+    expect(recovered.segments[0].sha256).toBeUndefined()
+    expect(isSegmentReadyForLocalDeletion(recovered.segments[0])).toBe(false)
+    expect(isSegmentReadyForLocalDeletion({
+      ...recovered.segments[0],
+      sha256: 'server-sha256'
+    })).toBe(true)
   })
 
-  it('clears pending upload only through the named storage key', () => {
+  it('clears pending session only through the named storage key', () => {
     const storage = memoryStorage()
 
-    clearPendingShoulderPressUpload(storage)
+    clearPendingShoulderPressSession(storage)
 
-    expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_SHOULDER_PRESS_UPLOAD_KEY)
+    expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_SHOULDER_PRESS_SESSION_KEY)
   })
 })
