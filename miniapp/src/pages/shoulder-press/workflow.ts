@@ -48,7 +48,13 @@ type LegacyWorkflowDependencies = {
     actionId: number
     sizeBytes: number
     durationSeconds: number
+    clientSessionId: string
+    trainingDate: string
   }) => Promise<VideoSessionStatus>
+  getVideoSessionStatus?: PendingSegmentUploadDependencies['getVideoSessionStatus']
+  uploadVideoSegment?: PendingSegmentUploadDependencies['uploadVideoSegment']
+  finalizeVideoSession?: PendingSegmentUploadDependencies['finalizeVideoSession']
+  deleteSavedFile?: PendingSegmentUploadDependencies['deleteSavedFile']
   uploadVideo?: (input: Record<string, unknown> & {
     filePath: string
     onProgress?: (progress: number) => void
@@ -56,6 +62,8 @@ type LegacyWorkflowDependencies = {
   completeUpload?: (input: Record<string, unknown>) => Promise<unknown>
   savePending?: (pending: PendingShoulderPressUpload) => void
 }
+
+const REMOTE_SEGMENTS_ERROR_MESSAGE = '服务端分段状态不一致，请重新上传'
 
 export function shoulderPressUploadErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) return '上传失败，请检查网络后重试'
@@ -66,10 +74,23 @@ export function shoulderPressUploadErrorMessage(error: unknown): string {
   return message
 }
 
-function uploadedIndexes(status: VideoSessionStatus): number[] {
-  return Array.isArray(status.uploaded_segments)
-    ? status.uploaded_segments.filter((index) => Number.isInteger(index) && index >= 0)
-    : []
+function uploadedIndexes(status: VideoSessionStatus, segmentCount: number): number[] {
+  if (status.uploaded_segments === undefined) return []
+  if (!Array.isArray(status.uploaded_segments)) throw new Error(REMOTE_SEGMENTS_ERROR_MESSAGE)
+
+  const seen = new Set<number>()
+  for (const index of status.uploaded_segments) {
+    if (!Number.isInteger(index) || index < 0 || index >= segmentCount || seen.has(index)) {
+      throw new Error(REMOTE_SEGMENTS_ERROR_MESSAGE)
+    }
+    seen.add(index)
+  }
+
+  const indexes = [...seen].sort((left, right) => left - right)
+  for (let expected = 0; expected < indexes.length; expected += 1) {
+    if (indexes[expected] !== expected) throw new Error(REMOTE_SEGMENTS_ERROR_MESSAGE)
+  }
+  return indexes
 }
 
 function persist(
@@ -124,7 +145,7 @@ export async function runPendingSegmentUploads(
     }
 
     const status = await dependencies.getVideoSessionStatus(session.videoId)
-    const recovered = markServerUploadedSegments(session, uploadedIndexes(status))
+    const recovered = markServerUploadedSegments(session, uploadedIndexes(status, session.segments.length))
     if (JSON.stringify(recovered.segments) !== JSON.stringify(session.segments)) {
       session = persist(recovered, dependencies)
     } else {
@@ -193,31 +214,83 @@ export async function runShoulderPressUploadWorkflow(
   onEvent: (event: { phase: ShoulderPressUploadPhase; progress: number }) => void
 ): Promise<PendingShoulderPressUpload> {
   const firstSegment = initialPending.segments[0]
-  if (!firstSegment || !dependencies.createIntent || !dependencies.uploadVideo || !dependencies.completeUpload) {
+  if (
+    initialPending.segments.length !== 1 ||
+    !firstSegment ||
+    !firstSegment.savedFilePath ||
+    !Number.isInteger(firstSegment.durationMs) ||
+    firstSegment.durationMs <= 0 ||
+    !Number.isInteger(firstSegment.sizeBytes) ||
+    firstSegment.sizeBytes <= 0
+  ) {
     throw new Error('录像上传信息不完整，请重新开始')
   }
 
-  const intent = await dependencies.createIntent({
-    actionId: initialPending.actionId,
-    sizeBytes: firstSegment.sizeBytes,
-    durationSeconds: Math.ceil(firstSegment.durationMs / 1000)
-  })
-  const uploaded = await dependencies.uploadVideo({
-    filePath: firstSegment.savedFilePath,
-    onProgress: (progress) => onEvent({ phase: 'upload', progress })
-  })
-  await dependencies.completeUpload({
-    videoId: intent.video_id,
-    hash: uploaded.hash,
-    actualDurationMinutes: Math.ceil(initialPending.actualDurationMs / 60000),
-    note: ''
-  })
-  const completed: PendingShoulderPressUpload = {
-    ...initialPending,
-    videoId: intent.video_id,
-    hash: uploaded.hash,
-    finalized: true
+  let videoId = initialPending.videoId
+  if (!videoId) {
+    if (!dependencies.createIntent) throw new Error('录像上传信息不完整，请重新开始')
+    onEvent({ phase: 'credential', progress: 0 })
+    const intent = await dependencies.createIntent({
+      actionId: initialPending.actionId,
+      sizeBytes: firstSegment.sizeBytes,
+      durationSeconds: Math.ceil(firstSegment.durationMs / 1000),
+      clientSessionId: initialPending.clientSessionId,
+      trainingDate: initialPending.trainingDate
+    })
+    videoId = intent.video_id
   }
+
+  if (!Number.isInteger(videoId) || videoId <= 0) throw new Error('录像上传信息不完整，请重新开始')
+
+  const pendingSession: PendingShoulderPressSession = {
+    clientSessionId: initialPending.clientSessionId,
+    videoId,
+    actionId: initialPending.actionId,
+    trainingDate: initialPending.trainingDate,
+    expectedDurationSeconds: initialPending.expectedDurationSeconds,
+    actualDurationMs: firstSegment.durationMs,
+    segments: [{
+      ...firstSegment,
+      index: 0,
+      uploadState: firstSegment.uploadState === 'uploaded' ? 'uploaded' : 'pending'
+    }],
+    finalized: false,
+    createdAt: initialPending.createdAt
+  }
+
+  const toLegacyPending = (session: PendingShoulderPressSession): PendingShoulderPressUpload => {
+    const segment = session.segments[0]
+    return {
+      ...initialPending,
+      ...session,
+      tempFilePath: segment.savedFilePath,
+      durationSeconds: Math.max(1, Math.round(segment.durationMs / 1000)),
+      sizeBytes: segment.sizeBytes,
+      ...(segment.sha256 ? { hash: segment.sha256 } : {})
+    }
+  }
+
+  const apiDependencies = (
+    dependencies.getVideoSessionStatus &&
+    dependencies.uploadVideoSegment &&
+    dependencies.finalizeVideoSession
+  )
+    ? null
+    : await import('./api')
+
+  const completedSession = await runPendingSegmentUploads(pendingSession, {
+    createVideoSession: async () => ({ video_id: videoId, status: 'created' }),
+    getVideoSessionStatus: dependencies.getVideoSessionStatus ?? apiDependencies.getVideoSessionStatus,
+    uploadVideoSegment: dependencies.uploadVideoSegment ?? apiDependencies.uploadVideoSegment,
+    finalizeVideoSession: dependencies.finalizeVideoSession ?? apiDependencies.finalizeVideoSession,
+    saveSession: (session) => dependencies.savePending?.(toLegacyPending(session)),
+    deleteSavedFile: dependencies.deleteSavedFile ?? (async () => undefined)
+  }, (event) => {
+    if (event.phase === 'upload') onEvent({ phase: 'upload', progress: event.progress ?? 0 })
+    if (event.phase === 'finalize') onEvent({ phase: 'finalize', progress: event.progress ?? 100 })
+  })
+
+  const completed = toLegacyPending(completedSession)
   dependencies.savePending?.(completed)
   onEvent({ phase: 'complete', progress: 100 })
   return completed

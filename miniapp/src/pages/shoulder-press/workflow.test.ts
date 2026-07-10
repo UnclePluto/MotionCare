@@ -5,7 +5,11 @@ import {
   createPendingShoulderPressSession,
   type PendingShoulderPressSession
 } from './session'
-import { runPendingSegmentUploads, shoulderPressUploadErrorMessage } from './workflow'
+import {
+  runPendingSegmentUploads,
+  runShoulderPressUploadWorkflow,
+  shoulderPressUploadErrorMessage
+} from './workflow'
 
 const NOW = 1783692000000
 
@@ -26,6 +30,7 @@ function baseSession(): PendingShoulderPressSession {
 function dependencies() {
   const saved: PendingShoulderPressSession[] = []
   const deleted: string[] = []
+  const eventLog: string[] = []
   const deps = {
     createVideoSession: vi.fn().mockResolvedValue({ video_id: 9, status: 'created' }),
     getVideoSessionStatus: vi.fn().mockResolvedValue({ video_id: 9, status: 'created', uploaded_segments: [] }),
@@ -40,12 +45,18 @@ function dependencies() {
     }),
     saveSession: vi.fn((session: PendingShoulderPressSession) => {
       saved.push(JSON.parse(JSON.stringify(session)) as PendingShoulderPressSession)
+      for (const segment of session.segments) {
+        if (segment.uploadState === 'uploaded' && segment.sha256) {
+          eventLog.push(`save:uploaded:${segment.index}:${segment.sha256}`)
+        }
+      }
     }),
     deleteSavedFile: vi.fn(async (path: string) => {
       deleted.push(path)
+      eventLog.push(`delete:${path}`)
     })
   }
-  return { deps, saved, deleted }
+  return { deps, saved, deleted, eventLog }
 }
 
 async function flushPromises(times = 6) {
@@ -63,7 +74,7 @@ describe('shoulder press pending segment upload workflow', () => {
   })
 
   it('creates the video session, uploads one segment at a time, persists uploaded sha before delete, then finalizes', async () => {
-    const { deps, saved, deleted } = dependencies()
+    const { deps, saved, deleted, eventLog } = dependencies()
     const events: Array<{ index: number; state: string; progress?: number }> = []
 
     const result = await runPendingSegmentUploads(baseSession(), deps, (event) => events.push(event))
@@ -89,6 +100,8 @@ describe('shoulder press pending segment upload workflow', () => {
     ))
     expect(firstDeleteIndex).toBeGreaterThanOrEqual(0)
     expect(deleted[0]).toBe('wxfile://store/segment-0.mp4')
+    expect(eventLog.indexOf('save:uploaded:0:sha-0'))
+      .toBeLessThan(eventLog.indexOf('delete:wxfile://store/segment-0.mp4'))
   })
 
   it('skips server-confirmed indexes during cold recovery and continues with the first local pending segment', async () => {
@@ -103,6 +116,26 @@ describe('shoulder press pending segment upload workflow', () => {
 
     expect(deps.createVideoSession).not.toHaveBeenCalled()
     expect(deps.uploadVideoSegment.mock.calls.map(([input]) => input.index)).toEqual([1, 2])
+  })
+
+  it.each([
+    [[99], '越界'],
+    [[1], '非前缀'],
+    [[0, 0], '重复']
+  ])('stops and persists lastError when remote uploaded_segments are %s (%s)', async (uploadedSegments) => {
+    const { deps, saved } = dependencies()
+    deps.getVideoSessionStatus.mockResolvedValueOnce({
+      video_id: 9,
+      status: 'created',
+      uploaded_segments: uploadedSegments
+    })
+
+    await expect(runPendingSegmentUploads({ ...baseSession(), videoId: 9 }, deps, vi.fn()))
+      .rejects.toThrow('服务端分段状态不一致，请重新上传')
+
+    expect(deps.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(deps.finalizeVideoSession).not.toHaveBeenCalled()
+    expect(saved.at(-1)?.lastError).toBe('服务端分段状态不一致，请重新上传')
   })
 
   it('never starts the next upload promise until the current segment has resolved', async () => {
@@ -156,5 +189,65 @@ describe('shoulder press pending segment upload workflow', () => {
     expect(saved.find((session) => (
       session.segments[0].uploadState === 'pending' && session.segments[0].sha256 === 'sha-0'
     ))).toBeUndefined()
+  })
+
+  it('bridges the legacy upload page through a single-segment pending session with real metadata', async () => {
+    const initial = baseSession()
+    const singleSegmentPending = {
+      ...initial,
+      actualDurationMs: initial.segments[0].durationMs,
+      segments: [initial.segments[0]],
+      durationSeconds: 30,
+      tempFilePath: initial.segments[0].savedFilePath,
+      sizeBytes: initial.segments[0].sizeBytes
+    }
+    const saved: PendingShoulderPressSession[] = []
+    const deps = {
+      createIntent: vi.fn().mockResolvedValue({ video_id: 77, status: 'created' }),
+      getVideoSessionStatus: vi.fn().mockResolvedValue({ video_id: 77, status: 'created', uploaded_segments: [] }),
+      uploadVideoSegment: vi.fn().mockResolvedValue({ index: 0, sha256: 'sha-real' }),
+      finalizeVideoSession: vi.fn().mockResolvedValue({ video_id: 77, status: 'assembling' }),
+      savePending: vi.fn((session: PendingShoulderPressSession) => {
+        saved.push(JSON.parse(JSON.stringify(session)) as PendingShoulderPressSession)
+      }),
+      deleteSavedFile: vi.fn(async () => undefined),
+      uploadVideo: vi.fn(async () => {
+        throw new Error('legacy uploadVideo should not be used')
+      }),
+      completeUpload: vi.fn(async () => {
+        throw new Error('legacy completeUpload should not be used')
+      })
+    }
+
+    const result = await runShoulderPressUploadWorkflow(singleSegmentPending, deps, vi.fn())
+
+    expect(deps.createIntent).toHaveBeenCalledWith({
+      actionId: 42,
+      sizeBytes: 1024000,
+      durationSeconds: 30,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11'
+    })
+    expect(deps.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
+      videoId: 77,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 30000,
+      sizeBytes: 1024000
+    }))
+    expect(deps.finalizeVideoSession).toHaveBeenCalledWith({
+      videoId: 77,
+      segmentCount: 1,
+      actualDurationSeconds: 30,
+      note: ''
+    })
+    expect(deps.uploadVideo).not.toHaveBeenCalled()
+    expect(deps.completeUpload).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      videoId: 77,
+      finalized: true,
+      hash: 'sha-real'
+    })
+    expect(saved.at(-1)).toMatchObject({ videoId: 77, finalized: true })
   })
 })

@@ -164,4 +164,89 @@ describe('shoulder press segmented upload api', () => {
       sizeBytes: 2097152
     })).rejects.not.toThrow(/patient-token|Authorization/i)
   })
+
+  it('uses safe string error fields from JSON request failures', async () => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 500,
+      data: { error: '服务端忙，请稍后重试' }
+    })
+
+    await expect(createVideoSession({
+      actionId: 42,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180
+    })).rejects.toThrow('服务端忙，请稍后重试')
+  })
+
+  it('uses safe string error fields from multipart upload failures', async () => {
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.success?.({
+        statusCode: 500,
+        data: '{"error":"分段文件已损坏，请重新录制"}'
+      })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).rejects.toThrow('分段文件已损坏，请重新录制')
+  })
+
+  it('reports malformed success JSON as an invalid segment response', async () => {
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.success?.({ statusCode: 200, data: 'not-json' })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).rejects.toThrow('视频分段上传响应格式无效')
+  })
+
+  it('reports upload network failures as a retryable upload error', async () => {
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.fail?.({ errMsg: 'request:fail timeout' })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).rejects.toThrow('视频分段上传失败，请检查网络后重试')
+  })
+
+  it('settles multipart upload exactly once when success and fail callbacks both fire', async () => {
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.success?.({ statusCode: 201, data: '{"index":0,"sha256":"segment-sha"}' })
+      options.success?.({
+        statusCode: 401,
+        data: '{"detail":"Authorization Bearer patient-token expired"}'
+      })
+      options.fail?.({ errMsg: 'request:fail late' })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await expect(uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29800,
+      sizeBytes: 2097152
+    })).resolves.toEqual({ index: 0, sha256: 'segment-sha' })
+
+    expect(taroMock.removeStorageSync).not.toHaveBeenCalled()
+    expect(taroMock.redirectTo).not.toHaveBeenCalled()
+  })
 })

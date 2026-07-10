@@ -203,6 +203,10 @@ function normalizeSession(value: unknown): PendingShoulderPressSession | null {
 
   const segments = session.segments.map((segment, index) => normalizeSegment(segment, index))
   if (segments.some((segment) => segment === null)) return null
+  const normalizedSegments = segments as PendingShoulderPressSegment[]
+  const actualDurationMs = normalizedSegments.reduce((total, segment) => total + segment.durationMs, 0)
+  if (session.actualDurationMs !== actualDurationMs) return null
+  if (session.finalized && normalizedSegments.some((segment) => segment.uploadState !== 'uploaded')) return null
 
   return {
     clientSessionId: session.clientSessionId,
@@ -210,8 +214,8 @@ function normalizeSession(value: unknown): PendingShoulderPressSession | null {
     actionId: session.actionId,
     trainingDate: session.trainingDate,
     expectedDurationSeconds: Math.round(session.expectedDurationSeconds),
-    actualDurationMs: session.actualDurationMs,
-    segments: segments as PendingShoulderPressSegment[],
+    actualDurationMs,
+    segments: normalizedSegments,
     finalized: session.finalized,
     createdAt: session.createdAt,
     ...(typeof session.lastError === 'string' ? { lastError: session.lastError } : {})

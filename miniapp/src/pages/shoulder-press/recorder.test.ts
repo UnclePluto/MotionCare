@@ -31,6 +31,12 @@ function fakeCamera() {
   }
 }
 
+async function flushPromises(times = 6) {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve()
+  }
+}
+
 describe('ShoulderPressRecorder', () => {
   it('starts the next recording before asynchronously delivering a timeout segment', async () => {
     const { camera, startOptions } = fakeCamera()
@@ -137,6 +143,125 @@ describe('ShoulderPressRecorder', () => {
     expect(segments).toEqual([
       { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 30000 },
       { savedFilePath: 'wxfile://store/segment-1.mp4', durationMs: 12000 }
+    ])
+  })
+
+  it('still delivers the timed-out segment when the next start fails and exposes the start error to finish', async () => {
+    const { camera, startOptions } = fakeCamera()
+    const delivered: string[] = []
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    let now = 0
+    camera.startRecord.mockImplementation((options: StartOptions) => {
+      startOptions.push(options)
+      if (startOptions.length === 1) options.success?.()
+      else options.fail?.()
+    })
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: async (path) => {
+        delivered.push(path)
+      }
+    })
+
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      await recorder.start()
+      now = 30000
+      startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+      await flushPromises()
+
+      expect(delivered).toEqual(['wxfile://store/segment-0.mp4'])
+      await expect(recorder.finish()).rejects.toThrow('摄像头录像启动失败，请检查权限后重试')
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('keeps timeout onSegment rejection controlled and observable from finish', async () => {
+    const { camera, startOptions, stopOptions } = fakeCamera()
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    let now = 0
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: async (path) => {
+        if (path.includes('segment-0')) throw new Error('保存失败')
+      }
+    })
+
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      await recorder.start()
+      now = 30000
+      startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+      await flushPromises()
+
+      now = 42000
+      const finishPromise = recorder.finish()
+      stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-1.mp4' })
+
+      await expect(finishPromise).rejects.toThrow('保存失败')
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('ignores stale start callbacks from older generations when finishing the active segment', async () => {
+    const { camera, startOptions, stopOptions } = fakeCamera()
+    let now = 0
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: vi.fn(async () => undefined)
+    })
+
+    await recorder.start()
+    now = 30000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+    await flushPromises()
+    startOptions[0].fail?.()
+
+    now = 42000
+    const finishPromise = recorder.finish()
+    expect(camera.stopRecord).toHaveBeenCalledTimes(1)
+    stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-1.mp4' })
+
+    await expect(finishPromise).resolves.toEqual([
+      { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 30000 },
+      { savedFilePath: 'wxfile://store/segment-1.mp4', durationMs: 12000 }
+    ])
+  })
+
+  it('lets finish wait for an in-flight pause stop and returns the delivered segment', async () => {
+    const { camera, stopOptions } = fakeCamera()
+    let now = 1000
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: vi.fn(async () => undefined)
+    })
+
+    await recorder.start()
+    now = 4500
+    const pausePromise = recorder.pause()
+    const finishPromise = recorder.finish()
+    stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+
+    await expect(pausePromise).resolves.toEqual({
+      savedFilePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 3500
+    })
+    await expect(finishPromise).resolves.toEqual([
+      { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 3500 }
     ])
   })
 })

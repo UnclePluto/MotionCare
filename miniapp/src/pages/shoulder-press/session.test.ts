@@ -115,6 +115,74 @@ describe('shoulder press segmented session helpers', () => {
     }))).toBeNull()
   })
 
+  it('rejects finalized sessions that still have pending segments during cold recovery', () => {
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180,
+      actualDurationMs: 30000,
+      finalized: true,
+      createdAt: 1783692000000,
+      segments: [{
+        index: 0,
+        savedFilePath: 'wxfile://store/segment-0.mp4',
+        durationMs: 30000,
+        sizeBytes: 1024,
+        uploadState: 'pending'
+      }]
+    }))).toBeNull()
+  })
+
+  it('rejects sessions whose actual duration no longer matches the segment manifest', () => {
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180,
+      actualDurationMs: 29999,
+      finalized: false,
+      createdAt: 1783692000000,
+      segments: [{
+        index: 0,
+        savedFilePath: 'wxfile://store/segment-0.mp4',
+        durationMs: 30000,
+        sizeBytes: 1024,
+        uploadState: 'pending'
+      }]
+    }))).toBeNull()
+  })
+
+  it('restores finalized sessions with uploaded segments even when two sha256 values match', () => {
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180,
+      actualDurationMs: 60000,
+      finalized: true,
+      createdAt: 1783692000000,
+      segments: [
+        {
+          index: 0,
+          savedFilePath: 'wxfile://store/segment-0.mp4',
+          durationMs: 30000,
+          sizeBytes: 1024,
+          uploadState: 'uploaded',
+          sha256: 'same-sha'
+        },
+        {
+          index: 1,
+          savedFilePath: 'wxfile://store/segment-1.mp4',
+          durationMs: 30000,
+          sizeBytes: 1024,
+          uploadState: 'uploaded',
+          sha256: 'same-sha'
+        }
+      ]
+    }))?.segments.map((segment) => segment.sha256)).toEqual(['same-sha', 'same-sha'])
+  })
+
   it('validates the RFC4122 v4 client session id shape', () => {
     expect(() => createPendingShoulderPressSession({
       actionId: 42,

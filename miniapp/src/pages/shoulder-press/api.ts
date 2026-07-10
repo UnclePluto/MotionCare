@@ -75,6 +75,18 @@ export async function uploadVideoSegment(input: {
   onProgress?: (progress: number) => void
 }): Promise<UploadedVideoSegment> {
   return new Promise((resolve, reject) => {
+    let settled = false
+    const settleResolve = (value: UploadedVideoSegment) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    const settleReject = (error: Error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
     try {
       const task = Taro.uploadFile({
         url: apiUrl(`/patient-app/training-video-sessions/${input.videoId}/segments/${input.index}/`),
@@ -86,26 +98,27 @@ export async function uploadVideoSegment(input: {
           size_bytes: input.sizeBytes
         },
         success(response: UploadFileSuccess) {
+          if (settled) return
           if (response.statusCode === 401 || response.statusCode === 403) {
             try {
               handlePatientUnauthorized()
             } catch (error) {
-              reject(error)
+              settleReject(error instanceof Error ? error : new Error('登录已失效'))
             }
             return
           }
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(uploadErrorMessage(response.data)))
+            settleReject(new Error(uploadErrorMessage(response.data)))
             return
           }
           try {
-            resolve(parseUploadedSegment(response.data, input.index))
+            settleResolve(parseUploadedSegment(response.data, input.index))
           } catch (error) {
-            reject(error)
+            settleReject(error instanceof Error ? error : new Error('视频分段上传响应格式无效'))
           }
         },
         fail() {
-          reject(new Error('视频分段上传失败，请检查网络后重试'))
+          settleReject(new Error('视频分段上传失败，请检查网络后重试'))
         }
       })
 
@@ -116,7 +129,7 @@ export async function uploadVideoSegment(input: {
         })
       }
     } catch {
-      reject(new Error('视频分段上传失败，请检查网络后重试'))
+      settleReject(new Error('视频分段上传失败，请检查网络后重试'))
     }
   })
 }
@@ -144,12 +157,15 @@ export async function getVideoSessionStatus(videoId: number): Promise<VideoSessi
 export async function createShoulderPressUploadIntent(input: {
   actionId: number
   durationSeconds: number
+  clientSessionId?: string
+  trainingDate?: string
+  expectedDurationSeconds?: number
 }): Promise<VideoSessionStatus> {
   return createVideoSession({
     actionId: input.actionId,
-    clientSessionId: createClientSessionId(),
-    trainingDate: new Date().toISOString().slice(0, 10),
-    expectedDurationSeconds: input.durationSeconds
+    clientSessionId: input.clientSessionId ?? createClientSessionId(),
+    trainingDate: input.trainingDate ?? new Date().toISOString().slice(0, 10),
+    expectedDurationSeconds: input.expectedDurationSeconds ?? input.durationSeconds
   })
 }
 
@@ -157,12 +173,25 @@ export async function uploadVideoToQiniu(input: Record<string, unknown> & {
   filePath: string
   onProgress?: (progress: number) => void
 }): Promise<{ key: string; hash: string }> {
+  if (
+    !Number.isInteger(input.videoId) ||
+    Number(input.videoId) <= 0 ||
+    !Number.isInteger(input.index) ||
+    Number(input.index) < 0 ||
+    !Number.isInteger(input.durationMs) ||
+    Number(input.durationMs) <= 0 ||
+    !Number.isInteger(input.sizeBytes) ||
+    Number(input.sizeBytes) <= 0
+  ) {
+    throw new Error('录像上传信息不完整，请重新开始')
+  }
+
   const uploaded = await uploadVideoSegment({
-    videoId: 0,
-    index: 0,
+    videoId: Number(input.videoId),
+    index: Number(input.index),
     filePath: input.filePath,
-    durationMs: 1,
-    sizeBytes: 1,
+    durationMs: Number(input.durationMs),
+    sizeBytes: Number(input.sizeBytes),
     onProgress: input.onProgress
   })
   return { key: String(uploaded.index), hash: uploaded.sha256 }
