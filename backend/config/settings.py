@@ -147,7 +147,15 @@ CELERY_BEAT_SCHEDULE = {
     "recover-stale-motion-analysis-jobs": {
         "task": "apps.training.tasks.recover_stale_motion_analysis_jobs",
         "schedule": MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS,
-    }
+    },
+    "recover-stale-video-assembly-jobs": {
+        "task": "apps.training.video_tasks.recover_stale_video_assembly_jobs",
+        "schedule": 300,
+    },
+    "expire-stale-training-video-sessions": {
+        "task": "apps.training.video_tasks.expire_stale_training_video_sessions",
+        "schedule": 900,
+    },
 }
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "CRF_TEMPLATE_PATH",

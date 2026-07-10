@@ -71,6 +71,12 @@ class PatientAppTrainingVideoSegmentSerializer(serializers.Serializer):
     size_bytes = serializers.IntegerField(min_value=1)
 
 
+class PatientAppTrainingVideoFinalizeSerializer(serializers.Serializer):
+    segment_count = serializers.IntegerField(min_value=1)
+    actual_duration_seconds = serializers.IntegerField(min_value=1)
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
 class PatientAppDailyHealthSerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyHealthRecord

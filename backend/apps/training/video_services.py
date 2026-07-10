@@ -11,6 +11,7 @@ from django.http import Http404
 from django.utils import timezone
 
 from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.studies.models import ProjectPatient
 
 from .models import (
     MotionAnalysisJob,
@@ -24,6 +25,7 @@ from .video_staging import (
     SessionConflict,
     segment_install_lock,
     segment_path,
+    session_root,
     write_uploaded_segment,
 )
 
@@ -263,6 +265,129 @@ def store_training_video_segment(
                 raise
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _validate_uploaded_segments_for_finalize(video, segment_count, actual_duration_seconds):
+    if segment_count > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+        raise ValidationError("训练视频分段数量超过限制")
+    if actual_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
+        raise ValidationError("训练视频总时长超过限制")
+
+    segments = list(
+        video.segments.filter(status=TrainingVideoSegment.Status.UPLOADED).order_by("index")
+    )
+    indexes = [segment.index for segment in segments]
+    if indexes != list(range(segment_count)):
+        raise ValidationError("训练视频已上传分段必须连续且数量匹配")
+
+    total_size_bytes = sum(segment.size_bytes for segment in segments)
+    total_duration_ms = sum(segment.duration_ms for segment in segments)
+    if total_size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
+        raise ValidationError("训练视频总大小超过限制")
+    if total_duration_ms > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000:
+        raise ValidationError("训练视频总时长超过限制")
+
+    actual_segment_duration_seconds = total_duration_ms / 1000
+    allowed_difference = max(2, actual_duration_seconds * 0.02)
+    if abs(actual_segment_duration_seconds - actual_duration_seconds) > allowed_difference:
+        raise ValidationError("训练视频分段时长与提交时长不一致")
+
+    staging_root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
+    root = session_root(video)
+    for segment in segments:
+        expected_path = segment_path(video, segment.index)
+        expected_relative_path = expected_path.relative_to(staging_root).as_posix()
+        candidate = staging_root / segment.relative_path
+        if (
+            segment.relative_path != expected_relative_path
+            or candidate.is_symlink()
+            or not candidate.is_file()
+            or not candidate.resolve().is_relative_to(root)
+        ):
+            raise ValidationError("训练视频分段尚未安全落盘")
+
+
+def _finalize_payload_matches(video, *, segment_count, actual_duration_seconds, note):
+    return (
+        video.expected_segment_count == segment_count
+        and video.actual_duration_seconds == actual_duration_seconds
+        and video.note == note
+    )
+
+
+def _training_video_qiniu_key(video):
+    return (
+        f"training-videos/{video.project_patient_id}/"
+        f"{video.training_date:%Y/%m/%d}/{video.client_session_id}.mp4"
+    )
+
+
+@transaction.atomic
+def finalize_training_video_session(
+    *,
+    project_patient,
+    video_id: int,
+    segment_count: int,
+    actual_duration_seconds: int,
+    note: str,
+):
+    locked_project_patient = ProjectPatient.objects.select_for_update().filter(
+        pk=project_patient.pk
+    ).first()
+    if locked_project_patient is None:
+        raise Http404
+    video = (
+        TrainingVideo.objects.select_for_update(of=("self",))
+        .filter(pk=video_id, project_patient=locked_project_patient)
+        .first()
+    )
+    if video is None:
+        raise Http404
+
+    existing_job = VideoAssemblyJob.objects.filter(training_video=video).first()
+    if existing_job is not None:
+        if not _finalize_payload_matches(
+            video,
+            segment_count=segment_count,
+            actual_duration_seconds=actual_duration_seconds,
+            note=note,
+        ):
+            raise SessionConflict("重复提交的训练视频完成数据冲突")
+        return video, existing_job, False
+
+    _validate_uploaded_segments_for_finalize(
+        video,
+        segment_count=segment_count,
+        actual_duration_seconds=actual_duration_seconds,
+    )
+    now = timezone.now()
+    video.expected_segment_count = segment_count
+    video.actual_duration_seconds = actual_duration_seconds
+    video.note = note
+    video.finalized_at = now
+    video.status = TrainingVideo.Status.QUEUED
+    video.failure_reason = ""
+    video.save(
+        update_fields=[
+            "expected_segment_count",
+            "actual_duration_seconds",
+            "note",
+            "finalized_at",
+            "status",
+            "failure_reason",
+            "updated_at",
+        ]
+    )
+    job = VideoAssemblyJob.objects.create(
+        training_video=video,
+        qiniu_object_key=_training_video_qiniu_key(video),
+    )
+    from .video_tasks import run_video_assembly_job
+
+    transaction.on_commit(
+        lambda assembly_job_id=job.id: run_video_assembly_job.delay(assembly_job_id)
+    )
+    return video, job, True
 
 
 def training_video_session_status(*, project_patient, video_id):

@@ -20,6 +20,7 @@ from apps.training.video_services import (
     SessionConflict,
     SHOULDER_PRESS_SOURCE_KEY,
     create_training_video_session,
+    finalize_training_video_session,
     store_training_video_segment,
     training_video_session_status,
 )
@@ -30,6 +31,7 @@ from .serializers import (
     PatientAppBindSerializer,
     PatientAppDailyHealthSerializer,
     PatientAppTrainingRecordCreateSerializer,
+    PatientAppTrainingVideoFinalizeSerializer,
     PatientAppTrainingVideoSegmentSerializer,
     PatientAppTrainingVideoSessionSerializer,
 )
@@ -303,6 +305,38 @@ class PatientAppTrainingVideoSegmentView(PatientAppBaseView):
                 "uploaded_segment_count": segment.training_video.uploaded_segment_count,
             },
             status=response_status,
+        )
+
+
+class PatientAppTrainingVideoFinalizeView(PatientAppBaseView):
+    def post(self, request, video_id):
+        serializer = PatientAppTrainingVideoFinalizeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            video, job, created = finalize_training_video_session(
+                project_patient=self.project_patient(),
+                video_id=video_id,
+                segment_count=serializer.validated_data["segment_count"],
+                actual_duration_seconds=serializer.validated_data[
+                    "actual_duration_seconds"
+                ],
+                note=serializer.validated_data["note"],
+            )
+        except SessionConflict as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": validation_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {
+                "video_id": video.id,
+                "status": video.status,
+                "assembly_job_id": job.id,
+                "processing_stage": job.status,
+            },
+            status=status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK,
         )
 
 
