@@ -15,7 +15,13 @@ from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
-from apps.training.video_services import complete_training_video, create_upload_intent
+from apps.training.video_services import (
+    SegmentConflict,
+    SHOULDER_PRESS_SOURCE_KEY,
+    create_training_video_session,
+    store_training_video_segment,
+    training_video_session_status,
+)
 from apps.training.views import validation_detail
 
 from .authentication import PatientAppTokenAuthentication
@@ -23,8 +29,8 @@ from .serializers import (
     PatientAppBindSerializer,
     PatientAppDailyHealthSerializer,
     PatientAppTrainingRecordCreateSerializer,
-    PatientAppTrainingVideoCompleteSerializer,
-    PatientAppTrainingVideoUploadIntentSerializer,
+    PatientAppTrainingVideoSegmentSerializer,
+    PatientAppTrainingVideoSessionSerializer,
 )
 from .services import bind_project_patient_with_code
 
@@ -222,6 +228,11 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
                     {"detail": "处方已更新，请返回当前处方重新进入"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if action.action_library_item.source_key == SHOULDER_PRESS_SOURCE_KEY:
+                return Response(
+                    {"detail": "肩部推举必须完成录像上传"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             record = create_training_record(
                 project_patient=project_patient,
                 prescription_action=action,
@@ -240,40 +251,48 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
         return Response(TrainingRecordSerializer(record).data, status=status.HTTP_201_CREATED)
 
 
-class PatientAppTrainingVideoUploadIntentView(PatientAppBaseView):
+class PatientAppTrainingVideoSessionView(PatientAppBaseView):
     def post(self, request):
-        serializer = PatientAppTrainingVideoUploadIntentSerializer(data=request.data)
+        serializer = PatientAppTrainingVideoSessionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            data = create_upload_intent(
+            video, created = create_training_video_session(
                 project_patient=self.project_patient(),
+                client_session_id=serializer.validated_data["client_session_id"],
                 prescription_action_id=serializer.validated_data["prescription_action"],
-                content_type=serializer.validated_data["content_type"],
-                size_bytes=serializer.validated_data["size_bytes"],
-                duration_seconds=serializer.validated_data["duration_seconds"],
+                training_date=serializer.validated_data["training_date"],
+                expected_duration_seconds=serializer.validated_data[
+                    "expected_duration_seconds"
+                ],
             )
         except DjangoValidationError as exc:
             return Response(
                 {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
             )
-        return Response(data, status=status.HTTP_201_CREATED)
+        data = training_video_session_status(
+            project_patient=self.project_patient(),
+            video_id=video.id,
+        )
+        response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(data, status=response_status)
 
 
-class PatientAppTrainingVideoCompleteView(PatientAppBaseView):
-    def post(self, request, video_id):
-        serializer = PatientAppTrainingVideoCompleteSerializer(data=request.data)
+class PatientAppTrainingVideoSegmentView(PatientAppBaseView):
+    def post(self, request, video_id, index):
+        serializer = PatientAppTrainingVideoSegmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            video, created = complete_training_video(
+            segment, created = store_training_video_segment(
                 project_patient=self.project_patient(),
                 video_id=video_id,
-                key=serializer.validated_data["key"],
-                object_hash=serializer.validated_data["hash"],
-                training_date=serializer.validated_data["training_date"],
-                actual_duration_minutes=serializer.validated_data[
-                    "actual_duration_minutes"
-                ],
-                note=serializer.validated_data.get("note", ""),
+                index=index,
+                uploaded_file=serializer.validated_data["file"],
+                duration_ms=serializer.validated_data["duration_ms"],
+                declared_size_bytes=serializer.validated_data["size_bytes"],
+            )
+        except SegmentConflict as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_409_CONFLICT
             )
         except DjangoValidationError as exc:
             return Response(
@@ -282,12 +301,23 @@ class PatientAppTrainingVideoCompleteView(PatientAppBaseView):
         response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response(
             {
-                "video_id": video.id,
-                "status": video.status,
-                "training_record": serialize_training_record(video.training_record),
+                "index": segment.index,
+                "duration_ms": segment.duration_ms,
+                "size_bytes": segment.size_bytes,
+                "sha256": segment.sha256,
+                "uploaded_segment_count": segment.training_video.uploaded_segment_count,
             },
             status=response_status,
         )
+
+
+class PatientAppTrainingVideoStatusView(PatientAppBaseView):
+    def get(self, request, video_id):
+        data = training_video_session_status(
+            project_patient=self.project_patient(),
+            video_id=video_id,
+        )
+        return Response(data)
 
 
 class PatientAppActionHistoryView(PatientAppBaseView):

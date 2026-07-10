@@ -9,9 +9,6 @@ from apps.common.models import UserStampedModel
 
 class TrainingVideo(UserStampedModel):
     class Status(models.TextChoices):
-        # Task 1 兼容旧 API；Task 2 删除这两个旧状态。
-        UPLOADING = "uploading", "上传中"
-        UPLOADED = "uploaded", "已上传"
         RECORDING = "recording", "录制中"
         UPLOADING_SEGMENTS = "uploading_segments", "分段上传中"
         QUEUED = "queued", "等待合并"
@@ -58,9 +55,8 @@ class TrainingVideo(UserStampedModel):
         "状态",
         max_length=20,
         choices=Status.choices,
-        default=Status.UPLOADING,
+        default=Status.RECORDING,
     )
-    upload_token_expires_at = models.DateTimeField("上传凭证过期时间", null=True, blank=True)
     uploaded_at = models.DateTimeField("上传完成时间", null=True, blank=True)
     failure_reason = models.TextField("失败原因", blank=True)
 

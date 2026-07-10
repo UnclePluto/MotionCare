@@ -51,7 +51,6 @@ def _video(project_patient, active_prescription, action, *, status=TrainingVideo
         size_bytes=1024,
         duration_seconds=120,
         status=status,
-        upload_token_expires_at=timezone.now(),
         uploaded_at=timezone.now(),
     )
 
@@ -78,16 +77,16 @@ def test_doctor_gets_short_private_url_only_for_attached_video(
 ):
     action = _shoulder_press_action(active_prescription)
     attached = _video(project_patient, active_prescription, action)
-    uploading = _video(
+    recording = _video(
         project_patient,
         active_prescription,
         action,
-        status=TrainingVideo.Status.UPLOADING,
+        status=TrainingVideo.Status.RECORDING,
     )
 
     response = _client(doctor).get(f"/api/training/videos/{attached.id}/download-url/")
-    uploading_response = _client(doctor).get(
-        f"/api/training/videos/{uploading.id}/download-url/"
+    recording_response = _client(doctor).get(
+        f"/api/training/videos/{recording.id}/download-url/"
     )
 
     assert response.status_code == 200, response.data
@@ -95,8 +94,8 @@ def test_doctor_gets_short_private_url_only_for_attached_video(
         f"https://cdn.example.com/{attached.object_key}?e="
     )
     assert "token=ak-test:" in response.data["url"]
-    assert uploading_response.status_code == 400
-    assert "绑定" in str(uploading_response.data)
+    assert recording_response.status_code == 400
+    assert "绑定" in str(recording_response.data)
 
 
 @pytest.mark.django_db
@@ -164,7 +163,7 @@ def test_analysis_job_rejects_non_shoulder_press_and_unattached_video(
         project_patient,
         active_prescription,
         shoulder_action,
-        status=TrainingVideo.Status.UPLOADING,
+        status=TrainingVideo.Status.RECORDING,
     )
 
     wrong_action_response = _client(doctor).post(
@@ -281,7 +280,7 @@ def test_service_validation_failure_registers_no_enqueue_callback(
         project_patient,
         active_prescription,
         action,
-        status=TrainingVideo.Status.UPLOADING,
+        status=TrainingVideo.Status.RECORDING,
     )
 
     with patch("apps.training.tasks.run_motion_analysis_job.delay") as delay:

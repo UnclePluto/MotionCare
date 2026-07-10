@@ -1,4 +1,5 @@
 import pytest
+from django.core.exceptions import FieldDoesNotExist
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 
@@ -37,3 +38,48 @@ def test_segmented_video_migration_assigns_distinct_session_ids_to_history(
 
     assert all(client_session_ids)
     assert len(set(client_session_ids)) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+def test_remove_direct_upload_migration_fails_incomplete_legacy_sessions_and_keeps_attached(
+    project_patient, active_prescription, prescription_action
+):
+    executor = MigrationExecutor(connection)
+    migrate_from = [("training", "0004_segmented_training_video")]
+    migrate_to = [("training", "0005_remove_direct_video_upload")]
+
+    executor.migrate(migrate_from)
+    old_apps = executor.loader.project_state(migrate_from).apps
+    TrainingVideo = old_apps.get_model("training", "TrainingVideo")
+    common = {
+        "project_patient_id": project_patient.id,
+        "prescription_id": active_prescription.id,
+        "prescription_action_id": prescription_action.id,
+        "bucket": "motioncare-videos",
+        "content_type": "video/mp4",
+        "size_bytes": 1,
+        "duration_seconds": 1,
+    }
+    uploading = TrainingVideo.objects.create(
+        object_key="legacy/uploading.mp4", status="uploading", **common
+    )
+    uploaded = TrainingVideo.objects.create(
+        object_key="legacy/uploaded.mp4", status="uploaded", **common
+    )
+    attached = TrainingVideo.objects.create(
+        object_key="legacy/attached.mp4", status="attached", **common
+    )
+
+    executor = MigrationExecutor(connection)
+    executor.migrate(migrate_to)
+    new_apps = executor.loader.project_state(migrate_to).apps
+    TrainingVideo = new_apps.get_model("training", "TrainingVideo")
+
+    expected_reason = "旧直传会话已停止，请重新训练"
+    assert TrainingVideo.objects.get(pk=uploading.pk).status == "failed"
+    assert TrainingVideo.objects.get(pk=uploading.pk).failure_reason == expected_reason
+    assert TrainingVideo.objects.get(pk=uploaded.pk).status == "failed"
+    assert TrainingVideo.objects.get(pk=uploaded.pk).failure_reason == expected_reason
+    assert TrainingVideo.objects.get(pk=attached.pk).status == "attached"
+    with pytest.raises(FieldDoesNotExist):
+        TrainingVideo._meta.get_field("upload_token_expires_at")

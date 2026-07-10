@@ -158,6 +158,37 @@ def test_training_record_api_allows_multiple_records_same_day(
 
 
 @pytest.mark.django_db
+def test_training_record_api_rejects_shoulder_press_without_video(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    item = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
+    action = active_prescription.add_action_snapshot(
+        item,
+        weekly_frequency="2 次/周",
+        weekly_target_count=2,
+        duration_minutes=10,
+    )
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-records/",
+        {
+            "prescription_action": action.id,
+            "training_date": str(timezone.localdate()),
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 10,
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert response.data["detail"] == "肩部推举必须完成录像上传"
+    assert not TrainingRecord.objects.filter(prescription_action=action).exists()
+
+
+@pytest.mark.django_db
 def test_patient_app_submits_game_result(
     project_patient,
     doctor,

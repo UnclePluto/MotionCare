@@ -322,7 +322,6 @@ def _analysis_job(project_patient, active_prescription):
         size_bytes=1024,
         duration_seconds=120,
         status=TrainingVideo.Status.ATTACHED,
-        upload_token_expires_at=timezone.now(),
         uploaded_at=timezone.now(),
     )
     job = MotionAnalysisJob.objects.create(

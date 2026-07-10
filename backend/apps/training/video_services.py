@@ -1,23 +1,29 @@
-import uuid
+import os
+import shutil
 from datetime import timedelta
+from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Count, Sum
 from django.http import Http404
 from django.utils import timezone
 
 from apps.prescriptions.models import Prescription, PrescriptionAction
-from apps.studies.models import ProjectPatient
 
-from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
-from .qiniu import (
-    generate_upload_token,
-    private_download_url,
-    stat_object_metadata,
-    validate_object_metadata,
+from .models import (
+    MotionAnalysisJob,
+    TrainingVideo,
+    TrainingVideoSegment,
+    VideoAssemblyJob,
 )
-from .services import create_training_record
+from .qiniu import private_download_url
+from .video_staging import (
+    SegmentConflict,
+    segment_path,
+    write_uploaded_segment,
+)
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
 
@@ -49,185 +55,203 @@ def _get_current_shoulder_action(project_patient, prescription_action_id):
     return active, action
 
 
-def _upload_configuration():
-    configuration = {
-        "access_key": settings.QINIU_ACCESS_KEY,
-        "secret_key": settings.QINIU_SECRET_KEY,
-        "bucket": settings.QINIU_BUCKET,
-        "upload_host": settings.QINIU_UPLOAD_HOST,
-    }
-    if not all(configuration.values()):
-        raise ValidationError("七牛配置不完整，无法生成上传凭证")
-    return configuration
+def _ensure_staging_available():
+    if shutil.which(str(settings.FFMPEG_PATH)) is None:
+        raise ValidationError("FFmpeg 不可用，暂时无法开始录像")
+
+    root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(root).free < settings.TRAINING_VIDEO_MIN_FREE_BYTES:
+        raise ValidationError("训练视频临时磁盘空间不足")
 
 
-def _object_key(project_patient_id):
-    today = timezone.localdate()
-    return (
-        f"training-videos/{project_patient_id}/"
-        f"{today:%Y/%m/%d}/{uuid.uuid4().hex}.mp4"
-    )
-
-
-@transaction.atomic
-def create_upload_intent(
-    *, project_patient, prescription_action_id, content_type, size_bytes, duration_seconds
+def create_training_video_session(
+    *,
+    project_patient,
+    client_session_id,
+    prescription_action_id,
+    training_date,
+    expected_duration_seconds,
 ):
-    if size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
-        raise ValidationError("训练视频文件过大")
-    if duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
+    if expected_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
         raise ValidationError("训练视频时长超过限制")
-    active, action = _get_current_shoulder_action(project_patient, prescription_action_id)
-    configuration = _upload_configuration()
-    expires_at = timezone.now() + timedelta(seconds=settings.QINIU_UPLOAD_TOKEN_TTL_SECONDS)
-    key = _object_key(project_patient.id)
-    video = TrainingVideo.objects.create(
+    _ensure_staging_available()
+    active, action = _get_current_shoulder_action(
+        project_patient, prescription_action_id
+    )
+    video, created = TrainingVideo.objects.get_or_create(
         project_patient=project_patient,
-        prescription=active,
-        prescription_action=action,
-        bucket=configuration["bucket"],
-        object_key=key,
-        content_type=content_type,
-        size_bytes=size_bytes,
-        duration_seconds=duration_seconds,
-        upload_token_expires_at=expires_at,
+        client_session_id=client_session_id,
+        defaults={
+            "prescription": active,
+            "prescription_action": action,
+            "training_date": training_date,
+            "expected_duration_seconds": expected_duration_seconds,
+            "status": TrainingVideo.Status.RECORDING,
+        },
     )
-    token = generate_upload_token(
-        bucket=configuration["bucket"],
-        key=key,
-        expires_at=int(expires_at.timestamp()),
-    )
-    return {
-        "video_id": video.id,
-        "bucket": video.bucket,
-        "key": video.object_key,
-        "upload_token": token,
-        "upload_host": configuration["upload_host"],
-        "expires_at": expires_at.isoformat(),
-    }
+    return video, created
 
 
-def complete_training_video(
+def _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes):
+    if index >= settings.TRAINING_VIDEO_MAX_SEGMENTS:
+        raise ValidationError("训练视频分段数量超过限制")
+    if declared_size_bytes > settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES:
+        raise ValidationError("训练视频分段过大")
+    if duration_ms > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000:
+        raise ValidationError("训练视频分段时长超过限制")
+    content_type = (uploaded_file.content_type or "").split(";", 1)[0].strip().lower()
+    if content_type != "video/mp4":
+        raise ValidationError("训练视频分段必须是 MP4 文件")
+
+
+def _segment_matches(segment, *, duration_ms, size_bytes, sha256):
+    return (
+        segment.status == TrainingVideoSegment.Status.UPLOADED
+        and segment.duration_ms == duration_ms
+        and segment.size_bytes == size_bytes
+        and segment.sha256 == sha256
+    )
+
+
+def store_training_video_segment(
     *,
     project_patient,
     video_id,
-    key,
-    object_hash,
-    training_date,
-    actual_duration_minutes,
-    note="",
+    index,
+    uploaded_file,
+    duration_ms,
+    declared_size_bytes,
 ):
-    object_hash = object_hash.strip() if object_hash else ""
-    if not object_hash:
-        raise ValidationError("训练视频 Hash 不能为空")
+    preliminary_video = TrainingVideo.objects.filter(
+        pk=video_id,
+        project_patient=project_patient,
+    ).first()
+    if preliminary_video is None:
+        raise Http404
 
-    preliminary_video = (
+    _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes)
+    temporary, actual_size_bytes, sha256 = write_uploaded_segment(
+        preliminary_video, index, uploaded_file
+    )
+    destination = segment_path(preliminary_video, index)
+    destination_was_installed = False
+    try:
+        if actual_size_bytes != declared_size_bytes:
+            raise ValidationError("训练视频分段实际大小与声明不一致")
+
+        with transaction.atomic():
+            video = (
+                TrainingVideo.objects.select_for_update(of=("self",))
+                .filter(pk=video_id, project_patient=project_patient)
+                .first()
+            )
+            if video is None:
+                raise Http404
+            if video.status not in {
+                TrainingVideo.Status.RECORDING,
+                TrainingVideo.Status.UPLOADING_SEGMENTS,
+            }:
+                raise ValidationError("训练视频会话当前不可上传分段")
+
+            existing = TrainingVideoSegment.objects.filter(
+                training_video=video,
+                index=index,
+            ).first()
+            if existing is not None:
+                if _segment_matches(
+                    existing,
+                    duration_ms=duration_ms,
+                    size_bytes=actual_size_bytes,
+                    sha256=sha256,
+                ):
+                    return existing, False
+                raise SegmentConflict("重复分段与已上传内容冲突")
+
+            totals = TrainingVideoSegment.objects.filter(
+                training_video=video,
+                status=TrainingVideoSegment.Status.UPLOADED,
+            ).aggregate(
+                segment_count=Count("id"),
+                total_size_bytes=Sum("size_bytes"),
+                total_duration_ms=Sum("duration_ms"),
+            )
+            segment_count = totals["segment_count"] or 0
+            total_size_bytes = totals["total_size_bytes"] or 0
+            total_duration_ms = totals["total_duration_ms"] or 0
+            if segment_count + 1 > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+                raise ValidationError("训练视频分段数量超过限制")
+            if total_size_bytes + actual_size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
+                raise ValidationError("训练视频总大小超过限制")
+            if (
+                total_duration_ms + duration_ms
+                > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000
+            ):
+                raise ValidationError("训练视频总时长超过限制")
+
+            destination = segment_path(video, index)
+            os.replace(temporary, destination)
+            destination_was_installed = True
+            relative_path = destination.relative_to(
+                Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
+            ).as_posix()
+            segment = TrainingVideoSegment.objects.create(
+                training_video=video,
+                index=index,
+                duration_ms=duration_ms,
+                size_bytes=actual_size_bytes,
+                sha256=sha256,
+                relative_path=relative_path,
+                status=TrainingVideoSegment.Status.UPLOADED,
+                uploaded_at=timezone.now(),
+            )
+            video.status = TrainingVideo.Status.UPLOADING_SEGMENTS
+            video.uploaded_segment_count = segment_count + 1
+            video.save(
+                update_fields=["status", "uploaded_segment_count", "updated_at"]
+            )
+            return segment, True
+    except Exception:
+        if destination_was_installed:
+            destination.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def training_video_session_status(*, project_patient, video_id):
+    video = (
         TrainingVideo.objects.select_related("training_record")
         .filter(pk=video_id, project_patient=project_patient)
         .first()
     )
-    if preliminary_video is None:
-        raise ValidationError("训练视频不存在")
-    if not preliminary_video.training_record_id and preliminary_video.object_key != key:
-        raise ValidationError("训练视频对象不匹配")
-
-    metadata = None
-    if not preliminary_video.training_record_id:
-        metadata = stat_object_metadata(
-            bucket=preliminary_video.bucket,
-            key=preliminary_video.object_key,
-        )
-
-    with transaction.atomic():
-        locked_project_patient = (
-            ProjectPatient.objects.select_for_update(of=("self",))
-            .select_related("project")
-            .filter(pk=project_patient.pk)
-            .first()
-        )
-        if locked_project_patient is None:
-            raise ValidationError("患者项目绑定不存在")
-
-        video = (
-            TrainingVideo.objects.select_for_update(of=("self",))
-            .select_related("prescription_action", "training_record")
-            .filter(pk=video_id, project_patient=locked_project_patient)
-            .first()
-        )
-        if video is None:
-            raise ValidationError("训练视频不存在")
-
-        if video.training_record_id:
-            _validate_attached_request(
-                video,
-                key=key,
-                object_hash=object_hash,
-                training_date=training_date,
-                actual_duration_minutes=actual_duration_minutes,
-                note=note,
-            )
-            return video, False
-
-        if video.object_key != key:
-            raise ValidationError("训练视频对象不匹配")
-        if metadata is None:
-            raise ValidationError("训练视频状态已变化，请重试")
-        validate_object_metadata(
-            metadata,
-            expected_hash=object_hash,
-            expected_size_bytes=video.size_bytes,
-            expected_content_type=video.content_type,
-        )
-
-        active, action = _get_current_shoulder_action(
-            locked_project_patient, video.prescription_action_id
-        )
-        record = create_training_record(
-            project_patient=locked_project_patient,
-            prescription_action=action,
-            training_date=training_date,
-            status=TrainingRecord.Status.COMPLETED,
-            actual_duration_minutes=actual_duration_minutes,
-            form_data={"video_id": video.id, "video_object_key": video.object_key},
-            note=note,
-        )
-        video.prescription = active
-        video.object_hash = object_hash
-        video.status = TrainingVideo.Status.ATTACHED
-        video.uploaded_at = timezone.now()
-        video.training_record = record
-        video.save(
-            update_fields=[
-                "prescription",
-                "object_hash",
-                "status",
-                "uploaded_at",
-                "training_record",
-                "updated_at",
-            ]
-        )
-        return video, True
-
-
-def _validate_attached_request(
-    video,
-    *,
-    key,
-    object_hash,
-    training_date,
-    actual_duration_minutes,
-    note,
-):
-    record = video.training_record
-    matches = (
-        video.object_key == key
-        and video.object_hash == object_hash
-        and record.training_date == training_date
-        and record.actual_duration_minutes == actual_duration_minutes
-        and record.note == note
+    if video is None:
+        raise Http404
+    uploaded_segments = list(
+        video.segments.filter(status=TrainingVideoSegment.Status.UPLOADED)
+        .order_by("index")
+        .values_list("index", flat=True)
     )
-    if not matches:
-        raise ValidationError("重复完成请求与已绑定训练记录冲突")
+    try:
+        processing_stage = video.assembly_job.status
+    except VideoAssemblyJob.DoesNotExist:
+        processing_stage = None
+    return {
+        "video_id": video.id,
+        "client_session_id": str(video.client_session_id),
+        "status": video.status,
+        "uploaded_segments": uploaded_segments,
+        "uploaded_segment_count": len(uploaded_segments),
+        "expected_duration_seconds": video.expected_duration_seconds,
+        "processing_stage": processing_stage,
+        "training_record_id": video.training_record_id,
+        "failure_reason": video.failure_reason,
+        "retryable": video.status
+        in {
+            TrainingVideo.Status.RECORDING,
+            TrainingVideo.Status.UPLOADING_SEGMENTS,
+        },
+    }
 
 
 def get_training_video_for_user(user, video_id):

@@ -586,7 +586,6 @@ def test_tracking_recent_records_return_null_video_and_analysis_fields_when_miss
         size_bytes=1024,
         duration_seconds=120,
         status=TrainingVideo.Status.ATTACHED,
-        upload_token_expires_at=timezone.now(),
         uploaded_at=timezone.now(),
     )
 
@@ -637,7 +636,6 @@ def test_tracking_recent_records_use_latest_analysis_job_by_created_at_and_id(
         size_bytes=1024,
         duration_seconds=120,
         status=TrainingVideo.Status.ATTACHED,
-        upload_token_expires_at=timezone.now(),
         uploaded_at=timezone.now(),
     )
     previous_job = MotionAnalysisJob.objects.create(
@@ -701,7 +699,6 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
         size_bytes=1024,
         duration_seconds=120,
         status=TrainingVideo.Status.ATTACHED,
-        upload_token_expires_at=timezone.now(),
         uploaded_at=timezone.now(),
     )
     MotionAnalysisJob.objects.create(
@@ -754,7 +751,6 @@ def test_tracking_recent_records_related_queries_do_not_scale_with_record_count(
             size_bytes=1024,
             duration_seconds=120,
             status=TrainingVideo.Status.ATTACHED,
-            upload_token_expires_at=timezone.now(),
             uploaded_at=timezone.now(),
         )
         MotionAnalysisJob.objects.create(

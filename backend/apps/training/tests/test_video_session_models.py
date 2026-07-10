@@ -27,7 +27,7 @@ def test_segmented_training_video_models(
     )
     job = VideoAssemblyJob.objects.create(training_video=video)
 
-    assert video.status == TrainingVideo.Status.UPLOADING
+    assert video.status == TrainingVideo.Status.RECORDING
     assert first.index == 0
     assert job.status == VideoAssemblyJob.Status.PENDING
     assert job.cleanup_status == VideoAssemblyJob.CleanupStatus.PENDING

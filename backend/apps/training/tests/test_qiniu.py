@@ -162,5 +162,5 @@ def test_training_video_and_analysis_job_models_are_available(
         rule_version="shoulder-press-v1",
     )
 
-    assert video.status == TrainingVideo.Status.UPLOADING
+    assert video.status == TrainingVideo.Status.RECORDING
     assert job.status == MotionAnalysisJob.Status.PENDING

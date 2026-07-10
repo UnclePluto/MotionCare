@@ -1,39 +1,24 @@
-import pytest
-from types import SimpleNamespace
-from unittest.mock import Mock
+from pathlib import Path
 
-from django.test import override_settings
+import pytest
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
-from qiniu import BucketManager
 from rest_framework.test import APIClient
 
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
 from apps.patients.models import Patient
-from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.prescriptions.models import ActionLibraryItem
 from apps.studies.models import ProjectPatient
-from apps.training.models import TrainingRecord, TrainingVideo
+from apps.training.models import TrainingVideo, TrainingVideoSegment
 
-
-def _stat_response(*, status_code=200, error=None):
-    return SimpleNamespace(status_code=status_code, error=error)
+CLIENT_SESSION_ID = "8cf99c30-9b03-4bda-b4d3-b492f3a2db12"
 
 
 @pytest.fixture(autouse=True)
-def qiniu_stat(monkeypatch):
-    def trusted_metadata(bucket, key):
-        video = TrainingVideo.objects.get(bucket=bucket, object_key=key)
-        return (
-            {
-                "hash": "qiniu-hash",
-                "fsize": video.size_bytes,
-                "mimeType": video.content_type,
-            },
-            _stat_response(),
-        )
-
-    stat = Mock(side_effect=trusted_metadata)
-    monkeypatch.setattr(BucketManager, "stat", stat)
-    return stat
+def video_staging_settings(settings, tmp_path):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.TRAINING_VIDEO_MIN_FREE_BYTES = 0
+    settings.FFMPEG_PATH = "/usr/bin/true"
 
 
 def _auth_client(project_patient, doctor, *, wx_openid="openid-video"):
@@ -54,24 +39,39 @@ def _shoulder_press_action(active_prescription):
     )
 
 
-def _upload_payload(action, **overrides):
+def _session_payload(action, **overrides):
     return {
+        "client_session_id": CLIENT_SESSION_ID,
         "prescription_action": action.id,
-        "content_type": "video/mp4",
-        "size_bytes": 1024,
-        "duration_seconds": 60,
+        "training_date": "2026-07-11",
+        "expected_duration_seconds": 180,
         **overrides,
     }
 
 
-def _complete_payload(intent, **overrides):
+def _create_session(client, action):
+    response = client.post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action),
+        format="json",
+    )
+    assert response.status_code == 201, response.data
+    return response
+
+
+def _segment_url(video_id, index):
+    return f"/api/patient-app/training-video-sessions/{video_id}/segments/{index}/"
+
+
+def _segment_payload(content=b"video-bytes", *, duration_ms=30000, size_bytes=None):
     return {
-        "key": intent.data["key"],
-        "hash": "qiniu-hash",
-        "training_date": str(timezone.localdate()),
-        "actual_duration_minutes": 2,
-        "note": "完成肩部推举",
-        **overrides,
+        "file": SimpleUploadedFile(
+            "../../client-name.mp4",
+            content,
+            content_type="video/mp4",
+        ),
+        "duration_ms": duration_ms,
+        "size_bytes": len(content) if size_bytes is None else size_bytes,
     }
 
 
@@ -90,541 +90,292 @@ def _other_project_patient(project_patient, doctor):
     )
 
 
+def _assert_no_partial_files(root: Path):
+    assert list(root.rglob("*.part")) == []
+
+
 @pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_creates_shoulder_press_upload_intent(project_patient, doctor, active_prescription):
+def test_create_session_is_idempotent(project_patient, doctor, active_prescription):
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
+    payload = _session_payload(action)
 
-    response = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action),
-        format="json",
+    first = client.post(
+        "/api/patient-app/training-video-sessions/", payload, format="json"
+    )
+    second = client.post(
+        "/api/patient-app/training-video-sessions/", payload, format="json"
     )
 
-    assert response.status_code == 201, response.data
-    assert response.data["upload_token"].startswith("ak-test:")
-    assert response.data["upload_host"] == "https://upload.qiniup.com"
-    video = TrainingVideo.objects.get(pk=response.data["video_id"])
+    assert first.status_code == 201, first.data
+    assert second.status_code == 200, second.data
+    assert first.data["video_id"] == second.data["video_id"]
+    assert second.data["uploaded_segments"] == []
+    video = TrainingVideo.objects.get(pk=first.data["video_id"])
     assert video.project_patient == project_patient
     assert video.prescription_action == action
-    assert video.status == TrainingVideo.Status.UPLOADING
-    assert video.object_key == response.data["key"]
+    assert video.training_date.isoformat() == "2026-07-11"
+    assert video.expected_duration_seconds == 180
+    assert video.status == TrainingVideo.Status.RECORDING
 
 
 @pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_ignores_frontend_project_patient_identity(
-    project_patient,
-    doctor,
-    active_prescription,
-):
-    action = _shoulder_press_action(active_prescription)
-    other_project_patient = _other_project_patient(project_patient, doctor)
-    client = _auth_client(project_patient, doctor)
-
-    response = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(
-            action,
-            project_patient=other_project_patient.id,
-            patient=other_project_patient.patient_id,
-            project=other_project_patient.project_id,
-        ),
-        format="json",
-    )
-
-    assert response.status_code == 201, response.data
-    assert TrainingVideo.objects.get(pk=response.data["video_id"]).project_patient == project_patient
-
-
-@pytest.mark.django_db
-def test_patient_app_rejects_upload_intent_for_non_shoulder_action(
-    project_patient,
-    doctor,
-    active_prescription,
-    prescription_action,
+def test_create_session_rejects_non_shoulder_action(
+    project_patient, doctor, active_prescription, prescription_action
 ):
     client = _auth_client(project_patient, doctor)
 
     response = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(prescription_action),
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(prescription_action),
         format="json",
     )
 
     assert response.status_code == 400, response.data
     assert "肩部推举" in str(response.data)
+    assert not TrainingVideo.objects.exists()
 
 
 @pytest.mark.django_db
-def test_patient_app_rejects_upload_intent_for_another_patients_action(
-    project_patient,
-    doctor,
-    active_prescription,
+def test_create_session_rejects_unavailable_ffmpeg(
+    project_patient, doctor, active_prescription, settings
 ):
-    _shoulder_press_action(active_prescription)
-    other_project_patient = _other_project_patient(project_patient, doctor)
-    other_prescription = Prescription.objects.create(
-        project_patient=other_project_patient,
-        version=1,
-        opened_by=doctor,
-        status=Prescription.Status.ACTIVE,
-        effective_at=timezone.now(),
-    )
-    other_action = _shoulder_press_action(other_prescription)
-    client = _auth_client(project_patient, doctor)
-
-    response = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(other_action),
-        format="json",
-    )
-
-    assert response.status_code == 400, response.data
-    assert TrainingVideo.objects.count() == 0
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("field", "value", "expected_detail"),
-    [
-        ("size_bytes", 2_000, "文件过大"),
-        ("duration_seconds", 121, "时长超过限制"),
-    ],
-)
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-    TRAINING_VIDEO_MAX_SIZE_BYTES=1_999,
-    TRAINING_VIDEO_MAX_DURATION_SECONDS=120,
-)
-def test_patient_app_rejects_upload_intent_outside_video_limits(
-    project_patient,
-    doctor,
-    active_prescription,
-    field,
-    value,
-    expected_detail,
-):
+    settings.FFMPEG_PATH = "/missing/ffmpeg"
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
 
     response = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action, **{field: value}),
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action),
         format="json",
     )
 
     assert response.status_code == 400, response.data
-    assert expected_detail in str(response.data)
-    assert TrainingVideo.objects.count() == 0
+    assert "FFmpeg" in str(response.data)
+    assert not TrainingVideo.objects.exists()
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "setting_name",
-    [
-        "QINIU_ACCESS_KEY",
-        "QINIU_SECRET_KEY",
-        "QINIU_BUCKET",
-        "QINIU_UPLOAD_HOST",
-    ],
-)
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_rejects_upload_intent_when_qiniu_configuration_is_missing(
-    project_patient,
-    doctor,
-    active_prescription,
-    settings,
-    setting_name,
+def test_create_session_rejects_low_staging_disk_space(
+    project_patient, doctor, active_prescription, settings
 ):
-    setattr(settings, setting_name, "")
+    settings.TRAINING_VIDEO_MIN_FREE_BYTES = 10**30
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
 
     response = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action),
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action),
         format="json",
     )
 
     assert response.status_code == 400, response.data
-    assert "七牛配置" in str(response.data)
-    assert TrainingVideo.objects.count() == 0
+    assert "磁盘" in str(response.data)
+    assert not TrainingVideo.objects.exists()
 
 
 @pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_complete_upload_creates_training_record_once(
-    project_patient,
-    doctor,
-    active_prescription,
+def test_upload_segment_streams_to_server_and_is_idempotent(
+    project_patient, doctor, active_prescription, settings, tmp_path
 ):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action, size_bytes=2048, duration_seconds=120),
-        format="json",
-    )
+    session = _create_session(client, action)
+    url = _segment_url(session.data["video_id"], 0)
 
-    first = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent),
-        format="json",
-    )
-    second = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent),
-        format="json",
-    )
+    first = client.post(url, _segment_payload())
+    second = client.post(url, _segment_payload())
 
     assert first.status_code == 201, first.data
     assert second.status_code == 200, second.data
-    assert TrainingRecord.objects.filter(project_patient=project_patient).count() == 1
-    video = TrainingVideo.objects.get(pk=intent.data["video_id"])
-    assert video.status == TrainingVideo.Status.ATTACHED
-    assert video.object_hash == "qiniu-hash"
-    assert video.training_record_id == first.data["training_record"]["id"]
+    assert first.data["sha256"] == second.data["sha256"]
+    assert first.data["size_bytes"] == 11
+    assert first.data["duration_ms"] == 30000
+    assert first.data["uploaded_segment_count"] == 1
+    path = (
+        tmp_path
+        / "8cf99c309b034bdab4d3b492f3a2db12"
+        / "segments"
+        / "000000.mp4"
+    )
+    assert path.read_bytes() == b"video-bytes"
+    _assert_no_partial_files(tmp_path)
+    segment = TrainingVideoSegment.objects.get()
+    assert segment.relative_path == (
+        "8cf99c309b034bdab4d3b492f3a2db12/segments/000000.mp4"
+    )
+    assert segment.status == TrainingVideoSegment.Status.UPLOADED
 
 
 @pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_complete_retry_remains_idempotent_after_prescription_changes(
-    project_patient,
-    doctor,
-    active_prescription,
-    qiniu_stat,
+def test_upload_segment_returns_conflict_for_reused_index_with_different_content(
+    project_patient, doctor, active_prescription, tmp_path
 ):
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action),
-        format="json",
-    )
-    payload = _complete_payload(intent)
-    first = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        payload,
-        format="json",
-    )
-    active_prescription.status = Prescription.Status.ARCHIVED
-    active_prescription.save(update_fields=["status", "updated_at"])
-    replacement = Prescription.objects.create(
-        project_patient=project_patient,
-        version=2,
-        opened_by=doctor,
-        status=Prescription.Status.ACTIVE,
-        effective_at=timezone.now(),
-    )
-    _shoulder_press_action(replacement)
+    session = _create_session(client, action)
+    url = _segment_url(session.data["video_id"], 0)
+    first = client.post(url, _segment_payload(b"first-video"))
 
-    retry = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        payload,
-        format="json",
-    )
+    conflict = client.post(url, _segment_payload(b"other-video"))
 
     assert first.status_code == 201, first.data
-    assert retry.status_code == 200, retry.data
-    assert retry.data["training_record"]["id"] == first.data["training_record"]["id"]
-    assert TrainingRecord.objects.filter(project_patient=project_patient).count() == 1
-    assert qiniu_stat.call_count == 1
+    assert conflict.status_code == 409, conflict.data
+    assert "冲突" in str(conflict.data)
+    path = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments" / "000000.mp4"
+    assert path.read_bytes() == b"first-video"
+    assert TrainingVideoSegment.objects.count() == 1
+    _assert_no_partial_files(tmp_path)
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("key", "training-videos/other.mp4"),
-        ("hash", "different-hash"),
-        ("training_date", "2026-07-09"),
-        ("actual_duration_minutes", 3),
-        ("note", "不同备注"),
-    ],
-)
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_rejects_attached_retry_with_conflicting_payload(
-    project_patient,
-    doctor,
-    active_prescription,
-    field,
-    value,
-):
-    action = _shoulder_press_action(active_prescription)
-    client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action),
-        format="json",
-    )
-    payload = _complete_payload(intent)
-    first = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        payload,
-        format="json",
-    )
-
-    retry = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        {**payload, field: value},
-        format="json",
-    )
-
-    assert first.status_code == 201, first.data
-    assert retry.status_code == 400, retry.data
-    assert "冲突" in str(retry.data)
-    record = TrainingRecord.objects.get(project_patient=project_patient)
-    assert record.training_date == timezone.localdate()
-    assert record.actual_duration_minutes == 2
-    assert record.note == "完成肩部推举"
-    assert TrainingVideo.objects.get(pk=intent.data["video_id"]).object_hash == "qiniu-hash"
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("remote_metadata", "expected_detail"),
-    [
-        (None, "对象不存在"),
-        (
-            {"hash": "random-hash", "fsize": 1024, "mimeType": "video/mp4"},
-            "Hash 不匹配",
-        ),
-        (
-            {"hash": "qiniu-hash", "fsize": 2048, "mimeType": "video/mp4"},
-            "大小不匹配",
-        ),
-        (
-            {"hash": "qiniu-hash", "fsize": 1024, "mimeType": "image/png"},
-            "类型不匹配",
-        ),
-    ],
-)
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_rejects_complete_when_qiniu_metadata_is_untrusted(
-    project_patient,
-    doctor,
-    active_prescription,
-    qiniu_stat,
-    remote_metadata,
-    expected_detail,
-):
-    action = _shoulder_press_action(active_prescription)
-    client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action),
-        format="json",
-    )
-    status_code = 200 if remote_metadata is not None else 612
-    qiniu_stat.side_effect = None
-    qiniu_stat.return_value = (
-        remote_metadata,
-        _stat_response(status_code=status_code, error="no such file"),
-    )
-
-    response = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent),
-        format="json",
-    )
-
-    assert response.status_code == 400, response.data
-    assert expected_detail in str(response.data)
-    assert TrainingRecord.objects.count() == 0
-    video = TrainingVideo.objects.get(pk=intent.data["video_id"])
-    assert video.status == TrainingVideo.Status.UPLOADING
-    assert video.object_hash == ""
-
-
-@pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_complete_stats_before_project_patient_and_video_locks(
-    project_patient,
-    doctor,
-    active_prescription,
-    qiniu_stat,
-    monkeypatch,
-):
-    from django.db.models.query import QuerySet
-
-    action = _shoulder_press_action(active_prescription)
-    client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/",
-        _upload_payload(action),
-        format="json",
-    )
-    events = []
-    original_select_for_update = QuerySet.select_for_update
-    original_stat_side_effect = qiniu_stat.side_effect
-
-    def record_lock(queryset, *args, **kwargs):
-        if queryset.model in {ProjectPatient, TrainingVideo}:
-            events.append(queryset.model.__name__)
-        return original_select_for_update(queryset, *args, **kwargs)
-
-    def record_stat(bucket, key):
-        events.append("qiniu_stat")
-        return original_stat_side_effect(bucket, key)
-
-    monkeypatch.setattr(QuerySet, "select_for_update", record_lock)
-    qiniu_stat.side_effect = record_stat
-
-    response = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent),
-        format="json",
-    )
-
-    assert response.status_code == 201, response.data
-    assert events[:3] == ["qiniu_stat", "ProjectPatient", "TrainingVideo"]
-
-
-@pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_rejects_complete_for_another_patients_video(
-    project_patient,
-    doctor,
-    active_prescription,
+@pytest.mark.parametrize("endpoint", ["segment", "status"])
+def test_training_video_session_is_hidden_from_another_patient(
+    project_patient, doctor, active_prescription, endpoint
 ):
     action = _shoulder_press_action(active_prescription)
     owner_client = _auth_client(project_patient, doctor)
-    intent = owner_client.post(
-        "/api/patient-app/training-videos/upload-intent/", _upload_payload(action), format="json"
-    )
+    session = _create_session(owner_client, action)
     other_project_patient = _other_project_patient(project_patient, doctor)
-    other_client = _auth_client(other_project_patient, doctor, wx_openid="openid-other-video")
-
-    response = other_client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent),
-        format="json",
+    other_client = _auth_client(
+        other_project_patient,
+        doctor,
+        wx_openid=f"openid-other-{endpoint}",
     )
+    if endpoint == "segment":
+        response = other_client.post(
+            _segment_url(session.data["video_id"], 0),
+            _segment_payload(),
+        )
+    else:
+        response = other_client.get(
+            f"/api/patient-app/training-video-sessions/{session.data['video_id']}/status/"
+        )
 
-    assert response.status_code == 400, response.data
-    assert TrainingRecord.objects.count() == 0
+    assert response.status_code == 404, response.data
 
 
 @pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_rejects_complete_with_wrong_key_or_empty_hash(
-    project_patient,
-    doctor,
-    active_prescription,
+def test_upload_segment_rejects_actual_size_mismatch_without_file_residue(
+    project_patient, doctor, active_prescription, tmp_path
 ):
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/", _upload_payload(action), format="json"
-    )
-
-    wrong_key = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent, key="training-videos/other.mp4"),
-        format="json",
-    )
-    blank_hash = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent, hash=""),
-        format="json",
-    )
-
-    assert wrong_key.status_code == 400, wrong_key.data
-    assert blank_hash.status_code == 400, blank_hash.data
-    assert TrainingRecord.objects.count() == 0
-    assert TrainingVideo.objects.get(pk=intent.data["video_id"]).status == TrainingVideo.Status.UPLOADING
-
-
-@pytest.mark.django_db
-@override_settings(
-    QINIU_ACCESS_KEY="ak-test",
-    QINIU_SECRET_KEY="sk-test",
-    QINIU_BUCKET="motioncare-training",
-    QINIU_UPLOAD_HOST="https://upload.qiniup.com",
-)
-def test_patient_app_rejects_complete_after_prescription_changes(
-    project_patient,
-    doctor,
-    active_prescription,
-):
-    action = _shoulder_press_action(active_prescription)
-    client = _auth_client(project_patient, doctor)
-    intent = client.post(
-        "/api/patient-app/training-videos/upload-intent/", _upload_payload(action), format="json"
-    )
-    active_prescription.status = Prescription.Status.ARCHIVED
-    active_prescription.save(update_fields=["status", "updated_at"])
-    replacement = Prescription.objects.create(
-        project_patient=project_patient,
-        version=2,
-        opened_by=doctor,
-        status=Prescription.Status.ACTIVE,
-        effective_at=timezone.now(),
-    )
-    _shoulder_press_action(replacement)
+    session = _create_session(client, action)
 
     response = client.post(
-        f"/api/patient-app/training-videos/{intent.data['video_id']}/complete/",
-        _complete_payload(intent),
-        format="json",
+        _segment_url(session.data["video_id"], 0),
+        _segment_payload(b"actual", size_bytes=99),
     )
 
     assert response.status_code == 400, response.data
-    assert "处方已更新" in str(response.data)
-    assert TrainingRecord.objects.count() == 0
-    assert TrainingVideo.objects.get(pk=intent.data["video_id"]).status == TrainingVideo.Status.UPLOADING
+    assert not TrainingVideoSegment.objects.exists()
+    assert list(tmp_path.rglob("*.mp4")) == []
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
+def test_upload_segment_size_limit_leaves_no_partial_file(
+    project_patient, doctor, active_prescription, settings, tmp_path
+):
+    settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = 5
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+
+    response = client.post(
+        _segment_url(session.data["video_id"], 0),
+        _segment_payload(b"123456"),
+    )
+
+    assert response.status_code == 400, response.data
+    assert not TrainingVideoSegment.objects.exists()
+    assert list(tmp_path.rglob("*.mp4")) == []
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
+def test_upload_segment_total_size_limit_leaves_rejected_segment_no_residue(
+    project_patient, doctor, active_prescription, settings, tmp_path
+):
+    settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = 10
+    settings.TRAINING_VIDEO_MAX_SIZE_BYTES = 10
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    first = client.post(
+        _segment_url(session.data["video_id"], 0),
+        _segment_payload(b"123456", duration_ms=1000),
+    )
+
+    response = client.post(
+        _segment_url(session.data["video_id"], 1),
+        _segment_payload(b"abcdef", duration_ms=1000),
+    )
+
+    assert first.status_code == 201, first.data
+    assert response.status_code == 400, response.data
+    assert TrainingVideoSegment.objects.count() == 1
+    session_root = tmp_path / CLIENT_SESSION_ID.replace("-", "") / "segments"
+    assert (session_root / "000000.mp4").read_bytes() == b"123456"
+    assert not (session_root / "000001.mp4").exists()
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
+def test_status_returns_real_uploaded_segment_indexes(
+    project_patient, doctor, active_prescription
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    assert client.post(
+        _segment_url(session.data["video_id"], 2),
+        _segment_payload(b"third"),
+    ).status_code == 201
+    assert client.post(
+        _segment_url(session.data["video_id"], 0),
+        _segment_payload(b"first"),
+    ).status_code == 201
+
+    response = client.get(
+        f"/api/patient-app/training-video-sessions/{session.data['video_id']}/status/"
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["video_id"] == session.data["video_id"]
+    assert response.data["status"] == TrainingVideo.Status.UPLOADING_SEGMENTS
+    assert response.data["uploaded_segments"] == [0, 2]
+    assert response.data["uploaded_segment_count"] == 2
+    assert "relative_path" not in response.data
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("url", "payload"),
+    [
+        (
+            "/api/patient-app/training-videos/upload-intent/",
+            {
+                "prescription_action": 1,
+                "content_type": "video/mp4",
+                "size_bytes": 1,
+                "duration_seconds": 1,
+            },
+        ),
+        (
+            "/api/patient-app/training-videos/1/complete/",
+            {
+                "key": "legacy.mp4",
+                "hash": "legacy-hash",
+                "training_date": str(timezone.localdate()),
+                "actual_duration_minutes": 1,
+            },
+        ),
+    ],
+)
+def test_legacy_direct_upload_routes_are_removed(url, payload):
+    response = APIClient().post(url, payload, format="json")
+
+    assert response.status_code == 404
