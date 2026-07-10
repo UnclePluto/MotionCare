@@ -85,12 +85,41 @@ def _touch_heartbeat(job_id):
     ).update(heartbeat_at=now, updated_at=now)
 
 
+def _job_training_video_id(job_id):
+    return VideoAssemblyJob.objects.only("training_video_id").get(pk=job_id).training_video_id
+
+
+def _lock_training_video_then_job(job_id):
+    training_video_id = _job_training_video_id(job_id)
+    video = TrainingVideo.objects.select_for_update().get(pk=training_video_id)
+    job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
+    if job.training_video_id != video.id:
+        raise ValidationError("训练视频合并任务状态已变更")
+    job.training_video = video
+    return video, job
+
+
+def _lock_project_patient_training_video_then_job(job_id):
+    ids = (
+        VideoAssemblyJob.objects.filter(pk=job_id)
+        .values("training_video_id", "training_video__project_patient_id")
+        .get()
+    )
+    project_patient = ProjectPatient.objects.select_for_update().get(
+        pk=ids["training_video__project_patient_id"]
+    )
+    video = TrainingVideo.objects.select_for_update().get(pk=ids["training_video_id"])
+    job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
+    if video.project_patient_id != project_patient.id or job.training_video_id != video.id:
+        raise ValidationError("训练视频合并任务状态已变更")
+    video.project_patient = project_patient
+    job.training_video = video
+    return project_patient, video, job
+
+
 @transaction.atomic
 def claim_video_assembly_job(job_id):
-    job = VideoAssemblyJob.objects.select_for_update().select_related("training_video").get(
-        pk=job_id
-    )
-    video = TrainingVideo.objects.select_for_update().get(pk=job.training_video_id)
+    video, job = _lock_training_video_then_job(job_id)
     if (
         job.status != VideoAssemblyJob.Status.PENDING
         or video.status == TrainingVideo.Status.ATTACHED
@@ -160,10 +189,7 @@ def load_verified_assembly_output(job):
 
 @transaction.atomic
 def mark_uploading_qiniu(job_id, result):
-    job = VideoAssemblyJob.objects.select_for_update().select_related("training_video").get(
-        pk=job_id
-    )
-    video = TrainingVideo.objects.select_for_update().get(pk=job.training_video_id)
+    video, job = _lock_training_video_then_job(job_id)
     if job.status != VideoAssemblyJob.Status.RUNNING:
         raise ValidationError("训练视频合并任务当前不可上传")
 
@@ -189,12 +215,7 @@ def mark_uploading_qiniu(job_id, result):
 
 @transaction.atomic
 def attach_training_video(job_id, result, metadata):
-    initial_job = VideoAssemblyJob.objects.select_related("training_video").get(pk=job_id)
-    project_patient = ProjectPatient.objects.select_for_update().get(
-        pk=initial_job.training_video.project_patient_id
-    )
-    video = TrainingVideo.objects.select_for_update().get(pk=initial_job.training_video_id)
-    job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
+    project_patient, video, job = _lock_project_patient_training_video_then_job(job_id)
     if video.status == TrainingVideo.Status.ATTACHED and video.training_record_id:
         return job
     if job.status != VideoAssemblyJob.Status.RUNNING:
@@ -301,11 +322,8 @@ def process_video_assembly_job(job_id):
 
 @transaction.atomic
 def _record_assembly_failure(job_id, reason):
-    job = VideoAssemblyJob.objects.select_for_update().select_related("training_video").get(
-        pk=job_id
-    )
-    video = TrainingVideo.objects.select_for_update().get(pk=job.training_video_id)
-    if job.status == VideoAssemblyJob.Status.SUCCEEDED:
+    video, job = _lock_training_video_then_job(job_id)
+    if job.status != VideoAssemblyJob.Status.RUNNING:
         return job, False
 
     retryable = job.attempt_count < MAX_ASSEMBLY_ATTEMPTS
@@ -383,10 +401,7 @@ def _remove_session_files(video):
 
 @transaction.atomic
 def _claim_cleanup(job_id):
-    job = VideoAssemblyJob.objects.select_for_update().select_related("training_video").get(
-        pk=job_id
-    )
-    video = TrainingVideo.objects.select_for_update().get(pk=job.training_video_id)
+    video, job = _lock_training_video_then_job(job_id)
     if (
         video.status != TrainingVideo.Status.ATTACHED
         or job.cleanup_status == VideoAssemblyJob.CleanupStatus.SUCCEEDED
@@ -457,6 +472,26 @@ def _is_stale_assembly_job(job, cutoff):
     return job.started_at is not None and job.started_at < cutoff
 
 
+def _mark_stale_job_failed(job, video, now):
+    reason = "视频合并上传任务心跳超时，已达到最大尝试次数"
+    job.status = VideoAssemblyJob.Status.FAILED
+    job.failure_reason = reason
+    job.finished_at = now
+    job.heartbeat_at = now
+    job.save(
+        update_fields=[
+            "status",
+            "failure_reason",
+            "finished_at",
+            "heartbeat_at",
+            "updated_at",
+        ]
+    )
+    video.status = TrainingVideo.Status.FAILED
+    video.failure_reason = reason
+    video.save(update_fields=["status", "failure_reason", "updated_at"])
+
+
 @shared_task(ignore_result=True)
 def recover_stale_video_assembly_jobs():
     cutoff = timezone.now() - timedelta(
@@ -471,16 +506,16 @@ def recover_stale_video_assembly_jobs():
     recovered = 0
     for job_id in candidate_ids:
         with transaction.atomic():
-            job = (
-                VideoAssemblyJob.objects.select_for_update()
-                .select_related("training_video")
-                .filter(pk=job_id)
-                .first()
-            )
-            if job is None or not _is_stale_assembly_job(job, cutoff):
+            try:
+                video, job = _lock_training_video_then_job(job_id)
+            except VideoAssemblyJob.DoesNotExist:
                 continue
-            video = TrainingVideo.objects.select_for_update().get(pk=job.training_video_id)
+            if not _is_stale_assembly_job(job, cutoff):
+                continue
             now = timezone.now()
+            if job.attempt_count >= MAX_ASSEMBLY_ATTEMPTS:
+                _mark_stale_job_failed(job, video, now)
+                continue
             job.status = VideoAssemblyJob.Status.PENDING
             job.heartbeat_at = now
             job.save(update_fields=["status", "heartbeat_at", "updated_at"])

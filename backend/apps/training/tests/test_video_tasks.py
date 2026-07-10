@@ -277,6 +277,42 @@ def test_cleanup_failure_only_marks_cleanup_and_keeps_attached_record(
 
 
 @pytest.mark.django_db
+def test_cleanup_success_removes_attached_session_and_is_idempotent(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    record = TrainingRecord.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=video.prescription_action,
+        training_date=video.training_date,
+        status=TrainingRecord.Status.COMPLETED,
+    )
+    video.training_record = record
+    video.status = TrainingVideo.Status.ATTACHED
+    video.save(update_fields=["training_record", "status", "updated_at"])
+    (session_root(video) / "working").mkdir(parents=True, exist_ok=True)
+    (session_root(video) / "working" / "final.mp4").write_bytes(b"final")
+    module = _video_tasks()
+
+    first = module.cleanup_training_video_files.run(job.id)
+    second = module.cleanup_training_video_files.run(job.id)
+
+    job.refresh_from_db()
+    assert first.id == second.id == job.id
+    assert not session_root(video).exists()
+    assert not TrainingVideoSegment.objects.filter(
+        training_video=video,
+    ).exclude(status=TrainingVideoSegment.Status.DELETED).exists()
+    assert job.cleanup_status == VideoAssemblyJob.CleanupStatus.SUCCEEDED
+    assert job.cleanup_error == ""
+
+
+@pytest.mark.django_db
 def test_expire_scan_removes_old_failed_and_unfinalized_sessions_only(
     project_patient,
     active_prescription,
@@ -337,7 +373,7 @@ def test_stale_recovery_skips_fresh_heartbeat_and_enqueues_stale_once(
         video.status = TrainingVideo.Status.ASSEMBLING
         video.save(update_fields=["status", "updated_at"])
         job.status = VideoAssemblyJob.Status.RUNNING
-        job.attempt_count = 1
+        job.attempt_count = 2
         job.started_at = now - timedelta(hours=2)
         job.heartbeat_at = heartbeat
         job.save(
@@ -363,9 +399,88 @@ def test_stale_recovery_skips_fresh_heartbeat_and_enqueues_stale_once(
     assert first_count == 1
     assert second_count == 0
     assert stale.status == VideoAssemblyJob.Status.PENDING
+    assert stale.attempt_count == 2
     assert stale_video.status == TrainingVideo.Status.QUEUED
     assert fresh.status == VideoAssemblyJob.Status.RUNNING
     delay.assert_called_once_with(stale.id)
+
+
+@pytest.mark.django_db
+def test_stale_recovery_fails_job_at_max_attempts_without_enqueue(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS = 3600
+    video, job = _pending_job(project_patient, active_prescription, tmp_path)
+    now = timezone.now()
+    video.status = TrainingVideo.Status.ASSEMBLING
+    video.save(update_fields=["status", "updated_at"])
+    job.status = VideoAssemblyJob.Status.RUNNING
+    job.attempt_count = 3
+    job.started_at = now - timedelta(hours=2)
+    job.heartbeat_at = now - timedelta(seconds=3601)
+    job.save(
+        update_fields=[
+            "status",
+            "attempt_count",
+            "started_at",
+            "heartbeat_at",
+            "updated_at",
+        ]
+    )
+    module = _video_tasks()
+    delay = Mock()
+    monkeypatch.setattr(module.run_video_assembly_job, "delay", delay)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        recovered_count = module.recover_stale_video_assembly_jobs.run()
+
+    job.refresh_from_db()
+    video.refresh_from_db()
+    assert recovered_count == 0
+    assert job.status == VideoAssemblyJob.Status.FAILED
+    assert job.attempt_count == 3
+    assert job.finished_at is not None
+    assert job.heartbeat_at is not None
+    assert job.failure_reason
+    assert video.status == TrainingVideo.Status.FAILED
+    assert video.failure_reason == job.failure_reason
+    delay.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_job_state_updates_revalidate_locked_state_before_progressing(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    module = _video_tasks()
+
+    video.status = TrainingVideo.Status.ATTACHED
+    video.save(update_fields=["status", "updated_at"])
+    claimed_job, claimed = module.claim_video_assembly_job(job.id)
+    assert claimed_job.id == job.id
+    assert claimed is False
+    job.refresh_from_db()
+    assert job.status == VideoAssemblyJob.Status.PENDING
+    assert job.attempt_count == 0
+
+    video.status = TrainingVideo.Status.ASSEMBLING
+    video.save(update_fields=["status", "updated_at"])
+    with pytest.raises(ValidationError):
+        module.mark_uploading_qiniu(job.id, _assembly_result(video, duration=60.0))
+    job.refresh_from_db()
+    video.refresh_from_db()
+    assert job.status == VideoAssemblyJob.Status.PENDING
+    assert video.status == TrainingVideo.Status.ASSEMBLING
 
 
 @pytest.mark.django_db
