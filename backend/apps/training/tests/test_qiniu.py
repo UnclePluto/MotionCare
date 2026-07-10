@@ -134,7 +134,11 @@ def test_upload_local_video_stats_after_successful_upload(tmp_path, monkeypatch)
     assert metadata == _matching_metadata(path)
     assert stat.call_count == 2
     put_file.assert_called_once_with(
-        "upload-token", "training-videos/1/final.mp4", str(path), check_crc=True
+        "upload-token",
+        "training-videos/1/final.mp4",
+        str(path),
+        check_crc=True,
+        mime_type="video/mp4",
     )
     upload_token.assert_called_once_with("motioncare-training", "training-videos/1/final.mp4", 3600)
 

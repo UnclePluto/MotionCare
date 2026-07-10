@@ -89,7 +89,9 @@ def upload_local_video(*, path: Path, bucket: str, key: str) -> dict:
     try:
         auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
         token = auth.upload_token(bucket, key, 3600)
-        result, response = put_file(token, key, str(path), check_crc=True)
+        result, response = put_file(
+            token, key, str(path), check_crc=True, mime_type="video/mp4"
+        )
     except Exception as exc:
         raise ValidationError("训练视频上传七牛失败") from exc
     if getattr(response, "status_code", None) != 200 or not isinstance(result, dict):
