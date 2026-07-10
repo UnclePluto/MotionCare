@@ -7,6 +7,13 @@ from django.conf import settings
 from django.db import migrations, models
 
 
+def populate_client_session_ids(apps, schema_editor):
+    TrainingVideo = apps.get_model("training", "TrainingVideo")
+    for video in TrainingVideo.objects.filter(client_session_id__isnull=True).iterator():
+        video.client_session_id = uuid.uuid4()
+        video.save(update_fields=["client_session_id"])
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -62,6 +69,12 @@ class Migration(migrations.Migration):
             field=models.PositiveIntegerField(blank=True, null=True, verbose_name='实际时长'),
         ),
         migrations.AddField(
+            model_name='trainingvideo',
+            name='client_session_id',
+            field=models.UUIDField(null=True, verbose_name='客户端会话 ID'),
+        ),
+        migrations.RunPython(populate_client_session_ids, migrations.RunPython.noop),
+        migrations.AlterField(
             model_name='trainingvideo',
             name='client_session_id',
             field=models.UUIDField(default=uuid.uuid4, verbose_name='客户端会话 ID'),
