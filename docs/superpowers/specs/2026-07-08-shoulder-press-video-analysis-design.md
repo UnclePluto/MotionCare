@@ -1,8 +1,10 @@
-> 状态：review
+> 状态：superseded
 > 日期：2026-07-08
 > 范围：肩部推举专项升级；小程序录像跟练、七牛 Kodo 直传、医生端视频审阅、PP-TinyPose 手动分析。
 > 关联：`docs/superpowers/specs/2026-05-14-prescription-motion-training-design.md`、`docs/superpowers/specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md`、`docs/superpowers/specs/2026-05-15-game-prescription-tracking-design.md`
 > 实施基线 commit：c72d8ce
+>
+> 修订（2026-07-11, codex）：七牛直传单文件方案已由 `docs/superpowers/specs/2026-07-11-shoulder-press-segmented-server-upload-design.md` 替代；本文件保留为历史记录。
 
 # 肩部推举录像跟练与动作分析设计
 
