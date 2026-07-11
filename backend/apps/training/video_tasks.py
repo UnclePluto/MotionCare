@@ -1,5 +1,5 @@
 import math
-import os
+import stat
 from datetime import timedelta
 from pathlib import Path
 
@@ -13,13 +13,27 @@ from django.utils import timezone
 from apps.studies.models import ProjectPatient
 
 from .models import TrainingRecord, TrainingVideo, TrainingVideoSegment, VideoAssemblyJob
-from .qiniu import upload_local_video
+from .qiniu import delete_object_if_exists, upload_local_video
 from .video_assembly import AssemblyResult, assemble_video, probe_video
+from .video_staging import (
+    SESSION_DIRECTORY_PATTERN,
+    ensure_working_directory,
+    quarantine_and_remove_session,
+    remove_orphan_session_directory,
+    remove_quarantined_session_directory,
+    session_root,
+    staging_directory_entries,
+    staging_root,
+)
 
 
 MAX_ASSEMBLY_ATTEMPTS = 3
 MAX_CLEANUP_ATTEMPTS = 3
 RETRY_BASE_SECONDS = 60
+
+
+class AssemblyLeaseLost(ValidationError):
+    pass
 
 
 def _safe_video_failure_reason(stage, exc):
@@ -30,11 +44,7 @@ def _safe_video_failure_reason(stage, exc):
 
 
 def _session_root(video):
-    staging_root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
-    root = staging_root / f"{video.id}-{video.client_session_id.hex}"
-    if root.is_symlink() or not root.is_relative_to(staging_root):
-        raise ValidationError("训练视频临时目录无效")
-    return root
+    return session_root(video)
 
 
 def _safe_staging_relative_path(video, relative_path):
@@ -45,24 +55,24 @@ def _safe_staging_relative_path(video, relative_path):
     if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
         raise ValidationError("训练视频临时路径无效")
 
-    staging_root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
+    root_path = staging_root()
     root = _session_root(video)
-    candidate = staging_root.joinpath(*relative.parts)
+    candidate = root_path.joinpath(*relative.parts)
     if not candidate.is_relative_to(root):
         raise ValidationError("训练视频临时路径无效")
 
-    current = staging_root
+    current = root_path
     for part in relative.parts:
         if current.is_symlink():
             raise ValidationError("训练视频临时路径包含符号链接")
         current = current / part
-    if current.is_symlink() or not current.resolve(strict=False).is_relative_to(root.resolve()):
+    if current.is_symlink():
         raise ValidationError("训练视频临时路径包含符号链接")
     return candidate
 
 
 def assembly_output_path(video):
-    return _session_root(video) / "working" / "final.mp4"
+    return ensure_working_directory(video) / "final.mp4"
 
 
 def absolute_staging_path(video, relative_path):
@@ -74,15 +84,20 @@ def _relative_staging_path(video, path):
     path = Path(path)
     if path.is_symlink() or not path.is_file() or not path.is_relative_to(root):
         raise ValidationError("训练视频最终文件无效")
-    return path.relative_to(Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()).as_posix()
+    return path.relative_to(staging_root()).as_posix()
 
 
-def _touch_heartbeat(job_id):
+def _touch_heartbeat(job_id, lease_attempt):
     now = timezone.now()
-    VideoAssemblyJob.objects.filter(
+    updated = VideoAssemblyJob.objects.filter(
         pk=job_id,
         status=VideoAssemblyJob.Status.RUNNING,
+        attempt_count=lease_attempt,
+        training_video__cleanup_requested_at__isnull=True,
+        training_video__project_patient__isnull=False,
     ).update(heartbeat_at=now, updated_at=now)
+    if updated != 1:
+        raise AssemblyLeaseLost("训练视频合并任务租约已失效")
 
 
 def _job_training_video_id(job_id):
@@ -123,6 +138,8 @@ def claim_video_assembly_job(job_id):
     if (
         job.status != VideoAssemblyJob.Status.PENDING
         or video.status == TrainingVideo.Status.ATTACHED
+        or video.project_patient_id is None
+        or video.cleanup_requested_at is not None
     ):
         return job, False
 
@@ -150,7 +167,7 @@ def claim_video_assembly_job(job_id):
     return job, True
 
 
-def load_verified_assembly_output(job):
+def load_verified_assembly_output(job, lease_attempt):
     if not job.output_relative_path:
         return None
 
@@ -161,7 +178,7 @@ def load_verified_assembly_output(job):
     if output_path.is_symlink() or not output_path.is_file():
         return None
 
-    _touch_heartbeat(job.id)
+    _touch_heartbeat(job.id, lease_attempt)
     try:
         probe = probe_video(
             output_path,
@@ -171,7 +188,7 @@ def load_verified_assembly_output(job):
     except ValidationError:
         return None
     finally:
-        _touch_heartbeat(job.id)
+        _touch_heartbeat(job.id, lease_attempt)
 
     video = job.training_video
     if (
@@ -188,10 +205,15 @@ def load_verified_assembly_output(job):
 
 
 @transaction.atomic
-def mark_uploading_qiniu(job_id, result):
+def mark_uploading_qiniu(job_id, result, *, lease_attempt):
     video, job = _lock_training_video_then_job(job_id)
-    if job.status != VideoAssemblyJob.Status.RUNNING:
-        raise ValidationError("训练视频合并任务当前不可上传")
+    if (
+        job.status != VideoAssemblyJob.Status.RUNNING
+        or job.attempt_count != lease_attempt
+        or video.project_patient_id is None
+        or video.cleanup_requested_at is not None
+    ):
+        raise AssemblyLeaseLost("训练视频合并任务租约已失效")
 
     now = timezone.now()
     job.output_relative_path = _relative_staging_path(video, result.output_path)
@@ -214,12 +236,16 @@ def mark_uploading_qiniu(job_id, result):
 
 
 @transaction.atomic
-def attach_training_video(job_id, result, metadata):
+def attach_training_video(job_id, result, metadata, *, lease_attempt):
     project_patient, video, job = _lock_project_patient_training_video_then_job(job_id)
     if video.status == TrainingVideo.Status.ATTACHED and video.training_record_id:
         return job
-    if job.status != VideoAssemblyJob.Status.RUNNING:
-        raise ValidationError("训练视频合并任务当前不可绑定")
+    if (
+        job.status != VideoAssemblyJob.Status.RUNNING
+        or job.attempt_count != lease_attempt
+        or video.cleanup_requested_at is not None
+    ):
+        raise AssemblyLeaseLost("训练视频合并任务租约已失效")
 
     object_hash = metadata.get("hash")
     object_size = metadata.get("fsize")
@@ -287,46 +313,67 @@ def process_video_assembly_job(job_id):
     if not claimed:
         return job
 
-    video = job.training_video
-    segments = list(
-        video.segments.filter(status=TrainingVideoSegment.Status.UPLOADED).order_by("index")
-    )
-    _touch_heartbeat(job.id)
-    result = load_verified_assembly_output(job)
-    _touch_heartbeat(job.id)
-    if result is None:
-        _touch_heartbeat(job.id)
-        try:
+    lease_attempt = job.attempt_count
+    try:
+        video = job.training_video
+
+        def heartbeat():
+            _touch_heartbeat(job.id, lease_attempt)
+
+        segments = list(
+            video.segments.filter(status=TrainingVideoSegment.Status.UPLOADED).order_by(
+                "index"
+            )
+        )
+        heartbeat()
+        result = load_verified_assembly_output(job, lease_attempt)
+        heartbeat()
+        if result is None:
             result = assemble_video(
                 [absolute_staging_path(video, segment.relative_path) for segment in segments],
                 assembly_output_path(video),
                 ffmpeg_path=settings.FFMPEG_PATH,
                 ffprobe_path=settings.FFPROBE_PATH,
                 timeout=settings.VIDEO_ASSEMBLY_TIMEOUT_SECONDS,
+                on_progress=heartbeat,
             )
-        finally:
-            _touch_heartbeat(job.id)
 
-    mark_uploading_qiniu(job.id, result)
-    _touch_heartbeat(job.id)
-    try:
-        metadata = upload_local_video(
-            path=result.output_path,
-            bucket=settings.QINIU_BUCKET,
-            key=job.qiniu_object_key,
+        mark_uploading_qiniu(job.id, result, lease_attempt=lease_attempt)
+        heartbeat()
+        try:
+            metadata = upload_local_video(
+                path=result.output_path,
+                bucket=settings.QINIU_BUCKET,
+                key=job.qiniu_object_key,
+            )
+            heartbeat()
+        except AssemblyLeaseLost:
+            delete_object_if_exists(bucket=settings.QINIU_BUCKET, key=job.qiniu_object_key)
+            raise
+        return attach_training_video(
+            job.id,
+            result,
+            metadata,
+            lease_attempt=lease_attempt,
         )
-    finally:
-        _touch_heartbeat(job.id)
-    return attach_training_video(job.id, result, metadata)
+    except Exception as exc:
+        exc.assembly_lease_attempt = lease_attempt
+        raise
 
 
 @transaction.atomic
-def _record_assembly_failure(job_id, reason):
+def _record_assembly_failure(job_id, reason, *, lease_attempt):
     video, job = _lock_training_video_then_job(job_id)
-    if job.status != VideoAssemblyJob.Status.RUNNING:
+    if (
+        job.status != VideoAssemblyJob.Status.RUNNING
+        or job.attempt_count != lease_attempt
+    ):
         return job, False
 
-    retryable = job.attempt_count < MAX_ASSEMBLY_ATTEMPTS
+    cleanup_requested = (
+        video.cleanup_requested_at is not None or video.project_patient_id is None
+    )
+    retryable = not cleanup_requested and job.attempt_count < MAX_ASSEMBLY_ATTEMPTS
     now = timezone.now()
     job.status = VideoAssemblyJob.Status.PENDING if retryable else VideoAssemblyJob.Status.FAILED
     job.failure_reason = reason
@@ -344,6 +391,10 @@ def _record_assembly_failure(job_id, reason):
     video.status = TrainingVideo.Status.QUEUED if retryable else TrainingVideo.Status.FAILED
     video.failure_reason = reason
     video.save(update_fields=["status", "failure_reason", "updated_at"])
+    if cleanup_requested:
+        transaction.on_commit(
+            lambda video_id=video.id: cleanup_unbound_training_video.delay(video_id)
+        )
     return job, retryable
 
 
@@ -354,10 +405,14 @@ def run_video_assembly_job(self, job_id):
     except VideoAssemblyJob.DoesNotExist:
         return None
     except Exception as exc:
+        lease_attempt = getattr(exc, "assembly_lease_attempt", None)
+        if lease_attempt is None:
+            return None
         try:
             job, retryable = _record_assembly_failure(
                 job_id,
                 _safe_video_failure_reason("视频合并上传", exc),
+                lease_attempt=lease_attempt,
             )
         except VideoAssemblyJob.DoesNotExist:
             return None
@@ -370,33 +425,151 @@ def run_video_assembly_job(self, job_id):
 
 
 def _remove_session_files(video):
-    root = _session_root(video)
-    if not root.exists():
-        return
-    if root.is_symlink() or not root.is_dir():
-        raise ValidationError("训练视频临时目录无效")
+    quarantine_and_remove_session(video)
 
-    files = []
-    directories = []
-    for directory, dirnames, filenames in os.walk(root, topdown=False, followlinks=False):
-        current = Path(directory)
-        if not current.is_relative_to(root) or current.is_symlink():
-            raise ValidationError("训练视频清理路径无效")
-        for name in [*dirnames, *filenames]:
-            path = current / name
-            if not path.is_relative_to(root) or path.is_symlink():
-                raise ValidationError("训练视频清理路径包含符号链接")
-        files.extend(current / filename for filename in filenames)
-        directories.append(current)
 
-    for path in files:
-        if path.is_symlink():
-            raise ValidationError("训练视频清理路径包含符号链接")
-        path.unlink(missing_ok=True)
-    for directory in directories:
-        if directory.is_symlink():
-            raise ValidationError("训练视频清理路径包含符号链接")
-        directory.rmdir()
+@transaction.atomic
+def _claim_unbound_video_cleanup(video_id):
+    video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
+    if (
+        video is None
+        or video.project_patient_id is not None
+        or video.cleanup_requested_at is None
+    ):
+        return video, None, None, False, False
+
+    job = VideoAssemblyJob.objects.select_for_update().filter(training_video=video).first()
+    if job is not None and job.status == VideoAssemblyJob.Status.RUNNING:
+        cutoff = timezone.now() - timedelta(
+            seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS
+        )
+        if not _is_stale_assembly_job(job, cutoff):
+            return video, None, None, False, True
+        job.status = VideoAssemblyJob.Status.FAILED
+        job.failure_reason = "训练视频已解绑，旧合并任务租约失效"
+        job.finished_at = timezone.now()
+        job.save(
+            update_fields=["status", "failure_reason", "finished_at", "updated_at"]
+        )
+
+    now = timezone.now()
+    video.cleanup_status = TrainingVideo.CleanupStatus.RUNNING
+    video.cleanup_attempt_count += 1
+    video.cleanup_heartbeat_at = now
+    video.cleanup_error = ""
+    video.save(
+        update_fields=[
+            "cleanup_status",
+            "cleanup_attempt_count",
+            "cleanup_heartbeat_at",
+            "cleanup_error",
+            "updated_at",
+        ]
+    )
+    object_key = video.object_key or (job.qiniu_object_key if job is not None else "")
+    bucket = video.bucket or settings.QINIU_BUCKET
+    return video, bucket, object_key, True, False
+
+
+@transaction.atomic
+def _record_unbound_cleanup_failure(video_id, cleanup_attempt, reason):
+    video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
+    if (
+        video is None
+        or video.cleanup_status != TrainingVideo.CleanupStatus.RUNNING
+        or video.cleanup_attempt_count != cleanup_attempt
+    ):
+        return video, False
+    video.cleanup_status = TrainingVideo.CleanupStatus.FAILED
+    video.cleanup_error = reason
+    video.cleanup_heartbeat_at = timezone.now()
+    video.save(
+        update_fields=[
+            "cleanup_status",
+            "cleanup_error",
+            "cleanup_heartbeat_at",
+            "updated_at",
+        ]
+    )
+    return video, cleanup_attempt < MAX_CLEANUP_ATTEMPTS
+
+
+@transaction.atomic
+def _delete_unbound_cleanup_record(video_id, cleanup_attempt):
+    video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
+    if video is None:
+        return True
+    if (
+        video.project_patient_id is not None
+        or video.cleanup_status != TrainingVideo.CleanupStatus.RUNNING
+        or video.cleanup_attempt_count != cleanup_attempt
+    ):
+        return False
+    video.delete()
+    return True
+
+
+@shared_task(bind=True, max_retries=MAX_CLEANUP_ATTEMPTS - 1)
+def cleanup_unbound_training_video(self, video_id):
+    video, bucket, object_key, claimed, busy = _claim_unbound_video_cleanup(video_id)
+    if video is None:
+        return True
+    if busy:
+        return self.retry(args=[video_id], countdown=RETRY_BASE_SECONDS)
+    if not claimed:
+        return False
+
+    cleanup_attempt = video.cleanup_attempt_count
+    try:
+        if object_key:
+            delete_object_if_exists(bucket=bucket, key=object_key)
+        _remove_session_files(video)
+    except Exception as exc:
+        video, retryable = _record_unbound_cleanup_failure(
+            video_id,
+            cleanup_attempt,
+            _safe_video_failure_reason("解绑训练视频清理", exc),
+        )
+        if retryable:
+            return self.retry(
+                args=[video_id],
+                countdown=RETRY_BASE_SECONDS * 2 ** (cleanup_attempt - 1),
+            )
+        return False
+    return _delete_unbound_cleanup_record(video_id, cleanup_attempt)
+
+
+@shared_task(ignore_result=True)
+def recover_training_video_cleanup():
+    cutoff = timezone.now() - timedelta(
+        seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS
+    )
+    candidate_ids = list(
+        TrainingVideo.objects.filter(
+            project_patient__isnull=True,
+            cleanup_requested_at__isnull=False,
+        )
+        .filter(
+            Q(
+                cleanup_status__in=[
+                    TrainingVideo.CleanupStatus.PENDING,
+                    TrainingVideo.CleanupStatus.FAILED,
+                ]
+            )
+            | Q(
+                cleanup_status=TrainingVideo.CleanupStatus.RUNNING,
+                cleanup_heartbeat_at__lt=cutoff,
+            )
+        )
+        .values_list("id", flat=True)
+    )
+    for video_id in candidate_ids:
+        transaction.on_commit(
+            lambda durable_video_id=video_id: cleanup_unbound_training_video.delay(
+                durable_video_id
+            )
+        )
+    return len(candidate_ids)
 
 
 @transaction.atomic
@@ -494,6 +667,11 @@ def _mark_stale_job_failed(job, video, now):
 
 @shared_task(ignore_result=True)
 def recover_stale_video_assembly_jobs():
+    if (
+        settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS
+        <= settings.VIDEO_ASSEMBLY_TIMEOUT_SECONDS
+    ):
+        raise ValidationError("视频合并 stale timeout 必须大于整体 assembly timeout")
     cutoff = timezone.now() - timedelta(
         seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS
     )
@@ -513,6 +691,26 @@ def recover_stale_video_assembly_jobs():
             if not _is_stale_assembly_job(job, cutoff):
                 continue
             now = timezone.now()
+            if video.cleanup_requested_at is not None or video.project_patient_id is None:
+                job.status = VideoAssemblyJob.Status.FAILED
+                job.failure_reason = "训练视频已解绑，旧合并任务租约失效"
+                job.finished_at = now
+                job.heartbeat_at = now
+                job.save(
+                    update_fields=[
+                        "status",
+                        "failure_reason",
+                        "finished_at",
+                        "heartbeat_at",
+                        "updated_at",
+                    ]
+                )
+                transaction.on_commit(
+                    lambda video_id=video.id: cleanup_unbound_training_video.delay(
+                        video_id
+                    )
+                )
+                continue
             if job.attempt_count >= MAX_ASSEMBLY_ATTEMPTS:
                 _mark_stale_job_failed(job, video, now)
                 continue
@@ -543,6 +741,46 @@ def _is_expirable_video(video, job, cutoff):
         job.status == VideoAssemblyJob.Status.FAILED
         and (job.heartbeat_at is None or job.heartbeat_at < cutoff)
     )
+
+
+def _remove_expired_orphan_staging(cutoff):
+    _, sessions, quarantined = staging_directory_entries()
+    cutoff_timestamp = cutoff.timestamp()
+    removed = 0
+    for path in sessions:
+        match = SESSION_DIRECTORY_PATTERN.fullmatch(path.name)
+        if match is None:
+            continue
+        metadata = path.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mtime >= cutoff_timestamp
+        ):
+            continue
+        video_id = int(match.group("video_id"))
+        if TrainingVideo.objects.filter(pk=video_id).exists():
+            continue
+        if remove_orphan_session_directory(path.name):
+            removed += 1
+
+    for path in quarantined:
+        match = SESSION_DIRECTORY_PATTERN.fullmatch(path.name)
+        if match is None:
+            continue
+        metadata = path.lstat()
+        if (
+            stat.S_ISLNK(metadata.st_mode)
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_mtime >= cutoff_timestamp
+        ):
+            continue
+        video = TrainingVideo.objects.filter(pk=int(match.group("video_id"))).first()
+        if video is not None and video.cleanup_requested_at is None:
+            continue
+        if remove_quarantined_session_directory(path.name):
+            removed += 1
+    return removed
 
 
 @shared_task(ignore_result=True)
@@ -582,4 +820,4 @@ def expire_stale_training_video_sessions():
                 job.cleanup_error = ""
                 job.save(update_fields=["cleanup_status", "cleanup_error", "updated_at"])
             expired += 1
-    return expired
+    return expired + _remove_expired_orphan_staging(cutoff)

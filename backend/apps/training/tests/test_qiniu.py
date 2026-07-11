@@ -162,6 +162,46 @@ def test_upload_local_video_reuses_matching_existing_object(tmp_path, monkeypatc
     put_file.assert_not_called()
 
 
+@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
+def test_upload_local_video_rejects_matching_existing_object_with_wrong_mime(
+    tmp_path, monkeypatch
+):
+    path = _local_video(tmp_path)
+    metadata = {
+        **_matching_metadata(path),
+        "mimeType": "application/octet-stream",
+    }
+    put_file = Mock()
+    monkeypatch.setattr(
+        BucketManager,
+        "stat",
+        Mock(return_value=(metadata, _stat_response())),
+    )
+    monkeypatch.setattr(training_qiniu, "put_file", put_file)
+
+    with pytest.raises(ValidationError, match="类型不匹配"):
+        training_qiniu.upload_local_video(
+            path=path,
+            bucket="motioncare-training",
+            key="training-videos/1/final.mp4",
+        )
+
+    put_file.assert_not_called()
+
+
+@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
+def test_delete_object_if_exists_treats_qiniu_612_as_success(monkeypatch):
+    delete = Mock(return_value=(None, _stat_response(status_code=612, error="no such file")))
+    monkeypatch.setattr(BucketManager, "delete", delete)
+
+    training_qiniu.delete_object_if_exists(
+        bucket="motioncare-training",
+        key="training-videos/1/final.mp4",
+    )
+
+    delete.assert_called_once_with("motioncare-training", "training-videos/1/final.mp4")
+
+
 @pytest.mark.parametrize(
     "metadata",
     [

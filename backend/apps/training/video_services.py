@@ -1,7 +1,5 @@
-import os
 import shutil
 from datetime import timedelta
-from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -23,9 +21,12 @@ from .qiniu import private_download_url
 from .video_staging import (
     SegmentConflict,
     SessionConflict,
+    install_uploaded_segment,
     segment_install_lock,
     segment_path,
     session_root,
+    staging_root,
+    unlink_segment_file,
     write_uploaded_segment,
 )
 
@@ -63,8 +64,7 @@ def _ensure_staging_available():
     if shutil.which(str(settings.FFMPEG_PATH)) is None:
         raise ValidationError("FFmpeg 不可用，暂时无法开始录像")
 
-    root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    root = staging_root()
     if shutil.disk_usage(root).free < settings.TRAINING_VIDEO_MIN_FREE_BYTES:
         raise ValidationError("训练视频临时磁盘空间不足")
 
@@ -237,12 +237,9 @@ def store_training_video_segment(
                     ):
                         raise ValidationError("训练视频总时长超过限制")
 
-                    destination = segment_path(video, index)
-                    os.replace(temporary, destination)
+                    destination = install_uploaded_segment(video, index, temporary)
                     destination_was_installed = True
-                    relative_path = destination.relative_to(
-                        Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
-                    ).as_posix()
+                    relative_path = destination.relative_to(staging_root()).as_posix()
                     segment = TrainingVideoSegment.objects.create(
                         training_video=video,
                         index=index,
@@ -261,7 +258,7 @@ def store_training_video_segment(
                     return segment, True
             except Exception:
                 if destination_was_installed:
-                    destination.unlink(missing_ok=True)
+                    unlink_segment_file(preliminary_video, index)
                 raise
     finally:
         temporary.unlink(missing_ok=True)
@@ -292,17 +289,17 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
     if abs(actual_segment_duration_seconds - actual_duration_seconds) > allowed_difference:
         raise ValidationError("训练视频分段时长与提交时长不一致")
 
-    staging_root = Path(settings.TRAINING_VIDEO_STAGING_ROOT).resolve()
+    staging = staging_root()
     root = session_root(video)
     for segment in segments:
         expected_path = segment_path(video, segment.index)
-        expected_relative_path = expected_path.relative_to(staging_root).as_posix()
-        candidate = staging_root / segment.relative_path
+        expected_relative_path = expected_path.relative_to(staging).as_posix()
+        candidate = staging / segment.relative_path
         if (
             segment.relative_path != expected_relative_path
             or candidate.is_symlink()
             or not candidate.is_file()
-            or not candidate.resolve().is_relative_to(root)
+            or candidate.parent != root / "segments"
         ):
             raise ValidationError("训练视频分段尚未安全落盘")
 

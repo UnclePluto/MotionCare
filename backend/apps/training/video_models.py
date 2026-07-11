@@ -8,6 +8,12 @@ from apps.common.models import UserStampedModel
 
 
 class TrainingVideo(UserStampedModel):
+    class CleanupStatus(models.TextChoices):
+        NONE = "", "无需清理"
+        PENDING = "pending", "待清理"
+        RUNNING = "running", "清理中"
+        FAILED = "failed", "清理失败"
+
     class Status(models.TextChoices):
         RECORDING = "recording", "录制中"
         UPLOADING_SEGMENTS = "uploading_segments", "分段上传中"
@@ -20,7 +26,9 @@ class TrainingVideo(UserStampedModel):
 
     project_patient = models.ForeignKey(
         "studies.ProjectPatient",
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name="training_video_uploads",
     )
     prescription = models.ForeignKey("prescriptions.Prescription", on_delete=models.PROTECT)
@@ -59,6 +67,17 @@ class TrainingVideo(UserStampedModel):
     )
     uploaded_at = models.DateTimeField("上传完成时间", null=True, blank=True)
     failure_reason = models.TextField("失败原因", blank=True)
+    cleanup_status = models.CharField(
+        "解绑清理状态",
+        max_length=20,
+        choices=CleanupStatus.choices,
+        default=CleanupStatus.NONE,
+        blank=True,
+    )
+    cleanup_requested_at = models.DateTimeField("解绑清理请求时间", null=True, blank=True)
+    cleanup_heartbeat_at = models.DateTimeField("解绑清理心跳时间", null=True, blank=True)
+    cleanup_attempt_count = models.PositiveIntegerField("解绑清理尝试次数", default=0)
+    cleanup_error = models.TextField("解绑清理失败原因", blank=True)
 
     class Meta:
         constraints = [

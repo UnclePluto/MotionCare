@@ -47,6 +47,16 @@ def stat_object_metadata(*, bucket: str, key: str) -> dict:
     return metadata
 
 
+def delete_object_if_exists(*, bucket: str, key: str) -> None:
+    auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
+    try:
+        _, response = BucketManager(auth).delete(bucket, key)
+    except Exception as exc:
+        raise ValidationError("七牛训练视频对象删除失败") from exc
+    if getattr(response, "status_code", None) not in {200, 612}:
+        raise ValidationError("七牛训练视频对象删除失败")
+
+
 def validate_object_metadata(
     metadata: dict,
     *,
@@ -84,6 +94,12 @@ def upload_local_video(*, path: Path, bucket: str, key: str) -> dict:
     if existing is not None:
         if existing.get("fsize") != local_size or existing.get("hash") != local_etag:
             raise ValidationError("七牛目标对象与本地视频冲突")
+        validate_object_metadata(
+            existing,
+            expected_hash=local_etag,
+            expected_size_bytes=local_size,
+            expected_content_type="video/mp4",
+        )
         return existing
 
     try:

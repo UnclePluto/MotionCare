@@ -9,13 +9,20 @@ from apps.training import video_assembly
 from apps.training.video_assembly import VideoProbe, assemble_video, probe_video
 
 
-def _probe(*, duration_seconds=1.0):
+def _probe(
+    *,
+    duration_seconds=1.0,
+    width=640,
+    height=480,
+    video_codec="h264",
+    audio_codec="aac",
+):
     return VideoProbe(
         duration_seconds=duration_seconds,
-        width=640,
-        height=480,
-        video_codec="h264",
-        audio_codec="aac",
+        width=width,
+        height=height,
+        video_codec=video_codec,
+        audio_codec=audio_codec,
     )
 
 
@@ -35,7 +42,8 @@ def test_assemble_video_falls_back_to_one_transcode(tmp_path, monkeypatch):
         calls.append(command)
         if "copy" in command:
             raise subprocess.CalledProcessError(1, command, stderr="bad timestamps")
-        Path(command[-1]).write_bytes(b"merged")
+        if command[-1] != "-":
+            Path(command[-1]).write_bytes(b"merged")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(video_assembly, "probe_video", lambda *args, **kwargs: _probe())
@@ -57,6 +65,129 @@ def test_assemble_video_falls_back_to_one_transcode(tmp_path, monkeypatch):
     assert "-safe" in calls[0]
     assert result.output_path == tmp_path / "final.mp4"
     assert result.size_bytes == len(b"merged")
+    assert sum(command[-2:] == ["null", "-"] for command in calls) == 1
+
+
+@pytest.mark.parametrize(
+    "input_probes",
+    [
+        [_probe(), _probe(width=1280)],
+        [_probe(), _probe(video_codec="hevc")],
+        [_probe(), _probe(audio_codec=None)],
+        [_probe(audio_codec="mp3"), _probe(audio_codec="mp3")],
+    ],
+)
+def test_assemble_video_transcodes_incompatible_inputs_without_trying_copy(
+    tmp_path, monkeypatch, input_probes
+):
+    calls = []
+    probes = iter([*input_probes, _probe(duration_seconds=2.0)])
+    monkeypatch.setattr(
+        video_assembly,
+        "probe_video",
+        lambda *args, **kwargs: next(probes),
+    )
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[-1] != "-":
+            Path(command[-1]).write_bytes(b"merged")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    result = assemble_video(
+        _segment_paths(tmp_path),
+        tmp_path / "final.mp4",
+        ffmpeg_path="ffmpeg",
+        ffprobe_path="ffprobe",
+        timeout=30,
+        runner=runner,
+    )
+
+    assert result.transcoded is True
+    assert sum("copy" in command for command in calls) == 0
+    assert sum("libx264" in command for command in calls) == 1
+    assert sum(command[-2:] == ["null", "-"] for command in calls) == 1
+
+
+def test_assemble_video_rejects_output_that_cannot_be_fully_decoded(
+    tmp_path, monkeypatch
+):
+    calls = []
+    probes = iter([
+        _probe(),
+        _probe(),
+        _probe(duration_seconds=2.0),
+        _probe(duration_seconds=2.0),
+    ])
+    monkeypatch.setattr(
+        video_assembly,
+        "probe_video",
+        lambda *args, **kwargs: next(probes),
+    )
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[-2:] == ["null", "-"]:
+            raise subprocess.CalledProcessError(1, command, stderr="decode failed")
+        Path(command[-1]).write_bytes(b"merged")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    with pytest.raises(ValidationError, match="解码验证"):
+        assemble_video(
+            _segment_paths(tmp_path),
+            tmp_path / "final.mp4",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            timeout=30,
+            runner=runner,
+        )
+
+    assert not (tmp_path / "final.mp4").exists()
+
+
+def test_assemble_video_uses_one_monotonic_deadline_and_reports_stage_progress(
+    tmp_path,
+):
+    now = [100.0]
+    timeouts = []
+    progress = []
+
+    def monotonic():
+        return now[0]
+
+    def runner(command, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        now[0] += 4.0
+        if command[0] == "ffprobe":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    '{"streams":[{"codec_type":"video","codec_name":"h264",'
+                    '"width":640,"height":480},{"codec_type":"audio",'
+                    '"codec_name":"aac"}],"format":{"duration":"1.0"}}'
+                ),
+                stderr="",
+            )
+        if command[-1] != "-":
+            Path(command[-1]).write_bytes(b"merged")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    with pytest.raises(ValidationError, match="整体处理超时"):
+        assemble_video(
+            _segment_paths(tmp_path),
+            tmp_path / "final.mp4",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            timeout=10,
+            runner=runner,
+            monotonic=monotonic,
+            on_progress=lambda: progress.append(now[0]),
+        )
+
+    assert timeouts == sorted(timeouts, reverse=True)
+    assert timeouts[0] <= 10
+    assert len(progress) >= 2
 
 
 def test_assemble_video_rejects_invalid_segment_paths(tmp_path):
@@ -93,7 +224,12 @@ def test_assemble_video_rejects_duration_mismatch_without_final_output(tmp_path,
         Path(command[-1]).write_bytes(b"merged")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    probes = iter([_probe(duration_seconds=3.0), _probe(duration_seconds=3.0), _probe()])
+    probes = iter([
+        _probe(duration_seconds=3.0),
+        _probe(duration_seconds=3.0),
+        _probe(),
+        _probe(),
+    ])
     monkeypatch.setattr(video_assembly, "probe_video", lambda *args, **kwargs: next(probes))
 
     with pytest.raises(ValidationError, match="时长"):

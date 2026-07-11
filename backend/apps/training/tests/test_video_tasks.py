@@ -36,6 +36,8 @@ def test_video_assembly_job_task_routes_to_dedicated_queue():
 
     default_queue_tasks = [
         module.cleanup_training_video_files,
+        module.cleanup_unbound_training_video,
+        module.recover_training_video_cleanup,
         module.expire_stale_training_video_sessions,
         module.recover_stale_video_assembly_jobs,
         training_tasks.run_motion_analysis_job,
@@ -276,13 +278,13 @@ def test_cleanup_failure_only_marks_cleanup_and_keeps_attached_record(
     video.training_record = record
     video.status = TrainingVideo.Status.ATTACHED
     video.save(update_fields=["training_record", "status", "updated_at"])
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    unsafe_link = session_root(video) / "working" / "unsafe-link"
-    unsafe_link.parent.mkdir(parents=True, exist_ok=True)
-    unsafe_link.symlink_to(outside, target_is_directory=True)
     module = _video_tasks()
     retry = Mock(side_effect=Retry())
+    monkeypatch.setattr(
+        module,
+        "_remove_session_files",
+        Mock(side_effect=RuntimeError("quarantine delete failed")),
+    )
     monkeypatch.setattr(module.cleanup_training_video_files, "retry", retry)
 
     with pytest.raises(Retry):
@@ -295,8 +297,6 @@ def test_cleanup_failure_only_marks_cleanup_and_keeps_attached_record(
     assert video.status == TrainingVideo.Status.ATTACHED
     assert video.training_record == record
     assert TrainingRecord.objects.filter(pk=record.id).exists()
-    assert outside.is_dir()
-    assert unsafe_link.is_symlink()
 
 
 @pytest.mark.django_db
@@ -499,7 +499,11 @@ def test_job_state_updates_revalidate_locked_state_before_progressing(
     video.status = TrainingVideo.Status.ASSEMBLING
     video.save(update_fields=["status", "updated_at"])
     with pytest.raises(ValidationError):
-        module.mark_uploading_qiniu(job.id, _assembly_result(video, duration=60.0))
+        module.mark_uploading_qiniu(
+            job.id,
+            _assembly_result(video, duration=60.0),
+            lease_attempt=job.attempt_count,
+        )
     job.refresh_from_db()
     video.refresh_from_db()
     assert job.status == VideoAssemblyJob.Status.PENDING
@@ -520,7 +524,203 @@ def test_attach_does_not_create_record_after_project_patient_unbind(
     project_patient.delete()
     module = _video_tasks()
 
-    with pytest.raises(ObjectDoesNotExist):
-        module.attach_training_video(job_id, result, _remote_metadata(result))
+    with pytest.raises((ObjectDoesNotExist, ValidationError)):
+        module.attach_training_video(
+            job_id,
+            result,
+            _remote_metadata(result),
+            lease_attempt=job.attempt_count,
+        )
 
     assert not TrainingRecord.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("status", [TrainingVideo.Status.UPLOADING_QINIU, TrainingVideo.Status.ATTACHED])
+def test_unbound_video_cleanup_deletes_qiniu_local_files_and_database_record(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+    status,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    video.status = status
+    video.project_patient = None
+    video.cleanup_status = TrainingVideo.CleanupStatus.PENDING
+    video.cleanup_requested_at = timezone.now()
+    if status == TrainingVideo.Status.ATTACHED:
+        video.object_key = job.qiniu_object_key
+    video.save()
+    (session_root(video) / "working").mkdir(parents=True, exist_ok=True)
+    (session_root(video) / "working" / "final.mp4").write_bytes(b"final")
+    module = _video_tasks()
+    delete = Mock()
+    monkeypatch.setattr(module, "delete_object_if_exists", delete)
+
+    cleaned = module.cleanup_unbound_training_video.run(video.id)
+
+    assert cleaned is True
+    assert not TrainingVideo.objects.filter(pk=video.id).exists()
+    assert not session_root(video).exists()
+    delete.assert_called_once_with(
+        bucket="motioncare-training",
+        key=job.qiniu_object_key,
+    )
+
+
+@pytest.mark.django_db
+def test_unbound_video_cleanup_failure_is_durable_retried_and_beat_compensated(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, _ = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    video.project_patient = None
+    video.cleanup_status = TrainingVideo.CleanupStatus.PENDING
+    video.cleanup_requested_at = timezone.now()
+    video.save()
+    module = _video_tasks()
+    retry = Mock(side_effect=Retry())
+    monkeypatch.setattr(module, "delete_object_if_exists", Mock(side_effect=RuntimeError("qiniu down")))
+    monkeypatch.setattr(module.cleanup_unbound_training_video, "retry", retry)
+
+    with pytest.raises(Retry):
+        module.cleanup_unbound_training_video.run(video.id)
+
+    video.refresh_from_db()
+    assert video.cleanup_status == TrainingVideo.CleanupStatus.FAILED
+    assert video.cleanup_attempt_count == 1
+    assert video.cleanup_error
+
+    delay = Mock()
+    monkeypatch.setattr(module.cleanup_unbound_training_video, "delay", delay)
+    with django_capture_on_commit_callbacks(execute=True):
+        recovered = module.recover_training_video_cleanup.run()
+
+    assert recovered == 1
+    delay.assert_called_once_with(video.id)
+
+
+@pytest.mark.django_db
+def test_attempt_count_lease_blocks_old_worker_touch_mark_and_attach(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    module = _video_tasks()
+    first, claimed = module.claim_video_assembly_job(job.id)
+    assert claimed is True
+    first_attempt = first.attempt_count
+
+    VideoAssemblyJob.objects.filter(pk=job.id).update(
+        status=VideoAssemblyJob.Status.PENDING,
+    )
+    TrainingVideo.objects.filter(pk=video.id).update(status=TrainingVideo.Status.QUEUED)
+    second, claimed = module.claim_video_assembly_job(job.id)
+    assert claimed is True
+    assert second.attempt_count == first_attempt + 1
+    result = _assembly_result(video, duration=60.0)
+
+    with pytest.raises(ValidationError, match="租约"):
+        module._touch_heartbeat(job.id, first_attempt)
+    with pytest.raises(ValidationError, match="租约"):
+        module.mark_uploading_qiniu(job.id, result, lease_attempt=first_attempt)
+    with pytest.raises(ValidationError, match="租约"):
+        module.attach_training_video(
+            job.id,
+            result,
+            _remote_metadata(result),
+            lease_attempt=first_attempt,
+        )
+    assert not TrainingRecord.objects.exists()
+
+
+@pytest.mark.django_db
+def test_stale_takeover_stops_old_worker_before_next_file_write(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    module = _video_tasks()
+    old_output = session_root(video) / "working" / "old-worker-write.mp4"
+
+    def takeover_before_write(*args, on_progress, **kwargs):
+        VideoAssemblyJob.objects.filter(pk=job.id).update(
+            status=VideoAssemblyJob.Status.PENDING,
+        )
+        TrainingVideo.objects.filter(pk=video.id).update(status=TrainingVideo.Status.QUEUED)
+        _, claimed = module.claim_video_assembly_job(job.id)
+        assert claimed is True
+        on_progress()
+        old_output.write_bytes(b"must-not-be-written")
+
+    upload = Mock()
+    monkeypatch.setattr(module, "assemble_video", takeover_before_write)
+    monkeypatch.setattr(module, "upload_local_video", upload)
+
+    with pytest.raises(ValidationError, match="租约"):
+        module.process_video_assembly_job(job.id)
+
+    assert not old_output.exists()
+    upload.assert_not_called()
+
+
+def test_safe_failure_reason_redacts_common_bare_credential_fields(settings):
+    settings.QINIU_ACCESS_KEY = "configured-ak"
+    settings.QINIU_SECRET_KEY = "configured-sk"
+    module = _video_tasks()
+    reason = module._safe_video_failure_reason(
+        "视频处理",
+        RuntimeError(
+            "access_key=one accessKey=two secret_key=three "
+            "credential_id=four AK=five SK=six"
+        ),
+    )
+
+    for secret in ("one", "two", "three", "four", "five", "six"):
+        assert secret not in reason
+
+
+@pytest.mark.django_db
+def test_expire_scan_removes_only_strict_old_orphans_and_old_quarantine(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.TRAINING_VIDEO_STAGING_TTL_SECONDS = 86400
+    orphan = tmp_path / "999-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    malformed = tmp_path / "999-not-a-session"
+    quarantine = tmp_path / ".quarantine" / "998-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    for path in (orphan, malformed, quarantine):
+        path.mkdir(parents=True)
+        (path / "segment.mp4").write_bytes(b"private")
+    old_timestamp = (timezone.now() - timedelta(hours=25)).timestamp()
+    for path in (orphan, malformed, quarantine):
+        path.touch()
+        import os
+
+        os.utime(path, (old_timestamp, old_timestamp))
+    module = _video_tasks()
+
+    module.expire_stale_training_video_sessions.run()
+
+    assert not orphan.exists()
+    assert not quarantine.exists()
+    assert malformed.exists()

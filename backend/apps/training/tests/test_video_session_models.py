@@ -1,8 +1,13 @@
+import uuid
+
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.training.models import TrainingVideo, TrainingVideoSegment, VideoAssemblyJob
+from apps.prescriptions.models import ActionLibraryItem
+from apps.training.video_services import create_training_video_session
 
 
 @pytest.mark.django_db
@@ -31,6 +36,8 @@ def test_segmented_training_video_models(
     assert first.index == 0
     assert job.status == VideoAssemblyJob.Status.PENDING
     assert job.cleanup_status == VideoAssemblyJob.CleanupStatus.PENDING
+    assert video.cleanup_status == TrainingVideo.CleanupStatus.NONE
+    assert video.cleanup_requested_at is None
 
     with pytest.raises(IntegrityError), transaction.atomic():
         TrainingVideoSegment.objects.create(
@@ -52,3 +59,44 @@ def test_segmented_training_video_models(
 
     with pytest.raises(IntegrityError), transaction.atomic():
         VideoAssemblyJob.objects.create(training_video=video)
+
+    project_patient.delete()
+    video.refresh_from_db()
+    assert video.project_patient_id is None
+
+
+@pytest.mark.django_db
+def test_training_video_session_accepts_600_seconds_and_rejects_601(
+    project_patient,
+    active_prescription,
+    monkeypatch,
+):
+    action = active_prescription.add_action_snapshot(
+        ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press"),
+        weekly_frequency="2 次/周",
+        weekly_target_count=2,
+        duration_minutes=12,
+    )
+    monkeypatch.setattr(
+        "apps.training.video_services._ensure_staging_available",
+        lambda: None,
+    )
+
+    accepted, created = create_training_video_session(
+        project_patient=project_patient,
+        client_session_id=uuid.uuid4(),
+        prescription_action_id=action.id,
+        training_date=timezone.localdate(),
+        expected_duration_seconds=600,
+    )
+
+    assert created is True
+    assert accepted.expected_duration_seconds == 600
+    with pytest.raises(ValidationError, match="时长超过限制"):
+        create_training_video_session(
+            project_patient=project_patient,
+            client_session_id=uuid.uuid4(),
+            prescription_action_id=action.id,
+            training_date=timezone.localdate(),
+            expected_duration_seconds=601,
+        )

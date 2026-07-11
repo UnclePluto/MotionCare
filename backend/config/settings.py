@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -114,6 +115,10 @@ VIDEO_ASSEMBLY_TIMEOUT_SECONDS = int(os.getenv("VIDEO_ASSEMBLY_TIMEOUT_SECONDS",
 VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS = int(os.getenv(
     "VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS", "3600"
 ))
+if VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS <= VIDEO_ASSEMBLY_TIMEOUT_SECONDS:
+    raise ImproperlyConfigured(
+        "VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS 必须大于 VIDEO_ASSEMBLY_TIMEOUT_SECONDS"
+    )
 FFMPEG_PATH = os.getenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
 FFPROBE_PATH = os.getenv("FFPROBE_PATH", "/usr/bin/ffprobe")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -157,6 +162,10 @@ CELERY_BEAT_SCHEDULE = {
     },
     "expire-stale-training-video-sessions": {
         "task": "apps.training.video_tasks.expire_stale_training_video_sessions",
+        "schedule": 900,
+    },
+    "recover-training-video-cleanup": {
+        "task": "apps.training.video_tasks.recover_training_video_cleanup",
         "schedule": 900,
     },
 }

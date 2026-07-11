@@ -20,6 +20,10 @@ FAILURE_REASON_MAX_LENGTH = 2000
 DOWNLOAD_CHUNK_SIZE_BYTES = 64 * 1024
 URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 TOKEN_PATTERN = re.compile(r"(?i)(token=)[^&\s]+")
+CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\b(access[_-]?key|secret[_-]?key|credential[_-]?id|AK|SK)\b"
+    r"\s*[:=]\s*[^\s,;&]+"
+)
 LOCAL_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9])/(?:[^\s'\";,()]+)")
 
 
@@ -93,6 +97,7 @@ def _safe_failure_reason(stage, exc):
     message = str(exc)
     message = URL_PATTERN.sub("[URL已隐藏]", message)
     message = TOKEN_PATTERN.sub(r"\1[已隐藏]", message)
+    message = CREDENTIAL_PATTERN.sub(r"\1=[密钥已隐藏]", message)
     message = LOCAL_PATH_PATTERN.sub("[路径已隐藏]", message)
     for secret in (settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY):
         if secret:
@@ -242,7 +247,9 @@ def run_motion_analysis_job(job_id):
 
 from .video_tasks import (  # noqa: E402,F401
     cleanup_training_video_files,
+    cleanup_unbound_training_video,
     expire_stale_training_video_sessions,
+    recover_training_video_cleanup,
     recover_stale_video_assembly_jobs,
     run_video_assembly_job,
 )

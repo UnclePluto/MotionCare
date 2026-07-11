@@ -18,13 +18,20 @@ from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 from apps.training import video_services
+from apps.training import video_staging
 from apps.training.models import TrainingVideo, TrainingVideoSegment
 from apps.training.video_services import (
     SessionConflict,
     create_training_video_session,
     store_training_video_segment,
 )
-from apps.training.video_staging import segment_install_lock, segment_path
+from apps.training.video_staging import (
+    segment_install_lock,
+    segment_path,
+    session_root,
+    write_uploaded_segment,
+    quarantine_and_remove_session,
+)
 
 
 def _start_database_thread(name, operation, results, errors, backend_pids=None):
@@ -51,6 +58,71 @@ def _join_threads(test_case, *threads):
 
 
 class SegmentInstallLockTests(SimpleTestCase):
+    def test_quarantine_rename_happens_before_recursive_delete_and_retry_finishes(self):
+        video = SimpleNamespace(
+            pk=1,
+            client_session_id=uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db12"),
+        )
+        with TemporaryDirectory() as staging_root, override_settings(
+            TRAINING_VIDEO_STAGING_ROOT=staging_root
+        ):
+            root = session_root(video)
+            (root / "segments").mkdir(parents=True)
+            (root / "segments" / "000000.mp4").write_bytes(b"private")
+            quarantined = Path(staging_root) / ".quarantine" / root.name
+
+            with patch.object(
+                video_staging,
+                "_remove_directory_contents",
+                side_effect=RuntimeError("delete interrupted"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                    quarantine_and_remove_session(video)
+
+            self.assertFalse(root.exists())
+            self.assertTrue(quarantined.is_dir())
+            quarantine_and_remove_session(video)
+            self.assertFalse(quarantined.exists())
+
+    def test_rejects_staging_root_and_session_directory_symlinks(self):
+        video = SimpleNamespace(
+            pk=1,
+            client_session_id=uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db12"),
+        )
+        with TemporaryDirectory() as parent:
+            parent_path = Path(parent)
+            real_root = parent_path / "real"
+            real_root.mkdir(mode=0o700)
+            linked_root = parent_path / "linked"
+            linked_root.symlink_to(real_root, target_is_directory=True)
+            with override_settings(TRAINING_VIDEO_STAGING_ROOT=linked_root):
+                with self.assertRaisesRegex(Exception, "符号链接"):
+                    session_root(video)
+
+            other_session = real_root / "2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            other_session.mkdir(mode=0o700)
+            expected_session = real_root / f"1-{video.client_session_id.hex}"
+            expected_session.symlink_to(other_session, target_is_directory=True)
+            with override_settings(TRAINING_VIDEO_STAGING_ROOT=real_root):
+                with self.assertRaisesRegex(Exception, "符号链接"):
+                    segment_path(video, 0)
+
+    def test_temporary_segment_is_created_nofollow_with_private_permissions(self):
+        video = SimpleNamespace(
+            pk=1,
+            client_session_id=uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db12"),
+        )
+        uploaded = SimpleUploadedFile("segment.mp4", b"private-video")
+        with TemporaryDirectory() as staging_root, override_settings(
+            TRAINING_VIDEO_STAGING_ROOT=staging_root,
+            TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES=1024,
+        ):
+            temporary, _, _ = write_uploaded_segment(video, 0, uploaded)
+            try:
+                self.assertEqual(temporary.stat().st_mode & 0o777, 0o600)
+            finally:
+                temporary.unlink(missing_ok=True)
+
     def test_second_thread_waits_for_first_lock_holder(self):
         video = SimpleNamespace(
             pk=1,
