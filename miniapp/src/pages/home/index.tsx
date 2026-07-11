@@ -1,6 +1,6 @@
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { request } from '../../api/client'
 import type { HomeData } from '../../types/patientApp'
@@ -11,6 +11,7 @@ import {
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
 import { actionEntryUrl } from '../prescription/actionRouting'
+import { reLaunchPendingShoulderPressUploadIfNeeded } from '../shoulder-press/pageState'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -25,6 +26,7 @@ export default function HomePage() {
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [pendingUploadBanner, setPendingUploadBanner] = useState('')
+  const mountedRef = useRef(true)
 
   function refreshPendingUploadBanner() {
     setPendingUploadBanner(pendingGameUploadBannerText())
@@ -33,17 +35,24 @@ export default function HomePage() {
   function loadHomeData() {
     request<HomeData>('/patient-app/home/')
       .then((body) => {
+        if (!mountedRef.current) return
         setData(body)
         setLoaded(true)
       })
       .catch((err) => {
+        if (!mountedRef.current) return
         setError(err instanceof Error ? err.message : '加载失败')
         setLoaded(true)
       })
   }
 
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
+
   useEffect(() => {
     return subscribePendingGameUploadRetryLoop((result) => {
+      if (!mountedRef.current) return
       refreshPendingUploadBanner()
       if (result === 'uploaded') {
         loadHomeData()
@@ -55,18 +64,22 @@ export default function HomePage() {
     setError('')
     setLoaded(false)
     setData(null)
-    refreshPendingUploadBanner()
-    void tryUploadPendingGameRecord(Taro)
-      .then((result) => {
-        if (result === 'uploaded') {
-          loadHomeData()
-        }
-      })
-      .finally(() => {
-        refreshPendingUploadBanner()
-        startPendingGameUploadRetryLoop(Taro)
-      })
-    loadHomeData()
+    void reLaunchPendingShoulderPressUploadIfNeeded(Taro).then((redirected) => {
+      if (!mountedRef.current) return
+      if (redirected) return
+      refreshPendingUploadBanner()
+      void tryUploadPendingGameRecord(Taro)
+        .then((result) => {
+          if (result === 'uploaded') {
+            loadHomeData()
+          }
+        })
+        .finally(() => {
+          refreshPendingUploadBanner()
+          startPendingGameUploadRetryLoop(Taro)
+        })
+      loadHomeData()
+    })
   })
 
   const currentPrescription = data?.current_prescription

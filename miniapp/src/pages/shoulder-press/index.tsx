@@ -7,10 +7,16 @@ import type { CurrentPrescription } from '../../types/patientApp'
 import {
   canCompleteShoulderPressTraining,
   canStartShoulderPressRecording,
+  computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
+  loadOwnedPendingShoulderPressSession,
+  registerShoulderPressBackgroundUpload,
+  reLaunchPendingShoulderPressUploadIfNeeded,
   resolveShoulderPressAction,
+  saveOwnedPendingShoulderPressSession,
   shoulderPressUploadCounters,
   shouldAutoFinishShoulderPressTraining,
+  waitForShoulderPressBackgroundUploadSettled,
   type ShoulderPressAction
 } from './pageState'
 import { ShoulderPressRecorder } from './recorder'
@@ -66,6 +72,16 @@ function persistSession(session: PendingShoulderPressSession, onSession?: Sessio
   return session
 }
 
+function persistOwnedSession(
+  session: PendingShoulderPressSession,
+  onSession?: SessionUpdate
+): PendingShoulderPressSession | null {
+  const saved = saveOwnedPendingShoulderPressSession(Taro, session)
+  if (!saved) return null
+  onSession?.(saved)
+  return saved
+}
+
 function mergeServerUploaded(
   session: PendingShoulderPressSession,
   uploadedSegments: number[] | undefined
@@ -86,7 +102,7 @@ function mergeServerUploaded(
 async function ensureRemoteSession(
   session: PendingShoulderPressSession,
   onSession?: SessionUpdate
-): Promise<PendingShoulderPressSession> {
+): Promise<PendingShoulderPressSession | null> {
   if (session.videoId) return session
   const created = await createVideoSession({
     actionId: session.actionId,
@@ -94,8 +110,10 @@ async function ensureRemoteSession(
     trainingDate: session.trainingDate,
     expectedDurationSeconds: session.expectedDurationSeconds
   })
-  return persistSession({
-    ...mergeServerUploaded(session, created.uploaded_segments),
+  const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
+  if (!latest) return null
+  return persistOwnedSession({
+    ...mergeServerUploaded(latest, created.uploaded_segments),
     videoId: created.video_id
   }, onSession)
 }
@@ -104,21 +122,30 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
   let session = loadPendingShoulderPressSession(Taro)
   if (!session || session.finalized || session.segments.length === 0) return
 
+  const clientSessionId = session.clientSessionId
   session = await ensureRemoteSession(session, onSession)
+  if (!session || !session.videoId) return
   const status = await getVideoSessionStatus(session.videoId)
-  session = persistSession(mergeServerUploaded(session, status.uploaded_segments), onSession)
+  const latestAfterStatus = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+  if (!latestAfterStatus) return
+  session = persistOwnedSession(mergeServerUploaded({
+    ...latestAfterStatus,
+    videoId: session.videoId
+  }, status.uploaded_segments), onSession)
+  if (!session) return
 
   for (;;) {
-    session = loadPendingShoulderPressSession(Taro) ?? session
-    if (session.finalized || !session.videoId) return
+    session = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+    if (!session || session.finalized || !session.videoId) return
 
     const segment = session.segments.find((item) => item.uploadState !== 'uploaded')
     if (!segment) return
 
-    session = persistSession(updateSegment(session, segment.index, {
+    session = persistOwnedSession(updateSegment(session, segment.index, {
       uploadState: 'uploading',
       sha256: undefined
     }), onSession)
+    if (!session) return
 
     try {
       const uploaded = await uploadVideoSegment({
@@ -128,14 +155,17 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
         durationMs: segment.durationMs,
         sizeBytes: segment.sizeBytes
       })
-      session = loadPendingShoulderPressSession(Taro) ?? session
-      session = persistSession(updateSegment(session, uploaded.index, {
+      session = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+      if (!session) return
+      session = persistOwnedSession(updateSegment(session, uploaded.index, {
         uploadState: 'uploaded',
         sha256: uploaded.sha256
       }), onSession)
+      if (!session) return
     } catch (error) {
-      session = loadPendingShoulderPressSession(Taro) ?? session
-      persistSession({
+      session = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+      if (!session) return
+      persistOwnedSession({
         ...updateSegment(session, segment.index, {
           uploadState: 'pending',
           sha256: undefined
@@ -164,6 +194,7 @@ function uploadPendingSegmentsInBackground(onSession?: SessionUpdate): Promise<v
         void uploadPendingSegmentsInBackground(onSession)
       }
     })
+  registerShoulderPressBackgroundUpload(backgroundUploadPromise)
 
   return backgroundUploadPromise
 }
@@ -187,11 +218,14 @@ export default function ShoulderPressPage() {
   const pausedRef = useRef(false)
   const commandInFlightRef = useRef(false)
   const finishInFlightRef = useRef(false)
+  const mountedRef = useRef(true)
+  const recordingBaseDurationMsRef = useRef(0)
   const recordingStartedAtRef = useRef(0)
   const segmentSaveChainRef = useRef<Promise<void>>(Promise.resolve())
 
   function syncSession(nextSession: PendingShoulderPressSession) {
     sessionRef.current = nextSession
+    if (!mountedRef.current) return
     setSession(nextSession)
     if (nextSession.lastError) setError(nextSession.lastError)
   }
@@ -202,10 +236,13 @@ export default function ShoulderPressPage() {
 
   function currentElapsedMs(): number {
     const savedDuration = sessionRef.current?.actualDurationMs ?? session?.actualDurationMs ?? 0
-    const liveDuration = recordingRef.current && recordingStartedAtRef.current > 0
-      ? Math.max(0, Date.now() - recordingStartedAtRef.current)
-      : 0
-    return Math.min(savedDuration + liveDuration, 600_000)
+    return computeShoulderPressEffectiveDuration({
+      savedDurationMs: savedDuration,
+      recording: recordingRef.current,
+      recordingBaseDurationMs: recordingBaseDurationMsRef.current,
+      recordingStartedAtMs: recordingStartedAtRef.current,
+      nowMs: Date.now()
+    })
   }
 
   async function persistRecordedSegment(tempFilePath: string): Promise<void> {
@@ -244,6 +281,7 @@ export default function ShoulderPressPage() {
       onPause: () => {
         recordingRef.current = false
         pausedRef.current = true
+        recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
         recordingStartedAtRef.current = 0
         setRecording(false)
         setPaused(true)
@@ -271,6 +309,7 @@ export default function ShoulderPressPage() {
       await recorder.start()
       recordingRef.current = true
       pausedRef.current = false
+      recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
       recordingStartedAtRef.current = Date.now()
       setRecording(true)
       setPaused(false)
@@ -288,7 +327,10 @@ export default function ShoulderPressPage() {
   }
 
   async function pauseTraining() {
+    if (finishInFlightRef.current || commandInFlightRef.current) return
     if (!recorderRef.current || !recordingRef.current) return
+    commandInFlightRef.current = true
+    setProcessing(true)
     try {
       await recorderRef.current.pause()
     } catch (pauseError) {
@@ -296,9 +338,12 @@ export default function ShoulderPressPage() {
     } finally {
       recordingRef.current = false
       pausedRef.current = true
+      recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
       recordingStartedAtRef.current = 0
       setRecording(false)
       setPaused(true)
+      commandInFlightRef.current = false
+      setProcessing(false)
     }
   }
 
@@ -323,6 +368,7 @@ export default function ShoulderPressPage() {
         await recorderRef.current.finish()
       }
       await segmentSaveChainRef.current
+      await waitForShoulderPressBackgroundUploadSettled()
       const currentSession = sessionRef.current
       if (!currentSession || currentSession.segments.length === 0) {
         throw new Error('还没有可上传的训练片段，请先开始训练')
@@ -342,20 +388,21 @@ export default function ShoulderPressPage() {
   }
 
   useEffect(() => {
-    const pending = loadPendingShoulderPressSession(Taro)
-    if (pending && !pending.finalized) {
-      Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
-      return
-    }
+    let cancelled = false
 
-    if (!Number.isInteger(actionId) || actionId <= 0) {
-      setError('训练动作无效，请返回当前处方重新进入')
-      setLoaded(true)
-      return
-    }
+    async function bootstrap() {
+      const redirected = await reLaunchPendingShoulderPressUploadIfNeeded(Taro)
+      if (cancelled || redirected) return
 
-    request<CurrentPrescription>('/patient-app/current-prescription/')
-      .then((prescription) => {
+      if (!Number.isInteger(actionId) || actionId <= 0) {
+        setError('训练动作无效，请返回当前处方重新进入')
+        setLoaded(true)
+        return
+      }
+
+      try {
+        const prescription = await request<CurrentPrescription>('/patient-app/current-prescription/')
+        if (cancelled) return
         const currentAction = resolveShoulderPressAction(prescription, actionId)
         setAction(currentAction)
         if (!currentAction) {
@@ -369,12 +416,23 @@ export default function ShoulderPressPage() {
         })
         sessionRef.current = nextSession
         setSession(nextSession)
-      })
-      .catch((loadError) => {
+      } catch (loadError) {
+        if (cancelled) return
         setError(loadError instanceof Error ? loadError.message : '当前动作加载失败，请稍后重试')
-      })
-      .finally(() => setLoaded(true))
+      } finally {
+        if (!cancelled) setLoaded(true)
+      }
+    }
+
+    void bootstrap()
+    return () => {
+      cancelled = true
+    }
   }, [actionId])
+
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
 
   useEffect(() => {
     if (!recording) return undefined
@@ -389,6 +447,7 @@ export default function ShoulderPressPage() {
   }, [recording])
 
   useDidHide(() => {
+    if (finishInFlightRef.current || commandInFlightRef.current) return
     void pauseTraining()
   })
 

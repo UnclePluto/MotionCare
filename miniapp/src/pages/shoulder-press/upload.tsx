@@ -5,13 +5,14 @@ import { useRef, useState } from 'react'
 import {
   isServerRetryableFinalizeStatus,
   isServerSafeFinalizeStatus,
+  loadOwnedPendingShoulderPressSession,
+  saveOwnedPendingShoulderPressSession,
   shoulderPressUploadCounters,
   type TrainingVideoStatus
 } from './pageState'
 import {
   clearPendingShoulderPressSession,
   loadPendingShoulderPressSession,
-  savePendingShoulderPressSession,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
 } from './session'
@@ -64,9 +65,9 @@ function mergeServerUploaded(
 }
 
 function statusMessage(status: TrainingVideoStatus | string): string {
-  if (status === 'failed') return '服务端处理失败，请重试上传或重新训练。'
-  if (status === 'expired') return '本次上传会话已过期，请重新训练。'
-  return '上传失败，请检查网络后重试。'
+  if (status === 'failed') return '处理失败，本地视频仍保留。请重试上传或重新训练。'
+  if (status === 'expired') return '上传会话已过期，本地视频仍保留。请重新训练。'
+  return '上传失败，本地视频仍保留。请检查网络后重试。'
 }
 
 function deleteSavedFile(path: string): Promise<void> {
@@ -105,10 +106,11 @@ export default function ShoulderPressUploadPage() {
   const [error, setError] = useState('')
   const runningRef = useRef(false)
 
-  function persist(session: PendingShoulderPressSession): PendingShoulderPressSession {
-    savePendingShoulderPressSession(Taro, session)
-    setPending(session)
-    return session
+  function persist(session: PendingShoulderPressSession): PendingShoulderPressSession | null {
+    const saved = saveOwnedPendingShoulderPressSession(Taro, session)
+    if (!saved) return null
+    setPending(saved)
+    return saved
   }
 
   async function leaveAfterSafeReceipt(session: PendingShoulderPressSession) {
@@ -126,10 +128,13 @@ export default function ShoulderPressUploadPage() {
       trainingDate: session.trainingDate,
       expectedDurationSeconds: session.expectedDurationSeconds
     })
+    const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
+    if (!latest) return null
     const nextSession = persist({
-      ...mergeServerUploaded(session, created.uploaded_segments),
+      ...mergeServerUploaded(latest, created.uploaded_segments),
       videoId: created.video_id
     })
+    if (!nextSession) return null
     if (isServerRetryableFinalizeStatus(created.status)) {
       throw new Error(statusMessage(created.status))
     }
@@ -144,7 +149,13 @@ export default function ShoulderPressUploadPage() {
     if (!session.videoId) return session
     setPhase('status')
     const status = await getVideoSessionStatus(session.videoId)
-    const nextSession = persist(mergeServerUploaded(session, status.uploaded_segments))
+    const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
+    if (!latest) return null
+    const nextSession = persist(mergeServerUploaded({
+      ...latest,
+      videoId: session.videoId
+    }, status.uploaded_segments))
+    if (!nextSession) return null
     if (isServerSafeFinalizeStatus(status.status)) {
       await leaveAfterSafeReceipt({ ...nextSession, finalized: true })
       return null
@@ -155,13 +166,19 @@ export default function ShoulderPressUploadPage() {
     return nextSession
   }
 
-  async function uploadSegments(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession> {
+  async function uploadSegments(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
     if (!session.videoId) return session
     setPhase('segments')
+    const clientSessionId = session.clientSessionId
     let current = session
 
-    for (const segment of current.segments) {
-      if (segment.uploadState === 'uploaded') continue
+    for (;;) {
+      const latest = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+      if (!latest) return null
+      current = latest
+      if (!current.videoId) return null
+      const segment = current.segments.find((item) => item.uploadState !== 'uploaded')
+      if (!segment) break
       setActiveIndex(segment.index)
       setSegmentProgress(0)
 
@@ -169,6 +186,7 @@ export default function ShoulderPressUploadPage() {
         uploadState: 'uploading',
         sha256: undefined
       }))
+      if (!current || !current.videoId) return null
 
       try {
         const uploaded = await uploadVideoSegment({
@@ -179,14 +197,17 @@ export default function ShoulderPressUploadPage() {
           sizeBytes: segment.sizeBytes,
           onProgress: (progress) => setSegmentProgress(progress)
         })
-        current = loadPendingShoulderPressSession(Taro) ?? current
+        current = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!current) return null
         current = persist(updateSegment(current, uploaded.index, {
           uploadState: 'uploaded',
           sha256: uploaded.sha256
         }))
+        if (!current) return null
         setSegmentProgress(100)
       } catch (uploadError) {
-        current = loadPendingShoulderPressSession(Taro) ?? current
+        current = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!current) return null
         persist({
           ...updateSegment(current, segment.index, {
             uploadState: 'pending',
@@ -236,6 +257,7 @@ export default function ShoulderPressUploadPage() {
       session = await mergeRemoteStatus(session)
       if (!session) return
       session = await uploadSegments(session)
+      if (!session) return
       const finalized = await finalizeSession(session)
 
       if (isServerSafeFinalizeStatus(finalized.status)) {

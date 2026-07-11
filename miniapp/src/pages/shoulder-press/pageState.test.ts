@@ -4,12 +4,12 @@ import type { CurrentPrescription } from '../../types/patientApp'
 import {
   canStartShoulderPressRecording,
   canCompleteShoulderPressTraining,
+  computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
   isServerSafeFinalizeStatus,
   resolveShoulderPressAction,
   shoulderPressUploadCounters,
-  shouldAutoFinishShoulderPressTraining,
-  uploadStageStates
+  shouldAutoFinishShoulderPressTraining
 } from './pageState'
 
 function prescription(): NonNullable<CurrentPrescription> {
@@ -60,17 +60,6 @@ describe('shoulder press page state', () => {
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
   })
 
-  it('derives credential, upload, and complete stage states from persisted progress', () => {
-    expect(uploadStageStates({ hasIntent: false, hasHash: false, activePhase: 'credential' }))
-      .toEqual(['active', 'pending', 'pending'])
-    expect(uploadStageStates({ hasIntent: true, hasHash: false, activePhase: 'upload' }))
-      .toEqual(['done', 'active', 'pending'])
-    expect(uploadStageStates({ hasIntent: true, hasHash: true, activePhase: 'complete' }))
-      .toEqual(['done', 'done', 'active'])
-    expect(uploadStageStates({ hasIntent: true, hasHash: true, activePhase: null }))
-      .toEqual(['done', 'done', 'pending'])
-  })
-
   it('allows finishing only after the prescribed shoulder press duration', () => {
     expect(canCompleteShoulderPressTraining({
       actualDurationMs: 119_000,
@@ -85,6 +74,37 @@ describe('shoulder press page state', () => {
   it('auto finishes at the hard ten minute limit', () => {
     expect(shouldAutoFinishShoulderPressTraining(599_999)).toBe(false)
     expect(shouldAutoFinishShoulderPressTraining(600_000)).toBe(true)
+  })
+
+  it('computes effective duration from the continuous recording anchor without double counting saved segments', () => {
+    expect(computeShoulderPressEffectiveDuration({
+      savedDurationMs: 30_000,
+      recording: true,
+      recordingBaseDurationMs: 0,
+      recordingStartedAtMs: 1_000,
+      nowMs: 61_000
+    })).toBe(60_000)
+    expect(computeShoulderPressEffectiveDuration({
+      savedDurationMs: 30_000,
+      recording: false,
+      recordingBaseDurationMs: 0,
+      recordingStartedAtMs: 0,
+      nowMs: 80_000
+    })).toBe(30_000)
+    expect(computeShoulderPressEffectiveDuration({
+      savedDurationMs: 30_000,
+      recording: true,
+      recordingBaseDurationMs: 30_000,
+      recordingStartedAtMs: 100_000,
+      nowMs: 120_000
+    })).toBe(50_000)
+    expect(computeShoulderPressEffectiveDuration({
+      savedDurationMs: 30_000,
+      recording: true,
+      recordingBaseDurationMs: 0,
+      recordingStartedAtMs: 1_000,
+      nowMs: 601_000
+    })).toBe(600_000)
   })
 
   it('formats the fixed-size recording timer', () => {
