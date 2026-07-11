@@ -129,14 +129,6 @@ if min(
     QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS,
 ) <= 0 or QINIU_UPLOAD_REQUEST_RETRIES <= 0:
     raise ImproperlyConfigured("七牛上传超时与补偿配置无效")
-if QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS <= (
-    QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS * (QINIU_UPLOAD_REQUEST_RETRIES + 1)
-):
-    raise ImproperlyConfigured("七牛上传迟到补偿窗口必须覆盖 SDK 请求重试上界")
-if TRAINING_VIDEO_STAGING_TTL_SECONDS <= (
-    QINIU_UPLOAD_TIMEOUT_SECONDS + QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS
-):
-    raise ImproperlyConfigured("训练视频 staging TTL 必须覆盖七牛上传与迟到补偿窗口")
 if VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS <= (
     VIDEO_ASSEMBLY_TIMEOUT_SECONDS + QINIU_UPLOAD_TIMEOUT_SECONDS
 ):
@@ -191,6 +183,10 @@ CELERY_BEAT_SCHEDULE = {
     "recover-training-video-cleanup": {
         "task": "apps.training.video_tasks.recover_training_video_cleanup",
         "schedule": 900,
+    },
+    "cleanup-qiniu-tombstones": {
+        "task": "apps.training.video_tasks.cleanup_qiniu_tombstones",
+        "schedule": 300,
     },
 }
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(

@@ -2,6 +2,7 @@ import fcntl
 import hashlib
 import os
 import re
+import shutil
 import stat
 import uuid
 from contextlib import contextmanager
@@ -49,6 +50,27 @@ def _configured_staging_root(*, create: bool = True) -> Path:
 
 def staging_root() -> Path:
     return _configured_staging_root()
+
+
+def _validate_video_binary(configured_path, label: str) -> Path:
+    resolved = shutil.which(str(configured_path))
+    if resolved is None:
+        raise ValidationError(f"{label} 不可用，暂时无法开始录像")
+    path = Path(resolved)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValidationError(f"{label} 不可执行，暂时无法开始录像")
+    return path
+
+
+def validate_video_runtime_environment(*, check_disk_space: bool = True) -> Path:
+    _validate_video_binary(settings.FFMPEG_PATH, "FFmpeg")
+    _validate_video_binary(settings.FFPROBE_PATH, "FFprobe")
+    root = staging_root()
+    if not os.access(root, os.R_OK | os.W_OK | os.X_OK):
+        raise ValidationError("训练视频临时根目录不可读写")
+    if check_disk_space and shutil.disk_usage(root).free < settings.TRAINING_VIDEO_MIN_FREE_BYTES:
+        raise ValidationError("训练视频临时磁盘空间不足")
+    return root
 
 
 def _session_directory_name(video: TrainingVideo) -> str:

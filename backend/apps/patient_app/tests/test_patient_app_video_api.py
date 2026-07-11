@@ -21,6 +21,7 @@ def video_staging_settings(settings, tmp_path):
     settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
     settings.TRAINING_VIDEO_MIN_FREE_BYTES = 0
     settings.FFMPEG_PATH = "/usr/bin/true"
+    settings.FFPROBE_PATH = "/usr/bin/true"
 
 
 def _auth_client(project_patient, doctor, *, wx_openid="openid-video"):
@@ -248,6 +249,25 @@ def test_create_session_rejects_unavailable_ffmpeg(
 
     assert response.status_code == 400, response.data
     assert "FFmpeg" in str(response.data)
+    assert not TrainingVideo.objects.exists()
+
+
+@pytest.mark.django_db
+def test_create_session_rejects_unavailable_ffprobe(
+    project_patient, doctor, active_prescription, settings
+):
+    settings.FFPROBE_PATH = "/missing/ffprobe"
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+
+    response = client.post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert "FFprobe" in str(response.data)
     assert not TrainingVideo.objects.exists()
 
 

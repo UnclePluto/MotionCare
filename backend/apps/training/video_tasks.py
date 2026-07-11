@@ -13,8 +13,18 @@ from django.utils import timezone
 
 from apps.studies.models import ProjectPatient
 
-from .models import TrainingRecord, TrainingVideo, TrainingVideoSegment, VideoAssemblyJob
-from .qiniu import delete_object_if_exists, upload_local_video
+from .models import (
+    QiniuCleanupTombstone,
+    TrainingRecord,
+    TrainingVideo,
+    TrainingVideoSegment,
+    VideoAssemblyJob,
+)
+from .qiniu import (
+    delete_object_if_exists,
+    stat_object_metadata_or_none,
+    upload_and_publish_local_video,
+)
 from .video_assembly import AssemblyResult, assemble_video, probe_video
 from .video_staging import (
     SESSION_DIRECTORY_PATTERN,
@@ -31,6 +41,9 @@ from .video_staging import (
 MAX_ASSEMBLY_ATTEMPTS = 3
 MAX_CLEANUP_ATTEMPTS = 3
 RETRY_BASE_SECONDS = 60
+QINIU_CLEANUP_INITIAL_BACKOFF_SECONDS = 300
+QINIU_CLEANUP_MAX_BACKOFF_SECONDS = 86400
+QINIU_CLEANUP_BATCH_SIZE = 100
 
 
 class AssemblyLeaseLost(ValidationError):
@@ -76,42 +89,77 @@ def assembly_output_path(video):
     return ensure_working_directory(video) / "final.mp4"
 
 
+def qiniu_attempt_key_prefix(video):
+    return f"training-videos/attempts/{video.id}-{video.client_session_id}/attempt-"
+
+
 def qiniu_attempt_object_key(video, lease_attempt):
     if lease_attempt <= 0:
         raise ValidationError("训练视频七牛上传 generation 无效")
-    return (
-        f"training-videos/attempts/{video.id}-{video.client_session_id}/"
-        f"attempt-{lease_attempt}.mp4"
+    return f"{qiniu_attempt_key_prefix(video)}{lease_attempt}.mp4"
+
+
+@transaction.atomic
+def _ensure_qiniu_cleanup_tombstone(video, job, *, retain_canonical):
+    prefix = qiniu_attempt_key_prefix(video)
+    tombstone = (
+        QiniuCleanupTombstone.objects.select_for_update()
+        .filter(attempt_key_prefix=prefix)
+        .first()
     )
-
-
-def _remote_attempt_keys(video, job, *, keep_key=None):
-    candidates = []
-    if video.object_key:
-        candidates.append(video.object_key)
-    if job is not None and job.qiniu_object_key:
-        candidates.append(job.qiniu_object_key)
+    canonical_key = ""
+    max_attempt_number = 0
     if job is not None:
-        candidates.extend(
-            qiniu_attempt_object_key(video, attempt)
-            for attempt in range(1, job.attempt_count + 1)
+        canonical_key = job.qiniu_object_key
+        max_attempt_number = job.attempt_count
+    if video.object_key:
+        canonical_key = video.object_key
+    now = timezone.now()
+    if tombstone is None:
+        return QiniuCleanupTombstone.objects.create(
+            session_id=video.client_session_id,
+            bucket=video.bucket or settings.QINIU_BUCKET,
+            attempt_key_prefix=prefix,
+            max_attempt_number=max_attempt_number,
+            canonical_key=canonical_key,
+            retain_canonical=retain_canonical,
+            next_check_at=now,
         )
-    return list(dict.fromkeys(key for key in candidates if key and key != keep_key))
 
-
-def _remote_cleanup_wait_seconds(job):
-    if job is None or job.qiniu_upload_deadline_at is None:
-        return 0
-    not_before = job.qiniu_upload_deadline_at + timedelta(
-        seconds=settings.QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS
+    tombstone.bucket = video.bucket or settings.QINIU_BUCKET
+    tombstone.max_attempt_number = max(
+        tombstone.max_attempt_number,
+        max_attempt_number,
     )
-    return max(0, math.ceil((not_before - timezone.now()).total_seconds()))
+    if canonical_key:
+        tombstone.canonical_key = canonical_key
+    tombstone.retain_canonical = retain_canonical
+    tombstone.next_check_at = min(tombstone.next_check_at, now)
+    tombstone.archived_at = None
+    tombstone.save(
+        update_fields=[
+            "bucket",
+            "max_attempt_number",
+            "canonical_key",
+            "retain_canonical",
+            "next_check_at",
+            "archived_at",
+            "updated_at",
+        ]
+    )
+    return tombstone
 
 
-def _delete_remote_attempt_objects(video, job, *, keep_key=None):
-    bucket = video.bucket or settings.QINIU_BUCKET
-    for key in _remote_attempt_keys(video, job, keep_key=keep_key):
-        delete_object_if_exists(bucket=bucket, key=key)
+def _qiniu_cleanup_keys(tombstone):
+    keys = [
+        f"{tombstone.attempt_key_prefix}{attempt}.mp4"
+        for attempt in range(1, tombstone.max_attempt_number + 1)
+    ]
+    if tombstone.retain_canonical and tombstone.canonical_key:
+        keys = [key for key in keys if key != tombstone.canonical_key]
+    if tombstone.canonical_key and not tombstone.retain_canonical:
+        keys.append(tombstone.canonical_key)
+    return list(dict.fromkeys(keys))
 
 
 def absolute_staging_path(video, relative_path):
@@ -249,7 +297,8 @@ def mark_uploading_qiniu(
     result,
     *,
     lease_attempt,
-    object_key=None,
+    attempt_key=None,
+    canonical_key=None,
     upload_deadline_at=None,
 ):
     video, job = _lock_training_video_then_job(job_id)
@@ -262,18 +311,23 @@ def mark_uploading_qiniu(
         raise AssemblyLeaseLost("训练视频合并任务租约已失效")
 
     now = timezone.now()
-    object_key = object_key or qiniu_attempt_object_key(video, lease_attempt)
+    attempt_key = attempt_key or qiniu_attempt_object_key(video, lease_attempt)
+    canonical_key = canonical_key or job.qiniu_object_key
+    if not canonical_key:
+        raise ValidationError("训练视频 canonical key 缺失")
     upload_deadline_at = upload_deadline_at or (
         now + timedelta(seconds=settings.QINIU_UPLOAD_TIMEOUT_SECONDS)
     )
     job.output_relative_path = _relative_staging_path(video, result.output_path)
-    job.qiniu_object_key = object_key
+    job.qiniu_object_key = canonical_key
+    job.qiniu_attempt_object_key = attempt_key
     job.qiniu_upload_deadline_at = upload_deadline_at
     job.heartbeat_at = now
     job.save(
         update_fields=[
             "output_relative_path",
             "qiniu_object_key",
+            "qiniu_attempt_object_key",
             "qiniu_upload_deadline_at",
             "heartbeat_at",
             "updated_at",
@@ -292,6 +346,7 @@ def mark_uploading_qiniu(
             "updated_at",
         ]
     )
+    _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=True)
     return job
 
 
@@ -374,7 +429,11 @@ def attach_training_video(
             "updated_at",
         ]
     )
+    tombstone = _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=True)
     transaction.on_commit(lambda job_id=job.id: cleanup_training_video_files.delay(job_id))
+    transaction.on_commit(
+        lambda tombstone_id=tombstone.id: cleanup_qiniu_tombstone.delay(tombstone_id)
+    )
     return job
 
 
@@ -408,7 +467,8 @@ def process_video_assembly_job(job_id):
                 on_progress=heartbeat,
             )
 
-        object_key = qiniu_attempt_object_key(video, lease_attempt)
+        attempt_key = qiniu_attempt_object_key(video, lease_attempt)
+        canonical_key = job.qiniu_object_key
         upload_deadline_monotonic = time.monotonic() + settings.QINIU_UPLOAD_TIMEOUT_SECONDS
         upload_deadline_at = timezone.now() + timedelta(
             seconds=settings.QINIU_UPLOAD_TIMEOUT_SECONDS
@@ -417,31 +477,27 @@ def process_video_assembly_job(job_id):
             job.id,
             result,
             lease_attempt=lease_attempt,
-            object_key=object_key,
+            attempt_key=attempt_key,
+            canonical_key=canonical_key,
             upload_deadline_at=upload_deadline_at,
         )
         heartbeat()
-        try:
-            metadata = upload_local_video(
-                path=result.output_path,
-                bucket=settings.QINIU_BUCKET,
-                key=object_key,
-                deadline_monotonic=upload_deadline_monotonic,
-                on_progress=lambda *_: heartbeat(),
-            )
-            heartbeat()
-        except AssemblyLeaseLost:
-            try:
-                delete_object_if_exists(bucket=settings.QINIU_BUCKET, key=object_key)
-            except ValidationError:
-                pass
-            raise
+        metadata = upload_and_publish_local_video(
+            path=result.output_path,
+            bucket=settings.QINIU_BUCKET,
+            attempt_key=attempt_key,
+            canonical_key=canonical_key,
+            assert_lease=heartbeat,
+            deadline_monotonic=upload_deadline_monotonic,
+            on_progress=lambda *_: heartbeat(),
+        )
+        heartbeat()
         return attach_training_video(
             job.id,
             result,
             metadata,
             lease_attempt=lease_attempt,
-            object_key=object_key,
+            object_key=canonical_key,
         )
     except Exception as exc:
         exc.assembly_lease_attempt = lease_attempt
@@ -559,29 +615,6 @@ def _claim_unbound_video_cleanup(video_id):
 
 
 @transaction.atomic
-def _mark_unbound_cleanup_waiting(video_id, cleanup_attempt):
-    video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
-    if (
-        video is None
-        or video.cleanup_status != TrainingVideo.CleanupStatus.RUNNING
-        or video.cleanup_attempt_count != cleanup_attempt
-    ):
-        return False
-    video.cleanup_status = TrainingVideo.CleanupStatus.PENDING
-    video.cleanup_heartbeat_at = timezone.now()
-    video.cleanup_error = ""
-    video.save(
-        update_fields=[
-            "cleanup_status",
-            "cleanup_heartbeat_at",
-            "cleanup_error",
-            "updated_at",
-        ]
-    )
-    return True
-
-
-@transaction.atomic
 def _record_unbound_cleanup_failure(video_id, cleanup_attempt, reason):
     video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
     if (
@@ -628,9 +661,9 @@ def cleanup_unbound_training_video(self, video_id):
         return False
 
     cleanup_attempt = video.cleanup_attempt_count
+    tombstone = _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=False)
     try:
         _remove_session_files(video)
-        _delete_remote_attempt_objects(video, job)
     except Exception as exc:
         video, retryable = _record_unbound_cleanup_failure(
             video_id,
@@ -643,12 +676,77 @@ def cleanup_unbound_training_video(self, video_id):
                 countdown=RETRY_BASE_SECONDS * 2 ** (cleanup_attempt - 1),
             )
         return False
-    wait_seconds = _remote_cleanup_wait_seconds(job)
-    if wait_seconds > 0:
-        if _mark_unbound_cleanup_waiting(video_id, cleanup_attempt):
-            self.apply_async(args=[video_id], countdown=wait_seconds)
+    deleted = _delete_unbound_cleanup_record(video_id, cleanup_attempt)
+    if deleted:
+        cleanup_qiniu_tombstone.delay(tombstone.id)
+    return deleted
+
+
+@shared_task(ignore_result=True)
+def cleanup_qiniu_tombstone(tombstone_id):
+    tombstone = QiniuCleanupTombstone.objects.filter(
+        pk=tombstone_id,
+        archived_at__isnull=True,
+    ).first()
+    if tombstone is None:
         return False
-    return _delete_unbound_cleanup_record(video_id, cleanup_attempt)
+
+    now = timezone.now()
+    seen = False
+    try:
+        for key in _qiniu_cleanup_keys(tombstone):
+            metadata = stat_object_metadata_or_none(bucket=tombstone.bucket, key=key)
+            if metadata is None:
+                continue
+            seen = True
+            delete_object_if_exists(bucket=tombstone.bucket, key=key)
+    except Exception as exc:
+        backoff = min(
+            max(tombstone.backoff_seconds, QINIU_CLEANUP_INITIAL_BACKOFF_SECONDS) * 2,
+            QINIU_CLEANUP_MAX_BACKOFF_SECONDS,
+        )
+        QiniuCleanupTombstone.objects.filter(pk=tombstone.id).update(
+            last_checked_at=now,
+            last_seen_at=now if seen else tombstone.last_seen_at,
+            last_error=_safe_video_failure_reason("七牛迟到对象清理", exc),
+            backoff_seconds=backoff,
+            next_check_at=now + timedelta(seconds=backoff),
+            updated_at=now,
+        )
+        return False
+
+    backoff = (
+        QINIU_CLEANUP_INITIAL_BACKOFF_SECONDS
+        if seen
+        else min(
+            max(tombstone.backoff_seconds, QINIU_CLEANUP_INITIAL_BACKOFF_SECONDS) * 2,
+            QINIU_CLEANUP_MAX_BACKOFF_SECONDS,
+        )
+    )
+    QiniuCleanupTombstone.objects.filter(pk=tombstone.id).update(
+        last_checked_at=now,
+        last_seen_at=now if seen else tombstone.last_seen_at,
+        last_error="",
+        backoff_seconds=backoff,
+        next_check_at=now + timedelta(seconds=backoff),
+        updated_at=now,
+    )
+    return True
+
+
+@shared_task(ignore_result=True)
+def cleanup_qiniu_tombstones():
+    due_ids = list(
+        QiniuCleanupTombstone.objects.filter(
+            archived_at__isnull=True,
+            next_check_at__lte=timezone.now(),
+        )
+        .order_by("next_check_at", "id")
+        .values_list("id", flat=True)[:QINIU_CLEANUP_BATCH_SIZE]
+    )
+    for tombstone_id in due_ids:
+        cleanup_qiniu_tombstone.delay(tombstone_id)
+    return len(due_ids)
 
 
 @shared_task(ignore_result=True)
@@ -730,15 +828,6 @@ def _mark_cleanup_succeeded(job_id):
 
 
 @transaction.atomic
-def _mark_cleanup_waiting(job_id):
-    job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
-    job.cleanup_status = VideoAssemblyJob.CleanupStatus.PENDING
-    job.cleanup_error = ""
-    job.save(update_fields=["cleanup_status", "cleanup_error", "updated_at"])
-    return job
-
-
-@transaction.atomic
 def _record_cleanup_failure(job_id, reason):
     job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
     retryable = job.cleanup_attempt_count < MAX_CLEANUP_ATTEMPTS
@@ -757,13 +846,13 @@ def cleanup_training_video_files(self, job_id):
     if not claimed:
         return job
 
+    tombstone = _ensure_qiniu_cleanup_tombstone(
+        job.training_video,
+        job,
+        retain_canonical=True,
+    )
     try:
         _remove_session_files(job.training_video)
-        _delete_remote_attempt_objects(
-            job.training_video,
-            job,
-            keep_key=job.training_video.object_key,
-        )
     except Exception as exc:
         job, retryable = _record_cleanup_failure(
             job_id,
@@ -775,11 +864,7 @@ def cleanup_training_video_files(self, job_id):
                 countdown=RETRY_BASE_SECONDS * 2 ** (job.cleanup_attempt_count - 1),
             )
         return job
-    wait_seconds = _remote_cleanup_wait_seconds(job)
-    if wait_seconds > 0:
-        job = _mark_cleanup_waiting(job_id)
-        self.apply_async(args=[job_id], countdown=wait_seconds)
-        return job
+    cleanup_qiniu_tombstone.delay(tombstone.id)
     return _mark_cleanup_succeeded(job_id)
 
 
@@ -964,7 +1049,11 @@ def expire_stale_training_video_sessions():
             if not _is_expirable_video(video, job, cutoff):
                 continue
             _remove_session_files(video)
-            _delete_remote_attempt_objects(video, job)
+            tombstone = _ensure_qiniu_cleanup_tombstone(
+                video,
+                job,
+                retain_canonical=False,
+            )
             now = timezone.now()
             TrainingVideoSegment.objects.filter(training_video=video).update(
                 status=TrainingVideoSegment.Status.DELETED,
@@ -976,5 +1065,10 @@ def expire_stale_training_video_sessions():
                 job.cleanup_status = VideoAssemblyJob.CleanupStatus.SUCCEEDED
                 job.cleanup_error = ""
                 job.save(update_fields=["cleanup_status", "cleanup_error", "updated_at"])
+            transaction.on_commit(
+                lambda tombstone_id=tombstone.id: cleanup_qiniu_tombstone.delay(
+                    tombstone_id
+                )
+            )
             expired += 1
     return expired + _remove_expired_orphan_staging(cutoff)

@@ -1,4 +1,3 @@
-import shutil
 from datetime import timedelta
 
 from django.conf import settings
@@ -28,6 +27,7 @@ from .video_staging import (
     staging_root,
     unlink_segment_file,
     write_uploaded_segment,
+    validate_video_runtime_environment,
 )
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
@@ -61,12 +61,7 @@ def _get_current_shoulder_action(project_patient, prescription_action_id):
 
 
 def _ensure_staging_available():
-    if shutil.which(str(settings.FFMPEG_PATH)) is None:
-        raise ValidationError("FFmpeg 不可用，暂时无法开始录像")
-
-    root = staging_root()
-    if shutil.disk_usage(root).free < settings.TRAINING_VIDEO_MIN_FREE_BYTES:
-        raise ValidationError("训练视频临时磁盘空间不足")
+    validate_video_runtime_environment()
 
 
 def _ensure_session_payload_matches(

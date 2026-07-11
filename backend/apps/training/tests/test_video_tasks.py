@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.training.models import (
+    QiniuCleanupTombstone,
     TrainingRecord,
     TrainingVideo,
     TrainingVideoSegment,
@@ -37,6 +38,7 @@ def test_video_assembly_job_task_routes_to_dedicated_queue():
     default_queue_tasks = [
         module.cleanup_training_video_files,
         module.cleanup_unbound_training_video,
+        module.cleanup_qiniu_tombstones,
         module.recover_training_video_cleanup,
         module.expire_stale_training_video_sessions,
         module.recover_stale_video_assembly_jobs,
@@ -153,7 +155,7 @@ def test_process_job_attaches_one_historical_training_record_after_upload(
     cleanup_delay = Mock()
     module = _video_tasks()
     monkeypatch.setattr(module, "assemble_video", assemble)
-    monkeypatch.setattr(module, "upload_local_video", upload)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
     monkeypatch.setattr(module.cleanup_training_video_files, "delay", cleanup_delay)
 
     with django_capture_on_commit_callbacks(execute=True):
@@ -180,6 +182,12 @@ def test_process_job_attaches_one_historical_training_record_after_upload(
     assert video.status == TrainingVideo.Status.ATTACHED
     assert video.bucket == "motioncare-training"
     assert video.object_key == job.qiniu_object_key
+    tombstone = QiniuCleanupTombstone.objects.get(session_id=video.client_session_id)
+    assert tombstone.bucket == "motioncare-training"
+    assert tombstone.canonical_key == job.qiniu_object_key
+    assert tombstone.retain_canonical is True
+    assert tombstone.max_attempt_number == 1
+    assert "project_patient" not in {field.name for field in tombstone._meta.fields}
     assemble.assert_called_once()
     upload.assert_called_once()
     cleanup_delay.assert_called_once_with(job.id)
@@ -206,7 +214,7 @@ def test_existing_verified_final_and_qiniu_object_skip_reassembly_and_duplicate_
     upload = Mock(return_value=_remote_metadata(result, object_hash="existing-hash"))
     monkeypatch.setattr(module, "assemble_video", assemble)
     monkeypatch.setattr(module, "probe_video", Mock(return_value=result.probe))
-    monkeypatch.setattr(module, "upload_local_video", upload)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
     monkeypatch.setattr(module.cleanup_training_video_files, "delay", Mock())
 
     module.process_video_assembly_job(job.id)
@@ -234,7 +242,7 @@ def test_qiniu_failure_reuses_final_file_and_stops_after_three_attempts(
     retry = Mock(side_effect=Retry())
     monkeypatch.setattr(module, "assemble_video", assemble)
     monkeypatch.setattr(module, "probe_video", Mock(return_value=result.probe))
-    monkeypatch.setattr(module, "upload_local_video", upload)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
     monkeypatch.setattr(module.run_video_assembly_job, "retry", retry)
 
     with pytest.raises(Retry):
@@ -323,9 +331,6 @@ def test_cleanup_success_removes_attached_session_and_is_idempotent(
     old_key = module.qiniu_attempt_object_key(video, 1)
     job.attempt_count = 2
     job.qiniu_object_key = current_key
-    job.qiniu_upload_deadline_at = timezone.now() - timedelta(
-        seconds=settings.QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS + 1
-    )
     job.save()
     video.training_record = record
     video.status = TrainingVideo.Status.ATTACHED
@@ -334,10 +339,19 @@ def test_cleanup_success_removes_attached_session_and_is_idempotent(
     (session_root(video) / "working").mkdir(parents=True, exist_ok=True)
     (session_root(video) / "working" / "final.mp4").write_bytes(b"final")
     delete = Mock()
+    tombstone_delay = Mock()
+    monkeypatch.setattr(
+        module,
+        "stat_object_metadata_or_none",
+        Mock(return_value={"hash": "old", "fsize": 1, "mimeType": "video/mp4"}),
+    )
     monkeypatch.setattr(module, "delete_object_if_exists", delete)
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", tombstone_delay)
 
     first = module.cleanup_training_video_files.run(job.id)
     second = module.cleanup_training_video_files.run(job.id)
+    tombstone = QiniuCleanupTombstone.objects.get(session_id=video.client_session_id)
+    module.cleanup_qiniu_tombstone.run(tombstone.id)
 
     job.refresh_from_db()
     assert first.id == second.id == job.id
@@ -348,6 +362,7 @@ def test_cleanup_success_removes_attached_session_and_is_idempotent(
     assert job.cleanup_status == VideoAssemblyJob.CleanupStatus.SUCCEEDED
     assert job.cleanup_error == ""
     delete.assert_called_once_with(bucket=settings.QINIU_BUCKET, key=old_key)
+    tombstone_delay.assert_called_once_with(tombstone.id)
 
 
 @pytest.mark.django_db
@@ -379,7 +394,9 @@ def test_expire_scan_removes_old_failed_and_unfinalized_sessions_only(
     VideoAssemblyJob.objects.filter(pk=old_failed_job.id).update(updated_at=old_time)
     module = _video_tasks()
     delete = Mock()
+    tombstone_delay = Mock()
     monkeypatch.setattr(module, "delete_object_if_exists", delete)
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", tombstone_delay)
 
     expired_count = module.expire_stale_training_video_sessions.run()
 
@@ -393,10 +410,12 @@ def test_expire_scan_removes_old_failed_and_unfinalized_sessions_only(
     assert not session_root(old_recording).exists()
     assert not session_root(old_failed).exists()
     assert session_root(recent).exists()
-    assert [call.kwargs["key"] for call in delete.call_args_list] == [
-        old_recording_job.qiniu_object_key,
-        old_failed_job.qiniu_object_key,
-    ]
+    delete.assert_not_called()
+    tombstones = QiniuCleanupTombstone.objects.filter(
+        session_id__in=[old_recording.client_session_id, old_failed.client_session_id]
+    )
+    assert tombstones.count() == 2
+    assert all(tombstone.retain_canonical is False for tombstone in tombstones)
 
 
 @pytest.mark.django_db
@@ -584,16 +603,19 @@ def test_unbound_video_cleanup_deletes_qiniu_local_files_and_database_record(
     module = _video_tasks()
     delete = Mock()
     monkeypatch.setattr(module, "delete_object_if_exists", delete)
+    cleanup_delay = Mock()
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", cleanup_delay)
 
     cleaned = module.cleanup_unbound_training_video.run(video.id)
 
     assert cleaned is True
     assert not TrainingVideo.objects.filter(pk=video.id).exists()
     assert not session_root(video).exists()
-    delete.assert_called_once_with(
-        bucket="motioncare-training",
-        key=job.qiniu_object_key,
-    )
+    delete.assert_not_called()
+    tombstone = QiniuCleanupTombstone.objects.get(session_id=video.client_session_id)
+    assert tombstone.canonical_key == job.qiniu_object_key
+    assert tombstone.retain_canonical is False
+    cleanup_delay.assert_called_once_with(tombstone.id)
 
 
 @pytest.mark.django_db
@@ -613,7 +635,11 @@ def test_unbound_video_cleanup_failure_is_durable_retried_and_beat_compensated(
     video.save()
     module = _video_tasks()
     retry = Mock(side_effect=Retry())
-    monkeypatch.setattr(module, "delete_object_if_exists", Mock(side_effect=RuntimeError("qiniu down")))
+    monkeypatch.setattr(
+        module,
+        "_remove_session_files",
+        Mock(side_effect=RuntimeError("local cleanup down")),
+    )
     monkeypatch.setattr(module.cleanup_unbound_training_video, "retry", retry)
 
     with pytest.raises(Retry):
@@ -671,7 +697,36 @@ def test_attempt_count_lease_blocks_old_worker_touch_mark_and_attach(
 
 
 @pytest.mark.django_db
-def test_stale_worker_deletes_only_its_attempt_key_after_new_attempt_attaches(
+def test_move_before_attach_keeps_canonical_during_crash_recovery(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    module = _video_tasks()
+    claimed_job, claimed = module.claim_video_assembly_job(job.id)
+    assert claimed is True
+    result = _assembly_result(video, duration=60.0)
+
+    module.mark_uploading_qiniu(
+        job.id,
+        result,
+        lease_attempt=claimed_job.attempt_count,
+        attempt_key=module.qiniu_attempt_object_key(video, claimed_job.attempt_count),
+        canonical_key=job.qiniu_object_key,
+    )
+
+    tombstone = QiniuCleanupTombstone.objects.get(session_id=video.client_session_id)
+    assert tombstone.canonical_key == job.qiniu_object_key
+    assert tombstone.retain_canonical is True
+    assert tombstone.max_attempt_number == 1
+
+
+@pytest.mark.django_db
+def test_stale_worker_never_moves_or_deletes_canonical_after_new_attempt_attaches(
     project_patient,
     active_prescription,
     tmp_path,
@@ -684,13 +739,12 @@ def test_stale_worker_deletes_only_its_attempt_key_after_new_attempt_attaches(
     video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
     result = _assembly_result(video, duration=60.0)
     module = _video_tasks()
-    deleted = Mock()
     monkeypatch.setattr(module, "assemble_video", Mock(return_value=result))
-    monkeypatch.setattr(module, "delete_object_if_exists", deleted)
     monkeypatch.setattr(module.cleanup_training_video_files, "delay", Mock())
 
-    def old_upload(*, key, **kwargs):
-        assert key.endswith("/attempt-1.mp4")
+    def old_upload(*, attempt_key, canonical_key, assert_lease, **kwargs):
+        assert attempt_key.endswith("/attempt-1.mp4")
+        assert canonical_key == job.qiniu_object_key
         VideoAssemblyJob.objects.filter(pk=job.id).update(status=VideoAssemblyJob.Status.PENDING)
         TrainingVideo.objects.filter(pk=video.id).update(status=TrainingVideo.Status.QUEUED)
         second, claimed = module.claim_video_assembly_job(job.id)
@@ -700,33 +754,31 @@ def test_stale_worker_deletes_only_its_attempt_key_after_new_attempt_attaches(
             job.id,
             result,
             lease_attempt=second.attempt_count,
-            object_key=second_key,
+            attempt_key=second_key,
+            canonical_key=canonical_key,
         )
         module.attach_training_video(
             job.id,
             result,
             _remote_metadata(result, object_hash="new-hash"),
             lease_attempt=second.attempt_count,
-            object_key=second_key,
+            object_key=canonical_key,
         )
-        return _remote_metadata(result, object_hash="old-hash")
+        assert_lease()
+        raise AssertionError("stale lease check must raise")
 
-    monkeypatch.setattr(module, "upload_local_video", old_upload)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", old_upload)
 
     with pytest.raises(ValidationError, match="租约"):
         module.process_video_assembly_job(job.id)
 
     video.refresh_from_db()
     assert video.status == TrainingVideo.Status.ATTACHED
-    assert video.object_key.endswith("/attempt-2.mp4")
-    deleted.assert_called_once_with(
-        bucket="motioncare-training",
-        key=module.qiniu_attempt_object_key(video, 1),
-    )
+    assert video.object_key == job.qiniu_object_key
 
 
 @pytest.mark.django_db
-def test_unbound_cleanup_keeps_tombstone_and_rescans_all_attempt_keys_after_late_upload(
+def test_unbound_cleanup_deletes_video_but_keeps_durable_tombstone_for_late_upload(
     project_patient,
     active_prescription,
     tmp_path,
@@ -735,52 +787,135 @@ def test_unbound_cleanup_keeps_tombstone_and_rescans_all_attempt_keys_after_late
 ):
     settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
     settings.QINIU_BUCKET = "motioncare-training"
-    settings.QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS = 120
     video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
     job.attempt_count = 2
     job.status = VideoAssemblyJob.Status.FAILED
-    job.qiniu_upload_deadline_at = timezone.now() + timedelta(seconds=30)
     job.save()
     video.project_patient = None
     video.cleanup_status = TrainingVideo.CleanupStatus.PENDING
     video.cleanup_requested_at = timezone.now()
     video.save()
     module = _video_tasks()
-    expected_keys = [
-        job.qiniu_object_key,
-        *[module.qiniu_attempt_object_key(video, attempt) for attempt in (1, 2)],
+    session_id = video.client_session_id
+    expected_attempt_keys = [
+        module.qiniu_attempt_object_key(video, attempt) for attempt in (1, 2)
     ]
-    remote_objects = set(expected_keys)
+    cleanup_delay = Mock()
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", cleanup_delay)
+
+    cleaned = module.cleanup_unbound_training_video.run(video.id)
+
+    assert cleaned is True
+    assert not TrainingVideo.objects.filter(pk=video.id).exists()
+    tombstone = QiniuCleanupTombstone.objects.get(session_id=session_id)
+    assert tombstone.canonical_key == job.qiniu_object_key
+    assert tombstone.retain_canonical is False
+    assert tombstone.max_attempt_number == 2
+    cleanup_delay.assert_called_once_with(tombstone.id)
+
+    remote_objects = {expected_attempt_keys[-1], job.qiniu_object_key}
+    stat_remote = Mock(
+        side_effect=lambda *, key, **kwargs: (
+            {"hash": "late", "fsize": 1, "mimeType": "video/mp4"}
+            if key in remote_objects
+            else None
+        )
+    )
 
     def delete_remote(*, key, **kwargs):
         remote_objects.discard(key)
 
-    delete = Mock(side_effect=delete_remote)
-    reschedule = Mock()
-    monkeypatch.setattr(module, "delete_object_if_exists", delete)
-    monkeypatch.setattr(module.cleanup_unbound_training_video, "apply_async", reschedule)
+    monkeypatch.setattr(module, "stat_object_metadata_or_none", stat_remote)
+    monkeypatch.setattr(module, "delete_object_if_exists", Mock(side_effect=delete_remote))
 
-    first = module.cleanup_unbound_training_video.run(video.id)
-
-    assert first is False
-    video.refresh_from_db()
-    assert video.cleanup_status == TrainingVideo.CleanupStatus.PENDING
-    assert TrainingVideo.objects.filter(pk=video.id).exists()
-    assert [call.kwargs["key"] for call in delete.call_args_list] == expected_keys
+    module.cleanup_qiniu_tombstone.run(tombstone.id)
     assert remote_objects == set()
-    reschedule.assert_called_once()
+    tombstone.refresh_from_db()
+    assert tombstone.last_seen_at is not None
+    assert QiniuCleanupTombstone.objects.filter(pk=tombstone.id).exists()
 
-    remote_objects.add(expected_keys[-1])
-    job.qiniu_upload_deadline_at = timezone.now() - timedelta(seconds=121)
-    job.save(update_fields=["qiniu_upload_deadline_at", "updated_at"])
-    delete.reset_mock()
+    stat_remote.reset_mock()
+    module.cleanup_qiniu_tombstone.run(tombstone.id)
+    assert stat_remote.call_count == 3
+    assert QiniuCleanupTombstone.objects.filter(pk=tombstone.id).exists()
 
-    second = module.cleanup_unbound_training_video.run(video.id)
 
-    assert second is True
-    assert not TrainingVideo.objects.filter(pk=video.id).exists()
-    assert [call.kwargs["key"] for call in delete.call_args_list] == expected_keys
-    assert remote_objects == set()
+@pytest.mark.django_db
+def test_attached_tombstone_keeps_canonical_and_continues_cleaning_old_attempts(
+    monkeypatch,
+):
+    now = timezone.now()
+    tombstone = QiniuCleanupTombstone.objects.create(
+        session_id="8cf99c30-9b03-4bda-b4d3-b492f3a2db12",
+        bucket="motioncare-training",
+        attempt_key_prefix="training-videos/attempts/session/attempt-",
+        max_attempt_number=2,
+        canonical_key="training-videos/1/final.mp4",
+        retain_canonical=True,
+        next_check_at=now,
+    )
+    remote_objects = {
+        tombstone.canonical_key,
+        f"{tombstone.attempt_key_prefix}1.mp4",
+        f"{tombstone.attempt_key_prefix}2.mp4",
+    }
+    module = _video_tasks()
+    monkeypatch.setattr(
+        module,
+        "stat_object_metadata_or_none",
+        Mock(
+            side_effect=lambda *, key, **kwargs: (
+                {"hash": "remote", "fsize": 1, "mimeType": "video/mp4"}
+                if key in remote_objects
+                else None
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "delete_object_if_exists",
+        Mock(side_effect=lambda *, key, **kwargs: remote_objects.discard(key)),
+    )
+
+    module.cleanup_qiniu_tombstone.run(tombstone.id)
+
+    assert remote_objects == {tombstone.canonical_key}
+    tombstone.refresh_from_db()
+    assert tombstone.last_seen_at is not None
+    assert tombstone.next_check_at > now
+    assert QiniuCleanupTombstone.objects.filter(pk=tombstone.id).exists()
+
+
+@pytest.mark.django_db
+def test_tombstone_beat_only_enqueues_due_unarchived_rows(monkeypatch):
+    now = timezone.now()
+    due = QiniuCleanupTombstone.objects.create(
+        session_id="8cf99c30-9b03-4bda-b4d3-b492f3a2db12",
+        bucket="bucket",
+        attempt_key_prefix="attempts/a-",
+        next_check_at=now - timedelta(seconds=1),
+    )
+    QiniuCleanupTombstone.objects.create(
+        session_id="9cf99c30-9b03-4bda-b4d3-b492f3a2db12",
+        bucket="bucket",
+        attempt_key_prefix="attempts/b-",
+        next_check_at=now + timedelta(days=1),
+    )
+    QiniuCleanupTombstone.objects.create(
+        session_id="acf99c30-9b03-4bda-b4d3-b492f3a2db12",
+        bucket="bucket",
+        attempt_key_prefix="attempts/c-",
+        next_check_at=now - timedelta(seconds=1),
+        archived_at=now,
+    )
+    module = _video_tasks()
+    delay = Mock()
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", delay)
+
+    count = module.cleanup_qiniu_tombstones.run()
+
+    assert count == 1
+    delay.assert_called_once_with(due.id)
 
 
 @pytest.mark.django_db
@@ -808,7 +943,7 @@ def test_stale_takeover_stops_old_worker_before_next_file_write(
 
     upload = Mock()
     monkeypatch.setattr(module, "assemble_video", takeover_before_write)
-    monkeypatch.setattr(module, "upload_local_video", upload)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
 
     with pytest.raises(ValidationError, match="租约"):
         module.process_video_assembly_job(job.id)

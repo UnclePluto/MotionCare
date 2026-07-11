@@ -246,6 +246,8 @@ def run_motion_analysis_job(job_id):
 
 
 from .video_tasks import (  # noqa: E402,F401
+    cleanup_qiniu_tombstone,
+    cleanup_qiniu_tombstones,
     cleanup_training_video_files,
     cleanup_unbound_training_video,
     expire_stale_training_video_sessions,

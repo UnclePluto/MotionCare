@@ -63,6 +63,51 @@ def delete_object_if_exists(*, bucket: str, key: str) -> None:
         raise ValidationError("七牛训练视频对象删除失败")
 
 
+def publish_attempt_to_canonical(
+    *,
+    bucket: str,
+    attempt_key: str,
+    canonical_key: str,
+    expected_hash: str,
+    expected_size_bytes: int,
+    assert_lease: Callable[[], None],
+) -> dict:
+    existing = stat_object_metadata_or_none(bucket=bucket, key=canonical_key)
+    if existing is not None:
+        validate_object_metadata(
+            existing,
+            expected_hash=expected_hash,
+            expected_size_bytes=expected_size_bytes,
+            expected_content_type="video/mp4",
+        )
+        assert_lease()
+        return existing
+
+    assert_lease()
+    auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
+    try:
+        _, response = BucketManager(auth).move(
+            bucket,
+            attempt_key,
+            bucket,
+            canonical_key,
+            force="false",
+        )
+    except Exception as exc:
+        raise ValidationError("七牛训练视频对象发布失败") from exc
+    if getattr(response, "status_code", None) not in {200, 612, 614}:
+        raise ValidationError("七牛训练视频对象发布失败")
+
+    metadata = stat_object_metadata(bucket=bucket, key=canonical_key)
+    validate_object_metadata(
+        metadata,
+        expected_hash=expected_hash,
+        expected_size_bytes=expected_size_bytes,
+        expected_content_type="video/mp4",
+    )
+    return metadata
+
+
 def validate_object_metadata(
     metadata: dict,
     *,
@@ -163,6 +208,54 @@ def upload_local_video(
         expected_content_type="video/mp4",
     )
     return metadata
+
+
+def upload_and_publish_local_video(
+    *,
+    path: Path,
+    bucket: str,
+    attempt_key: str,
+    canonical_key: str,
+    assert_lease: Callable[[], None],
+    deadline_monotonic: float | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict:
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise ValidationError("训练视频最终文件不存在或不是普通文件")
+    try:
+        local_hash = qiniu.etag(str(path))
+    except OSError as exc:
+        raise ValidationError("训练视频最终文件无法计算 Hash") from exc
+    local_size = path.stat().st_size
+
+    existing = stat_object_metadata_or_none(bucket=bucket, key=canonical_key)
+    if existing is not None:
+        validate_object_metadata(
+            existing,
+            expected_hash=local_hash,
+            expected_size_bytes=local_size,
+            expected_content_type="video/mp4",
+        )
+        assert_lease()
+        return existing
+
+    attempt_metadata = upload_local_video(
+        path=path,
+        bucket=bucket,
+        key=attempt_key,
+        deadline_monotonic=deadline_monotonic,
+        on_progress=on_progress,
+    )
+    assert_lease()
+    return publish_attempt_to_canonical(
+        bucket=bucket,
+        attempt_key=attempt_key,
+        canonical_key=canonical_key,
+        expected_hash=attempt_metadata["hash"],
+        expected_size_bytes=local_size,
+        assert_lease=assert_lease,
+    )
 
 
 def private_download_url(base_url: str, *, expires_at: int) -> str:

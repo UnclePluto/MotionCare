@@ -192,6 +192,7 @@ class VideoSegmentServiceFixture:
             TRAINING_VIDEO_MAX_SEGMENTS=4,
             TRAINING_VIDEO_MIN_FREE_BYTES=0,
             FFMPEG_PATH="/usr/bin/true",
+            FFPROBE_PATH="/usr/bin/true",
         )
         self.settings_override.enable()
         self.addCleanup(self.settings_override.disable)
@@ -223,10 +224,17 @@ class VideoSegmentServiceFixture:
             status=Prescription.Status.ACTIVE,
             effective_at=timezone.now(),
         )
+        action_item, _ = ActionLibraryItem.objects.get_or_create(
+            source_key="motion-resistance-shoulder-press",
+            defaults={
+                "name": "肩部推举",
+                "training_type": "运动训练",
+                "internal_type": ActionLibraryItem.InternalType.MOTION,
+                "action_type": "抗阻训练",
+            },
+        )
         action = prescription.add_action_snapshot(
-            ActionLibraryItem.objects.get(
-                source_key="motion-resistance-shoulder-press"
-            ),
+            action_item,
             weekly_frequency="2 次/周",
             weekly_target_count=2,
             duration_minutes=10,
@@ -302,8 +310,6 @@ class SegmentInstallCleanupTests(VideoSegmentServiceFixture, TestCase):
 class TrainingVideoPostgresConcurrencyTests(
     VideoSegmentServiceFixture, TransactionTestCase
 ):
-    serialized_rollback = True
-
     def test_two_connections_serialize_segment_totals_on_video_row_lock(self):
         first_inserted = threading.Event()
         release_first = threading.Event()

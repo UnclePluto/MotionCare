@@ -4,7 +4,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from apps.common.models import UserStampedModel
+from apps.common.models import TimeStampedModel, UserStampedModel
 
 
 class TrainingVideo(UserStampedModel):
@@ -149,6 +149,11 @@ class VideoAssemblyJob(UserStampedModel):
     attempt_count = models.PositiveIntegerField("尝试次数", default=0)
     output_relative_path = models.CharField("输出相对路径", max_length=500, blank=True)
     qiniu_object_key = models.CharField("七牛对象 Key", max_length=500, blank=True)
+    qiniu_attempt_object_key = models.CharField(
+        "七牛上传尝试对象 Key",
+        max_length=500,
+        blank=True,
+    )
     qiniu_object_hash = models.CharField("七牛对象 Hash", max_length=120, blank=True)
     qiniu_upload_deadline_at = models.DateTimeField(
         "七牛上传截止时间",
@@ -167,6 +172,25 @@ class VideoAssemblyJob(UserStampedModel):
     started_at = models.DateTimeField("开始时间", null=True, blank=True)
     finished_at = models.DateTimeField("结束时间", null=True, blank=True)
     heartbeat_at = models.DateTimeField("心跳时间", null=True, blank=True)
+
+
+class QiniuCleanupTombstone(TimeStampedModel):
+    session_id = models.UUIDField("视频会话 UUID", db_index=True)
+    bucket = models.CharField("七牛空间", max_length=120)
+    attempt_key_prefix = models.CharField(
+        "上传尝试 Key 前缀",
+        max_length=500,
+        unique=True,
+    )
+    max_attempt_number = models.PositiveIntegerField("最大上传尝试序号", default=0)
+    canonical_key = models.CharField("最终对象 Key", max_length=500, blank=True)
+    retain_canonical = models.BooleanField("保留最终对象", default=False)
+    next_check_at = models.DateTimeField("下次检查时间", default=timezone.now, db_index=True)
+    backoff_seconds = models.PositiveIntegerField("检查退避秒数", default=300)
+    last_checked_at = models.DateTimeField("最近检查时间", null=True, blank=True)
+    last_seen_at = models.DateTimeField("最近发现对象时间", null=True, blank=True)
+    last_error = models.TextField("最近清理错误", blank=True)
+    archived_at = models.DateTimeField("管理员归档时间", null=True, blank=True, db_index=True)
 
 
 class MotionAnalysisJob(UserStampedModel):
