@@ -130,6 +130,9 @@ REST_FRAMEWORK = {
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_TASK_ROUTES = {
+    "apps.training.video_tasks.run_video_assembly_job": {"queue": "video-assembly"},
+}
 MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS = int(
     os.getenv("MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS", "30")
 )

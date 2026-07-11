@@ -23,6 +23,29 @@ def _video_tasks():
     return video_tasks
 
 
+def test_video_assembly_job_task_routes_to_dedicated_queue():
+    from config.celery import app as celery_app
+    from apps.training import tasks as training_tasks
+
+    module = _video_tasks()
+    task_name = module.run_video_assembly_job.name
+
+    assert task_name == "apps.training.video_tasks.run_video_assembly_job"
+    route = celery_app.amqp.router.route({}, task_name, args=(), kwargs={})
+    assert route["queue"].name == "video-assembly"
+
+    default_queue_tasks = [
+        module.cleanup_training_video_files,
+        module.expire_stale_training_video_sessions,
+        module.recover_stale_video_assembly_jobs,
+        training_tasks.run_motion_analysis_job,
+        training_tasks.recover_stale_motion_analysis_jobs,
+    ]
+    for task in default_queue_tasks:
+        route = celery_app.amqp.router.route({}, task.name, args=(), kwargs={})
+        assert route["queue"].name == "celery"
+
+
 def _shoulder_press_action(prescription):
     item = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
     return prescription.add_action_snapshot(
