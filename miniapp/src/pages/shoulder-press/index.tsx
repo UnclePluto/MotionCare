@@ -234,6 +234,47 @@ export default function ShoulderPressPage() {
     persistSession(nextSession, syncSession)
   }
 
+  function deleteOrphanedSavedFile(savedFilePath: string) {
+    try {
+      Taro.getFileSystemManager().unlink({
+        filePath: savedFilePath,
+        success: () => undefined,
+        fail: () => undefined
+      })
+    } catch {
+      // 清理孤立分段失败不应恢复已经失去所有权的 manifest。
+    }
+  }
+
+  function resolveOwnedSegmentWriteBase(
+    expectedClientSessionId: string
+  ): PendingShoulderPressSession | null {
+    if (!mountedRef.current) return null
+
+    const currentSession = sessionRef.current
+    if (
+      !currentSession ||
+      currentSession.finalized ||
+      currentSession.clientSessionId !== expectedClientSessionId
+    ) {
+      return null
+    }
+
+    const storedSession = loadPendingShoulderPressSession(Taro)
+    if (storedSession) {
+      if (
+        storedSession.finalized ||
+        storedSession.clientSessionId !== expectedClientSessionId
+      ) {
+        return null
+      }
+      return storedSession
+    }
+
+    if (currentSession.segments.length > 0) return null
+    return currentSession
+  }
+
   function currentElapsedMs(): number {
     const savedDuration = sessionRef.current?.actualDurationMs ?? session?.actualDurationMs ?? 0
     return computeShoulderPressEffectiveDuration({
@@ -249,10 +290,17 @@ export default function ShoulderPressPage() {
     const write = segmentSaveChainRef.current.then(async () => {
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
+      const expectedClientSessionId = currentSession.clientSessionId
 
       const saved = await Taro.saveFile({ tempFilePath })
       const info = await Taro.getVideoInfo({ src: saved.savedFilePath })
-      const nextSession = appendPendingSegment(currentSession, {
+      const writeBase = resolveOwnedSegmentWriteBase(expectedClientSessionId)
+      if (!writeBase) {
+        deleteOrphanedSavedFile(saved.savedFilePath)
+        return
+      }
+
+      const nextSession = appendPendingSegment(writeBase, {
         savedFilePath: saved.savedFilePath,
         durationSeconds: info.duration,
         sizeKb: info.size
