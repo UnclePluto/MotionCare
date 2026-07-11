@@ -407,7 +407,12 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
 def recent_records(project_patient: ProjectPatient) -> list[dict]:
     records = (
         TrainingRecord.objects.filter(project_patient=project_patient)
-        .select_related("prescription", "prescription_action", "video")
+        .select_related(
+            "prescription",
+            "prescription_action",
+            "prescription_action__action_library_item",
+            "video",
+        )
         .prefetch_related(
             Prefetch(
                 "motion_analysis_jobs",
@@ -454,6 +459,9 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "prescription_version": record.prescription.version,
                 "prescription_action": record.prescription_action_id,
                 "action_name": record.prescription_action.action_name_snapshot,
+                "action_source_key": (
+                    record.prescription_action.action_library_item.source_key or None
+                ),
                 "internal_type": record.prescription_action.internal_type_snapshot,
                 "action_type": record.prescription_action.action_type_snapshot,
                 "actual_duration_minutes": record.actual_duration_minutes,

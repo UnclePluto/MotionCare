@@ -187,6 +187,7 @@ const trackingDetail = {
       prescription_version: 3,
       prescription_action: 1000,
       action_name: "肩部推举",
+      action_source_key: "motion-resistance-shoulder-press",
       internal_type: "motion",
       action_type: "抗阻训练",
       status: "completed",
@@ -215,6 +216,7 @@ const trackingDetail = {
       prescription_version: 3,
       prescription_action: 1001,
       action_name: "坐站转移训练",
+      action_source_key: "motion-balance-sit-stand",
       internal_type: "game",
       action_type: "认知训练",
       status: "completed",
@@ -243,6 +245,7 @@ const trackingDetail = {
       prescription_version: 3,
       prescription_action: 1002,
       action_name: "旧游戏记录",
+      action_source_key: null,
       internal_type: "game",
       action_type: "认知训练",
       status: "completed",
@@ -271,6 +274,7 @@ const trackingDetail = {
       prescription_version: 3,
       prescription_action: 1003,
       action_name: "坐站训练",
+      action_source_key: "motion-balance-sit-stand",
       internal_type: "motion",
       action_type: "下肢训练",
       status: "completed",
@@ -305,6 +309,10 @@ function trendChartData() {
     return typeof first?.label === "string";
   });
   return (chart?.data ?? []) as Array<Record<string, unknown>>;
+}
+
+function cloneTrackingDetail() {
+  return JSON.parse(JSON.stringify(trackingDetail)) as typeof trackingDetail;
 }
 
 describe("TrainingTrackingDetailPage", () => {
@@ -374,6 +382,94 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getByText("非游戏记录")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "播放训练视频" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "动作分析" })).toHaveLength(1);
+  });
+
+  it("使用稳定 source_key 判断肩推视频入口而不是动作显示名", async () => {
+    const renamedDetail = cloneTrackingDetail();
+    renamedDetail.recent_records[0].action_name = "肩推训练改名";
+    renamedDetail.recent_records[0].action_source_key = "motion-resistance-shoulder-press";
+    renamedDetail.recent_records[3].action_name = "肩部推举";
+    renamedDetail.recent_records[3].action_source_key = "motion-balance-sit-stand";
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        return Promise.resolve({ data: renamedDetail });
+      }
+      if (url === "/training/videos/8101/download-url/") {
+        return Promise.resolve({ data: { url: "https://signed.example.com/video.mp4?token=secret" } });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/") {
+        return Promise.resolve({ data: null });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("肩推训练改名")).toBeInTheDocument();
+    expect(screen.getAllByText("肩部推举").length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "播放训练视频" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/videos/8101/download-url/");
+    });
+    expect(mockGet).not.toHaveBeenCalledWith("/training/videos/8102/download-url/");
+  });
+
+  it("latest 动作分析查询失败时展示安全错误和重试按钮", async () => {
+    let latestCallCount = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        return Promise.resolve({ data: trackingDetail });
+      }
+      if (url === "/training/videos/8101/download-url/") {
+        return Promise.resolve({ data: { url: "https://signed.example.com/video.mp4?token=secret" } });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/") {
+        latestCallCount += 1;
+        if (latestCallCount === 1) {
+          return Promise.reject({
+            response: {
+              data: {
+                detail: "https://signed.example.com/video.mp4?X-Amz-Signature=secret-signature raw response",
+              },
+            },
+          });
+        }
+        return Promise.resolve({ data: null });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
+
+    expect(await screen.findByText("加载动作分析结果失败")).toBeInTheDocument();
+    expect(screen.queryByText(/signed\.example\.com/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/secret-signature/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(latestCallCount).toBe(2);
+    });
+    expect(await screen.findByText("暂无动作分析结果")).toBeInTheDocument();
+  });
+
+  it("待处理失败视频摘要使用固定宽度省略并保留完整安全摘要", async () => {
+    const detailWithLongFailure = cloneTrackingDetail();
+    const longFailure = "视频合并失败，已经安全截断；请重新上传。".repeat(12);
+    detailWithLongFailure.pending_training_videos[3].failure_reason = longFailure;
+    mockGet.mockResolvedValue({ data: detailWithLongFailure });
+
+    renderAt("/training-tracking/patients/201");
+
+    const failureSummary = await screen.findByLabelText(longFailure);
+    expect(failureSummary).toHaveStyle({ maxWidth: "280px" });
+    expect(failureSummary).toHaveAttribute("title", longFailure);
   });
 
   it("打开视频 Drawer 后才请求下载地址，关闭时卸载视频并清理短效 URL", async () => {

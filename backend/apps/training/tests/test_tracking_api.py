@@ -68,12 +68,14 @@ def _action(
     prescription,
     *,
     name="坐立训练",
+    source_key=None,
     internal_type=ActionLibraryItem.InternalType.MOTION,
     action_type="平衡训练",
     weekly_target_count=2,
     sort_order=0,
 ):
     item = ActionLibraryItem.objects.create(
+        source_key=source_key,
         name=name,
         training_type="康复训练",
         internal_type=internal_type,
@@ -624,21 +626,25 @@ def test_tracking_recent_records_return_null_video_and_analysis_fields_when_miss
     )
 
     assert response.status_code == 200, response.data
-    fields = (
-        "video_id",
-        "video_status",
+    nullable_summary_fields = (
+        "action_source_key",
         "latest_analysis_status",
         "analysis_total_count",
         "analysis_standard_count",
         "analysis_nonstandard_count",
     )
     recent_by_id = {item["id"]: item for item in response.data["recent_records"]}
-    assert all(recent_by_id[record_without_video.id][field] is None for field in fields)
+    assert recent_by_id[record_without_video.id]["video_id"] is None
+    assert recent_by_id[record_without_video.id]["video_status"] is None
+    assert all(
+        recent_by_id[record_without_video.id][field] is None
+        for field in nullable_summary_fields
+    )
     assert recent_by_id[record_without_analysis.id]["video_id"] is not None
     assert recent_by_id[record_without_analysis.id]["video_status"] == TrainingVideo.Status.ATTACHED
     assert all(
         recent_by_id[record_without_analysis.id][field] is None
-        for field in fields[2:]
+        for field in nullable_summary_fields
     )
 
 
@@ -712,6 +718,11 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
     active_prescription,
     prescription_action,
 ):
+    shoulder_press_action = ActionLibraryItem.objects.get(
+        source_key="motion-resistance-shoulder-press"
+    )
+    prescription_action.action_library_item = shoulder_press_action
+    prescription_action.save(update_fields=["action_library_item", "updated_at"])
     record = _record(
         project_patient,
         active_prescription,
@@ -748,6 +759,7 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
 
     assert response.status_code == 200, response.data
     recent = response.data["recent_records"][0]
+    assert recent["action_source_key"] == "motion-resistance-shoulder-press"
     assert recent["video_id"] == video.id
     assert recent["video_status"] == TrainingVideo.Status.ATTACHED
     assert recent["latest_analysis_status"] == MotionAnalysisJob.Status.SUCCEEDED
@@ -938,6 +950,12 @@ def test_tracking_recent_records_related_queries_do_not_scale_with_record_count(
     active_prescription,
     prescription_action,
 ):
+    shoulder_press_action = ActionLibraryItem.objects.get(
+        source_key="motion-resistance-shoulder-press"
+    )
+    prescription_action.action_library_item = shoulder_press_action
+    prescription_action.save(update_fields=["action_library_item", "updated_at"])
+
     def create_record_with_video(index):
         record = _record(
             project_patient,
@@ -980,6 +998,14 @@ def test_tracking_recent_records_related_queries_do_not_scale_with_record_count(
 
     assert one_record_response.status_code == 200, one_record_response.data
     assert two_record_response.status_code == 200, two_record_response.data
+    assert all(
+        item["action_source_key"] == "motion-resistance-shoulder-press"
+        for item in one_record_response.data["recent_records"]
+    )
+    assert all(
+        item["action_source_key"] == "motion-resistance-shoulder-press"
+        for item in two_record_response.data["recent_records"]
+    )
     assert all(item["video_id"] is not None for item in one_record_response.data["recent_records"])
     assert all(item["video_id"] is not None for item in two_record_response.data["recent_records"])
     assert len(two_record_queries) == len(one_record_queries)

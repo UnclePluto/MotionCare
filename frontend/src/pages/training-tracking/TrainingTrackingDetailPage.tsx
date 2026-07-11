@@ -16,6 +16,7 @@ import {
   Table,
   Tag,
   Tooltip,
+  Typography,
 } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -66,6 +67,7 @@ const TRAINING_STATUS_LABEL: Record<string, string> = {
 };
 
 const PENDING_VIDEO_PROCESSING_STATUSES = new Set(["queued", "assembling", "uploading_qiniu"]);
+const SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press";
 
 const VIDEO_STATUS_LABEL: Record<string, string> = {
   attached: "已上传",
@@ -98,7 +100,7 @@ function isGameRecord(record: TrackingRecentRecord) {
 }
 
 function isShoulderPressRecord(record: TrackingRecentRecord) {
-  return record.action_name === "肩部推举";
+  return record.action_source_key === SHOULDER_PRESS_SOURCE_KEY;
 }
 
 function canUseVideoActions(record: TrackingRecentRecord) {
@@ -128,10 +130,14 @@ function errorMessage(error: unknown, fallback = "加载训练追踪数据失败
     const data = (error as { response?: { data?: unknown } }).response?.data;
     if (data && typeof data === "object" && "detail" in data) {
       const detail = (data as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail;
+      if (typeof detail === "string" && detail.trim() && !containsSensitiveErrorText(detail)) return detail;
     }
   }
   return fallback;
+}
+
+function containsSensitiveErrorText(value: string) {
+  return /https?:\/\//i.test(value) || /signature|token|credential|authorization|raw response/i.test(value);
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -149,6 +155,21 @@ function renderPendingVideoStatus(status: TrackingPendingVideo["status"]) {
     return <Tag color="processing">视频处理中</Tag>;
   }
   return <Tag color={status === "failed" ? "red" : undefined}>{VIDEO_STATUS_LABEL[status] ?? status}</Tag>;
+}
+
+function renderPendingFailureReason(value: string, record: TrackingPendingVideo) {
+  if (record.status !== "failed") return "—";
+  const summary = value || "处理失败";
+  return (
+    <Typography.Text
+      aria-label={summary}
+      ellipsis={{ tooltip: summary }}
+      style={{ display: "inline-block", maxWidth: 280 }}
+      title={summary}
+    >
+      {summary}
+    </Typography.Text>
+  );
 }
 
 function buildDailyTrendData(
@@ -556,7 +577,9 @@ export function TrainingTrackingDetailPage() {
             {
               title: "失败摘要",
               dataIndex: "failure_reason",
-              render: (value: string, record) => (record.status === "failed" ? value || "处理失败" : "—"),
+              width: 320,
+              ellipsis: true,
+              render: (value: string, record) => renderPendingFailureReason(value, record),
             },
             {
               title: "创建时间",
@@ -743,7 +766,18 @@ export function TrainingTrackingDetailPage() {
 
                 {latestAnalysisQuery.isFetching && analysisStatus == null ? <Spin size="small" /> : null}
 
-                {isActiveAnalysisStatus(analysisStatus) ? (
+                {latestAnalysisQuery.isError ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={errorMessage(latestAnalysisQuery.error, "加载动作分析结果失败")}
+                    action={
+                      <Button aria-label="重试" size="small" onClick={() => latestAnalysisQuery.refetch()}>
+                        重试
+                      </Button>
+                    }
+                  />
+                ) : isActiveAnalysisStatus(analysisStatus) ? (
                   <Alert type="info" showIcon message="动作分析处理中" />
                 ) : analysisStatus === "succeeded" ? (
                   <Space wrap>

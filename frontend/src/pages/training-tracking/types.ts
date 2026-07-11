@@ -86,6 +86,7 @@ export type TrackingRecentRecord = {
   prescription_version: number;
   prescription_action: number;
   action_name: string;
+  action_source_key: string | null;
   internal_type: string;
   action_type: string;
   actual_duration_minutes: number | null;
