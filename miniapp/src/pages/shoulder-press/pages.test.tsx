@@ -146,16 +146,28 @@ const recorderHarness = vi.hoisted(() => {
     start: ReturnType<typeof vi.fn>
     pause: ReturnType<typeof vi.fn>
     finish: ReturnType<typeof vi.fn>
-    options: { onSegment: (path: string, durationMs: number) => Promise<void> | void }
+    options: {
+      maxDurationMs?: number
+      onMaxDuration?: () => void
+      onSegment: (path: string, durationMs: number) => Promise<void> | void
+    }
   }> = []
 
   class MockShoulderPressRecorder {
     start = vi.fn(async () => undefined)
     pause = vi.fn(async () => null)
     finish = vi.fn(async () => [])
-    options: { onSegment: (path: string, durationMs: number) => Promise<void> | void }
+    options: {
+      maxDurationMs?: number
+      onMaxDuration?: () => void
+      onSegment: (path: string, durationMs: number) => Promise<void> | void
+    }
 
-    constructor(options: { onSegment: (path: string, durationMs: number) => Promise<void> | void }) {
+    constructor(options: {
+      maxDurationMs?: number
+      onMaxDuration?: () => void
+      onSegment: (path: string, durationMs: number) => Promise<void> | void
+    }) {
       this.options = options
       instances.push(this)
     }
@@ -826,7 +838,7 @@ describe('shoulder press pages', () => {
     expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(false)
   })
 
-  it('does not trigger the 600 second hard limit early after an automatic segment split', async () => {
+  it('stops at the safe boundary before 600 seconds after automatic segment splits', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
@@ -849,6 +861,7 @@ describe('shoulder press pages', () => {
     expect(apiMocks.createVideoSession).toHaveBeenCalledWith(
       expect.objectContaining({ expectedDurationSeconds: 600 })
     )
+    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(597_000)
 
     vi.setSystemTime(startAt + 570_000)
     vi.advanceTimersByTime(1000)
@@ -857,7 +870,7 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
     expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
 
-    vi.setSystemTime(startAt + 600_000)
+    vi.setSystemTime(startAt + 597_000)
     vi.advanceTimersByTime(1000)
     await flushPromises()
 

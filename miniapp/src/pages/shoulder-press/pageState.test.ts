@@ -71,9 +71,9 @@ describe('shoulder press page state', () => {
     })).toBe(true)
   })
 
-  it('auto finishes at the hard ten minute limit', () => {
-    expect(shouldAutoFinishShoulderPressTraining(599_999)).toBe(false)
-    expect(shouldAutoFinishShoulderPressTraining(600_000)).toBe(true)
+  it('auto finishes with a safety margin before the hard ten minute limit', () => {
+    expect(shouldAutoFinishShoulderPressTraining(596_999)).toBe(false)
+    expect(shouldAutoFinishShoulderPressTraining(597_000)).toBe(true)
   })
 
   it('computes effective duration from the continuous recording anchor without double counting saved segments', () => {

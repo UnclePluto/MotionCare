@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -139,8 +139,52 @@ def test_upload_local_video_stats_after_successful_upload(tmp_path, monkeypatch)
         str(path),
         check_crc=True,
         mime_type="video/mp4",
+        progress_handler=ANY,
     )
     upload_token.assert_called_once_with("motioncare-training", "training-videos/1/final.mp4", 3600)
+
+
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS=7,
+    QINIU_UPLOAD_REQUEST_RETRIES=1,
+)
+def test_upload_local_video_heartbeats_and_enforces_deadline(tmp_path, monkeypatch):
+    path = _local_video(tmp_path)
+    clock = Mock(return_value=5.0)
+    heartbeat = Mock()
+
+    def late_upload(*args, progress_handler, **kwargs):
+        progress_handler(1, 2)
+        clock.return_value = 11.0
+        progress_handler(2, 2)
+        return ({"key": "training-videos/1/attempt-1.mp4", "hash": etag(str(path))}, _stat_response())
+
+    auth = Auth("ak-test", "sk-test")
+    monkeypatch.setattr(auth, "upload_token", Mock(return_value="upload-token"))
+    monkeypatch.setattr(
+        BucketManager,
+        "stat",
+        Mock(return_value=(None, _stat_response(status_code=612, error="no such file"))),
+    )
+    monkeypatch.setattr(training_qiniu, "put_file", late_upload)
+    monkeypatch.setattr(training_qiniu, "Auth", Mock(return_value=auth))
+    configure_sdk = Mock()
+    monkeypatch.setattr(training_qiniu.qiniu.config, "set_default", configure_sdk)
+
+    with pytest.raises(ValidationError, match="上传超时"):
+        training_qiniu.upload_local_video(
+            path=path,
+            bucket="motioncare-training",
+            key="training-videos/1/attempt-1.mp4",
+            deadline_monotonic=10.0,
+            on_progress=heartbeat,
+            monotonic=clock,
+        )
+
+    heartbeat.assert_called_once_with(1, 2)
+    configure_sdk.assert_called_once_with(connection_timeout=7, connection_retries=1)
 
 
 @override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")

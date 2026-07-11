@@ -107,6 +107,20 @@ class SegmentInstallLockTests(SimpleTestCase):
                 with self.assertRaisesRegex(Exception, "符号链接"):
                     segment_path(video, 0)
 
+    def test_rejects_staging_root_that_other_users_can_enumerate(self):
+        video = SimpleNamespace(
+            pk=1,
+            client_session_id=uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db12"),
+        )
+        with TemporaryDirectory() as parent:
+            root = Path(parent) / "staging"
+            root.mkdir(mode=0o755)
+            root.chmod(0o755)
+
+            with override_settings(TRAINING_VIDEO_STAGING_ROOT=root):
+                with self.assertRaisesRegex(Exception, "权限不安全"):
+                    session_root(video)
+
     def test_temporary_segment_is_created_nofollow_with_private_permissions(self):
         video = SimpleNamespace(
             pk=1,

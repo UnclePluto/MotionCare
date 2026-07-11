@@ -21,6 +21,7 @@ export type TrainingVideoStatus = (
 )
 
 export const SHOULDER_PRESS_HARD_LIMIT_MS = 600_000
+export const SHOULDER_PRESS_RECORDING_STOP_MS = 597_000
 
 type ShoulderPressStorage = {
   getStorageSync: (key: string) => unknown
@@ -60,7 +61,7 @@ export function canCompleteShoulderPressTraining(input: {
 }
 
 export function shouldAutoFinishShoulderPressTraining(actualDurationMs: number): boolean {
-  return Number.isFinite(actualDurationMs) && actualDurationMs >= SHOULDER_PRESS_HARD_LIMIT_MS
+  return Number.isFinite(actualDurationMs) && actualDurationMs >= SHOULDER_PRESS_RECORDING_STOP_MS
 }
 
 export function computeShoulderPressEffectiveDuration(input: {

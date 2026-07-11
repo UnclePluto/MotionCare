@@ -13,7 +13,9 @@ from django.core.exceptions import ValidationError
 from .models import TrainingVideo
 
 
-SESSION_DIRECTORY_PATTERN = re.compile(r"^(?P<video_id>[1-9]\d*)-[0-9a-f]{32}$")
+SESSION_DIRECTORY_PATTERN = re.compile(
+    r"^(?P<video_id>[1-9]\d*)-(?P<session_id>[0-9a-f]{32})$"
+)
 QUARANTINE_DIRECTORY_NAME = ".quarantine"
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
 _PRIVATE_DIRECTORY_MODE = 0o700
@@ -40,7 +42,7 @@ def _configured_staging_root(*, create: bool = True) -> Path:
         raise ValidationError("训练视频临时根目录不能是符号链接")
     if not stat.S_ISDIR(metadata.st_mode):
         raise ValidationError("训练视频临时根目录无效")
-    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
         raise ValidationError("训练视频临时根目录权限不安全")
     return root
 

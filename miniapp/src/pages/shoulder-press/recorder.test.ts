@@ -5,6 +5,7 @@ import { ShoulderPressRecorder } from './recorder'
 type StartOptions = {
   success?: () => void
   fail?: () => void
+  timeout?: number
   timeoutCallback?: (result: { tempVideoPath: string }) => void
 }
 
@@ -144,6 +145,41 @@ describe('ShoulderPressRecorder', () => {
       { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 30000 },
       { savedFilePath: 'wxfile://store/segment-1.mp4', durationMs: 12000 }
     ])
+  })
+
+  it('uses the remaining duration for generation 20 and never records past the upload contract', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let now = 0
+    const onMaxDuration = vi.fn()
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      maxDurationMs: 597_000,
+      onMaxDuration,
+      onSegment: vi.fn(async () => undefined)
+    })
+
+    await recorder.start()
+    for (let index = 0; index < 19; index += 1) {
+      now = (index + 1) * 30_000
+      startOptions[index].timeoutCallback?.({ tempVideoPath: `wxfile://store/segment-${index}.mp4` })
+      await flushPromises()
+    }
+
+    expect(camera.startRecord).toHaveBeenCalledTimes(20)
+    expect(startOptions.slice(0, 19).every((options) => options.timeout === 30)).toBe(true)
+    expect(startOptions[19].timeout).toBe(27)
+
+    now = 597_000
+    startOptions[19].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-19.mp4' })
+    const finishPromise = recorder.finish()
+    await flushPromises()
+
+    expect(camera.startRecord).toHaveBeenCalledTimes(20)
+    const segments = await finishPromise
+    expect(segments).toHaveLength(20)
+    expect(segments.reduce((total, segment) => total + segment.durationMs, 0)).toBe(597_000)
+    expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
 
   it('still delivers the timed-out segment when the next start fails and exposes the start error to finish', async () => {

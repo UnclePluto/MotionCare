@@ -53,6 +53,33 @@ describe('shoulder press segmented session helpers', () => {
     expect(updated.trainingDate).toBe('2026-07-11')
   })
 
+  it('rejects real media durations whose manifest would exceed 600000ms', () => {
+    const session = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 600,
+      trainingDate: '2026-07-11',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    })
+    const nearlyFull = {
+      ...session,
+      actualDurationMs: 599_500,
+      segments: [{
+        index: 0,
+        savedFilePath: 'wxfile://store/segment-0.mp4',
+        durationMs: 599_500,
+        sizeBytes: 1024,
+        uploadState: 'pending' as const
+      }]
+    }
+
+    expect(() => appendPendingSegment(nearlyFull, {
+      savedFilePath: 'wxfile://store/segment-1.mp4',
+      durationSeconds: 0.501,
+      sizeKb: 1
+    })).toThrow('录像总时长超过限制')
+  })
+
   it('keeps the original training date when a session is restored on the next day', () => {
     const storage = memoryStorage()
     const session = appendPendingSegment(createPendingShoulderPressSession({

@@ -2,6 +2,8 @@ import base64
 import hashlib
 import hmac
 from pathlib import Path
+import time
+from collections.abc import Callable
 from urllib.parse import quote, urlencode
 
 from django.conf import settings
@@ -11,6 +13,10 @@ from qiniu import Auth, BucketManager, put_file
 
 
 ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/mp4", "video/quicktime"})
+
+
+class QiniuUploadDeadlineExceeded(ValidationError):
+    pass
 
 
 def _urlsafe_base64(data: bytes) -> str:
@@ -79,18 +85,40 @@ def validate_object_metadata(
         raise ValidationError("训练视频对象类型不匹配")
 
 
-def upload_local_video(*, path: Path, bucket: str, key: str) -> dict:
+def upload_local_video(
+    *,
+    path: Path,
+    bucket: str,
+    key: str,
+    deadline_monotonic: float | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict:
     path = Path(path).resolve()
     if not path.is_file():
         raise ValidationError("训练视频最终文件不存在或不是普通文件")
 
     local_size = path.stat().st_size
+    if deadline_monotonic is None:
+        deadline_monotonic = monotonic() + settings.QINIU_UPLOAD_TIMEOUT_SECONDS
+
+    def check_deadline() -> None:
+        if monotonic() >= deadline_monotonic:
+            raise QiniuUploadDeadlineExceeded("训练视频上传超时")
+
+    def progress_handler(uploaded_bytes: int, total_bytes: int) -> None:
+        check_deadline()
+        if on_progress is not None:
+            on_progress(uploaded_bytes, total_bytes)
+
+    check_deadline()
     try:
         local_etag = qiniu.etag(str(path))
     except OSError as exc:
         raise ValidationError("训练视频最终文件无法计算 Hash") from exc
 
     existing = stat_object_metadata_or_none(bucket=bucket, key=key)
+    check_deadline()
     if existing is not None:
         if existing.get("fsize") != local_size or existing.get("hash") != local_etag:
             raise ValidationError("七牛目标对象与本地视频冲突")
@@ -103,11 +131,23 @@ def upload_local_video(*, path: Path, bucket: str, key: str) -> dict:
         return existing
 
     try:
+        qiniu.config.set_default(
+            connection_timeout=settings.QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS,
+            connection_retries=settings.QINIU_UPLOAD_REQUEST_RETRIES,
+        )
         auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
         token = auth.upload_token(bucket, key, 3600)
         result, response = put_file(
-            token, key, str(path), check_crc=True, mime_type="video/mp4"
+            token,
+            key,
+            str(path),
+            check_crc=True,
+            mime_type="video/mp4",
+            progress_handler=progress_handler,
         )
+        check_deadline()
+    except ValidationError:
+        raise
     except Exception as exc:
         raise ValidationError("训练视频上传七牛失败") from exc
     if getattr(response, "status_code", None) != 200 or not isinstance(result, dict):

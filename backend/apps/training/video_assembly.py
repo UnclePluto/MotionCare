@@ -6,6 +6,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 
 from django.core.exceptions import ValidationError
@@ -21,6 +22,13 @@ class VideoProbe:
     height: int
     video_codec: str
     audio_codec: str | None
+    video_profile: str = ""
+    video_level: int = 0
+    pixel_format: str = ""
+    frame_rate: str = ""
+    time_base: str = ""
+    audio_sample_rate: int | None = None
+    audio_channel_layout: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +107,21 @@ def probe_video(
         height = int(video_stream["height"])
         video_codec = str(video_stream["codec_name"])
         audio_codec = None if audio_stream is None else str(audio_stream["codec_name"])
+        video_profile = str(video_stream.get("profile") or "")
+        video_level = int(video_stream.get("level") or 0)
+        pixel_format = str(video_stream.get("pix_fmt") or "")
+        frame_rate = str(video_stream.get("avg_frame_rate") or "")
+        time_base = str(video_stream.get("time_base") or "")
+        audio_sample_rate = (
+            None
+            if audio_stream is None or not audio_stream.get("sample_rate")
+            else int(audio_stream["sample_rate"])
+        )
+        audio_channel_layout = (
+            None
+            if audio_stream is None
+            else str(audio_stream.get("channel_layout") or "")
+        )
     except (KeyError, StopIteration, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ValidationError("FFprobe 返回的训练视频元数据无效") from exc
 
@@ -116,6 +139,13 @@ def probe_video(
         height=height,
         video_codec=video_codec,
         audio_codec=audio_codec,
+        video_profile=video_profile,
+        video_level=video_level,
+        pixel_format=pixel_format,
+        frame_rate=frame_rate,
+        time_base=time_base,
+        audio_sample_rate=audio_sample_rate,
+        audio_channel_layout=audio_channel_layout,
     )
 
 
@@ -159,17 +189,51 @@ def _progress(on_progress: ProgressCallback | None) -> None:
 
 def _copy_is_safe(input_probes: list[VideoProbe]) -> bool:
     first = input_probes[0]
-    if first.video_codec != "h264":
+
+    def normalized_rate(value: str) -> Fraction | None:
+        try:
+            rate = Fraction(value)
+        except (ValueError, ZeroDivisionError):
+            return None
+        return rate if rate > 0 else None
+
+    def browser_safe_h264(probe: VideoProbe) -> bool:
+        return (
+            probe.video_codec == "h264"
+            and probe.video_profile
+            in {"Baseline", "Constrained Baseline", "Main", "High"}
+            and 0 < probe.video_level <= 42
+            and probe.pixel_format == "yuv420p"
+            and normalized_rate(probe.frame_rate) is not None
+            and normalized_rate(probe.time_base) is not None
+        )
+
+    if not browser_safe_h264(first):
         return False
     if any(
-        probe.video_codec != "h264"
+        not browser_safe_h264(probe)
         or probe.width != first.width
         or probe.height != first.height
+        or probe.video_profile != first.video_profile
+        or probe.video_level != first.video_level
+        or probe.pixel_format != first.pixel_format
+        or normalized_rate(probe.frame_rate) != normalized_rate(first.frame_rate)
+        or normalized_rate(probe.time_base) != normalized_rate(first.time_base)
         for probe in input_probes
     ):
         return False
     audio_codecs = {probe.audio_codec for probe in input_probes}
-    return audio_codecs in ({None}, {"aac"})
+    if audio_codecs == {None}:
+        return True
+    if audio_codecs != {"aac"}:
+        return False
+    return all(
+        probe.audio_sample_rate == first.audio_sample_rate
+        and probe.audio_sample_rate in {44100, 48000}
+        and probe.audio_channel_layout == first.audio_channel_layout
+        and probe.audio_channel_layout in {"mono", "stereo"}
+        for probe in input_probes
+    )
 
 
 def _secure_create_file(path: Path) -> None:
@@ -240,14 +304,12 @@ def _run_assembly_attempt(
         expected=expected_duration,
     ):
         raise ValidationError("合并后训练视频时长与分段时长不一致")
-    if output_probe.video_codec != "h264" or output_probe.audio_codec not in {
-        None,
-        "aac",
-    }:
+    if not _copy_is_safe([output_probe]):
         raise ValidationError("合并后训练视频编码不受支持")
     _run_command(
         [
             ffmpeg_path,
+            "-xerror",
             "-v",
             "error",
             "-i",
@@ -329,6 +391,7 @@ def assemble_video(
         transcode_command = [
             ffmpeg_path,
             "-y",
+            "-xerror",
             "-f",
             "concat",
             "-safe",

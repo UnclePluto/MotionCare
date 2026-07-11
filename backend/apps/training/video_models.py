@@ -150,6 +150,11 @@ class VideoAssemblyJob(UserStampedModel):
     output_relative_path = models.CharField("输出相对路径", max_length=500, blank=True)
     qiniu_object_key = models.CharField("七牛对象 Key", max_length=500, blank=True)
     qiniu_object_hash = models.CharField("七牛对象 Hash", max_length=120, blank=True)
+    qiniu_upload_deadline_at = models.DateTimeField(
+        "七牛上传截止时间",
+        null=True,
+        blank=True,
+    )
     cleanup_status = models.CharField(
         "清理状态",
         max_length=20,

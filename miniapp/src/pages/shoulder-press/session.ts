@@ -43,6 +43,7 @@ type VideoInfo = {
 }
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS = 600_000
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -141,6 +142,9 @@ export function appendPendingSegment(
 
   const durationMs = Math.max(1, Math.round(input.durationSeconds * 1000))
   const sizeBytes = Math.max(1, Math.round(input.sizeKb * 1024))
+  if (session.actualDurationMs + durationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
+    throw new Error('录像总时长超过限制，请重新录制')
+  }
   const segment: PendingShoulderPressSegment = {
     index: session.segments.length,
     savedFilePath: input.savedFilePath,

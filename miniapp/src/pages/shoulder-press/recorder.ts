@@ -1,6 +1,7 @@
 type RecordStartOptions = {
   success?: () => void
   fail?: () => void
+  timeout?: number
   timeoutCallback?: (result: { tempVideoPath: string }) => void
 }
 
@@ -25,6 +26,7 @@ type GenerationState = 'starting' | 'recording' | 'stopping' | 'stopped' | 'fail
 type RecordingGeneration = {
   id: number
   startedAt: number
+  requestedDurationMs: number
   state: GenerationState
 }
 
@@ -36,6 +38,8 @@ export class ShoulderPressRecorder {
   private readonly now: () => number
   private readonly onSegment: (path: string, durationMs: number) => Promise<void> | void
   private readonly onPause?: () => void
+  private readonly onMaxDuration?: () => void
+  private readonly maxDurationMs: number
   private generation = 0
   private mode: RecorderMode = 'idle'
   private currentGeneration: RecordingGeneration | null = null
@@ -44,17 +48,22 @@ export class ShoulderPressRecorder {
   private pendingError: Error | null = null
   private readonly deliveredPaths = new Set<string>()
   private readonly deliveredSegments: ShoulderPressRecordedSegment[] = []
+  private recordedDurationMs = 0
 
   constructor(input: {
     camera: CameraContext
     now: () => number
     onSegment: (path: string, durationMs: number) => Promise<void> | void
     onPause?: () => void
+    onMaxDuration?: () => void
+    maxDurationMs?: number
   }) {
     this.camera = input.camera
     this.now = input.now
     this.onSegment = input.onSegment
     this.onPause = input.onPause
+    this.onMaxDuration = input.onMaxDuration
+    this.maxDurationMs = input.maxDurationMs ?? Number.POSITIVE_INFINITY
   }
 
   async start(): Promise<void> {
@@ -103,9 +112,18 @@ export class ShoulderPressRecorder {
   }
 
   private startGeneration(): Promise<void> {
+    const remainingMs = this.maxDurationMs - this.recordedDurationMs
+    if (remainingMs < 1000) {
+      this.mode = 'finishing'
+      this.currentGeneration = null
+      this.onMaxDuration?.()
+      return Promise.resolve()
+    }
+    const timeoutSeconds = Math.min(30, Math.floor(remainingMs / 1000))
     const generation: RecordingGeneration = {
       id: this.generation + 1,
       startedAt: this.now(),
+      requestedDurationMs: timeoutSeconds * 1000,
       state: 'starting'
     }
     this.generation = generation.id
@@ -113,6 +131,7 @@ export class ShoulderPressRecorder {
 
     return new Promise((resolve, reject) => {
       this.camera.startRecord({
+        timeout: timeoutSeconds,
         success: () => {
           if (!this.isCurrentGeneration(generation.id)) {
             resolve()
@@ -144,14 +163,25 @@ export class ShoulderPressRecorder {
     const generation = this.currentGeneration
     if (!generation || generation.id !== generationId || this.mode !== 'recording') return
     generation.state = 'stopped'
-    const durationMs = this.durationSinceStart(generation, TIMEOUT_SEGMENT_MS)
+    const durationMs = this.durationSinceStart(generation, generation.requestedDurationMs)
+    this.recordedDurationMs += durationMs
+    const reachedLimit = generation.requestedDurationMs < TIMEOUT_SEGMENT_MS ||
+      this.recordedDurationMs >= this.maxDurationMs
 
-    const startPromise = this.startGeneration().catch((error: unknown) => {
-      this.recordError(error)
-    })
-    void startPromise
+    if (reachedLimit) {
+      this.mode = 'finishing'
+      this.currentGeneration = null
+    } else {
+      const startPromise = this.startGeneration().catch((error: unknown) => {
+        this.recordError(error)
+      })
+      void startPromise
+    }
 
     const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
+    if (reachedLimit) {
+      void delivery.then(() => this.onMaxDuration?.())
+    }
     void delivery
   }
 
@@ -173,6 +203,7 @@ export class ShoulderPressRecorder {
             resolve(null)
             return
           }
+          this.recordedDurationMs += durationMs
           this.trackDelivery(this.deliver(result.tempVideoPath, durationMs), true)
             .then((segment) => resolve(segment))
             .catch((error: unknown) => reject(error instanceof Error ? error : new Error('录像分段保存失败')))

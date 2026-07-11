@@ -19,8 +19,10 @@ python -m venv .venv
 pip install -e ".[dev]"
 ffmpeg -version
 ffprobe -version
-mkdir -p /var/lib/motioncare/training-video-staging
-test -w /var/lib/motioncare/training-video-staging
+SERVICE_USER=motioncare
+SERVICE_GROUP=motioncare
+sudo install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_GROUP" /var/lib/motioncare/training-video-staging
+sudo -u "$SERVICE_USER" test -rwx /var/lib/motioncare/training-video-staging
 python manage.py migrate
 python manage.py seed_demo
 python manage.py runserver 127.0.0.1:8000
@@ -59,6 +61,8 @@ celery -A config beat
 Both Celery workers and Beat must be running. For the segmented training video
 flow, Django Web, the default worker, the `video-assembly` worker, and Beat must
 run on the same host or otherwise share the same `TRAINING_VIDEO_STAGING_ROOT`.
+All four processes must run as the same OS `SERVICE_USER`; a root-owned or
+group/world-enumerable staging directory is rejected even when it is writable.
 
 Segmented training video environment variables:
 
@@ -71,6 +75,10 @@ TRAINING_VIDEO_MAX_SEGMENTS=120
 TRAINING_VIDEO_STAGING_TTL_SECONDS=86400
 TRAINING_VIDEO_MIN_FREE_BYTES=5368709120
 VIDEO_ASSEMBLY_TIMEOUT_SECONDS=1800
+QINIU_UPLOAD_TIMEOUT_SECONDS=900
+QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS=30
+QINIU_UPLOAD_REQUEST_RETRIES=3
+QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS=300
 VIDEO_ASSEMBLY_MAX_CONCURRENCY=1
 VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS=3600
 FFMPEG_PATH=/usr/bin/ffmpeg

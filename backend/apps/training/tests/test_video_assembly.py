@@ -16,6 +16,13 @@ def _probe(
     height=480,
     video_codec="h264",
     audio_codec="aac",
+    video_profile="High",
+    video_level=31,
+    pixel_format="yuv420p",
+    frame_rate="30/1",
+    time_base="1/15360",
+    audio_sample_rate=48000,
+    audio_channel_layout="stereo",
 ):
     return VideoProbe(
         duration_seconds=duration_seconds,
@@ -23,6 +30,13 @@ def _probe(
         height=height,
         video_codec=video_codec,
         audio_codec=audio_codec,
+        video_profile=video_profile,
+        video_level=video_level,
+        pixel_format=pixel_format,
+        frame_rate=frame_rate,
+        time_base=time_base,
+        audio_sample_rate=audio_sample_rate if audio_codec else None,
+        audio_channel_layout=audio_channel_layout if audio_codec else None,
     )
 
 
@@ -75,6 +89,13 @@ def test_assemble_video_falls_back_to_one_transcode(tmp_path, monkeypatch):
         [_probe(), _probe(video_codec="hevc")],
         [_probe(), _probe(audio_codec=None)],
         [_probe(audio_codec="mp3"), _probe(audio_codec="mp3")],
+        [_probe(), _probe(video_profile="Main")],
+        [_probe(), _probe(video_level=32)],
+        [_probe(), _probe(pixel_format="yuv444p")],
+        [_probe(), _probe(frame_rate="30000/1001")],
+        [_probe(), _probe(time_base="1/90000")],
+        [_probe(), _probe(audio_sample_rate=44100)],
+        [_probe(), _probe(audio_channel_layout="mono")],
     ],
 )
 def test_assemble_video_transcodes_incompatible_inputs_without_trying_copy(
@@ -142,6 +163,10 @@ def test_assemble_video_rejects_output_that_cannot_be_fully_decoded(
             runner=runner,
         )
 
+    decode_commands = [command for command in calls if command[-2:] == ["null", "-"]]
+    assert decode_commands
+    assert all("-xerror" in command for command in decode_commands)
+
     assert not (tmp_path / "final.mp4").exists()
 
 
@@ -162,11 +187,14 @@ def test_assemble_video_uses_one_monotonic_deadline_and_reports_stage_progress(
             return subprocess.CompletedProcess(
                 command,
                 0,
-                stdout=(
-                    '{"streams":[{"codec_type":"video","codec_name":"h264",'
-                    '"width":640,"height":480},{"codec_type":"audio",'
-                    '"codec_name":"aac"}],"format":{"duration":"1.0"}}'
-                ),
+                    stdout=(
+                        '{"streams":[{"codec_type":"video","codec_name":"h264",'
+                        '"width":640,"height":480,"profile":"High","level":31,'
+                        '"pix_fmt":"yuv420p","avg_frame_rate":"30/1",'
+                        '"time_base":"1/15360"},{"codec_type":"audio",'
+                        '"codec_name":"aac","sample_rate":"48000",'
+                        '"channel_layout":"stereo"}],"format":{"duration":"1.0"}}'
+                    ),
                 stderr="",
             )
         if command[-1] != "-":
@@ -272,8 +300,11 @@ def test_probe_video_parses_ffprobe_json(tmp_path):
             0,
             stdout=(
                 '{"streams":[{"codec_type":"video","codec_name":"h264",'
-                '"width":640,"height":480},{"codec_type":"audio",'
-                '"codec_name":"aac"}],"format":{"duration":"1.25"}}'
+                '"width":640,"height":480,"profile":"High","level":31,'
+                '"pix_fmt":"yuv420p","avg_frame_rate":"30/1",'
+                '"time_base":"1/15360"},{"codec_type":"audio",'
+                '"codec_name":"aac","sample_rate":"48000",'
+                '"channel_layout":"stereo"}],"format":{"duration":"1.25"}}'
             ),
             stderr="",
         )
@@ -284,7 +315,63 @@ def test_probe_video_parses_ffprobe_json(tmp_path):
         height=480,
         video_codec="h264",
         audio_codec="aac",
+        video_profile="High",
+        video_level=31,
+        pixel_format="yuv420p",
+        frame_rate="30/1",
+        time_base="1/15360",
+        audio_sample_rate=48000,
+        audio_channel_layout="stereo",
     )
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg required")
+def test_assemble_video_rejects_real_probeable_but_corrupted_h264(tmp_path):
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffprobe_path = shutil.which("ffprobe")
+    assert ffmpeg_path is not None
+    assert ffprobe_path is not None
+    corrupted = tmp_path / "corrupted.mp4"
+    subprocess.run(
+        [
+            ffmpeg_path,
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=30:duration=3",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-g",
+            "30",
+            "-movflags",
+            "+faststart",
+            str(corrupted),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    payload = bytearray(corrupted.read_bytes())
+    mdat = payload.find(b"mdat")
+    assert mdat > 0
+    corrupt_start = mdat + 8 + len(payload[mdat + 8 :]) // 3
+    for index in range(corrupt_start, min(corrupt_start + 5000, len(payload))):
+        payload[index] ^= 0xFF
+    corrupted.write_bytes(payload)
+    probe_video(corrupted, ffprobe_path=ffprobe_path, timeout=30)
+
+    with pytest.raises(ValidationError):
+        assemble_video(
+            [corrupted],
+            tmp_path / "final.mp4",
+            ffmpeg_path=ffmpeg_path,
+            ffprobe_path=ffprobe_path,
+            timeout=30,
+        )
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg required")

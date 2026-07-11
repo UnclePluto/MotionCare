@@ -15,6 +15,7 @@ import {
   resolveShoulderPressAction,
   saveOwnedPendingShoulderPressSession,
   shoulderPressUploadCounters,
+  SHOULDER_PRESS_RECORDING_STOP_MS,
   shouldAutoFinishShoulderPressTraining,
   waitForShoulderPressBackgroundUploadSettled,
   type ShoulderPressAction
@@ -303,11 +304,17 @@ export default function ShoulderPressPage() {
         return
       }
 
-      const nextSession = appendPendingSegment(writeBase, {
-        savedFilePath: saved.savedFilePath,
-        durationSeconds: info.duration,
-        sizeKb: info.size
-      })
+      let nextSession: PendingShoulderPressSession
+      try {
+        nextSession = appendPendingSegment(writeBase, {
+          savedFilePath: saved.savedFilePath,
+          durationSeconds: info.duration,
+          sizeKb: info.size
+        })
+      } catch (appendError) {
+        deleteOrphanedSavedFile(saved.savedFilePath)
+        throw appendError
+      }
       saveCurrentSession(nextSession)
       void uploadPendingSegmentsInBackground(syncSession)
     })
@@ -328,6 +335,10 @@ export default function ShoulderPressPage() {
     recorderRef.current = new ShoulderPressRecorder({
       camera: context,
       now: () => Date.now(),
+      maxDurationMs: SHOULDER_PRESS_RECORDING_STOP_MS,
+      onMaxDuration: () => {
+        void finishTraining(true)
+      },
       onSegment: (tempFilePath) => persistRecordedSegment(tempFilePath),
       onPause: () => {
         recordingRef.current = false
@@ -487,6 +498,10 @@ export default function ShoulderPressPage() {
 
   useEffect(() => {
     if (!recording) return undefined
+    const stopDelayMs = Math.max(0, SHOULDER_PRESS_RECORDING_STOP_MS - currentElapsedMs())
+    const hardStopTimer = setTimeout(() => {
+      void finishTraining(true)
+    }, stopDelayMs)
     const timer = setInterval(() => {
       const elapsedMs = currentElapsedMs()
       setLiveTick(Date.now())
@@ -494,7 +509,10 @@ export default function ShoulderPressPage() {
         void finishTraining(true)
       }
     }, 1000)
-    return () => clearInterval(timer)
+    return () => {
+      clearTimeout(hardStopTimer)
+      clearInterval(timer)
+    }
   }, [recording])
 
   useDidHide(() => {
