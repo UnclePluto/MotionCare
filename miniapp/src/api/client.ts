@@ -1,6 +1,7 @@
 import Taro from '@tarojs/taro'
 
 import { clearPatientAppToken, getPatientAppToken } from '../auth/token'
+import { containsSensitiveCredentialText } from './safeError'
 
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
 
@@ -40,9 +41,10 @@ export function handlePatientUnauthorized(): never {
 
 export function safeApiErrorMessage(data: unknown): string {
   const message = resolveErrorMessage(data)
-  if (/authorization|bearer|token|secret/i.test(message)) return '请求失败'
+  if (containsSensitiveCredentialText(message)) return '请求失败'
   return message
 }
+
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   let response: Taro.request.SuccessCallbackResult<T>

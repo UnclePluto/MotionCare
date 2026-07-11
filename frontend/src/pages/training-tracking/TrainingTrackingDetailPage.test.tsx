@@ -432,7 +432,7 @@ describe("TrainingTrackingDetailPage", () => {
           return Promise.reject({
             response: {
               data: {
-                detail: "https://signed.example.com/video.mp4?X-Amz-Signature=secret-signature raw response",
+                detail: "动作分析失败 access_key=ak-value",
               },
             },
           });
@@ -448,8 +448,7 @@ describe("TrainingTrackingDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
 
     expect(await screen.findByText("加载动作分析结果失败")).toBeInTheDocument();
-    expect(screen.queryByText(/signed\.example\.com/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/secret-signature/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ak-value/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
 

@@ -1,3 +1,4 @@
+import { containsSensitiveCredentialText } from '../../api/safeError'
 import type { UploadedVideoSegment, VideoSessionStatus } from './api'
 import {
   isSegmentReadyForLocalDeletion,
@@ -68,7 +69,7 @@ const REMOTE_SEGMENTS_ERROR_MESSAGE = '服务端分段状态不一致，请重�
 export function shoulderPressUploadErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) return '上传失败，请检查网络后重试'
   const message = error.message.trim()
-  if (!message || /authorization|bearer|token|secret/i.test(message) || !/[\u3400-\u9fff]/.test(message)) {
+  if (!message || containsSensitiveCredentialText(message) || !/[\u3400-\u9fff]/.test(message)) {
     return '上传失败，请检查网络后重试'
   }
   return message

@@ -71,6 +71,17 @@ describe('shoulder press pending segment upload workflow', () => {
       .toBe('处方已更新，请重新进入')
     expect(shoulderPressUploadErrorMessage(new Error('Failed to fetch Authorization: Bearer secret')))
       .toBe('上传失败，请检查网络后重试')
+    for (const secret of [
+      'access_key=abc',
+      'accessKey: abc',
+      'secret_key=def',
+      'credential_id=ghi',
+      'AK=abc',
+      'SK=def'
+    ]) {
+      expect(shoulderPressUploadErrorMessage(new Error(`上传失败 ${secret}`)))
+        .toBe('上传失败，请检查网络后重试')
+    }
   })
 
   it('creates the video session, uploads one segment at a time, persists uploaded sha before delete, then finalizes', async () => {

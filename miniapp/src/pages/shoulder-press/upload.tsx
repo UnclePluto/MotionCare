@@ -25,6 +25,7 @@ import {
 } from './api'
 
 type UploadPhase = 'session' | 'status' | 'segments' | 'finalize' | 'done'
+const ABANDONED_SHOULDER_PRESS_FILES_KEY = 'motioncare.shoulderPress.abandonedFiles.v1'
 
 const PHASE_LABELS: Record<UploadPhase, string> = {
   session: '建立上传会话',
@@ -70,24 +71,35 @@ function statusMessage(status: TrainingVideoStatus | string): string {
   return '上传失败，本地视频仍保留。请检查网络后重试。'
 }
 
-function deleteSavedFile(path: string): Promise<void> {
+function deleteSavedFile(path: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       Taro.getFileSystemManager().unlink({
         filePath: path,
-        success: () => resolve(),
-        fail: () => resolve()
+        success: () => resolve(true),
+        fail: () => resolve(false)
       })
     } catch {
-      resolve()
+      resolve(false)
     }
   })
 }
 
 async function cleanupAfterServerReceipt(session: PendingShoulderPressSession): Promise<void> {
+  const failedPaths: string[] = []
   try {
     for (const segment of session.segments) {
-      await deleteSavedFile(segment.savedFilePath)
+      if (!await deleteSavedFile(segment.savedFilePath)) {
+        failedPaths.push(segment.savedFilePath)
+      }
+    }
+    if (failedPaths.length > 0) {
+      Taro.setStorageSync(ABANDONED_SHOULDER_PRESS_FILES_KEY, {
+        paths: failedPaths,
+        recordedAt: Date.now()
+      })
+    } else {
+      Taro.removeStorageSync(ABANDONED_SHOULDER_PRESS_FILES_KEY)
     }
   } finally {
     clearPendingShoulderPressSession(Taro)
@@ -281,11 +293,11 @@ export default function ShoulderPressUploadPage() {
     }
   }
 
-  function restartTraining() {
+  async function restartTraining() {
     const current = loadPendingShoulderPressSession(Taro)
     if (!current) return
-    clearPendingShoulderPressSession(Taro)
-    Taro.reLaunch({ url: `/pages/shoulder-press/index?actionId=${encodeURIComponent(String(current.actionId))}` })
+    await cleanupAfterServerReceipt(current)
+    await Taro.reLaunch({ url: `/pages/shoulder-press/index?actionId=${encodeURIComponent(String(current.actionId))}` })
   }
 
   useDidShow(() => {
@@ -361,7 +373,7 @@ export default function ShoulderPressUploadPage() {
           <Button
             className='secondary-button'
             disabled={running}
-            onClick={restartTraining}
+            onClick={() => void restartTraining()}
           >
             重新训练
           </Button>

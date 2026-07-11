@@ -7,7 +7,10 @@ import {
   request,
   safeApiErrorMessage
 } from '../../api/client'
-import { createClientSessionId } from './session'
+import {
+  createClientSessionId,
+  normalizeShoulderPressExpectedDurationSeconds
+} from './session'
 
 const TRAINING_VIDEO_STATUSES = new Set([
   'recording',
@@ -129,7 +132,9 @@ export async function createVideoSession(input: {
       prescription_action: input.actionId,
       client_session_id: input.clientSessionId,
       training_date: input.trainingDate,
-      expected_duration_seconds: input.expectedDurationSeconds
+      expected_duration_seconds: normalizeShoulderPressExpectedDurationSeconds(
+        input.expectedDurationSeconds
+      )
     }
   })
   return parseVideoSessionStatus(response, { requireUploadedSegments: true })

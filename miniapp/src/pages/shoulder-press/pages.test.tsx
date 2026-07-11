@@ -846,6 +846,9 @@ describe('shoulder press pages', () => {
 
     await recorderHarness.instances[0].options.onSegment('wxfile://temp/0.mp4', 30_000)
     await flushPromises()
+    expect(apiMocks.createVideoSession).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedDurationSeconds: 600 })
+    )
 
     vi.setSystemTime(startAt + 570_000)
     vi.advanceTimersByTime(1000)
@@ -883,6 +886,34 @@ describe('shoulder press pages', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('本地视频仍保留')
+  })
+
+  it('best-effort deletes every saved segment before clearing a retrained manifest', async () => {
+    saveStorageSession(pendingSession(2))
+    apiMocks.finalizeVideoSession.mockResolvedValueOnce({
+      video_id: 9,
+      status: 'failed',
+      assembly_job_id: 9
+    })
+    taroHarness.unlinkMock
+      .mockImplementationOnce((options) => options.fail?.({ errMsg: 'unlink failed' }))
+      .mockImplementationOnce((options) => options.success?.())
+
+    const page = renderPage(ShoulderPressUploadPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    await findButtonByText(page.element, '重新训练').props.onClick?.()
+    await flushPromises()
+
+    expect(taroHarness.unlinkMock.mock.calls.map(([options]) => options.filePath)).toEqual([
+      'wxfile://store/segment-0.mp4',
+      'wxfile://store/segment-1.mp4'
+    ])
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/index?actionId=42'
+    })
   })
 
   it('uses the shoulder press dedicated route from the home continue action', async () => {

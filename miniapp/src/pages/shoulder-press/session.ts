@@ -92,6 +92,11 @@ export function buildShoulderPressUploadUrl(): string {
   return '/pages/shoulder-press/upload'
 }
 
+export function normalizeShoulderPressExpectedDurationSeconds(value: number): number {
+  if (!Number.isFinite(value)) return 1
+  return Math.min(600, Math.max(1, Math.round(value)))
+}
+
 export function createPendingShoulderPressSession(input: {
   actionId: number
   expectedDurationSeconds: number
@@ -112,7 +117,9 @@ export function createPendingShoulderPressSession(input: {
     clientSessionId,
     actionId: input.actionId,
     trainingDate: input.trainingDate,
-    expectedDurationSeconds: Math.round(input.expectedDurationSeconds),
+    expectedDurationSeconds: normalizeShoulderPressExpectedDurationSeconds(
+      input.expectedDurationSeconds
+    ),
     actualDurationMs: 0,
     segments: [],
     finalized: false,
@@ -213,7 +220,9 @@ function normalizeSession(value: unknown): PendingShoulderPressSession | null {
     ...(isPositiveInteger(session.videoId) ? { videoId: session.videoId } : {}),
     actionId: session.actionId,
     trainingDate: session.trainingDate,
-    expectedDurationSeconds: Math.round(session.expectedDurationSeconds),
+    expectedDurationSeconds: normalizeShoulderPressExpectedDurationSeconds(
+      session.expectedDurationSeconds
+    ),
     actualDurationMs,
     segments: normalizedSegments,
     finalized: session.finalized,

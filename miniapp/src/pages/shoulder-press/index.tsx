@@ -26,6 +26,7 @@ import {
   createPendingShoulderPressSession,
   loadPendingShoulderPressSession,
   savePendingShoulderPressSession,
+  normalizeShoulderPressExpectedDurationSeconds,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
 } from './session'
@@ -50,7 +51,9 @@ function todayTrainingDate(): string {
 }
 
 function expectedDurationSeconds(action: ShoulderPressAction): number {
-  return Math.max(1, Math.round((action.duration_minutes || 1) * 60))
+  return normalizeShoulderPressExpectedDurationSeconds(
+    (action.duration_minutes || 1) * 60
+  )
 }
 
 function updateSegment(

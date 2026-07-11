@@ -137,7 +137,9 @@ function errorMessage(error: unknown, fallback = "加载训练追踪数据失败
 }
 
 function containsSensitiveErrorText(value: string) {
-  return /https?:\/\//i.test(value) || /signature|token|credential|authorization|raw response/i.test(value);
+  return /https?:\/\//i.test(value) ||
+    /signature|token|secret|credential|authorization|raw response|access[_-]?key/i.test(value) ||
+    /\b(?:AK|SK)\b\s*[:=]/.test(value);
 }
 
 function formatPercent(value: number | null | undefined) {

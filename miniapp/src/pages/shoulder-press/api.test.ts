@@ -180,6 +180,27 @@ describe('shoulder press segmented upload api', () => {
   })
 
   it.each([
+    'access_key=abc',
+    'accessKey: abc',
+    'secret_key=def',
+    'credential_id=ghi',
+    'AK=abc',
+    'SK=def'
+  ])('filters sensitive credential field %s from JSON errors', async (credential) => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 500,
+      data: { detail: `服务端异常 ${credential}` }
+    })
+
+    await expect(createVideoSession({
+      actionId: 42,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11',
+      expectedDurationSeconds: 180
+    })).rejects.toThrow('请求失败')
+  })
+
+  it.each([
     ['body is not an object', 'not-an-object'],
     ['video_id is missing', { status: 'recording' }],
     ['video_id is zero', { video_id: 0, status: 'recording' }],
