@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
-from .models import MotionAnalysisJob, TrainingRecord
+from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
 
@@ -474,6 +474,34 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
     return rows
 
 
+def pending_training_videos(project_patient: ProjectPatient) -> list[dict]:
+    videos = (
+        TrainingVideo.objects.filter(
+            project_patient=project_patient,
+            training_record__isnull=True,
+            status__in=[
+                TrainingVideo.Status.QUEUED,
+                TrainingVideo.Status.ASSEMBLING,
+                TrainingVideo.Status.UPLOADING_QINIU,
+                TrainingVideo.Status.FAILED,
+            ],
+        )
+        .select_related("prescription_action")
+        .order_by("-created_at", "-id")[:30]
+    )
+    return [
+        {
+            "id": video.id,
+            "training_date": video.training_date.isoformat(),
+            "action_name": video.prescription_action.action_name_snapshot,
+            "status": video.status,
+            "failure_reason": video.failure_reason,
+            "created_at": video.created_at.isoformat(),
+        }
+        for video in videos
+    ]
+
+
 def _project_patients_for_patient(user, patient_id):
     return accessible_project_patients(user).filter(patient_id=patient_id)
 
@@ -517,4 +545,5 @@ def get_patient_tracking_detail(
         "trend": trend(selected, range_value=range_value),
         "game_summary": game_summary(selected),
         "recent_records": recent_records(selected),
+        "pending_training_videos": pending_training_videos(selected),
     }

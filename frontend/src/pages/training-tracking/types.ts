@@ -99,6 +99,21 @@ export type TrackingRecentRecord = {
   game_retry_count: number | null;
   game_total_retry_count: number | null;
   note: string;
+  video_id: number | null;
+  video_status: string | null;
+  latest_analysis_status: "pending" | "running" | "succeeded" | "failed" | null;
+  analysis_total_count: number | null;
+  analysis_standard_count: number | null;
+  analysis_nonstandard_count: number | null;
+};
+
+export type TrackingPendingVideo = {
+  id: number;
+  training_date: string;
+  action_name: string;
+  status: "queued" | "assembling" | "uploading_qiniu" | "failed";
+  failure_reason: string;
+  created_at: string;
 };
 
 export type TrackingDetail = {
@@ -114,4 +129,5 @@ export type TrackingDetail = {
   };
   game_summary: TrackingGameSummary;
   recent_records: TrackingRecentRecord[];
+  pending_training_videos: TrackingPendingVideo[];
 };
