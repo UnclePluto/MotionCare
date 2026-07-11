@@ -1,3 +1,4 @@
+import importlib
 import uuid
 
 import pytest
@@ -14,12 +15,13 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     prescription_action,
 ):
     migrate_from = [("training", "0007_videoassemblyjob_qiniu_upload_deadline_at")]
-    migrate_to = [("training", "0009_repair_qiniu_canonical_keys")]
+    migrate_to = [("training", "0010_repair_unbound_qiniu_canonical_keys")]
     executor = MigrationExecutor(connection)
     executor.migrate(migrate_from)
     old_apps = executor.loader.project_state(migrate_from).apps
     TrainingVideo = old_apps.get_model("training", "TrainingVideo")
     VideoAssemblyJob = old_apps.get_model("training", "VideoAssemblyJob")
+    Prescription = old_apps.get_model("prescriptions", "Prescription")
 
     training_date = timezone.localdate()
     common = {
@@ -34,6 +36,13 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
         "expected_segment_count": 2,
         "finalized_at": timezone.now(),
     }
+    unbound_prescription = Prescription.objects.create(
+        project_patient_id=None,
+        version=active_prescription.version,
+        opened_by_id=active_prescription.opened_by_id,
+        status="terminated",
+    )
+    unbound_common = {**common, "prescription_id": unbound_prescription.id}
 
     pending_session = uuid.UUID("10000000-0000-4000-8000-000000000001")
     pending = TrainingVideo.objects.create(
@@ -72,7 +81,7 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
         client_session_id=cleanup_session,
         status="failed",
         cleanup_requested_at=timezone.now(),
-        **common,
+        **unbound_common,
     )
     cleanup_attempt = f"training-videos/attempts/{cleanup.id}-{cleanup_session}/attempt-3.mp4"
     cleanup_job = VideoAssemblyJob.objects.create(
@@ -80,6 +89,39 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
         status="failed",
         attempt_count=3,
         qiniu_object_key=cleanup_attempt,
+    )
+
+    attached_cleanup_session = uuid.UUID("40000000-0000-4000-8000-000000000004")
+    attached_cleanup_key = "legacy/attached-cleanup-object.mp4"
+    attached_cleanup = TrainingVideo.objects.create(
+        project_patient_id=None,
+        client_session_id=attached_cleanup_session,
+        status="attached",
+        object_key=attached_cleanup_key,
+        cleanup_requested_at=timezone.now(),
+        **unbound_common,
+    )
+    attached_cleanup_job = VideoAssemblyJob.objects.create(
+        training_video_id=attached_cleanup.id,
+        status="succeeded",
+        attempt_count=2,
+        qiniu_object_key=attached_cleanup_key,
+    )
+
+    detached_canonical_session = uuid.UUID("50000000-0000-4000-8000-000000000005")
+    detached_canonical_key = "legacy/unbound-job-object.mp4"
+    detached_canonical = TrainingVideo.objects.create(
+        project_patient_id=None,
+        client_session_id=detached_canonical_session,
+        status="failed",
+        cleanup_requested_at=timezone.now(),
+        **unbound_common,
+    )
+    detached_canonical_job = VideoAssemblyJob.objects.create(
+        training_video_id=detached_canonical.id,
+        status="failed",
+        attempt_count=4,
+        qiniu_object_key=detached_canonical_key,
     )
 
     executor = MigrationExecutor(connection)
@@ -110,14 +152,78 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     assert attached_tombstone.retain_canonical is True
 
     repaired_cleanup = VideoAssemblyJob.objects.get(pk=cleanup_job.pk)
-    cleanup_canonical = (
-        f"training-videos/{project_patient.id}/{training_date:%Y/%m/%d}/"
-        f"{cleanup_session}.mp4"
-    )
     assert repaired_cleanup.qiniu_attempt_object_key == cleanup_attempt
-    assert repaired_cleanup.qiniu_object_key == cleanup_canonical
+    assert repaired_cleanup.qiniu_object_key == ""
     cleanup_tombstone = QiniuCleanupTombstone.objects.get(
         attempt_key_prefix=f"training-videos/attempts/{cleanup.id}-{cleanup_session}/attempt-"
     )
-    assert cleanup_tombstone.canonical_key == cleanup_canonical
+    assert cleanup_tombstone.canonical_key == ""
     assert cleanup_tombstone.retain_canonical is False
+    assert cleanup_tombstone.max_attempt_number == 3
+
+    repaired_attached_cleanup = VideoAssemblyJob.objects.get(pk=attached_cleanup_job.pk)
+    assert repaired_attached_cleanup.qiniu_object_key == attached_cleanup_key
+    attached_cleanup_tombstone = QiniuCleanupTombstone.objects.get(
+        attempt_key_prefix=(
+            f"training-videos/attempts/{attached_cleanup.id}-{attached_cleanup_session}/attempt-"
+        )
+    )
+    assert attached_cleanup_tombstone.canonical_key == attached_cleanup_key
+    assert attached_cleanup_tombstone.retain_canonical is False
+
+    repaired_detached_canonical = VideoAssemblyJob.objects.get(
+        pk=detached_canonical_job.pk
+    )
+    assert repaired_detached_canonical.qiniu_object_key == detached_canonical_key
+    detached_canonical_tombstone = QiniuCleanupTombstone.objects.get(
+        attempt_key_prefix=(
+            "training-videos/attempts/"
+            f"{detached_canonical.id}-{detached_canonical_session}/attempt-"
+        )
+    )
+    assert detached_canonical_tombstone.canonical_key == detached_canonical_key
+    assert detached_canonical_tombstone.retain_canonical is False
+
+    assert not VideoAssemblyJob.objects.filter(
+        qiniu_object_key__startswith="training-videos/None/"
+    ).exists()
+    assert not QiniuCleanupTombstone.objects.filter(
+        canonical_key__startswith="training-videos/None/"
+    ).exists()
+
+    job_state = list(
+        VideoAssemblyJob.objects.order_by("id").values_list(
+            "id",
+            "qiniu_object_key",
+            "qiniu_attempt_object_key",
+        )
+    )
+    tombstone_state = list(
+        QiniuCleanupTombstone.objects.order_by("id").values_list(
+            "id",
+            "canonical_key",
+            "retain_canonical",
+            "max_attempt_number",
+            "updated_at",
+        )
+    )
+    migration = importlib.import_module(
+        "apps.training.migrations.0010_repair_unbound_qiniu_canonical_keys"
+    )
+    migration.repair_unbound_qiniu_canonical_keys(new_apps, None)
+    assert list(
+        VideoAssemblyJob.objects.order_by("id").values_list(
+            "id",
+            "qiniu_object_key",
+            "qiniu_attempt_object_key",
+        )
+    ) == job_state
+    assert list(
+        QiniuCleanupTombstone.objects.order_by("id").values_list(
+            "id",
+            "canonical_key",
+            "retain_canonical",
+            "max_attempt_number",
+            "updated_at",
+        )
+    ) == tombstone_state
