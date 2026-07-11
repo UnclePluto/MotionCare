@@ -142,10 +142,14 @@ const retryMocks = vi.hoisted(() => ({
   tryUploadPendingGameRecord: vi.fn()
 }))
 const recorderHarness = vi.hoisted(() => {
+  let nextStartPromise: Promise<void> | null = null
   const instances: Array<{
     start: ReturnType<typeof vi.fn>
     pause: ReturnType<typeof vi.fn>
     finish: ReturnType<typeof vi.fn>
+    hasFailedSegment: ReturnType<typeof vi.fn>
+    retryFailedSegment: ReturnType<typeof vi.fn>
+    abandonFailedSegment: ReturnType<typeof vi.fn>
     options: {
       maxDurationMs?: number
       onMaxDuration?: () => void
@@ -154,9 +158,16 @@ const recorderHarness = vi.hoisted(() => {
   }> = []
 
   class MockShoulderPressRecorder {
-    start = vi.fn(async () => undefined)
+    start = vi.fn(() => {
+      const pending = nextStartPromise
+      nextStartPromise = null
+      return pending ?? Promise.resolve()
+    })
     pause = vi.fn(async () => null)
     finish = vi.fn(async () => [])
+    hasFailedSegment = vi.fn(() => false)
+    retryFailedSegment = vi.fn(async () => null)
+    abandonFailedSegment = vi.fn(() => null)
     options: {
       maxDurationMs?: number
       onMaxDuration?: () => void
@@ -178,6 +189,10 @@ const recorderHarness = vi.hoisted(() => {
     MockShoulderPressRecorder,
     reset() {
       instances.length = 0
+      nextStartPromise = null
+    },
+    setNextStartPromise(promise: Promise<void>) {
+      nextStartPromise = promise
     }
   }
 })
@@ -415,6 +430,25 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(recorder.start).toHaveBeenCalledTimes(2)
+  })
+
+  it('queues page-hide pause until an asynchronous start command settles', async () => {
+    const start = deferred<void>()
+    const page = renderPage(ShoulderPressPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+
+    recorderHarness.setNextStartPromise(start.promise)
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await taroHarness.hideCallbacks[0]()
+    start.resolve()
+    await flushPromises()
+    page.rerender()
+
+    expect(recorderHarness.instances[0].pause).toHaveBeenCalledTimes(1)
+    expect(textContent(page.element)).toContain('继续训练')
   })
 
   it('writes the manifest only after saveFile and getVideoInfo succeed', async () => {
@@ -875,6 +909,101 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed at 600001ms and only enters forced upload after tail retry succeeds', async () => {
+    vi.useFakeTimers()
+    const startAt = 1783692000000
+    vi.setSystemTime(startAt)
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 12 }]
+    })
+    taroHarness.taroMock.saveFile
+      .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/first-570.mp4' })
+      .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/final-30.mp4' })
+    taroHarness.taroMock.getVideoInfo
+      .mockResolvedValueOnce({ duration: 570, size: 1 })
+      .mockResolvedValueOnce({ duration: 30.001, size: 1 })
+
+    const page = renderPage(ShoulderPressPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+    const recorder = recorderHarness.instances[0]
+
+    await recorder.options.onSegment('wxfile://temp/first-570.mp4', 570_000)
+    await expect(
+      recorder.options.onSegment('wxfile://temp/final.mp4', 30_001)
+    ).rejects.toThrow('录像总时长超过限制')
+    recorder.hasFailedSegment.mockReturnValue(true)
+    recorder.finish.mockRejectedValue(new Error('录像总时长超过限制，请重新录制'))
+    recorder.options.onMaxDuration?.()
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(findButtonByText(page.element, '重试保存尾段')).toBeTruthy()
+    expect(findButtonByText(page.element, '重新训练')).toBeTruthy()
+    expect(taroHarness.unlinkMock).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(2_000)
+    await flushPromises()
+    expect(recorder.finish).toHaveBeenCalledTimes(1)
+
+    taroHarness.taroMock.getVideoInfo.mockResolvedValueOnce({ duration: 27, size: 1 })
+    recorder.retryFailedSegment.mockImplementationOnce(async () => {
+      await recorder.options.onSegment('wxfile://temp/final.mp4', 27_000)
+      recorder.hasFailedSegment.mockReturnValue(false)
+      return { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 27_000 }
+    })
+    await findButtonByText(page.element, '重试保存尾段').props.onClick?.()
+    await flushPromises(20)
+
+    expect(taroHarness.taroMock.saveFile).toHaveBeenCalledTimes(2)
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/upload'
+    })
+  })
+
+  it('keeps the original tail path after saveFile failure until retraining is chosen', async () => {
+    taroHarness.taroMock.saveFile.mockRejectedValueOnce(new Error('saveFile failed'))
+    const page = renderPage(ShoulderPressPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+    const recorder = recorderHarness.instances[0]
+
+    await expect(
+      recorder.options.onSegment('wxfile://temp/final-save-failed.mp4', 30_000)
+    ).rejects.toThrow('saveFile failed')
+    recorder.hasFailedSegment.mockReturnValue(true)
+    recorder.abandonFailedSegment.mockReturnValue({
+      savedFilePath: 'wxfile://temp/final-save-failed.mp4',
+      durationMs: 30_000
+    })
+    recorder.finish.mockRejectedValue(new Error('saveFile failed'))
+    recorder.options.onMaxDuration?.()
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.unlinkMock).not.toHaveBeenCalled()
+    await findButtonByText(page.element, '重新训练').props.onClick?.()
+    await flushPromises()
+
+    expect(recorder.abandonFailedSegment).toHaveBeenCalledTimes(1)
+    expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://temp/final-save-failed.mp4'
+    }))
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/index?actionId=42'
+    })
   })
 
   it('blocks the home page entry and redirects to forced upload when a shoulder press manifest is pending', async () => {

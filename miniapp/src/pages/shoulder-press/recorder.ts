@@ -47,7 +47,9 @@ export class ShoulderPressRecorder {
   private readonly pendingDeliveries = new Set<Promise<unknown>>()
   private pendingError: Error | null = null
   private readonly deliveredPaths = new Set<string>()
+  private readonly deliveriesByPath = new Map<string, Promise<ShoulderPressRecordedSegment | null>>()
   private readonly deliveredSegments: ShoulderPressRecordedSegment[] = []
+  private failedSegment: ShoulderPressRecordedSegment | null = null
   private recordedDurationMs = 0
 
   constructor(input: {
@@ -111,6 +113,27 @@ export class ShoulderPressRecorder {
     }
   }
 
+  hasFailedSegment(): boolean {
+    return this.failedSegment !== null
+  }
+
+  async retryFailedSegment(): Promise<ShoulderPressRecordedSegment | null> {
+    const failedSegment = this.failedSegment
+    if (!failedSegment) return null
+    this.pendingError = null
+    return this.trackDelivery(
+      this.deliver(failedSegment.savedFilePath, failedSegment.durationMs),
+      true
+    )
+  }
+
+  abandonFailedSegment(): ShoulderPressRecordedSegment | null {
+    const failedSegment = this.failedSegment
+    this.failedSegment = null
+    this.pendingError = null
+    return failedSegment
+  }
+
   private startGeneration(): Promise<void> {
     const remainingMs = this.maxDurationMs - this.recordedDurationMs
     if (remainingMs < 1000) {
@@ -133,7 +156,7 @@ export class ShoulderPressRecorder {
       this.camera.startRecord({
         timeout: timeoutSeconds,
         success: () => {
-          if (!this.isCurrentGeneration(generation.id)) {
+          if (!this.isStartingGeneration(generation)) {
             resolve()
             return
           }
@@ -141,7 +164,7 @@ export class ShoulderPressRecorder {
           resolve()
         },
         fail: () => {
-          if (!this.isCurrentGeneration(generation.id)) {
+          if (!this.isStartingGeneration(generation)) {
             resolve()
             return
           }
@@ -180,7 +203,9 @@ export class ShoulderPressRecorder {
 
     const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
     if (reachedLimit) {
-      void delivery.then(() => this.onMaxDuration?.())
+      void delivery.then((segment) => {
+        if (segment) this.onMaxDuration?.()
+      })
     }
     void delivery
   }
@@ -227,17 +252,41 @@ export class ShoulderPressRecorder {
     return durationMs > 0 ? durationMs : fallbackMs
   }
 
-  private async deliver(path: string, durationMs: number): Promise<ShoulderPressRecordedSegment | null> {
-    if (!path || this.deliveredPaths.has(path)) return null
-    this.deliveredPaths.add(path)
+  private deliver(path: string, durationMs: number): Promise<ShoulderPressRecordedSegment | null> {
+    if (!path || this.deliveredPaths.has(path)) return Promise.resolve(null)
+    const existing = this.deliveriesByPath.get(path)
+    if (existing) return existing
     const segment = { savedFilePath: path, durationMs }
-    await this.onSegment(path, durationMs)
-    this.deliveredSegments.push(segment)
-    return segment
+    let delivery: Promise<ShoulderPressRecordedSegment | null>
+    delivery = Promise.resolve()
+      .then(() => this.onSegment(path, durationMs))
+      .then(() => {
+        this.deliveredPaths.add(path)
+        if (this.failedSegment?.savedFilePath === path) this.failedSegment = null
+        this.deliveredSegments.push(segment)
+        return segment
+      })
+      .catch((error: unknown) => {
+        this.failedSegment = segment
+        throw error
+      })
+      .finally(() => {
+        if (this.deliveriesByPath.get(path) === delivery) {
+          this.deliveriesByPath.delete(path)
+        }
+      })
+    this.deliveriesByPath.set(path, delivery)
+    return delivery
   }
 
   private isCurrentGeneration(generation: number): boolean {
     return this.currentGeneration?.id === generation
+  }
+
+  private isStartingGeneration(generation: RecordingGeneration): boolean {
+    return this.currentGeneration?.id === generation.id &&
+      this.mode === 'recording' &&
+      generation.state === 'starting'
   }
 
   private trackDelivery<T>(promise: Promise<T>, surfaceError: boolean): Promise<T | null> {

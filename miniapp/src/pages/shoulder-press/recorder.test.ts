@@ -300,4 +300,95 @@ describe('ShoulderPressRecorder', () => {
       { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 3500 }
     ])
   })
+
+  it('ignores late start failure after pause already stopped a starting generation', async () => {
+    const { camera, startOptions, stopOptions } = fakeCamera()
+    camera.startRecord.mockImplementation((options: StartOptions) => {
+      startOptions.push(options)
+    })
+    let now = 1000
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: vi.fn(async () => undefined)
+    })
+
+    const startPromise = recorder.start()
+    await Promise.resolve()
+    now = 4000
+    const pausePromise = recorder.pause()
+    stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+    startOptions[0].fail?.()
+
+    await expect(startPromise).resolves.toBeUndefined()
+    await expect(pausePromise).resolves.toEqual({
+      savedFilePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 3000
+    })
+  })
+
+  it('finishes a newly starting generation when timeout and finish happen back to back', async () => {
+    const { camera, startOptions, stopOptions } = fakeCamera()
+    let now = 0
+    camera.startRecord.mockImplementation((options: StartOptions) => {
+      startOptions.push(options)
+      if (startOptions.length === 1) options.success?.()
+    })
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: vi.fn(async () => undefined)
+    })
+
+    await recorder.start()
+    now = 30000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+    now = 31000
+    const finishPromise = recorder.finish()
+    stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-1.mp4' })
+    startOptions[1].success?.()
+
+    await expect(finishPromise).resolves.toEqual([
+      { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 30000 },
+      { savedFilePath: 'wxfile://store/segment-1.mp4', durationMs: 1000 }
+    ])
+    expect(camera.startRecord).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a failed final path retryable and only delivers it after retry succeeds', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let now = 0
+    let saveAttempt = 0
+    const onMaxDuration = vi.fn()
+    const onSegment = vi.fn(async () => {
+      saveAttempt += 1
+      if (saveAttempt === 1) throw new Error('尾段保存失败')
+    })
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      maxDurationMs: 30_000,
+      onMaxDuration,
+      onSegment
+    })
+
+    await recorder.start()
+    now = 30_000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
+    await flushPromises()
+
+    expect(onMaxDuration).not.toHaveBeenCalled()
+    await expect(recorder.finish()).rejects.toThrow('尾段保存失败')
+    expect(recorder.hasFailedSegment()).toBe(true)
+
+    await expect(recorder.retryFailedSegment()).resolves.toEqual({
+      savedFilePath: 'wxfile://temp/final.mp4',
+      durationMs: 30_000
+    })
+    expect(recorder.hasFailedSegment()).toBe(false)
+    await expect(recorder.finish()).resolves.toEqual([
+      { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 30_000 }
+    ])
+    expect(onSegment).toHaveBeenCalledTimes(2)
+  })
 })

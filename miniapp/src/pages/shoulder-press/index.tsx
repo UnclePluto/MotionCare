@@ -23,7 +23,9 @@ import {
 import { ShoulderPressRecorder } from './recorder'
 import {
   appendPendingSegment,
+  buildShoulderPressSessionUrl,
   buildShoulderPressUploadUrl,
+  clearPendingShoulderPressSession,
   createPendingShoulderPressSession,
   loadPendingShoulderPressSession,
   savePendingShoulderPressSession,
@@ -212,6 +214,7 @@ export default function ShoulderPressPage() {
   const [recording, setRecording] = useState(false)
   const [paused, setPaused] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [tailSaveFailed, setTailSaveFailed] = useState(false)
   const [session, setSession] = useState<PendingShoulderPressSession | null>(null)
   const [error, setError] = useState('')
   const [, setLiveTick] = useState(Date.now())
@@ -222,10 +225,13 @@ export default function ShoulderPressPage() {
   const pausedRef = useRef(false)
   const commandInFlightRef = useRef(false)
   const finishInFlightRef = useRef(false)
+  const tailSaveFailedRef = useRef(false)
+  const hidePauseRequestedRef = useRef(false)
   const mountedRef = useRef(true)
   const recordingBaseDurationMsRef = useRef(0)
   const recordingStartedAtRef = useRef(0)
   const segmentSaveChainRef = useRef<Promise<void>>(Promise.resolve())
+  const retainedSegmentPathsRef = useRef(new Map<string, string>())
 
   function syncSession(nextSession: PendingShoulderPressSession) {
     sessionRef.current = nextSession
@@ -296,25 +302,26 @@ export default function ShoulderPressPage() {
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
       const expectedClientSessionId = currentSession.clientSessionId
 
-      const saved = await Taro.saveFile({ tempFilePath })
-      const info = await Taro.getVideoInfo({ src: saved.savedFilePath })
+      let savedFilePath = retainedSegmentPathsRef.current.get(tempFilePath)
+      if (!savedFilePath) {
+        const saved = await Taro.saveFile({ tempFilePath })
+        savedFilePath = saved.savedFilePath
+        retainedSegmentPathsRef.current.set(tempFilePath, savedFilePath)
+      }
+      const info = await Taro.getVideoInfo({ src: savedFilePath })
       const writeBase = resolveOwnedSegmentWriteBase(expectedClientSessionId)
       if (!writeBase) {
-        deleteOrphanedSavedFile(saved.savedFilePath)
+        retainedSegmentPathsRef.current.delete(tempFilePath)
+        deleteOrphanedSavedFile(savedFilePath)
         return
       }
 
-      let nextSession: PendingShoulderPressSession
-      try {
-        nextSession = appendPendingSegment(writeBase, {
-          savedFilePath: saved.savedFilePath,
-          durationSeconds: info.duration,
-          sizeKb: info.size
-        })
-      } catch (appendError) {
-        deleteOrphanedSavedFile(saved.savedFilePath)
-        throw appendError
-      }
+      const nextSession = appendPendingSegment(writeBase, {
+        savedFilePath,
+        durationSeconds: info.duration,
+        sizeKb: info.size
+      })
+      retainedSegmentPathsRef.current.delete(tempFilePath)
       saveCurrentSession(nextSession)
       void uploadPendingSegmentsInBackground(syncSession)
     })
@@ -385,12 +392,23 @@ export default function ShoulderPressPage() {
     } finally {
       commandInFlightRef.current = false
       setProcessing(false)
+      if (hidePauseRequestedRef.current && !finishInFlightRef.current) {
+        void pauseTraining()
+      }
     }
   }
 
   async function pauseTraining() {
-    if (finishInFlightRef.current || commandInFlightRef.current) return
-    if (!recorderRef.current || !recordingRef.current) return
+    if (finishInFlightRef.current) return
+    if (commandInFlightRef.current) {
+      hidePauseRequestedRef.current = true
+      return
+    }
+    if (!recorderRef.current || !recordingRef.current) {
+      hidePauseRequestedRef.current = false
+      return
+    }
+    hidePauseRequestedRef.current = false
     commandInFlightRef.current = true
     setProcessing(true)
     try {
@@ -410,7 +428,7 @@ export default function ShoulderPressPage() {
   }
 
   async function finishTraining(force = false) {
-    if (finishInFlightRef.current) return
+    if (finishInFlightRef.current || tailSaveFailedRef.current) return
     const elapsedMs = currentElapsedMs()
     const expectedSeconds = sessionRef.current?.expectedDurationSeconds ?? session?.expectedDurationSeconds ?? 1
     if (!force && !canCompleteShoulderPressTraining({
@@ -441,9 +459,76 @@ export default function ShoulderPressPage() {
       setPaused(false)
       await Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
     } catch (finishError) {
+      if (recorderRef.current?.hasFailedSegment()) {
+        tailSaveFailedRef.current = true
+        recordingRef.current = false
+        pausedRef.current = false
+        recordingStartedAtRef.current = 0
+        setTailSaveFailed(true)
+        setRecording(false)
+        setPaused(false)
+      }
       setError(finishError instanceof Error ? finishError.message : '训练完成失败，请重试')
     } finally {
       finishInFlightRef.current = false
+      commandInFlightRef.current = false
+      setProcessing(false)
+    }
+  }
+
+  async function retryTailSegment() {
+    if (finishInFlightRef.current || commandInFlightRef.current) return
+    const recorder = recorderRef.current
+    if (!recorder || !tailSaveFailedRef.current) return
+
+    finishInFlightRef.current = true
+    commandInFlightRef.current = true
+    setProcessing(true)
+    setError('')
+    try {
+      const retried = await recorder.retryFailedSegment()
+      await segmentSaveChainRef.current
+      if (!retried || recorder.hasFailedSegment()) {
+        throw new Error('尾段仍未保存，请重试或重新训练')
+      }
+      await waitForShoulderPressBackgroundUploadSettled()
+      const currentSession = sessionRef.current
+      if (!currentSession || currentSession.segments.length === 0) {
+        throw new Error('尾段保存后未生成可上传录像，请重新训练')
+      }
+      tailSaveFailedRef.current = false
+      setTailSaveFailed(false)
+      await Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
+    } catch (retryError) {
+      tailSaveFailedRef.current = true
+      setTailSaveFailed(true)
+      setError(retryError instanceof Error ? retryError.message : '尾段保存失败，请重试或重新训练')
+    } finally {
+      finishInFlightRef.current = false
+      commandInFlightRef.current = false
+      setProcessing(false)
+    }
+  }
+
+  async function restartAfterTailFailure() {
+    if (finishInFlightRef.current || commandInFlightRef.current) return
+    commandInFlightRef.current = true
+    setProcessing(true)
+    try {
+      const abandoned = recorderRef.current?.abandonFailedSegment()
+      const paths = new Set([
+        ...(sessionRef.current?.segments.map((segment) => segment.savedFilePath) ?? []),
+        ...retainedSegmentPathsRef.current.values(),
+        ...(abandoned?.savedFilePath ? [abandoned.savedFilePath] : [])
+      ])
+      for (const path of paths) deleteOrphanedSavedFile(path)
+      retainedSegmentPathsRef.current.clear()
+      clearPendingShoulderPressSession(Taro)
+      sessionRef.current = null
+      tailSaveFailedRef.current = false
+      setTailSaveFailed(false)
+      await Taro.reLaunch({ url: buildShoulderPressSessionUrl(actionId) })
+    } finally {
       commandInFlightRef.current = false
       setProcessing(false)
     }
@@ -516,7 +601,8 @@ export default function ShoulderPressPage() {
   }, [recording])
 
   useDidHide(() => {
-    if (finishInFlightRef.current || commandInFlightRef.current) return
+    if (finishInFlightRef.current) return
+    hidePauseRequestedRef.current = true
     void pauseTraining()
   })
 
@@ -537,7 +623,9 @@ export default function ShoulderPressPage() {
     ? '正在录像，保持动作完整入镜。'
     : paused || pausedRef.current
       ? '训练已暂停，点击继续训练后再录像。'
-      : '准备好后点击开始训练。'
+      : tailSaveFailed
+        ? '尾段尚未保存，不能提交当前录像。'
+        : '准备好后点击开始训练。'
 
   return (
     <View className='page shoulder-press-page'>
@@ -622,6 +710,25 @@ export default function ShoulderPressPage() {
         >
           返回当前处方
         </Button>
+      ) : tailSaveFailed ? (
+        <View className='button-row shoulder-press-action-row'>
+          <Button
+            className='primary-button'
+            loading={processing}
+            disabled={processing}
+            onClick={() => void retryTailSegment()}
+          >
+            重试保存尾段
+          </Button>
+          <Button
+            className='secondary-button'
+            loading={processing}
+            disabled={processing}
+            onClick={() => void restartAfterTailFailure()}
+          >
+            重新训练
+          </Button>
+        </View>
       ) : recording ? (
         <Button
           className='primary-button full-button'
