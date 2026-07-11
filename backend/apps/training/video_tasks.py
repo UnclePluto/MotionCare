@@ -22,6 +22,7 @@ from .models import (
 )
 from .qiniu import (
     delete_object_if_exists,
+    publish_attempt_to_canonical,
     stat_object_metadata_or_none,
     upload_and_publish_local_video,
 )
@@ -219,6 +220,34 @@ def _lock_project_patient_training_video_then_job(job_id):
     return project_patient, video, job
 
 
+def _lock_optional_project_patient_training_video_then_job(job_id):
+    ids = (
+        VideoAssemblyJob.objects.filter(pk=job_id)
+        .values("training_video_id", "training_video__project_patient_id")
+        .get()
+    )
+    project_patient = None
+    project_patient_id = ids["training_video__project_patient_id"]
+    if project_patient_id is not None:
+        project_patient = (
+            ProjectPatient.objects.select_for_update()
+            .filter(pk=project_patient_id)
+            .first()
+        )
+        if project_patient is None:
+            raise AssemblyLeaseLost("训练视频合并任务租约已失效")
+    video = TrainingVideo.objects.select_for_update().get(pk=ids["training_video_id"])
+    job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
+    if (
+        video.project_patient_id != project_patient_id
+        or job.training_video_id != video.id
+    ):
+        raise AssemblyLeaseLost("训练视频合并任务租约已失效")
+    video.project_patient = project_patient
+    job.training_video = video
+    return project_patient, video, job
+
+
 @transaction.atomic
 def claim_video_assembly_job(job_id):
     video, job = _lock_training_video_then_job(job_id)
@@ -348,6 +377,46 @@ def mark_uploading_qiniu(
     )
     _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=True)
     return job
+
+
+@transaction.atomic
+def publish_canonical_under_lease(
+    job_id,
+    *,
+    lease_attempt,
+    bucket,
+    attempt_key,
+    canonical_key,
+    expected_hash,
+    expected_size_bytes,
+):
+    project_patient, video, job = (
+        _lock_optional_project_patient_training_video_then_job(job_id)
+    )
+    if (
+        project_patient is None
+        or video.status != TrainingVideo.Status.UPLOADING_QINIU
+        or video.cleanup_requested_at is not None
+        or job.status != VideoAssemblyJob.Status.RUNNING
+        or job.attempt_count != lease_attempt
+        or job.qiniu_attempt_object_key != attempt_key
+        or job.qiniu_object_key != canonical_key
+        or video.bucket not in {"", bucket}
+    ):
+        raise AssemblyLeaseLost("训练视频合并任务租约已失效")
+
+    metadata = publish_attempt_to_canonical(
+        bucket=bucket,
+        attempt_key=attempt_key,
+        canonical_key=canonical_key,
+        expected_hash=expected_hash,
+        expected_size_bytes=expected_size_bytes,
+    )
+    now = timezone.now()
+    job.qiniu_object_hash = metadata["hash"]
+    job.heartbeat_at = now
+    job.save(update_fields=["qiniu_object_hash", "heartbeat_at", "updated_at"])
+    return metadata
 
 
 @transaction.atomic
@@ -487,7 +556,11 @@ def process_video_assembly_job(job_id):
             bucket=settings.QINIU_BUCKET,
             attempt_key=attempt_key,
             canonical_key=canonical_key,
-            assert_lease=heartbeat,
+            publish_attempt=lambda **kwargs: publish_canonical_under_lease(
+                job.id,
+                lease_attempt=lease_attempt,
+                **kwargs,
+            ),
             deadline_monotonic=upload_deadline_monotonic,
             on_progress=lambda *_: heartbeat(),
         )

@@ -4,6 +4,7 @@ from unittest.mock import Mock
 import pytest
 from celery.exceptions import Retry
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import DatabaseError
 from django.utils import timezone
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
@@ -726,6 +727,89 @@ def test_move_before_attach_keeps_canonical_during_crash_recovery(
 
 
 @pytest.mark.django_db
+def test_retry_after_move_and_db_failure_reuses_canonical_and_records_publish(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    from apps.training import qiniu as training_qiniu
+
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    module = _video_tasks()
+    claimed_job, claimed = module.claim_video_assembly_job(job.id)
+    assert claimed is True
+    result = _assembly_result(video, duration=60.0)
+    attempt_key = module.qiniu_attempt_object_key(video, claimed_job.attempt_count)
+    module.mark_uploading_qiniu(
+        job.id,
+        result,
+        lease_attempt=claimed_job.attempt_count,
+        attempt_key=attempt_key,
+        canonical_key=job.qiniu_object_key,
+    )
+    metadata = _remote_metadata(result, object_hash="published-hash")
+    monkeypatch.setattr(module, "publish_attempt_to_canonical", Mock(return_value=metadata))
+
+    real_save = VideoAssemblyJob.save
+    fail_publish_save = True
+
+    def flaky_save(instance, *args, **kwargs):
+        nonlocal fail_publish_save
+        if (
+            fail_publish_save
+            and instance.pk == job.id
+            and "qiniu_object_hash" in kwargs.get("update_fields", [])
+        ):
+            fail_publish_save = False
+            raise DatabaseError("publish state write failed")
+        return real_save(instance, *args, **kwargs)
+
+    monkeypatch.setattr(VideoAssemblyJob, "save", flaky_save)
+    publish_kwargs = {
+        "lease_attempt": claimed_job.attempt_count,
+        "bucket": settings.QINIU_BUCKET,
+        "attempt_key": attempt_key,
+        "canonical_key": job.qiniu_object_key,
+        "expected_hash": metadata["hash"],
+        "expected_size_bytes": result.size_bytes,
+    }
+    with pytest.raises(DatabaseError, match="publish state write failed"):
+        module.publish_canonical_under_lease(job.id, **publish_kwargs)
+
+    job.refresh_from_db()
+    assert job.qiniu_object_hash == ""
+
+    upload = Mock()
+    monkeypatch.setattr(
+        training_qiniu,
+        "stat_object_metadata_or_none",
+        Mock(return_value=metadata),
+    )
+    monkeypatch.setattr(training_qiniu.qiniu, "etag", Mock(return_value=metadata["hash"]))
+    monkeypatch.setattr(training_qiniu, "upload_local_video", upload)
+    recovered = training_qiniu.upload_and_publish_local_video(
+        path=result.output_path,
+        bucket=settings.QINIU_BUCKET,
+        attempt_key=attempt_key,
+        canonical_key=job.qiniu_object_key,
+        publish_attempt=lambda **kwargs: module.publish_canonical_under_lease(
+            job.id,
+            lease_attempt=claimed_job.attempt_count,
+            **kwargs,
+        ),
+    )
+
+    assert recovered == metadata
+    upload.assert_not_called()
+    job.refresh_from_db()
+    assert job.qiniu_object_hash == "published-hash"
+
+
+@pytest.mark.django_db
 def test_stale_worker_never_moves_or_deletes_canonical_after_new_attempt_attaches(
     project_patient,
     active_prescription,
@@ -742,7 +826,7 @@ def test_stale_worker_never_moves_or_deletes_canonical_after_new_attempt_attache
     monkeypatch.setattr(module, "assemble_video", Mock(return_value=result))
     monkeypatch.setattr(module.cleanup_training_video_files, "delay", Mock())
 
-    def old_upload(*, attempt_key, canonical_key, assert_lease, **kwargs):
+    def old_upload(*, bucket, attempt_key, canonical_key, publish_attempt, **kwargs):
         assert attempt_key.endswith("/attempt-1.mp4")
         assert canonical_key == job.qiniu_object_key
         VideoAssemblyJob.objects.filter(pk=job.id).update(status=VideoAssemblyJob.Status.PENDING)
@@ -764,8 +848,13 @@ def test_stale_worker_never_moves_or_deletes_canonical_after_new_attempt_attache
             lease_attempt=second.attempt_count,
             object_key=canonical_key,
         )
-        assert_lease()
-        raise AssertionError("stale lease check must raise")
+        return publish_attempt(
+            bucket=bucket,
+            attempt_key=attempt_key,
+            canonical_key=canonical_key,
+            expected_hash="old-hash",
+            expected_size_bytes=result.size_bytes,
+        )
 
     monkeypatch.setattr(module, "upload_and_publish_local_video", old_upload)
 

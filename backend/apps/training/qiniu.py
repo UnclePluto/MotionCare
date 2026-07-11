@@ -70,8 +70,11 @@ def publish_attempt_to_canonical(
     canonical_key: str,
     expected_hash: str,
     expected_size_bytes: int,
-    assert_lease: Callable[[], None],
 ) -> dict:
+    qiniu.config.set_default(
+        connection_timeout=settings.QINIU_MOVE_REQUEST_TIMEOUT_SECONDS,
+        connection_retries=1,
+    )
     existing = stat_object_metadata_or_none(bucket=bucket, key=canonical_key)
     if existing is not None:
         validate_object_metadata(
@@ -80,10 +83,8 @@ def publish_attempt_to_canonical(
             expected_size_bytes=expected_size_bytes,
             expected_content_type="video/mp4",
         )
-        assert_lease()
         return existing
 
-    assert_lease()
     auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
     try:
         _, response = BucketManager(auth).move(
@@ -216,7 +217,7 @@ def upload_and_publish_local_video(
     bucket: str,
     attempt_key: str,
     canonical_key: str,
-    assert_lease: Callable[[], None],
+    publish_attempt: Callable[..., dict],
     deadline_monotonic: float | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> dict:
@@ -237,24 +238,20 @@ def upload_and_publish_local_video(
             expected_size_bytes=local_size,
             expected_content_type="video/mp4",
         )
-        assert_lease()
-        return existing
-
-    attempt_metadata = upload_local_video(
-        path=path,
-        bucket=bucket,
-        key=attempt_key,
-        deadline_monotonic=deadline_monotonic,
-        on_progress=on_progress,
-    )
-    assert_lease()
-    return publish_attempt_to_canonical(
+    else:
+        upload_local_video(
+            path=path,
+            bucket=bucket,
+            key=attempt_key,
+            deadline_monotonic=deadline_monotonic,
+            on_progress=on_progress,
+        )
+    return publish_attempt(
         bucket=bucket,
         attempt_key=attempt_key,
         canonical_key=canonical_key,
-        expected_hash=attempt_metadata["hash"],
+        expected_hash=local_hash,
         expected_size_bytes=local_size,
-        assert_lease=assert_lease,
     )
 
 

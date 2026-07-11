@@ -268,7 +268,6 @@ def test_publish_attempt_moves_without_force_and_stats_canonical(tmp_path, monke
         canonical_key=canonical_key,
         expected_hash=metadata["hash"],
         expected_size_bytes=metadata["fsize"],
-        assert_lease=Mock(),
     )
 
     assert published == metadata
@@ -307,35 +306,46 @@ def test_publish_attempt_recovers_duplicate_move_612_from_matching_canonical(
         canonical_key="training-videos/1/final.mp4",
         expected_hash=metadata["hash"],
         expected_size_bytes=metadata["fsize"],
-        assert_lease=Mock(),
     )
 
     assert published == metadata
 
 
-@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
-def test_publish_attempt_rechecks_lease_after_stat_before_move(tmp_path, monkeypatch):
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_MOVE_REQUEST_TIMEOUT_SECONDS=4,
+)
+def test_publish_attempt_sets_short_single_request_timeout_before_move(
+    tmp_path, monkeypatch
+):
     path = _local_video(tmp_path)
     metadata = _matching_metadata(path)
-    move = Mock()
+    configure = Mock()
+    move = Mock(return_value=(None, _stat_response()))
     monkeypatch.setattr(
         BucketManager,
         "stat",
-        Mock(return_value=(None, _stat_response(status_code=612, error="no such file"))),
+        Mock(
+            side_effect=[
+                (None, _stat_response(status_code=612, error="no such file")),
+                (metadata, _stat_response()),
+            ]
+        ),
     )
     monkeypatch.setattr(BucketManager, "move", move)
+    monkeypatch.setattr(training_qiniu.qiniu.config, "set_default", configure)
 
-    with pytest.raises(RuntimeError, match="lease lost"):
-        training_qiniu.publish_attempt_to_canonical(
-            bucket="motioncare-training",
-            attempt_key="training-videos/attempts/session/attempt-1.mp4",
-            canonical_key="training-videos/1/final.mp4",
-            expected_hash=metadata["hash"],
-            expected_size_bytes=metadata["fsize"],
-            assert_lease=Mock(side_effect=RuntimeError("lease lost")),
-        )
+    training_qiniu.publish_attempt_to_canonical(
+        bucket="motioncare-training",
+        attempt_key="training-videos/attempts/session/attempt-1.mp4",
+        canonical_key="training-videos/1/final.mp4",
+        expected_hash=metadata["hash"],
+        expected_size_bytes=metadata["fsize"],
+    )
 
-    move.assert_not_called()
+    configure.assert_called_once_with(connection_timeout=4, connection_retries=1)
+    move.assert_called_once()
 
 
 @override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
@@ -345,42 +355,44 @@ def test_retry_after_move_before_db_attach_reuses_canonical_without_second_uploa
     path = _local_video(tmp_path)
     metadata = _matching_metadata(path)
     upload = Mock()
-    move = Mock()
-    lease = Mock()
+    publish = Mock(return_value=metadata)
     monkeypatch.setattr(
         training_qiniu,
         "stat_object_metadata_or_none",
         Mock(return_value=metadata),
     )
     monkeypatch.setattr(training_qiniu, "upload_local_video", upload)
-    monkeypatch.setattr(training_qiniu, "publish_attempt_to_canonical", move)
 
     published = training_qiniu.upload_and_publish_local_video(
         path=path,
         bucket="motioncare-training",
         attempt_key="training-videos/attempts/session/attempt-2.mp4",
         canonical_key="training-videos/1/final.mp4",
-        assert_lease=lease,
+        publish_attempt=publish,
     )
 
     assert published == metadata
     upload.assert_not_called()
-    move.assert_not_called()
-    lease.assert_called_once_with()
+    publish.assert_called_once_with(
+        bucket="motioncare-training",
+        attempt_key="training-videos/attempts/session/attempt-2.mp4",
+        canonical_key="training-videos/1/final.mp4",
+        expected_hash=metadata["hash"],
+        expected_size_bytes=metadata["fsize"],
+    )
 
 
 @override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
-def test_upload_and_publish_stale_lease_never_moves(tmp_path, monkeypatch):
+def test_upload_and_publish_requires_lease_guarded_publish_callback(tmp_path, monkeypatch):
     path = _local_video(tmp_path)
     metadata = _matching_metadata(path)
-    move = Mock()
+    publish = Mock(side_effect=RuntimeError("lease lost"))
     monkeypatch.setattr(
         training_qiniu,
         "stat_object_metadata_or_none",
         Mock(return_value=None),
     )
     monkeypatch.setattr(training_qiniu, "upload_local_video", Mock(return_value=metadata))
-    monkeypatch.setattr(training_qiniu, "publish_attempt_to_canonical", move)
 
     with pytest.raises(RuntimeError, match="lease lost"):
         training_qiniu.upload_and_publish_local_video(
@@ -388,10 +400,10 @@ def test_upload_and_publish_stale_lease_never_moves(tmp_path, monkeypatch):
             bucket="motioncare-training",
             attempt_key="training-videos/attempts/session/attempt-1.mp4",
             canonical_key="training-videos/1/final.mp4",
-            assert_lease=Mock(side_effect=RuntimeError("lease lost")),
+            publish_attempt=publish,
         )
 
-    move.assert_not_called()
+    publish.assert_called_once()
 
 
 @pytest.mark.parametrize(
