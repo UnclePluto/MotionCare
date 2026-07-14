@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { maskPhoneForList } from "../patients/phoneMask";
 
 type StudyProject = { id: number; name: string };
 
@@ -105,34 +106,41 @@ export function PrescriptionEntryPage() {
         loading={isLoading}
         dataSource={rows}
         pagination={{ pageSize: 20, showSizeChanger: false }}
+        scroll={{ x: 900 }}
         columns={[
           {
-            title: "患者",
+            title: "患者姓名",
             dataIndex: "patient_name",
-            render: (t: string, r) => (
-              <>
-                <span>{t}</span> · {r.patient_phone}
-              </>
-            ),
+            width: 140,
           },
-          { title: "项目", dataIndex: "project_name" },
+          {
+            title: "手机号",
+            dataIndex: "patient_phone",
+            width: 140,
+            render: (phone: string) => <span style={{ whiteSpace: "nowrap" }}>{maskPhoneForList(phone)}</span>,
+          },
+          { title: "项目", dataIndex: "project_name", width: 180 },
           {
             title: "分组",
             dataIndex: "group_name",
+            width: 90,
             render: (v: string | null) => v ?? "—",
           },
           {
             title: "项目状态",
             dataIndex: "project_status",
+            width: 90,
             render: (v: ProjectPatientRow["project_status"]) => PROJECT_STATUS_LABEL[v] ?? v,
           },
           {
             title: "入组时间",
             dataIndex: "enrolled_at",
+            width: 150,
             render: (v: string | null | undefined) => formatDateTime(v),
           },
           {
             title: "操作",
+            width: 70,
             render: (_: unknown, r) => (
               <Space>
                 <Link to={`/prescriptions/project-patients/${r.id}`}>处方</Link>

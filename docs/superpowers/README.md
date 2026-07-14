@@ -41,6 +41,7 @@ docs/superpowers/
 | `plans/2026-05-12-frontend-only-randomization-confirmed-binding.md` | 前端临时随机 + 确认入组绑定 | implementing | `specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` |
 | `plans/2026-05-14-project-patient-research-entry-tabs.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` |
 | `plans/2026-05-14-wechat-miniapp-patient-daily-workbench.md` | 微信小程序患者日常工作台 | approved | `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` |
+| `plans/2026-07-10-shoulder-press-video-analysis.md` | 肩部推举录像跟练与动作分析 | review | `specs/2026-07-08-shoulder-press-video-analysis-design.md` |
 
 ## 状态语义
 
