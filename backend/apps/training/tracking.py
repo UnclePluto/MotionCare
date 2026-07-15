@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
-from .models import TrainingRecord
+from .models import TrainingRecord, TrainingVideo
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
 
@@ -407,11 +407,15 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
 def recent_records(project_patient: ProjectPatient) -> list[dict]:
     records = (
         TrainingRecord.objects.filter(project_patient=project_patient)
-        .select_related("prescription", "prescription_action")
+        .select_related("prescription", "prescription_action", "video")
+        .prefetch_related("motion_analysis_jobs")
         .order_by("-training_date", "-id")[:30]
     )
     rows = []
     for record in records:
+        video = getattr(record, "video", None)
+        analysis_jobs = list(record.motion_analysis_jobs.all())
+        latest_job = max(analysis_jobs, key=lambda item: (item.created_at, item.id)) if analysis_jobs else None
         is_game = (
             record.prescription_action.internal_type_snapshot
             == ActionLibraryItem.InternalType.GAME
@@ -454,6 +458,15 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "game_difficulty": _form_difficulty(record.form_data),
                 **game_fields,
                 "note": record.note,
+                "video_id": (
+                    video.id if video and video.status == TrainingVideo.Status.ATTACHED else None
+                ),
+                "video_status": video.status if video else None,
+                "latest_analysis_status": latest_job.status if latest_job else None,
+                "analysis_total_count": latest_job.total_count if latest_job else None,
+                "analysis_standard_count": latest_job.standard_count if latest_job else None,
+                "analysis_nonstandard_count": latest_job.nonstandard_count if latest_job else None,
+                "analysis_failure_reason": latest_job.failure_reason if latest_job else "",
             }
         )
     return rows

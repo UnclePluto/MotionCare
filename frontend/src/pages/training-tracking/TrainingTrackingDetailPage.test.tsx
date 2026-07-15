@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrainingTrackingDetailPage } from "./TrainingTrackingDetailPage";
 
-const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
+const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
 
 vi.mock("../../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
+    post: (...args: unknown[]) => mockPost(...args),
   },
 }));
 
@@ -166,6 +167,13 @@ const trackingDetail = {
       game_retry_count: 2,
       game_total_retry_count: 12,
       note: "完成顺利",
+      video_id: 55,
+      video_status: "attached",
+      latest_analysis_status: null,
+      analysis_total_count: null,
+      analysis_standard_count: null,
+      analysis_nonstandard_count: null,
+      analysis_failure_reason: "",
     },
     {
       id: 7002,
@@ -229,9 +237,17 @@ function trendChartData() {
 describe("TrainingTrackingDetailPage", () => {
   beforeEach(() => {
     mockGet.mockReset();
+    mockPost.mockReset();
+    mockPost.mockResolvedValue({ data: { id: 88, status: "pending" } });
     mockGet.mockImplementation((url: string) => {
       if (url === "/training/tracking/patients/201/") {
         return Promise.resolve({ data: trackingDetail });
+      }
+      if (url === "/training/videos/55/download-url/") {
+        return Promise.resolve({ data: { url: "https://cdn.example.com/video.mp4" } });
+      }
+      if (url === "/training/videos/55/analysis-jobs/latest/") {
+        return Promise.resolve({ data: null });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -313,6 +329,19 @@ describe("TrainingTrackingDetailPage", () => {
         moving_average: 5,
       }),
     ]);
+  });
+
+  it("打开录像并触发动作分析", async () => {
+    renderAt("/training-tracking/patients/201");
+    await screen.findByText("训练患者甲");
+
+    fireEvent.click(screen.getByRole("button", { name: /查看视频/ }));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/training/videos/55/download-url/"));
+    await waitFor(() => expect(document.querySelector("video")?.getAttribute("src")).toContain("video.mp4"));
+
+    const buttons = screen.getAllByRole("button", { name: /动作分析/ });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/training/videos/55/analysis-jobs/"));
   });
 
   it("切换日期范围重新请求时保留详情页内容", async () => {

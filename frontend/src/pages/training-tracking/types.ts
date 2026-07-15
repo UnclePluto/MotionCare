@@ -99,6 +99,31 @@ export type TrackingRecentRecord = {
   game_retry_count: number | null;
   game_total_retry_count: number | null;
   note: string;
+  video_id: number | null;
+  video_status: string | null;
+  latest_analysis_status: string | null;
+  analysis_total_count: number | null;
+  analysis_standard_count: number | null;
+  analysis_nonstandard_count: number | null;
+  analysis_failure_reason: string;
+};
+
+export type MotionAnalysisJob = {
+  id: number;
+  training_video: number;
+  training_record: number | null;
+  status: "pending" | "running" | "succeeded" | "failed";
+  algorithm_name: string;
+  algorithm_version: string;
+  rule_version: string;
+  total_count: number | null;
+  standard_count: number | null;
+  nonstandard_count: number | null;
+  result_payload: Record<string, unknown>;
+  failure_reason: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
 };
 
 export type TrackingDetail = {

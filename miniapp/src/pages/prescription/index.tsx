@@ -11,6 +11,8 @@ import {
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
 import { gameSessionUrl, loadGameSessionSubpackage } from './gameSubpackage'
+import { actionButtonLabel, actionEntryUrl } from './actionRouting'
+import { buildShoulderPressUploadUrl, loadShoulderPressSession } from '../shoulder-press/session'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -48,7 +50,7 @@ export default function PrescriptionPage() {
   async function startAction(action: NonNullable<CurrentPrescription>['actions'][number]) {
     setGameLoadError('')
     if (action.internal_type !== 'game') {
-      Taro.navigateTo({ url: `/pages/training/index?actionId=${action.id}` })
+      Taro.navigateTo({ url: actionEntryUrl(action) })
       return
     }
     if (gameLoadingActionId !== null) return
@@ -75,6 +77,10 @@ export default function PrescriptionPage() {
   }, [])
 
   useDidShow(() => {
+    if (loadShoulderPressSession(Taro)) {
+      Taro.navigateTo({ url: buildShoulderPressUploadUrl() })
+      return
+    }
     setError('')
     setLoaded(false)
     setData(null)
@@ -191,7 +197,7 @@ export default function PrescriptionPage() {
                   void startAction(action)
                 }}
               >
-                {action.internal_type === 'game' ? '开始游戏' : '开始训练'}
+                {actionButtonLabel(action)}
               </Button>
               <Button
                 className='secondary-button'

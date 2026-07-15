@@ -1,4 +1,5 @@
 .DS_Store
+.env
 **/__pycache__/
 **/*.py[cod]
 .pytest_cache/
@@ -36,3 +37,6 @@ specs/patient-rehab-system/crf/_docx_table_dump.txt
 # Local DB + packaging artifacts
 backend/db.sqlite3
 backend/*.egg-info/
+
+# 训练视频处理临时文件（运行时生成）
+media/training_video_temp/

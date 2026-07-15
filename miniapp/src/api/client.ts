@@ -1,8 +1,21 @@
 import Taro from '@tarojs/taro'
 
 import { clearPatientAppToken, getPatientAppToken } from '../auth/token'
+import { resolveApiBaseUrl } from './baseUrl'
 
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
+
+export function runtimeApiBaseUrl(): string {
+  try {
+    return resolveApiBaseUrl(API_BASE_URL, Taro.getDeviceInfo().platform)
+  } catch {
+    return API_BASE_URL
+  }
+}
+
+export function apiUrl(path: string): string {
+  return `${runtimeApiBaseUrl()}${path}`
+}
 
 type Method = 'GET' | 'POST' | 'PUT'
 
@@ -24,7 +37,7 @@ function resolveErrorMessage(data: unknown): string {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const token = getPatientAppToken()
   const response = await Taro.request<T>({
-    url: `${API_BASE_URL}${path}`,
+    url: apiUrl(path),
     method: options.method ?? 'GET',
     data: options.data,
     header: {

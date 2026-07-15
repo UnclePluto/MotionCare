@@ -111,6 +111,86 @@ def _record(
 
 
 @pytest.mark.django_db
+def test_tracking_recent_record_includes_video_analysis_summary(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    from apps.training.models import MotionAnalysisJob, TrainingVideo
+
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record,
+        bucket="motioncare",
+        object_key="tracking/video.mp4",
+        object_hash="final-hash",
+        content_type="video/mp4",
+        size_bytes=10,
+        duration_seconds=30,
+        status=TrainingVideo.Status.ATTACHED,
+    )
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+        total_count=8,
+        standard_count=6,
+        nonstandard_count=2,
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+    recent = response.data["recent_records"][0]
+    assert recent["video_id"] == video.id
+    assert recent["latest_analysis_status"] == "succeeded"
+    assert (recent["analysis_total_count"], recent["analysis_standard_count"]) == (8, 6)
+
+
+@pytest.mark.django_db
+def test_tracking_hides_video_until_server_cleanup_is_complete(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    from apps.training.models import TrainingVideo
+
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record,
+        bucket="motioncare",
+        object_key="tracking/cleaning.mp4",
+        object_hash="final-hash",
+        content_type="video/mp4",
+        size_bytes=10,
+        duration_seconds=30,
+        status=TrainingVideo.Status.CLEANING,
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    recent = response.data["recent_records"][0]
+    assert recent["video_id"] is None
+    assert recent["video_status"] == TrainingVideo.Status.CLEANING
+
+
+@pytest.mark.django_db
 def test_patient_search_returns_accessible_patient_summaries(
     doctor,
     project_patient,

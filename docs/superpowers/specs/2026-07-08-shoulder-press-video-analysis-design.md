@@ -3,6 +3,7 @@
 > 范围：肩部推举专项升级；小程序录像跟练、七牛 Kodo 直传、医生端视频审阅、PP-TinyPose 手动分析。
 > 关联：`docs/superpowers/specs/2026-05-14-prescription-motion-training-design.md`、`docs/superpowers/specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md`、`docs/superpowers/specs/2026-05-15-game-prescription-tracking-design.md`
 > 实施基线 commit：c72d8ce
+> 修订（2026-07-14, codex）：本文件中“单文件录像、小程序直传七牛、后端不承载视频”的描述记录错误，录制与上传链路已由 `2026-07-14-segmented-training-video-pipeline-design.md` 替代；医生审阅和动作分析设计继续有效。
 
 # 肩部推举录像跟练与动作分析设计
 

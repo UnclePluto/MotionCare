@@ -1,5 +1,6 @@
 import Taro from '@tarojs/taro'
 
+import { resolveApiBaseUrl } from '../../api/baseUrl'
 import { clearPatientAppToken, getPatientAppToken } from '../../auth/token'
 import type { GameTrainingPayload } from './gameTypes'
 
@@ -9,6 +10,14 @@ export const MAX_RETRY_PER_LAUNCH = 10
 
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
 const RETRYABLE_STATUS_CODE_MIN = 500
+
+function runtimeApiBaseUrl(): string {
+  try {
+    return resolveApiBaseUrl(API_BASE_URL, Taro.getDeviceInfo().platform)
+  } catch {
+    return API_BASE_URL
+  }
+}
 
 export type StorageLike = {
   getStorageSync(key: string): unknown
@@ -173,7 +182,7 @@ export async function postGameTrainingRecord(payload: GameTrainingPayload): Prom
   let response: Taro.request.SuccessCallbackResult<Record<string, unknown>>
   try {
     response = await Taro.request<Record<string, unknown>>({
-      url: `${API_BASE_URL}/patient-app/training-records/`,
+      url: `${runtimeApiBaseUrl()}/patient-app/training-records/`,
       method: 'POST',
       data: payload,
       header: {
