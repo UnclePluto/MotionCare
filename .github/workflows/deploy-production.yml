@@ -144,7 +144,7 @@ jobs:
       - name: 上传部署配置
         run: |
           scp -i ~/.ssh/motioncare_deploy -P "${{ vars.SERVER_PORT }}" \
-            deploy/docker-compose.prod.yml deploy/deploy.sh \
+            deploy/docker-compose.prod.yml deploy/deploy.sh deploy/renew-certificate.sh \
             "${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }}:/opt/motioncare-prod/"
       - name: 部署指定版本
         run: |
