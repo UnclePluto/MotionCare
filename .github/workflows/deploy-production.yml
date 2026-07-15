@@ -65,7 +65,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npm run test
+          npm run test -- --maxWorkers=2 --minWorkers=2
           npm run lint
           npm run build
       - name: 验证患者端
