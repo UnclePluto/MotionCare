@@ -17,6 +17,9 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
     "http://localhost:5173,http://127.0.0.1:5173,"
     "http://localhost:5174,http://127.0.0.1:5174",
 ).split(",")
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = os.getenv("DJANGO_SESSION_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
+CSRF_COOKIE_SECURE = os.getenv("DJANGO_CSRF_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -82,7 +85,8 @@ TIME_ZONE = "Asia/Shanghai"
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = ROOT_DIR / os.getenv("STATIC_ROOT", "staticfiles")
 MEDIA_URL = "media/"
 MEDIA_ROOT = ROOT_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

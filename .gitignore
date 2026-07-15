@@ -23,6 +23,9 @@ docs/superpowers/*
 !docs/superpowers/specs/**
 !docs/superpowers/plans/
 !docs/superpowers/plans/**
+!docs/other/
+docs/other/*
+!docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx
 
 # 本地工具链与临时图（不参与版本）
 .cursor/

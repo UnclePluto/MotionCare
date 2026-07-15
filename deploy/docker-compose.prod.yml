@@ -1,0 +1,186 @@
+name: motioncare-prod
+
+x-backend-environment: &backend-environment
+  DJANGO_DEBUG: "false"
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+  DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS}
+  DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  DATABASE_CONN_MAX_AGE: "60"
+  REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  STATIC_ROOT: /app/staticfiles
+  TRAINING_VIDEO_TEMP_ROOT: media/training_video_temp
+  QINIU_ACCESS_KEY: ${QINIU_ACCESS_KEY:-}
+  QINIU_SECRET_KEY: ${QINIU_SECRET_KEY:-}
+  QINIU_BUCKET: ${QINIU_BUCKET:-motioncare-training}
+  QINIU_DOWNLOAD_DOMAIN: ${QINIU_DOWNLOAD_DOMAIN:-}
+  PP_TINYPOSE_COMMAND: ${PP_TINYPOSE_COMMAND:-}
+  TZ: Asia/Shanghai
+
+services:
+  postgres:
+    image: ${ACR_IMAGE}:postgres-16
+    container_name: motioncare-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    image: ${ACR_IMAGE}:redis-7
+    container_name: motioncare-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  migrate:
+    image: ${ACR_IMAGE}:backend-${APP_VERSION}
+    profiles: ["tools"]
+    environment: *backend-environment
+    command: ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput"]
+    volumes:
+      - ./data/media:/app/media
+      - ./data/static:/app/staticfiles
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    image: ${ACR_IMAGE}:backend-${APP_VERSION}
+    container_name: motioncare-api
+    restart: unless-stopped
+    init: true
+    environment: *backend-environment
+    volumes:
+      - ./data/media:/app/media
+      - ./data/static:/app/staticfiles
+    ports:
+      - "127.0.0.1:18081:8000"
+    networks:
+      internal:
+      whest_lan:
+        aliases:
+          - motioncare-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/auth/csrf/', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 30s
+
+  celery-worker:
+    image: ${ACR_IMAGE}:backend-${APP_VERSION}
+    container_name: motioncare-celery-worker
+    restart: unless-stopped
+    init: true
+    environment: *backend-environment
+    command: ["celery", "-A", "config", "worker", "--loglevel=INFO", "--concurrency=1"]
+    volumes:
+      - ./data/media:/app/media
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    stop_grace_period: 60s
+
+  celery-beat:
+    image: ${ACR_IMAGE}:backend-${APP_VERSION}
+    container_name: motioncare-celery-beat
+    restart: unless-stopped
+    init: true
+    environment: *backend-environment
+    command: ["celery", "-A", "config", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    volumes:
+      - ./data/media:/app/media
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+
+  web:
+    image: ${ACR_IMAGE}:web-${APP_VERSION}
+    container_name: motioncare-web
+    restart: unless-stopped
+    volumes:
+      - ./data/static:/srv/django-static:ro
+    ports:
+      - "127.0.0.1:18080:80"
+    networks:
+      whest_lan:
+        aliases:
+          - motioncare-web
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  wx:
+    image: ${ACR_IMAGE}:wx-${APP_VERSION}
+    container_name: motioncare-wx
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18082:80"
+    networks:
+      whest_lan:
+        aliases:
+          - motioncare-wx
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+networks:
+  internal:
+    name: motioncare-prod-internal
+  whest_lan:
+    external: true
+    name: whest_Lan
