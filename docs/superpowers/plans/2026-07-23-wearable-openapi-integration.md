@@ -5,6 +5,8 @@
 > 执行记录（2026-07-23, codex）：Task 1 已落地于 commits `6b46942`、`b73bab7`，任务审查通过。
 >
 > 执行记录（2026-07-23, codex）：Task 2 已落地于 commits `d5f0050`、`e785522`、`1495a04`，任务审查通过。
+>
+> 执行记录（2026-07-23, codex）：Task 3 已落地于 commits `2fd4601`、`086d1e8`、`ea1bab5`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -425,7 +427,7 @@ git commit -m "feat(wearables): 实现厂商OpenAPI客户端"
 - Produces: `generate_device_short_code()`、`bind_device()`、`unbind_device()`、设备 CRUD、项目患者绑定状态/绑定/解绑 API。
 - Consumes: Task 1 模型、现有 `accessible_project_patients(user)` 行级过滤。
 
-- [ ] **Step 1: 写固定简码和绑定 API 失败测试**
+- [x] **Step 1: 写固定简码和绑定 API 失败测试**
 
 核心用例：
 
@@ -464,13 +466,13 @@ def test_rebound_device_does_not_overlap_previous_patient(
 
 同时覆盖：前导零简码、简码碰撞重试、四位空间耗尽、患者已有设备、设备已绑其他患者、无权访问 `ProjectPatient`、解绑二次调用幂等拒绝。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_binding_api.py -q`
 
 Expected: FAIL，路由不存在。
 
-- [ ] **Step 3: 实现固定简码生成器**
+- [x] **Step 3: 实现固定简码生成器**
 
 `generate_device_short_code()`：
 
@@ -481,7 +483,7 @@ Expected: FAIL，路由不存在。
 
 创建设备必须在事务内调用生成器并捕获 `IntegrityError` 重试，避免并发重复。
 
-- [ ] **Step 4: 实现绑定事务**
+- [x] **Step 4: 实现绑定事务**
 
 `bind_device(*, project_patient, short_code, actor, bound_at=None)` 必须：
 
@@ -499,7 +501,7 @@ with transaction.atomic():
 
 同一患者已绑定同一设备时返回现有绑定；患者或设备冲突时返回 409。`unbind_device()` 设置 `[bound_at, unbound_at)` 的结束时间，不删除绑定。
 
-- [ ] **Step 5: 实现 API 和权限**
+- [x] **Step 5: 实现 API 和权限**
 
 路由：
 
@@ -513,13 +515,13 @@ POST      /api/wearables/bindings/{id}/unbind/
 
 项目患者解析必须使用 `accessible_project_patients(request.user)`；设备接口使用 `IsAdminOrDoctor`。解绑响应明确返回 `historical_data_preserved: true`。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_binding_api.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/apps/wearables backend/config/urls.py
