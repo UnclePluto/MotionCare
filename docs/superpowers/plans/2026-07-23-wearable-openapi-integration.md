@@ -7,6 +7,8 @@
 > 执行记录（2026-07-23, codex）：Task 2 已落地于 commits `d5f0050`、`e785522`、`1495a04`，任务审查通过。
 >
 > 执行记录（2026-07-23, codex）：Task 3 已落地于 commits `2fd4601`、`086d1e8`、`ea1bab5`，任务审查通过。
+>
+> 执行记录（2026-07-23, codex）：Task 4 已落地于 commits `a95cbcb`、`940012f`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -542,7 +544,7 @@ git commit -m "feat(wearables): 完成设备台账与患者绑定"
 - Produces: `attribute_measurement()`、`attribute_daily_steps()`、`recalculate_daily_summary(patient_id, record_date)`。
 - Consumes: Task 1 模型、Task 2 `ProviderMeasurement` 和 `ProviderDailySteps`。
 
-- [ ] **Step 1: 写绑定边界失败测试**
+- [x] **Step 1: 写绑定边界失败测试**
 
 测试必须固定时间并覆盖半开区间：
 
@@ -571,7 +573,7 @@ def test_measurement_at_unbound_at_is_not_old_patient(
 - 当日 10:00 绑定：`ambiguous`。
 - 当日 15:00 从 A 换到 B：A、B 都不能取得该设备整日步数。
 
-- [ ] **Step 2: 写日汇总失败测试**
+- [x] **Step 2: 写日汇总失败测试**
 
 插入同日心率 `60, 72, 84`、两次血压 `120/80, 118/76`、血氧 `96, 98` 和有效步数 `5821`，断言：
 
@@ -585,13 +587,13 @@ assert summary.blood_oxygen_avg == Decimal("97.00")
 assert summary.steps == 5821
 ```
 
-- [ ] **Step 3: 运行失败测试**
+- [x] **Step 3: 运行失败测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_attribution.py apps/wearables/tests/test_summaries.py -q`
 
 Expected: FAIL，服务函数不存在。
 
-- [ ] **Step 4: 实现时间归属**
+- [x] **Step 4: 实现时间归属**
 
 `resolve_binding(device, measured_at)` 查询：
 
@@ -608,7 +610,7 @@ WearableBinding.objects.filter(
 
 步数归属使用 `ZoneInfo("Asia/Shanghai")` 计算 `[day_start, day_end)`，只有唯一绑定满足 `bound_at <= day_start` 且 `unbound_at is null or unbound_at >= day_end` 时才归属。
 
-- [ ] **Step 5: 实现幂等写入和汇总**
+- [x] **Step 5: 实现幂等写入和汇总**
 
 指纹使用规范化 JSON 的 SHA-256：
 
@@ -625,13 +627,13 @@ fingerprint = hashlib.sha256(
 
 汇总只查询 `attribution_status="attributed"` 的记录，并以 `WearableDailySummary.objects.update_or_create()` 写入。无有效值时对应字段设为 `None`、count 设为 `0`。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_attribution.py apps/wearables/tests/test_summaries.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/apps/wearables/services backend/apps/wearables/tests
