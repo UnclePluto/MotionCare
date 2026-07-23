@@ -238,3 +238,46 @@ def test_recalculate_revalidates_steps_after_midday_device_swap(
     old_summary = recalculate_daily_summary(patient.id, record_date)
 
     assert old_summary.steps is None
+
+
+@pytest.mark.django_db
+def test_locked_recalculation_reads_other_metric_added_after_lock(
+    monkeypatch, patient, doctor, wearable_device
+):
+    record_date = date(2026, 7, 22)
+    binding = WearableBinding.objects.create(
+        patient=patient,
+        device=wearable_device,
+        bound_at=datetime(2026, 7, 20, tzinfo=UTC),
+        bound_by=doctor,
+    )
+    WearableDailySource.objects.create(
+        provider=wearable_device.provider,
+        device=wearable_device,
+        binding=binding,
+        patient=patient,
+        record_date=record_date,
+        steps=5821,
+        attribution_status=WearableDailySource.AttributionStatus.ATTRIBUTED,
+        raw_payload={},
+    )
+    from apps.wearables.services import summaries
+
+    original_lock = summaries._lock_summary_scope
+
+    def add_heart_rate_after_lock(patient_id):
+        original_lock(patient_id)
+        _measurement(
+            patient=patient,
+            device=wearable_device,
+            metric_type="heart_rate",
+            measured_at=datetime(2026, 7, 22, 2, tzinfo=UTC),
+            heart_rate=72,
+        )
+
+    monkeypatch.setattr(summaries, "_lock_summary_scope", add_heart_rate_after_lock)
+
+    summary = recalculate_daily_summary(patient.id, record_date)
+
+    assert summary.steps == 5821
+    assert (summary.heart_rate_avg, summary.heart_rate_count) == (Decimal("72.00"), 1)

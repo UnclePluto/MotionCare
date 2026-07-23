@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from celery import shared_task
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -78,14 +79,30 @@ def _recalculate_affected_summaries(device: WearableDevice, metric_type: str, re
 
 
 def _advance_cursor(device: WearableDevice, metric_type: str, window_end: datetime):
-    cursor, _ = WearableSyncCursor.objects.get_or_create(
-        device=device,
-        metric_type=metric_type,
-        defaults={"last_success_window_end": window_end},
-    )
-    if cursor.last_success_window_end is None or cursor.last_success_window_end < window_end:
-        cursor.last_success_window_end = window_end
-        cursor.save(update_fields=["last_success_window_end", "updated_at"])
+    with transaction.atomic():
+        cursor = (
+            WearableSyncCursor.objects.select_for_update()
+            .filter(device=device, metric_type=metric_type)
+            .first()
+        )
+        if cursor is None:
+            try:
+                with transaction.atomic():
+                    WearableSyncCursor.objects.create(
+                        device=device,
+                        metric_type=metric_type,
+                        last_success_window_end=window_end,
+                    )
+                return
+            except IntegrityError:
+                cursor = (
+                    WearableSyncCursor.objects.select_for_update()
+                    .filter(device=device, metric_type=metric_type)
+                    .get()
+                )
+        WearableSyncCursor.objects.filter(pk=cursor.pk).filter(
+            Q(last_success_window_end__isnull=True) | Q(last_success_window_end__lt=window_end)
+        ).update(last_success_window_end=window_end, updated_at=timezone.now())
 
 
 @shared_task(bind=True)

@@ -4,6 +4,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+from django.conf import settings
 
 from apps.wearables.models import (
     WearableBinding,
@@ -14,7 +15,7 @@ from apps.wearables.models import (
 )
 from apps.wearables.providers import ProviderDailySteps, ProviderError, ProviderMeasurement
 from apps.wearables.services.sync import calculate_sync_window
-from apps.wearables.tasks import schedule_daily_wearable_sync, sync_device_metric
+from apps.wearables.tasks import _advance_cursor, schedule_daily_wearable_sync, sync_device_metric
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -67,6 +68,16 @@ def _run_sync(device, metric_type):
         args=[device.id, metric_type, TARGET_END.isoformat()],
         throw=False,
     )
+
+
+def test_wearable_beat_schedule_uses_shanghai_three_am():
+    entry = settings.CELERY_BEAT_SCHEDULE["schedule-daily-wearable-sync"]
+
+    assert entry["task"] == "apps.wearables.tasks.schedule_daily_wearable_sync"
+    assert entry["schedule"].hour == {3}
+    assert entry["schedule"].minute == {0}
+    assert settings.CELERY_TIMEZONE == "Asia/Shanghai"
+    assert settings.CELERY_ENABLE_UTC is True
 
 
 @pytest.mark.django_db
@@ -186,6 +197,10 @@ def test_scheduler_dispatches_all_metrics_for_recently_unbound_device(
         "steps",
     ]
     assert all(call.args[0] == wearable_device.id for call in delay.call_args_list)
+    dispatched_target_ends = {
+        datetime.fromisoformat(call.args[2]).astimezone(SHANGHAI_TZ) for call in delay.call_args_list
+    }
+    assert dispatched_target_ends == {TARGET_END}
 
 
 @pytest.mark.django_db
@@ -277,7 +292,9 @@ def test_sync_is_idempotent_and_recalculates_each_affected_shanghai_date(
 
 
 @pytest.mark.django_db
-def test_success_never_moves_cursor_backwards(monkeypatch, patient, doctor, wearable_device):
+def test_future_cursor_uses_a_nonempty_overlap_window_and_never_moves_backwards(
+    monkeypatch, patient, doctor, wearable_device
+):
     _bind(
         wearable_device,
         patient,
@@ -292,11 +309,113 @@ def test_success_never_moves_cursor_backwards(monkeypatch, patient, doctor, wear
     )
     monkeypatch.setattr("apps.wearables.tasks._get_provider", lambda device: StubProvider())
 
+    start, end = calculate_sync_window(
+        device=wearable_device,
+        metric_type="heart_rate",
+        target_end=TARGET_END,
+    )
+    assert (start, end) == (TARGET_END_UTC - timedelta(days=1), TARGET_END_UTC)
+
     assert _run_sync(wearable_device, "heart_rate").successful()
 
     assert WearableSyncCursor.objects.get(
         device=wearable_device, metric_type="heart_rate"
     ).last_success_window_end == future_cursor
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "cursor_end",
+    [TARGET_END_UTC, TARGET_END_UTC + timedelta(days=1), TARGET_END_UTC + timedelta(days=20)],
+)
+def test_equal_or_future_cursor_always_produces_nonempty_window_without_binding(
+    wearable_device, cursor_end
+):
+    WearableSyncCursor.objects.create(
+        device=wearable_device,
+        metric_type="heart_rate",
+        last_success_window_end=cursor_end,
+    )
+
+    start, end = calculate_sync_window(
+        device=wearable_device,
+        metric_type="heart_rate",
+        target_end=TARGET_END,
+    )
+
+    assert (start, end) == (TARGET_END_UTC - timedelta(days=1), TARGET_END_UTC)
+    assert start < end
+
+
+@pytest.mark.django_db
+def test_covered_failure_no_longer_expands_window(patient, doctor, wearable_device):
+    _bind(
+        wearable_device,
+        patient,
+        doctor,
+        bound_at=TARGET_END_UTC - timedelta(days=20),
+    )
+    failure_start = TARGET_END_UTC - timedelta(days=6)
+    failure_end = TARGET_END_UTC - timedelta(days=5)
+    WearableSyncRun.objects.create(
+        device=wearable_device,
+        metric_type="heart_rate",
+        window_start=failure_start,
+        window_end=failure_end,
+        status=WearableSyncRun.Status.FAILED,
+    )
+    WearableSyncRun.objects.create(
+        device=wearable_device,
+        metric_type="heart_rate",
+        window_start=failure_start,
+        window_end=TARGET_END_UTC - timedelta(days=4),
+        status=WearableSyncRun.Status.SUCCEEDED,
+    )
+    WearableSyncCursor.objects.create(
+        device=wearable_device,
+        metric_type="heart_rate",
+        last_success_window_end=TARGET_END_UTC - timedelta(days=2),
+    )
+
+    start, _ = calculate_sync_window(
+        device=wearable_device,
+        metric_type="heart_rate",
+        target_end=TARGET_END,
+    )
+
+    assert start == TARGET_END_UTC - timedelta(days=3)
+
+
+@pytest.mark.django_db
+def test_cursor_advance_cannot_overwrite_a_newer_interleaved_write(monkeypatch, wearable_device):
+    old_end = TARGET_END_UTC - timedelta(days=2)
+    new_end = TARGET_END_UTC
+    cursor = WearableSyncCursor.objects.create(
+        device=wearable_device,
+        metric_type="heart_rate",
+        last_success_window_end=old_end - timedelta(days=1),
+    )
+    stale_cursor = WearableSyncCursor.objects.get(pk=cursor.pk)
+    original_get_or_create = WearableSyncCursor.objects.get_or_create
+    original_select_for_update = WearableSyncCursor.objects.select_for_update
+
+    def stale_get_or_create(*args, **kwargs):
+        WearableSyncCursor.objects.filter(pk=cursor.pk).update(last_success_window_end=new_end)
+        return stale_cursor, False
+
+    def interleaving_select_for_update(*args, **kwargs):
+        WearableSyncCursor.objects.filter(pk=cursor.pk).update(last_success_window_end=new_end)
+        return original_select_for_update(*args, **kwargs)
+
+    monkeypatch.setattr(WearableSyncCursor.objects, "get_or_create", stale_get_or_create)
+    monkeypatch.setattr(
+        WearableSyncCursor.objects, "select_for_update", interleaving_select_for_update
+    )
+
+    _advance_cursor(wearable_device, "heart_rate", old_end)
+
+    assert WearableSyncCursor.objects.get(pk=cursor.pk).last_success_window_end == new_end
+    monkeypatch.setattr(WearableSyncCursor.objects, "get_or_create", original_get_or_create)
 
 
 @pytest.mark.django_db
@@ -312,6 +431,14 @@ def test_failure_logs_every_retry_and_never_advances_cursor(monkeypatch, patient
         lambda device: StubProvider(errors={"heart_rate": ProviderError("超时", code=504)}),
     )
 
+    retry_calls = []
+    original_retry = sync_device_metric.retry
+
+    def record_retry(*args, **kwargs):
+        retry_calls.append(kwargs)
+        return original_retry(*args, **kwargs)
+
+    monkeypatch.setattr(sync_device_metric, "retry", record_retry)
     result = _run_sync(wearable_device, "heart_rate")
 
     assert not result.successful()
@@ -325,6 +452,8 @@ def test_failure_logs_every_retry_and_never_advances_cursor(monkeypatch, patient
     assert not WearableSyncCursor.objects.filter(
         device=wearable_device, metric_type="heart_rate"
     ).exists()
+    assert [call["countdown"] for call in retry_calls] == [60, 120, 240, 480]
+    assert all(call["max_retries"] == 3 for call in retry_calls)
 
 
 @pytest.mark.django_db

@@ -60,11 +60,13 @@ def calculate_sync_window(
     horizon_start = end - SYNC_LOOKBACK
     binding_start = _earliest_relevant_binding_start(device, horizon_start, end)
     cursor = WearableSyncCursor.objects.filter(device=device, metric_type=metric_type).first()
-    cursor_start = (
-        _as_utc(cursor.last_success_window_end) - SYNC_OVERLAP
-        if cursor and cursor.last_success_window_end
-        else horizon_start
-    )
+    cursor_end = _as_utc(cursor.last_success_window_end) if cursor and cursor.last_success_window_end else None
+    if cursor_end is None:
+        cursor_start = horizon_start
+    elif cursor_end < end:
+        cursor_start = cursor_end - SYNC_OVERLAP
+    else:
+        cursor_start = end - SYNC_OVERLAP
     failed_start = _earliest_unresolved_failure_start(
         device=device,
         metric_type=metric_type,
