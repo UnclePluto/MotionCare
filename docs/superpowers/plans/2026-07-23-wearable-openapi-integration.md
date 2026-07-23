@@ -13,6 +13,8 @@
 > 执行记录（2026-07-24, codex）：Task 5 已落地于 commit `063e62b`。
 >
 > 执行记录（2026-07-24, codex）：Task 5 审查修复已落地于 commit `a2c4c0a`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 6 已落地于 commits `cbcd7d0`、`1c25d18`、`0ef175e`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -770,7 +772,7 @@ git commit -m "feat(wearables): 增加每日动态补拉任务"
 - Produces: `CapabilityProfile`、`get_capability_profile()`、`check_device_status()`、`send_device_command()`、主动测量轮询任务。
 - Consumes: Provider `get_device_status()` 和 `send_command()`。
 
-- [ ] **Step 1: 写安全能力失败测试**
+- [x] **Step 1: 写安全能力失败测试**
 
 测试：
 
@@ -794,13 +796,13 @@ def test_unknown_model_cannot_send_measurement_command(wearable_device):
 - `0/1803/1800/1801/1802` 映射为 `succeeded/queued/offline/timeout/failed`。
 - 命令日志保存参数摘要但不保存 AccessToken。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_commands.py -q`
 
 Expected: FAIL。
 
-- [ ] **Step 3: 实现能力配置**
+- [x] **Step 3: 实现能力配置**
 
 ```python
 @dataclass(frozen=True)
@@ -820,7 +822,7 @@ MODEL_CAPABILITIES: dict[tuple[str, str], CapabilityProfile] = {}
 
 生产默认映射保持为空，直到医院实际设备型号完成现场验证；测试通过 monkeypatch 注入明确 profile。空映射是安全关闭，不允许根据文档里的多型号混合命令表猜测型号能力。
 
-- [ ] **Step 4: 实现动作接口**
+- [x] **Step 4: 实现动作接口**
 
 ```text
 POST /api/wearables/devices/{id}/check-status/
@@ -838,13 +840,13 @@ POST /api/wearables/patients/{patient_id}/sync/
 
 命令返回 `queued` 后，Celery 每 10 秒查询对应历史接口，最多 6 次；取得 `requested_at` 之后的新点即成功。60 秒内没有新点返回 `timeout`，不创建伪造测量值。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_commands.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add backend/apps/wearables
