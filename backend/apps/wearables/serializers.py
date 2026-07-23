@@ -87,6 +87,13 @@ class BindDeviceSerializer(serializers.Serializer):
 class UnbindDeviceSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
 
+    def validate(self, attrs):
+        if "unbound_at" in self.initial_data:
+            raise serializers.ValidationError(
+                {"unbound_at": "解绑时间由服务端记录，不能提交。"}
+            )
+        return attrs
+
 
 class WearableBindingSerializer(serializers.ModelSerializer):
     patient_id = serializers.IntegerField(read_only=True)
