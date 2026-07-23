@@ -323,4 +323,8 @@ class WearableCommandLog(TimeStampedModel):
         blank=True,
         related_name="wearable_command_logs",
     )
+    requested_at = models.DateTimeField("实际发命令时间", null=True, blank=True)
+    poll_attempts = models.PositiveSmallIntegerField("轮询次数", default=0)
+    poll_deadline_at = models.DateTimeField("轮询截止时间", null=True, blank=True)
+    next_poll_at = models.DateTimeField("下次轮询时间", null=True, blank=True)
     completed_at = models.DateTimeField("完成时间", null=True, blank=True)

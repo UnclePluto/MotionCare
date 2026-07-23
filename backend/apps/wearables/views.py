@@ -253,11 +253,19 @@ class PatientConfigureView(APIView):
         }.get(setting)
         if command_type is None:
             return Response({"setting": "不支持的设备配置项。"}, status=status.HTTP_400_BAD_REQUEST)
-        parameters = {
-            key: request.data[key]
-            for key in ("interval_minutes", "enabled")
-            if key in request.data
-        }
+        parameter_name = "enabled" if setting == "step_switch" else "interval_minutes"
+        if set(request.data.keys()) != {"setting", parameter_name}:
+            return Response({"detail": "配置请求字段不合法。"}, status=status.HTTP_400_BAD_REQUEST)
+        value = request.data.get(parameter_name)
+        if parameter_name == "enabled":
+            if not isinstance(value, bool):
+                return Response({"enabled": "步数开关必须为布尔值。"}, status=status.HTTP_400_BAD_REQUEST)
+        elif isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1440:
+            return Response(
+                {"interval_minutes": "采集间隔必须为 1 至 1440 分钟。"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        parameters = {parameter_name: value}
         try:
             command = send_device_command(
                 binding.device,

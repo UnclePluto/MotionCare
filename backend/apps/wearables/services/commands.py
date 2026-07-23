@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
 from typing import Any
 
 from django.utils import timezone
@@ -38,14 +39,15 @@ _MEASUREMENT_COMMANDS = {
     "measure_blood_oxygen": "blood_oxygen",
 }
 _SENSITIVE_PARAMETER_KEYS = {
-    "access_token",
     "accesstoken",
     "authorization",
     "key",
     "password",
+    "secret",
     "token",
     "reqid",
-    "request_id",
+    "requestid",
+    "apikey",
 }
 _COMMAND_STATUS_BY_PROVIDER_CODE = {
     0: WearableCommandLog.Status.SUCCEEDED,
@@ -67,7 +69,7 @@ def _safe_parameters(parameters: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     safe = {}
     for key, value in parameters.items():
-        if str(key).lower() in _SENSITIVE_PARAMETER_KEYS:
+        if re.sub(r"[^a-z0-9]", "", str(key).lower()) in _SENSITIVE_PARAMETER_KEYS:
             continue
         if isinstance(value, dict):
             safe[str(key)] = _safe_parameters(value)
@@ -153,6 +155,8 @@ def send_device_command(
         raise DisabledDevice("设备已停用。")
     if command_type not in _COMMAND_FIELDS:
         raise UnsupportedCapability("不支持的远程命令。")
+    if not isinstance(device.model, str) or not device.model.strip():
+        raise UnsupportedCapability("该设备型号能力尚未验证。")
     capability = get_capability_profile(device.provider, device.model)
     command_code = getattr(capability, command_type)
     if not command_code:
@@ -173,6 +177,8 @@ def send_device_command(
     provider = None
     try:
         provider = _get_provider(device)
+        command.requested_at = timezone.now()
+        command.save(update_fields=["requested_at", "updated_at"])
         result = provider.send_command(
             device.external_device_id,
             command_code,
@@ -191,11 +197,15 @@ def send_device_command(
 
     if command.status != WearableCommandLog.Status.QUEUED:
         command.completed_at = timezone.now()
+    elif command_type in _MEASUREMENT_COMMANDS:
+        command.poll_deadline_at = command.requested_at + timedelta(seconds=60)
+        command.next_poll_at = command.requested_at + timedelta(seconds=10)
     command.save(update_fields=["provider_code", "status", "completed_at", "updated_at"])
     if command.status == WearableCommandLog.Status.QUEUED and command_type in _MEASUREMENT_COMMANDS:
+        command.save(update_fields=["poll_deadline_at", "next_poll_at", "updated_at"])
         from apps.wearables.tasks import poll_queued_measurement
 
-        poll_queued_measurement.apply_async(args=[command.id], kwargs={"attempt": 1}, countdown=10)
+        poll_queued_measurement.apply_async(args=[command.id], countdown=10)
     return command
 
 

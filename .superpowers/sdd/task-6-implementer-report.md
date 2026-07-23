@@ -22,3 +22,17 @@
 ## 顾虑
 
 - 生产能力表故意保持为空；医院完成实机型号和命令参数验证后，必须单独评审并显式加入映射，不能依据厂商文档推测。
+
+## 审查修复（2026-07-24）
+
+- 增加 `WearableCommandLog.requested_at`、`poll_attempts`、`poll_deadline_at` 和 `next_poll_at`，以及迁移 `0003_wearablecommandlog_next_poll_at_and_more`。
+- 空、空白或未知型号无法发送命令；即使能力表被误配空型号键也安全拒绝。
+- 在实际调用厂商 `send_command()` 前紧邻地持久化 `requested_at`；轮询只接受严格晚于该时间的真实点。
+- 轮询通过事务和 `select_for_update()` 原子认领到期计划点；持久化计数限制为请求后第 10/20/30/40/50/60 秒最多六次。重复、乱序、终态或过期投递不会再访问厂商。SQLite 测试验证认领条件；PostgreSQL 部署应补充并发 worker 的行锁等待集成测试。
+- 配置接口按 setting 使用严格字段 schema；参数净化覆盖大小写、连字符/下划线变化和嵌套敏感键。
+
+### TDD 证据
+
+- 原实现 RED 证据已保留：首次创建 `test_commands.py` 后运行失败于 `ModuleNotFoundError: No module named 'apps.wearables.capabilities'`（`1 error in 0.07s`）。
+- 本次修复 RED：`test_blank_or_unknown_model_cannot_send_even_if_mapping_is_misconfigured[None]` 失败，实际输出为 `Failed: DID NOT RAISE UnsupportedCapability`。
+- 本次 GREEN：`pytest apps/wearables/tests/test_commands.py apps/wearables/tests/test_provider_miwitracker.py -q` 为 `77 passed in 4.06s`。

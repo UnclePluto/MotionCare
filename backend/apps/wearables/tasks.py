@@ -181,16 +181,58 @@ def schedule_daily_wearable_sync():
     return dispatched
 
 
-@shared_task
-def poll_queued_measurement(command_log_id: int, attempt: int = 1):
-    """最多每十秒轮询六次，只接受命令发起后出现的真实测量点。"""
+def _timeout_queued_command(command, now):
+    command.status = command.Status.TIMEOUT
+    command.completed_at = now
+    command.next_poll_at = None
+    command.save(update_fields=["status", "completed_at", "next_poll_at", "updated_at"])
+
+
+def _claim_due_measurement_poll(command_log_id: int):
+    """原子认领一个到期轮询；SQLite 验证条件更新，生产 PostgreSQL 由行锁串行化。"""
     from apps.wearables.models import WearableCommandLog
 
-    command = (
-        WearableCommandLog.objects.select_related("device")
-        .filter(pk=command_log_id, status=WearableCommandLog.Status.QUEUED)
-        .first()
-    )
+    with transaction.atomic():
+        command = (
+            WearableCommandLog.objects.select_for_update()
+            .select_related("device")
+            .filter(pk=command_log_id, status=WearableCommandLog.Status.QUEUED)
+            .first()
+        )
+        if command is None:
+            return None
+        now = timezone.now()
+        if command.requested_at is None or command.poll_deadline_at is None:
+            return None
+        if command.poll_attempts >= 6 or now > command.poll_deadline_at:
+            _timeout_queued_command(command, now)
+            return None
+        if command.next_poll_at is None or now < command.next_poll_at:
+            return None
+
+        command.poll_attempts += 1
+        if command.poll_attempts < 6:
+            command.next_poll_at = command.requested_at + timedelta(seconds=10 * (command.poll_attempts + 1))
+        else:
+            command.next_poll_at = None
+        command.save(update_fields=["poll_attempts", "next_poll_at", "updated_at"])
+        return command
+
+
+def _finish_queued_measurement(command_id: int, status_value: str):
+    from apps.wearables.models import WearableCommandLog
+
+    now = timezone.now()
+    return WearableCommandLog.objects.filter(
+        pk=command_id,
+        status=WearableCommandLog.Status.QUEUED,
+    ).update(status=status_value, completed_at=now, next_poll_at=None, updated_at=now)
+
+
+@shared_task
+def poll_queued_measurement(command_log_id: int, attempt: int | None = None):
+    """最多在请求后第 10/20/30/40/50/60 秒轮询六次，重投不增加查询次数。"""
+    command = _claim_due_measurement_poll(command_log_id)
     if command is None:
         return None
 
@@ -198,36 +240,24 @@ def poll_queued_measurement(command_log_id: int, attempt: int = 1):
     try:
         provider = _get_command_provider(command.device)
         metric_type = measurement_metric_for_command(command.command_type)
-        points = measurement_points_since(provider, command.device, metric_type, command.created_at)
+        points = measurement_points_since(provider, command.device, metric_type, command.requested_at)
         if points:
             newest_point = max(points, key=lambda point: point.measured_at)
             attribute_measurement(command.device, newest_point)
-            command.status = WearableCommandLog.Status.SUCCEEDED
-            command.completed_at = timezone.now()
-            command.save(update_fields=["status", "completed_at", "updated_at"])
+            _finish_queued_measurement(command.id, command.Status.SUCCEEDED)
             return command.id
     except ProviderError as exc:
         if exc.code == 1800:
-            command.status = WearableCommandLog.Status.OFFLINE
-            command.completed_at = timezone.now()
-            command.save(update_fields=["status", "completed_at", "updated_at"])
+            _finish_queued_measurement(command.id, command.Status.OFFLINE)
             return command.id
-        # 已排队的命令仍可在下一次轮询中由厂商历史接口确认，避免把临时网络错误误记为失败。
-        pass
-    except Exception:
-        # 已排队的命令仍可在下一次轮询中由厂商历史接口确认，避免把临时网络错误误记为失败。
-        pass
     finally:
         if provider is not None:
             _close_provider(provider)
 
-    if attempt >= 6 or timezone.now() >= command.created_at + timedelta(seconds=60):
-        command.status = WearableCommandLog.Status.TIMEOUT
-        command.completed_at = timezone.now()
-        command.save(update_fields=["status", "completed_at", "updated_at"])
+    if command.poll_attempts >= 6:
+        _finish_queued_measurement(command.id, command.Status.TIMEOUT)
         return command.id
 
-    poll_queued_measurement.apply_async(
-        args=[command.id], kwargs={"attempt": attempt + 1}, countdown=10
-    )
+    delay_seconds = max(0, (command.next_poll_at - timezone.now()).total_seconds())
+    poll_queued_measurement.apply_async(args=[command.id], countdown=delay_seconds)
     return command.id

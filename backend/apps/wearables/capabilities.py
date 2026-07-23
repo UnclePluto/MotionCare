@@ -17,5 +17,7 @@ class CapabilityProfile:
 MODEL_CAPABILITIES: dict[tuple[str, str], CapabilityProfile] = {}
 
 
-def get_capability_profile(provider: str, model: str) -> CapabilityProfile:
+def get_capability_profile(provider: str, model: str | None) -> CapabilityProfile:
+    if not isinstance(model, str) or not model.strip():
+        return CapabilityProfile()
     return MODEL_CAPABILITIES.get((provider, model), CapabilityProfile())
