@@ -3,6 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > 执行记录（2026-07-23, codex）：Task 1 已落地于 commits `6b46942`、`b73bab7`，任务审查通过。
+>
+> 执行记录（2026-07-23, codex）：Task 2 已落地于 commits `d5f0050`、`e785522`、`1495a04`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -298,7 +300,7 @@ git commit -m "feat(wearables): 建立穿戴设备数据模型"
 - Produces: `ProviderMeasurement`、`ProviderDailySteps`、`ProviderDeviceStatus`、`ProviderCommandResult`、`WearableProvider` protocol、`MiwitrackerClient`。
 - Consumes: `MIWITRACKER_BASE_URL`、`MIWITRACKER_APP_ID`、`MIWITRACKER_KEY`。
 
-- [ ] **Step 1: 增加 httpx 依赖并写 Provider 合约**
+- [x] **Step 1: 增加 httpx 依赖并写 Provider 合约**
 
 在 `backend/pyproject.toml` dependencies 增加：
 
@@ -328,7 +330,7 @@ class ProviderDailySteps:
 
 `WearableProvider` 必须定义 `get_heart_rates()`、`get_blood_pressures()`、`get_blood_oxygen()`、`get_daily_steps()`、`get_device_status()`、`send_command()`。
 
-- [ ] **Step 2: 写 Token 和解析失败测试**
+- [x] **Step 2: 写 Token 和解析失败测试**
 
 使用 `httpx.MockTransport` 验证：
 
@@ -358,13 +360,13 @@ def test_heart_rate_parser_treats_begin_and_end_as_utc_zero(client):
 - 空数组返回空列表。
 - 非零厂商 `Code` 抛出带 code 的 `ProviderError`。
 
-- [ ] **Step 3: 运行 Provider 测试确认失败**
+- [x] **Step 3: 运行 Provider 测试确认失败**
 
 Run: `cd backend && pytest apps/wearables/tests/test_provider_miwitracker.py -q`
 
 Expected: FAIL，原因是 Provider 类尚未实现。
 
-- [ ] **Step 4: 实现 Token 缓存和四类接口**
+- [x] **Step 4: 实现 Token 缓存和四类接口**
 
 `MiwitrackerClient` 使用以下 endpoint：
 
@@ -380,7 +382,7 @@ COMMAND_PATH = "/api/command/sendcommand"
 
 Token 使用 Django cache 保存 50 分钟；401 或厂商无权限响应时清除缓存、刷新 Token 并且只重试一次。超时必须设置连接 5 秒、读取 20 秒。日志不得输出 KEY、Password 或 AccessToken。
 
-- [ ] **Step 5: 增加环境配置**
+- [x] **Step 5: 增加环境配置**
 
 ```python
 MIWITRACKER_BASE_URL = os.getenv(
@@ -392,13 +394,13 @@ MIWITRACKER_KEY = os.getenv("MIWITRACKER_KEY", "")
 
 `.env.example` 和 `deploy/env.production.example` 只写空值和说明，不填写真实凭据。执行时如果这些文件已有其他会话改动，必须在原内容上定向追加。
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `cd backend && python -m pip install -e '.[dev]' && pytest apps/wearables/tests/test_provider_miwitracker.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/pyproject.toml backend/apps/wearables/providers backend/apps/wearables/tests/test_provider_miwitracker.py backend/config/settings.py .env.example deploy/env.production.example
