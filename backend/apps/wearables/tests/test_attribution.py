@@ -57,7 +57,15 @@ def test_measurement_is_attributed_and_repeated_payload_is_idempotent(
     )
 
     first = attribute_measurement(wearable_device, point)
-    second = attribute_measurement(wearable_device, point)
+    second = attribute_measurement(
+        wearable_device,
+        ProviderMeasurement(
+            metric_type=point.metric_type,
+            measured_at=point.measured_at,
+            values=point.values,
+            raw_payload={"HeartRate": 72, "retry": True},
+        ),
+    )
 
     assert first.pk == second.pk
     assert WearableMeasurement.objects.count() == 1
@@ -65,6 +73,7 @@ def test_measurement_is_attributed_and_repeated_payload_is_idempotent(
     assert first.patient_id == patient.id
     assert first.attribution_status == WearableMeasurement.AttributionStatus.ATTRIBUTED
     assert len(first.source_fingerprint) == 64
+    assert second.raw_payload == {"HeartRate": 72, "retry": True}
 
 
 @pytest.mark.django_db

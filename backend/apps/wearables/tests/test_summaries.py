@@ -4,7 +4,15 @@ from decimal import Decimal
 
 import pytest
 
-from apps.wearables.models import WearableDailySource, WearableDailySummary, WearableMeasurement
+from apps.patients.models import Patient
+from apps.wearables.models import (
+    WearableBinding,
+    WearableDailySource,
+    WearableDailySummary,
+    WearableMeasurement,
+)
+from apps.wearables.providers import ProviderDailySteps
+from apps.wearables.services.attribution import attribute_daily_steps
 from apps.wearables.services.summaries import recalculate_daily_summary
 
 
@@ -24,9 +32,37 @@ def _measurement(*, patient, device, metric_type, measured_at, **values):
     )
 
 
+def _daily_steps(record_date):
+    return ProviderDailySteps(
+        record_date=record_date,
+        steps=5821,
+        distance=None,
+        calorie=None,
+        raw_payload={"Date": record_date.isoformat(), "Steps": 5821},
+    )
+
+
+def _other_patient(doctor):
+    return Patient.objects.create(
+        name="患者乙",
+        gender=Patient.Gender.UNKNOWN,
+        age=68,
+        phone="13900002222",
+        primary_doctor=doctor,
+    )
+
+
 @pytest.mark.django_db
-def test_recalculate_daily_summary_aggregates_attributed_raw_data(patient, wearable_device):
+def test_recalculate_daily_summary_aggregates_attributed_raw_data(
+    patient, doctor, wearable_device
+):
     record_date = date(2026, 7, 22)
+    binding = WearableBinding.objects.create(
+        patient=patient,
+        device=wearable_device,
+        bound_at=datetime(2026, 7, 20, tzinfo=UTC),
+        bound_by=doctor,
+    )
     for hour, heart_rate in enumerate((60, 72, 84)):
         _measurement(
             patient=patient,
@@ -56,6 +92,7 @@ def test_recalculate_daily_summary_aggregates_attributed_raw_data(patient, weara
         provider=wearable_device.provider,
         device=wearable_device,
         patient=patient,
+        binding=binding,
         record_date=record_date,
         steps=5821,
         attribution_status=WearableDailySource.AttributionStatus.ATTRIBUTED,
@@ -137,3 +174,67 @@ def test_summary_clears_empty_metrics_and_does_not_duplicate_on_recalculation(
     ) == (None, None, None, 0)
     assert second.steps is None
     assert second.steps_attribution_status == WearableDailySummary.AttributionStatus.OUTSIDE_BINDING
+
+
+@pytest.mark.django_db
+def test_recalculate_revalidates_steps_after_midday_unbinding(patient, doctor, wearable_device):
+    record_date = date(2026, 7, 22)
+    binding = WearableBinding.objects.create(
+        patient=patient,
+        device=wearable_device,
+        bound_at=datetime(2026, 7, 20, tzinfo=UTC),
+        bound_by=doctor,
+    )
+    source = attribute_daily_steps(wearable_device, _daily_steps(record_date))
+    assert source.attribution_status == WearableDailySource.AttributionStatus.ATTRIBUTED
+
+    binding.unbound_at = datetime(2026, 7, 22, 7, tzinfo=UTC)
+    binding.unbound_by = doctor
+    binding.save(update_fields=["unbound_at", "unbound_by", "updated_at"])
+
+    summary = recalculate_daily_summary(patient.id, record_date)
+    source.refresh_from_db()
+
+    assert source.binding is None
+    assert source.patient is None
+    assert source.attribution_status == WearableDailySource.AttributionStatus.AMBIGUOUS
+    assert summary.steps is None
+
+
+@pytest.mark.django_db
+def test_recalculate_revalidates_steps_after_midday_device_swap(
+    patient, doctor, wearable_device
+):
+    record_date = date(2026, 7, 22)
+    other_patient = _other_patient(doctor)
+    first_binding = WearableBinding.objects.create(
+        patient=patient,
+        device=wearable_device,
+        bound_at=datetime(2026, 7, 20, tzinfo=UTC),
+        bound_by=doctor,
+    )
+    source = attribute_daily_steps(wearable_device, _daily_steps(record_date))
+    assert source.attribution_status == WearableDailySource.AttributionStatus.ATTRIBUTED
+
+    swap_at = datetime(2026, 7, 22, 7, tzinfo=UTC)
+    first_binding.unbound_at = swap_at
+    first_binding.unbound_by = doctor
+    first_binding.save(update_fields=["unbound_at", "unbound_by", "updated_at"])
+    WearableBinding.objects.create(
+        patient=other_patient,
+        device=wearable_device,
+        bound_at=swap_at,
+        bound_by=doctor,
+    )
+
+    new_summary = recalculate_daily_summary(other_patient.id, record_date)
+    source.refresh_from_db()
+
+    assert source.binding is None
+    assert source.patient is None
+    assert source.attribution_status == WearableDailySource.AttributionStatus.AMBIGUOUS
+    assert new_summary.steps is None
+
+    old_summary = recalculate_daily_summary(patient.id, record_date)
+
+    assert old_summary.steps is None

@@ -5,6 +5,7 @@ from django.db.models import Avg, Count, Max, Min, Sum
 from django.utils import timezone
 
 from apps.wearables.models import WearableDailySource, WearableDailySummary, WearableMeasurement
+from apps.wearables.services.attribution import revalidate_daily_steps_for_patient
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -30,6 +31,7 @@ def _measurements_for_day(patient_id, record_date, metric_type, value_fields):
 
 def recalculate_daily_summary(patient_id, record_date):
     """根据上海业务自然日内已归属的原始数据重算患者日汇总。"""
+    revalidate_daily_steps_for_patient(patient_id, record_date)
     heart_rate = _measurements_for_day(patient_id, record_date, "heart_rate", ["heart_rate"])
     blood_pressure = _measurements_for_day(
         patient_id, record_date, "blood_pressure", ["systolic", "diastolic"]

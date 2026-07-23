@@ -114,3 +114,23 @@ def attribute_daily_steps(device, point):
         },
     )
     return source
+
+
+def revalidate_daily_steps_for_patient(patient_id, record_date):
+    """在汇总前重验患者相关设备的当日步数源，持久化最新归属结果。"""
+    day_start, day_end = _day_bounds_utc(record_date)
+    related_device_ids = WearableBinding.objects.filter(
+        patient_id=patient_id,
+        bound_at__lt=day_end,
+    ).filter(Q(unbound_at__isnull=True) | Q(unbound_at__gt=day_start)).values("device_id")
+    sources = WearableDailySource.objects.filter(record_date=record_date).filter(
+        Q(patient_id=patient_id)
+        | Q(binding__patient_id=patient_id)
+        | Q(device_id__in=related_device_ids)
+    )
+    for source in sources:
+        binding, attribution_status = _daily_steps_attribution(source.device, source.record_date)
+        source.binding = binding
+        source.patient = binding.patient if binding else None
+        source.attribution_status = attribution_status
+        source.save(update_fields=["binding", "patient", "attribution_status", "updated_at"])
