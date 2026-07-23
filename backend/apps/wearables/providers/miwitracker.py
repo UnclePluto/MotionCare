@@ -4,6 +4,7 @@ import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from django.conf import settings
@@ -40,7 +41,7 @@ class MiwitrackerClient:
         key: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ):
-        self.base_url = (base_url or settings.MIWITRACKER_BASE_URL).rstrip("/")
+        self.base_url = self._normalize_base_url(base_url or settings.MIWITRACKER_BASE_URL)
         self.app_id = app_id if app_id is not None else settings.MIWITRACKER_APP_ID
         self.key = key if key is not None else settings.MIWITRACKER_KEY
         self.timeout = httpx.Timeout(connect=5.0, read=20.0, write=20.0, pool=5.0)
@@ -61,8 +62,9 @@ class MiwitrackerClient:
 
     @property
     def _token_cache_key(self) -> str:
-        app_id_fingerprint = hashlib.sha256(self.app_id.encode()).hexdigest()
-        return f"wearables:miwitracker:access-token:{app_id_fingerprint}"
+        token_scope = f"{self.base_url}\0{self.app_id}"
+        scope_fingerprint = hashlib.sha256(token_scope.encode()).hexdigest()
+        return f"wearables:miwitracker:access-token:{scope_fingerprint}"
 
     def get_access_token(self) -> str:
         cached_token = cache.get(self._token_cache_key)
@@ -168,7 +170,6 @@ class MiwitrackerClient:
                 "CommandValue": command_value,
                 "ReqId": request_id or str(uuid.uuid4()),
             },
-            allow_vendor_error=True,
         )
         return ProviderCommandResult(
             code=self._response_code(payload),
@@ -228,8 +229,6 @@ class MiwitrackerClient:
         self,
         path: str,
         body: dict[str, Any],
-        *,
-        allow_vendor_error: bool = False,
     ) -> dict[str, Any]:
         for attempt in range(2):
             token = self.get_access_token()
@@ -239,14 +238,13 @@ class MiwitrackerClient:
                 error = ProviderError("厂商鉴权失败", code=401)
             else:
                 payload = self._decode_response(response)
-                if self._is_unauthorized(payload):
+                if self._is_unauthorized_vendor_error(payload):
                     error = ProviderError(
                         str(payload.get("Message") or "厂商鉴权失败"),
                         code=self._response_code(payload),
                     )
                 else:
-                    if not allow_vendor_error:
-                        self._raise_for_vendor_error(payload)
+                    self._raise_for_vendor_error(payload)
                     return payload
 
             if attempt == 0:
@@ -294,10 +292,22 @@ class MiwitrackerClient:
             raise ProviderError(str(payload.get("Message") or "厂商请求失败"), code=code)
 
     @classmethod
-    def _is_unauthorized(cls, payload: dict[str, Any]) -> bool:
+    def _is_unauthorized_vendor_error(cls, payload: dict[str, Any]) -> bool:
         code = cls._response_code(payload)
         message = str(payload.get("Message") or "").lower()
-        return code == 401 or "unauthorized" in message or "无权限" in message
+        return code == 401 or any(
+            marker in message for marker in ("unauthorized", "无权限", "没有权限", "权限不足")
+        )
+
+    @staticmethod
+    def _normalize_base_url(value: str) -> str:
+        parsed = urlsplit(value)
+        if not parsed.scheme or not parsed.hostname:
+            return value.rstrip("/")
+        netloc = parsed.hostname.lower()
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        return urlunsplit((parsed.scheme.lower(), netloc, parsed.path.rstrip("/"), "", ""))
 
     @staticmethod
     def _time_window_payload(

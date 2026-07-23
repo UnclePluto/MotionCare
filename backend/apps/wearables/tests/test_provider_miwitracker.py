@@ -158,6 +158,18 @@ def test_nonzero_vendor_code_raises_provider_error_with_code(client_factory):
     assert exc_info.value.code == 1042
 
 
+def test_command_nonzero_vendor_code_raises_provider_error_with_code(client_factory):
+    def handler(request):
+        if request.url.path == MiwitrackerClient.TOKEN_PATH:
+            return response(request, {"Code": 0, "Result": {"AccessToken": "token-1"}})
+        return response(request, {"Code": 1802, "Message": "command failed"})
+
+    with pytest.raises(ProviderError, match="1802") as exc_info:
+        client_factory(handler).send_command("8675309", "9018")
+
+    assert exc_info.value.code == 1802
+
+
 def test_access_token_is_cached_for_fifty_minutes(client_factory):
     calls = {"token": 0, "business": 0}
 
@@ -196,6 +208,74 @@ def test_unauthorized_response_refreshes_token_and_retries_once(client_factory):
     )
 
     assert calls == {"token": 2, "business": 2}
+
+
+@pytest.mark.parametrize("message", ["unauthorized", "无权限", "没有权限", "权限不足"])
+def test_permission_denied_response_refreshes_token_and_retries_once(client_factory, message):
+    calls = {"token": 0, "business": 0}
+
+    def handler(request):
+        if request.url.path == MiwitrackerClient.TOKEN_PATH:
+            calls["token"] += 1
+            return response(
+                request,
+                {"Code": 0, "Result": {"AccessToken": f"token-{calls['token']}"}},
+            )
+        calls["business"] += 1
+        if calls["business"] == 1:
+            return response(request, {"Code": 1001, "Message": message})
+        assert request.headers["Authorization"] == "token-2"
+        return response(request, {"Code": 0, "Result": []})
+
+    client_factory(handler).get_heart_rates(
+        "8675309", datetime(2026, 7, 22), datetime(2026, 7, 23)
+    )
+
+    assert calls == {"token": 2, "business": 2}
+
+
+def test_non_permission_vendor_error_does_not_refresh_token(client_factory):
+    calls = {"token": 0, "business": 0}
+
+    def handler(request):
+        if request.url.path == MiwitrackerClient.TOKEN_PATH:
+            calls["token"] += 1
+            return response(request, {"Code": 0, "Result": {"AccessToken": "token-1"}})
+        calls["business"] += 1
+        return response(request, {"Code": 1042, "Message": "device not found"})
+
+    with pytest.raises(ProviderError, match="1042"):
+        client_factory(handler).get_heart_rates(
+            "8675309", datetime(2026, 7, 22), datetime(2026, 7, 23)
+        )
+
+    assert calls == {"token": 1, "business": 1}
+
+
+def test_token_cache_key_is_scoped_to_normalized_base_url_and_app_id():
+    same_environment = MiwitrackerClient(
+        base_url="https://MIWI.EXAMPLE/",
+        app_id="188",
+        key="key-a",
+        transport=httpx.MockTransport(lambda request: None),
+    )
+    normalized_environment = MiwitrackerClient(
+        base_url="https://miwi.example",
+        app_id="188",
+        key="key-b",
+        transport=httpx.MockTransport(lambda request: None),
+    )
+    other_environment = MiwitrackerClient(
+        base_url="https://other-miwitracker.example",
+        app_id="188",
+        key="key-c",
+        transport=httpx.MockTransport(lambda request: None),
+    )
+
+    assert same_environment._token_cache_key == normalized_environment._token_cache_key
+    assert same_environment._token_cache_key != other_environment._token_cache_key
+    assert "MIWI.EXAMPLE" not in same_environment._token_cache_key
+    assert "188" not in same_environment._token_cache_key
 
 
 def test_second_unauthorized_response_is_not_retried_again(client_factory):
