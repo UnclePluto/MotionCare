@@ -210,6 +210,51 @@ def test_unauthorized_response_refreshes_token_and_retries_once(client_factory):
     assert calls == {"token": 2, "business": 2}
 
 
+def test_http_401_response_refreshes_token_and_retries_once(client_factory):
+    calls = {"token": 0, "business": 0}
+
+    def handler(request):
+        if request.url.path == MiwitrackerClient.TOKEN_PATH:
+            calls["token"] += 1
+            return response(
+                request,
+                {"Code": 0, "Result": {"AccessToken": f"token-{calls['token']}"}},
+            )
+        calls["business"] += 1
+        if calls["business"] == 1:
+            return response(request, {"Code": 401, "Message": "unauthorized"}, status_code=401)
+        assert request.headers["Authorization"] == "token-2"
+        return response(request, {"Code": 0, "Result": []})
+
+    client_factory(handler).get_heart_rates(
+        "8675309", datetime(2026, 7, 22), datetime(2026, 7, 23)
+    )
+
+    assert calls == {"token": 2, "business": 2}
+
+
+def test_second_http_401_response_is_not_retried_again(client_factory):
+    calls = {"token": 0, "business": 0}
+
+    def handler(request):
+        if request.url.path == MiwitrackerClient.TOKEN_PATH:
+            calls["token"] += 1
+            return response(
+                request,
+                {"Code": 0, "Result": {"AccessToken": f"token-{calls['token']}"}},
+            )
+        calls["business"] += 1
+        return response(request, {"Code": 401, "Message": "unauthorized"}, status_code=401)
+
+    with pytest.raises(ProviderError, match="401") as exc_info:
+        client_factory(handler).get_heart_rates(
+            "8675309", datetime(2026, 7, 22), datetime(2026, 7, 23)
+        )
+
+    assert exc_info.value.code == 401
+    assert calls == {"token": 2, "business": 2}
+
+
 @pytest.mark.parametrize("message", ["unauthorized", "无权限", "没有权限", "权限不足"])
 def test_permission_denied_response_refreshes_token_and_retries_once(client_factory, message):
     calls = {"token": 0, "business": 0}
