@@ -170,6 +170,7 @@ class MiwitrackerClient:
                 "CommandValue": command_value,
                 "ReqId": request_id or str(uuid.uuid4()),
             },
+            allow_vendor_error=True,
         )
         return ProviderCommandResult(
             code=self._response_code(payload),
@@ -229,6 +230,8 @@ class MiwitrackerClient:
         self,
         path: str,
         body: dict[str, Any],
+        *,
+        allow_vendor_error: bool = False,
     ) -> dict[str, Any]:
         for attempt in range(2):
             token = self.get_access_token()
@@ -244,7 +247,8 @@ class MiwitrackerClient:
                         code=self._response_code(payload),
                     )
                 else:
-                    self._raise_for_vendor_error(payload)
+                    if not allow_vendor_error:
+                        self._raise_for_vendor_error(payload)
                     return payload
 
             if attempt == 0:

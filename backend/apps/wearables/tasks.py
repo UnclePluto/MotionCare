@@ -14,6 +14,12 @@ from apps.wearables.models import (
 )
 from apps.wearables.providers import MiwitrackerClient, ProviderError
 from apps.wearables.services.attribution import attribute_daily_steps, attribute_measurement
+from apps.wearables.services.commands import (
+    _close_provider,
+    _get_provider as _get_command_provider,
+    measurement_metric_for_command,
+    measurement_points_since,
+)
 from apps.wearables.services.summaries import recalculate_daily_summary
 from apps.wearables.services.sync import calculate_sync_window
 
@@ -173,3 +179,55 @@ def schedule_daily_wearable_sync():
             sync_device_metric.delay(device.id, metric_type, target_end.isoformat())
             dispatched += 1
     return dispatched
+
+
+@shared_task
+def poll_queued_measurement(command_log_id: int, attempt: int = 1):
+    """最多每十秒轮询六次，只接受命令发起后出现的真实测量点。"""
+    from apps.wearables.models import WearableCommandLog
+
+    command = (
+        WearableCommandLog.objects.select_related("device")
+        .filter(pk=command_log_id, status=WearableCommandLog.Status.QUEUED)
+        .first()
+    )
+    if command is None:
+        return None
+
+    provider = None
+    try:
+        provider = _get_command_provider(command.device)
+        metric_type = measurement_metric_for_command(command.command_type)
+        points = measurement_points_since(provider, command.device, metric_type, command.created_at)
+        if points:
+            newest_point = max(points, key=lambda point: point.measured_at)
+            attribute_measurement(command.device, newest_point)
+            command.status = WearableCommandLog.Status.SUCCEEDED
+            command.completed_at = timezone.now()
+            command.save(update_fields=["status", "completed_at", "updated_at"])
+            return command.id
+    except ProviderError as exc:
+        if exc.code == 1800:
+            command.status = WearableCommandLog.Status.OFFLINE
+            command.completed_at = timezone.now()
+            command.save(update_fields=["status", "completed_at", "updated_at"])
+            return command.id
+        # 已排队的命令仍可在下一次轮询中由厂商历史接口确认，避免把临时网络错误误记为失败。
+        pass
+    except Exception:
+        # 已排队的命令仍可在下一次轮询中由厂商历史接口确认，避免把临时网络错误误记为失败。
+        pass
+    finally:
+        if provider is not None:
+            _close_provider(provider)
+
+    if attempt >= 6 or timezone.now() >= command.created_at + timedelta(seconds=60):
+        command.status = WearableCommandLog.Status.TIMEOUT
+        command.completed_at = timezone.now()
+        command.save(update_fields=["status", "completed_at", "updated_at"])
+        return command.id
+
+    poll_queued_measurement.apply_async(
+        args=[command.id], kwargs={"attempt": attempt + 1}, countdown=10
+    )
+    return command.id

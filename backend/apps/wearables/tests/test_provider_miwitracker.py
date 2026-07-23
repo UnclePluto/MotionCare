@@ -158,16 +158,16 @@ def test_nonzero_vendor_code_raises_provider_error_with_code(client_factory):
     assert exc_info.value.code == 1042
 
 
-def test_command_nonzero_vendor_code_raises_provider_error_with_code(client_factory):
+def test_command_nonzero_vendor_code_returns_result_for_command_status_mapping(client_factory):
     def handler(request):
         if request.url.path == MiwitrackerClient.TOKEN_PATH:
             return response(request, {"Code": 0, "Result": {"AccessToken": "token-1"}})
         return response(request, {"Code": 1802, "Message": "command failed"})
 
-    with pytest.raises(ProviderError, match="1802") as exc_info:
-        client_factory(handler).send_command("8675309", "9018")
+    result = client_factory(handler).send_command("8675309", "9018")
 
-    assert exc_info.value.code == 1802
+    assert result.code == 1802
+    assert result.message == "command failed"
 
 
 def test_access_token_is_cached_for_fifty_minutes(client_factory):
