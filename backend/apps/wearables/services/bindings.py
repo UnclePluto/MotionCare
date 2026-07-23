@@ -17,6 +17,10 @@ class BindingAlreadyUnbound(Exception):
     """绑定已结束，不能重复解绑。"""
 
 
+class InvalidUnbindTime(ValueError):
+    """解绑时间不在有效绑定区间之后。"""
+
+
 def bind_device(*, project_patient, short_code: str, actor, bound_at=None):
     """将启用设备绑定给项目患者所关联的全局患者。"""
     bound_at = bound_at or timezone.now()
@@ -67,7 +71,7 @@ def unbind_device(*, binding, actor, reason: str = "", unbound_at=None):
         if binding.unbound_at is not None:
             raise BindingAlreadyUnbound("该设备绑定已解绑，不能重复操作。")
         if unbound_at <= binding.bound_at:
-            unbound_at = binding.bound_at + timezone.timedelta(microseconds=1)
+            raise InvalidUnbindTime("解绑时间必须晚于绑定时间。")
         binding.unbound_at = unbound_at
         binding.unbound_by = actor
         binding.unbind_reason = reason

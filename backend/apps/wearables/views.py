@@ -19,6 +19,7 @@ from .services.bindings import (
     BindingAlreadyUnbound,
     BindingConflict,
     DeviceNotFound,
+    InvalidUnbindTime,
     bind_device,
     unbind_device,
 )
@@ -115,6 +116,8 @@ class WearableBindingUnbindView(APIView):
             )
         except BindingAlreadyUnbound as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except InvalidUnbindTime as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             {
                 "binding": WearableBindingSerializer(binding).data,

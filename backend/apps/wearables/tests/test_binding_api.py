@@ -1,6 +1,7 @@
 import re
 
 import pytest
+from django.db import IntegrityError
 from django.utils import timezone
 
 from apps.accounts.models import User
@@ -40,6 +41,88 @@ def test_device_crud_assigns_four_digit_short_code(api_client, doctor):
     assert patched.status_code == 200, patched.data
     assert patched.data["enabled"] is False
     assert patched.data["model"] == "UPDATED-MODEL"
+
+
+@pytest.mark.django_db
+def test_device_create_rejects_client_supplied_short_code(api_client, doctor):
+    api_client.force_authenticate(doctor)
+
+    response = api_client.post(
+        "/api/wearables/devices/",
+        _device_payload(short_code="9999"),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert "short_code" in response.data
+    assert not WearableDevice.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("provider", "other-provider"),
+        ("external_device_id", "new-device-id"),
+        ("identifier_type", "serial"),
+        ("short_code", "9999"),
+    ],
+)
+def test_device_patch_rejects_identity_fields(api_client, doctor, wearable_device, field, value):
+    api_client.force_authenticate(doctor)
+    previous_value = getattr(wearable_device, field)
+
+    response = api_client.patch(
+        f"/api/wearables/devices/{wearable_device.id}/",
+        {field: value},
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert field in str(response.data)
+    wearable_device.refresh_from_db()
+    assert getattr(wearable_device, field) == previous_value
+
+
+@pytest.mark.django_db
+def test_device_create_reports_external_identity_conflict_as_409(api_client, doctor):
+    api_client.force_authenticate(doctor)
+    first = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
+
+    response = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
+
+    assert first.status_code == 201, first.data
+    assert response.status_code == 409, response.data
+    assert "厂商标识" in str(response.data)
+
+
+@pytest.mark.django_db
+def test_device_create_retries_after_short_code_integrity_error_in_new_savepoint(
+    api_client, doctor, monkeypatch
+):
+    api_client.force_authenticate(doctor)
+    random_values = iter([7, 8])
+    monkeypatch.setattr(
+        "apps.wearables.services.short_codes.secrets.randbelow",
+        lambda _: next(random_values),
+    )
+    original_create = WearableDevice.objects.create
+    attempts = 0
+
+    def create_with_first_short_code_conflict(**kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise IntegrityError("short_code unique conflict")
+        return original_create(**kwargs)
+
+    monkeypatch.setattr(WearableDevice.objects, "create", create_with_first_short_code_conflict)
+
+    response = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
+
+    assert response.status_code == 201, response.data
+    assert response.data["short_code"] == "0008"
+    assert attempts == 2
 
 
 @pytest.mark.django_db
@@ -251,6 +334,55 @@ def test_repeated_unbind_is_rejected(api_client, doctor, project_patient, wearab
 
     assert first.status_code == 200, first.data
     assert second.status_code == 409, second.data
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("offset", [timezone.timedelta(), -timezone.timedelta(seconds=1)])
+def test_unbind_service_rejects_non_positive_binding_interval(
+    doctor, patient, wearable_device, offset
+):
+    from apps.wearables.services.bindings import unbind_device
+
+    bound_at = timezone.now()
+    binding = WearableBinding.objects.create(
+        patient=patient,
+        device=wearable_device,
+        bound_at=bound_at,
+        bound_by=doctor,
+    )
+
+    with pytest.raises(ValueError, match="解绑时间必须晚于绑定时间"):
+        unbind_device(
+            binding=binding,
+            actor=doctor,
+            unbound_at=bound_at + offset,
+        )
+
+    binding.refresh_from_db()
+    assert binding.unbound_at is None
+
+
+@pytest.mark.django_db
+def test_doctor_cannot_unbind_inaccessible_binding(api_client, doctor, project_patient, wearable_device):
+    api_client.force_authenticate(doctor)
+    created = api_client.post(
+        f"/api/wearables/project-patients/{project_patient.id}/bind/",
+        {"short_code": wearable_device.short_code},
+        format="json",
+    )
+    another_doctor = User.objects.create_user(
+        phone="13800007777",
+        password="pass123456",
+        name="无权医生",
+        role=User.Role.DOCTOR,
+    )
+    api_client.force_authenticate(another_doctor)
+
+    response = api_client.post(f"/api/wearables/bindings/{created.data['id']}/unbind/")
+
+    assert response.status_code == 404
+    binding = WearableBinding.objects.get(id=created.data["id"])
+    assert binding.unbound_at is None
 
 
 @pytest.mark.django_db

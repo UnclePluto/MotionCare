@@ -7,6 +7,14 @@ from .services.short_codes import ShortCodeExhausted, generate_device_short_code
 
 
 class WearableDeviceSerializer(serializers.ModelSerializer):
+    IDENTITY_FIELDS = {
+        "provider",
+        "external_device_id",
+        "identifier_type",
+        "short_code",
+    }
+    UPDATEABLE_FIELDS = {"model", "enabled"}
+
     class Meta:
         model = WearableDevice
         fields = [
@@ -34,6 +42,27 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        validators = []
+
+    def validate(self, attrs):
+        provided_fields = set(self.initial_data.keys())
+        if self.instance is None:
+            if "short_code" in provided_fields:
+                raise serializers.ValidationError(
+                    {"short_code": "设备固定简码由系统生成，不能提交。"}
+                )
+            return attrs
+
+        rejected_fields = provided_fields - self.UPDATEABLE_FIELDS
+        if rejected_fields:
+            errors = {}
+            for field in rejected_fields:
+                if field in self.IDENTITY_FIELDS:
+                    errors[field] = "设备真实身份字段创建后不可修改。"
+                else:
+                    errors[field] = "该字段不可通过设备台账接口修改。"
+            raise serializers.ValidationError(errors)
+        return attrs
 
     def create(self, validated_data):
         for _ in range(32):
