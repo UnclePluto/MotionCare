@@ -9,6 +9,8 @@
 > 执行记录（2026-07-23, codex）：Task 3 已落地于 commits `2fd4601`、`086d1e8`、`ea1bab5`，任务审查通过。
 >
 > 执行记录（2026-07-23, codex）：Task 4 已落地于 commits `a95cbcb`、`940012f`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 5 已落地于 commit `063e62b`。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -654,7 +656,7 @@ git commit -m "feat(wearables): 实现测量归属与日汇总"
 - Produces: `calculate_sync_window()`、`sync_device_metric()`、`schedule_daily_wearable_sync()`。
 - Consumes: Provider、归属、汇总、同步游标和日志模型。
 
-- [ ] **Step 1: 写窗口计算失败测试**
+- [x] **Step 1: 写窗口计算失败测试**
 
 固定 `target_end = 2026-07-23 00:00 Asia/Shanghai`，覆盖：
 
@@ -666,13 +668,13 @@ git commit -m "feat(wearables): 实现测量归属与日汇总"
 - 成功空结果推进游标。
 - 某一指标失败不影响其他三个指标成功。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_sync.py -q`
 
 Expected: FAIL，任务和窗口函数不存在。
 
-- [ ] **Step 3: 实现窗口函数**
+- [x] **Step 3: 实现窗口函数**
 
 函数签名：
 
@@ -697,7 +699,7 @@ max(
 
 若七天范围内存在更早未解决失败窗口，则用该窗口开始时间替换第三项。所有结果转换为 UTC。
 
-- [ ] **Step 4: 实现同步任务**
+- [x] **Step 4: 实现同步任务**
 
 `schedule_daily_wearable_sync` 查询：
 
@@ -720,7 +722,7 @@ WearableDevice.objects.filter(
 5. 成功时推进 `WearableSyncCursor`，包括空结果。
 6. 失败时保存错误且不推进游标，再通过 `self.retry(countdown=60 * 2**retries, max_retries=3)` 重试。
 
-- [ ] **Step 5: 配置每天 03:00**
+- [x] **Step 5: 配置每天 03:00**
 
 在 `settings.py` 引入 `from celery.schedules import crontab`，加入：
 
@@ -738,13 +740,13 @@ CELERY_TIMEZONE = "Asia/Shanghai"
 CELERY_ENABLE_UTC = True
 ```
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_sync.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/apps/wearables backend/config/settings.py
