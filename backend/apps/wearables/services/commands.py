@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 import re
+from datetime import datetime, timedelta
 from typing import Any
 
 from django.utils import timezone
@@ -38,17 +38,16 @@ _MEASUREMENT_COMMANDS = {
     "measure_blood_pressure": "blood_pressure",
     "measure_blood_oxygen": "blood_oxygen",
 }
-_SENSITIVE_PARAMETER_KEYS = {
-    "accesstoken",
+_SENSITIVE_TOKENS = {
     "authorization",
-    "key",
     "password",
     "secret",
     "token",
-    "reqid",
-    "requestid",
-    "apikey",
+    "credential",
+    "credentials",
 }
+_KEY_CREDENTIAL_QUALIFIERS = {"api", "access", "secret", "private", "client"}
+_DROP = object()
 _COMMAND_STATUS_BY_PROVIDER_CODE = {
     0: WearableCommandLog.Status.SUCCEEDED,
     1803: WearableCommandLog.Status.QUEUED,
@@ -64,17 +63,44 @@ def _get_provider(device: WearableDevice):
     raise UnsupportedCapability(f"不支持的穿戴设备厂商：{device.provider}")
 
 
+def _key_tokens(value: object) -> set[str]:
+    key = str(value)
+    key = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", key)
+    key = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key)
+    return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", key)}
+
+
+def _is_sensitive_parameter_key(key: object) -> bool:
+    tokens = _key_tokens(key)
+    if tokens & _SENSITIVE_TOKENS:
+        return True
+    return "key" in tokens and (tokens == {"key"} or bool(tokens & _KEY_CREDENTIAL_QUALIFIERS))
+
+
+def _safe_parameter_value(value: Any):
+    if isinstance(value, dict):
+        return _safe_parameters(value)
+    if isinstance(value, list):
+        return [
+            safe_value
+            for item in value
+            if (safe_value := _safe_parameter_value(item)) is not _DROP
+        ]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return _DROP
+
+
 def _safe_parameters(parameters: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(parameters, dict):
         return {}
     safe = {}
     for key, value in parameters.items():
-        if re.sub(r"[^a-z0-9]", "", str(key).lower()) in _SENSITIVE_PARAMETER_KEYS:
+        if _is_sensitive_parameter_key(key):
             continue
-        if isinstance(value, dict):
-            safe[str(key)] = _safe_parameters(value)
-        elif isinstance(value, (str, int, float, bool)) or value is None:
-            safe[str(key)] = value
+        safe_value = _safe_parameter_value(value)
+        if safe_value is not _DROP:
+            safe[str(key)] = safe_value
     return safe
 
 
@@ -98,7 +124,10 @@ def _is_online(status: str | None) -> bool:
 
 def _close_provider(provider) -> None:
     if hasattr(provider, "close"):
-        provider.close()
+        try:
+            provider.close()
+        except Exception:
+            pass
 
 
 def _active_binding(device: WearableDevice) -> WearableBinding | None:

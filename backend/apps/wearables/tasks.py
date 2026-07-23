@@ -250,6 +250,9 @@ def poll_queued_measurement(command_log_id: int, attempt: int | None = None):
         if exc.code == 1800:
             _finish_queued_measurement(command.id, command.Status.OFFLINE)
             return command.id
+    except Exception:
+        # 解析或归属失败同样已消耗本次已认领轮询；不持久化异常正文，后续仅按计划点重试。
+        pass
     finally:
         if provider is not None:
             _close_provider(provider)

@@ -724,3 +724,144 @@ def test_command_log_scrubs_normalized_sensitive_keys_recursively(
     )
 
     assert command.request_payload == {"nested": {"visible": "yes"}}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("history_error", [ValueError("bad payload"), RuntimeError("unexpected")])
+def test_non_provider_history_error_keeps_queue_on_remaining_attempt_and_does_not_log_detail(
+    wearable_device, history_error, monkeypatch
+):
+    requested_at = timezone.now() - timedelta(seconds=10)
+    command = WearableCommandLog.objects.create(
+        device=wearable_device,
+        command_type="measure_heart_rate",
+        command_code="9012",
+        status=WearableCommandLog.Status.QUEUED,
+        requested_at=requested_at,
+        poll_deadline_at=requested_at + timedelta(seconds=60),
+        next_poll_at=requested_at + timedelta(seconds=10),
+    )
+    provider = StubProvider(error=history_error)
+    scheduled = Mock()
+    monkeypatch.setattr("apps.wearables.tasks._get_command_provider", lambda _: provider)
+    monkeypatch.setattr("apps.wearables.tasks.poll_queued_measurement.apply_async", scheduled)
+    monkeypatch.setattr("apps.wearables.tasks.timezone.now", lambda: requested_at + timedelta(seconds=10))
+
+    poll_queued_measurement.run(command.id)
+
+    command.refresh_from_db()
+    assert command.status == WearableCommandLog.Status.QUEUED
+    assert command.poll_attempts == 1
+    assert command.next_poll_at == requested_at + timedelta(seconds=20)
+    assert "bad payload" not in str(command.request_payload)
+    scheduled.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_attribution_error_times_out_on_sixth_claim_without_error_detail(wearable_device, monkeypatch):
+    requested_at = timezone.now() - timedelta(seconds=60)
+    command = WearableCommandLog.objects.create(
+        device=wearable_device,
+        command_type="measure_heart_rate",
+        command_code="9012",
+        status=WearableCommandLog.Status.QUEUED,
+        requested_at=requested_at,
+        poll_attempts=5,
+        poll_deadline_at=requested_at + timedelta(seconds=60),
+        next_poll_at=requested_at + timedelta(seconds=60),
+    )
+    provider = StubProvider(
+        points=[
+            ProviderMeasurement(
+                metric_type="heart_rate",
+                measured_at=requested_at + timedelta(seconds=1),
+                values={"heart_rate": 72},
+                raw_payload={},
+            )
+        ]
+    )
+    monkeypatch.setattr("apps.wearables.tasks._get_command_provider", lambda _: provider)
+    monkeypatch.setattr("apps.wearables.tasks.attribute_measurement", Mock(side_effect=RuntimeError("raw secret")))
+    monkeypatch.setattr("apps.wearables.tasks.poll_queued_measurement.apply_async", Mock())
+    monkeypatch.setattr("apps.wearables.tasks.timezone.now", lambda: requested_at + timedelta(seconds=60))
+
+    poll_queued_measurement.run(command.id)
+
+    command.refresh_from_db()
+    assert command.status == WearableCommandLog.Status.TIMEOUT
+    assert command.completed_at is not None
+    assert "raw secret" not in str(command.request_payload)
+
+
+@pytest.mark.django_db
+def test_close_error_does_not_overwrite_successful_measurement(wearable_device, monkeypatch):
+    requested_at = timezone.now() - timedelta(seconds=10)
+    command = WearableCommandLog.objects.create(
+        device=wearable_device,
+        command_type="measure_heart_rate",
+        command_code="9012",
+        status=WearableCommandLog.Status.QUEUED,
+        requested_at=requested_at,
+        poll_deadline_at=requested_at + timedelta(seconds=60),
+        next_poll_at=requested_at + timedelta(seconds=10),
+    )
+    provider = StubProvider(
+        points=[
+            ProviderMeasurement(
+                metric_type="heart_rate",
+                measured_at=requested_at + timedelta(microseconds=1),
+                values={"heart_rate": 74},
+                raw_payload={},
+            )
+        ]
+    )
+    provider.close = Mock(side_effect=RuntimeError("close secret"))
+    monkeypatch.setattr("apps.wearables.tasks._get_command_provider", lambda _: provider)
+    monkeypatch.setattr("apps.wearables.tasks.timezone.now", lambda: requested_at + timedelta(seconds=10))
+
+    poll_queued_measurement.run(command.id)
+
+    command.refresh_from_db()
+    assert command.status == WearableCommandLog.Status.SUCCEEDED
+    assert WearableMeasurement.objects.get(device=wearable_device).heart_rate == 74
+
+
+@pytest.mark.django_db
+def test_command_log_scrubs_composite_sensitive_keys_and_keeps_safe_list_values(
+    wearable_device, verified_capability, monkeypatch
+):
+    provider = StubProvider()
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+
+    command = send_device_command(
+        wearable_device,
+        "ring",
+        actor=None,
+        parameters={
+            "refresh_token": "a",
+            "secret-key": "b",
+            "clientPassword": "c",
+            "apiKey": "d",
+            "access_key": "e",
+            "Authorization": "f",
+            "KEY": "g",
+            "monkey": "keep",
+            "hockey": "keep",
+            "request-id": "keep",
+            "model": "keep",
+            "metric_type": "keep",
+            "items": [
+                {"private_key": "h", "model": "inside"},
+                {"metric_type": "heart_rate", "token": "i"},
+            ],
+        },
+    )
+
+    assert command.request_payload == {
+        "monkey": "keep",
+        "hockey": "keep",
+        "request-id": "keep",
+        "model": "keep",
+        "metric_type": "keep",
+        "items": [{"model": "inside"}, {"metric_type": "heart_rate"}],
+    }

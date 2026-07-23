@@ -36,3 +36,18 @@
 - 原实现 RED 证据已保留：首次创建 `test_commands.py` 后运行失败于 `ModuleNotFoundError: No module named 'apps.wearables.capabilities'`（`1 error in 0.07s`）。
 - 本次修复 RED：`test_blank_or_unknown_model_cannot_send_even_if_mapping_is_misconfigured[None]` 失败，实际输出为 `Failed: DID NOT RAISE UnsupportedCapability`。
 - 本次 GREEN：`pytest apps/wearables/tests/test_commands.py apps/wearables/tests/test_provider_miwitracker.py -q` 为 `77 passed in 4.06s`。
+
+## 复审二修复（2026-07-24）
+
+- 历史查询解析、运行时和归属处理的非 `ProviderError` 会消耗当前已认领尝试；剩余计划点续排，第六次或截止时统一终结为 `timeout`，且不写入异常正文。
+- 客户端 `close()` 异常被安全吞掉，不能覆盖已经成功归属的真实测量结果。
+- 参数键按分隔符和 camelCase 拆词，递归处理列表与字典；净化 token/password/secret/authorization/credential，以及凭据限定词与 key 的组合，同时保留 `monkey`、`hockey`、`request-id`、`model`、`metric_type` 等正常字段。
+
+### 复审二 TDD 证据
+
+- RED：`test_non_provider_history_error_keeps_queue_on_remaining_attempt_and_does_not_log_detail` 实际失败，`ValueError: bad payload` 从 `poll_queued_measurement` 冒出。
+- GREEN：`pytest apps/wearables/tests/test_commands.py apps/wearables/tests/test_provider_miwitracker.py -q` 为 `82 passed in 3.47s`；完整后端 pytest 成功退出，Ruff、Django check、迁移 dry-run 与 diff 检查通过。
+
+### 集成风险
+
+- 早于 `next_poll_at` 的投递当前安全地不访问厂商也不新建任务，避免重复早投递形成无限队列；正常 Celery `countdown` 投递仍负责到期轮询。若队列系统会丢弃该正常延迟任务，应在生产环境补充 broker/worker 延迟投递监控。
