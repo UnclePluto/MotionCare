@@ -28,6 +28,7 @@ docs/superpowers/
 | `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` | 微信小程序患者日常工作台 | approved |
 | `specs/2026-07-08-shoulder-press-video-analysis-design.md` | 肩部推举录像跟练与动作分析 | review |
 | `specs/2026-07-14-segmented-training-video-pipeline-design.md` | 肩部推举 30 秒连续分片、服务端合并与七牛发布 | approved |
+| `specs/2026-07-23-wearable-openapi-integration-design.md` | 穿戴设备 OpenAPI 接入、患者绑定与训练健康分析 | approved |
 
 ## 实施计划（plans/）当前清单
 
@@ -44,6 +45,7 @@ docs/superpowers/
 | `plans/2026-05-14-project-patient-research-entry-tabs.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` |
 | `plans/2026-05-14-wechat-miniapp-patient-daily-workbench.md` | 微信小程序患者日常工作台 | approved | `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` |
 | `plans/2026-07-10-shoulder-press-video-analysis.md` | 肩部推举录像跟练与动作分析 | review | `specs/2026-07-08-shoulder-press-video-analysis-design.md` |
+| `plans/2026-07-23-wearable-openapi-integration.md` | 穿戴设备 OpenAPI 接入、患者绑定与训练健康分析 | approved | `specs/2026-07-23-wearable-openapi-integration-design.md` |
 
 ## 状态语义
 
@@ -89,4 +91,4 @@ docs/superpowers/
 
 3. plan 中的 `- [ ]` 改为 `- [x]` 时，同时在文件顶部"执行记录"区写明 commit short-sha 和工具名。
 
-_最后更新：2026-05-12_
+_最后更新：2026-07-23_

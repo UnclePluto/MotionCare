@@ -4,6 +4,8 @@
 > 关联：`specs/patient-rehab-system/prd.md`、`docs/superpowers/specs/2026-05-14-prescription-motion-training-design.md`
 > 实施基线 commit：981c652
 
+> 后续覆盖说明（2026-07-23）：本设计中的“健康日数据填报”页面、首页健康填报状态、`DailyHealthRecord` 写入和 `/api/patient-app/daily-health/today/` 接口已被 `docs/superpowers/specs/2026-07-23-wearable-openapi-integration-design.md` 覆盖并取消；其余小程序绑定、处方、训练和动作历史设计继续有效。
+
 # 微信小程序患者日常工作台设计
 
 ## 背景
