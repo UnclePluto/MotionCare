@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 
+from celery.schedules import crontab
 import dj_database_url
 from dotenv import load_dotenv
 
@@ -104,6 +105,8 @@ REST_FRAMEWORK = {
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_TIMEZONE = "Asia/Shanghai"
+CELERY_ENABLE_UTC = True
 CELERY_BEAT_SCHEDULE = {
     "retry-failed-training-video-jobs": {
         "task": "apps.training.tasks.retry_failed_video_processing_jobs",
@@ -112,6 +115,10 @@ CELERY_BEAT_SCHEDULE = {
     "expire-training-video-jobs": {
         "task": "apps.training.tasks.expire_training_video_jobs",
         "schedule": 3600.0,
+    },
+    "schedule-daily-wearable-sync": {
+        "task": "apps.wearables.tasks.schedule_daily_wearable_sync",
+        "schedule": crontab(hour=3, minute=0),
     },
 }
 QINIU_ACCESS_KEY = os.getenv("QINIU_ACCESS_KEY", "")
