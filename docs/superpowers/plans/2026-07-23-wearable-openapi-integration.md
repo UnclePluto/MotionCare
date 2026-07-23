@@ -1,6 +1,8 @@
 # 穿戴设备 OpenAPI 接入 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> 执行记录（2026-07-23, codex）：Task 1 已落地于 commits `6b46942`、`b73bab7`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -105,7 +107,7 @@ frontend/src/pages/wearables/
 - Produces: `WearableDevice`、`WearableBinding`、`WearableMeasurement`、`WearableDailySource`、`WearableDailySummary`、`WearableSyncCursor`、`WearableSyncRun`、`WearableCommandLog`。
 - Consumes: `apps.patients.models.Patient`、`apps.accounts.models.User`、`apps.common.models.TimeStampedModel`。
 
-- [ ] **Step 1: 建立测试夹具**
+- [x] **Step 1: 建立测试夹具**
 
 ```python
 # backend/apps/wearables/tests/conftest.py
@@ -149,7 +151,7 @@ def other_project_patient(db, doctor, project, group):
     )
 ```
 
-- [ ] **Step 2: 写模型约束失败测试**
+- [x] **Step 2: 写模型约束失败测试**
 
 ```python
 # backend/apps/wearables/tests/test_models.py
@@ -206,13 +208,13 @@ def test_patient_and_device_each_have_only_one_active_binding(patient, doctor):
         )
 ```
 
-- [ ] **Step 3: 运行模型测试确认失败**
+- [x] **Step 3: 运行模型测试确认失败**
 
 Run: `cd backend && pytest apps/wearables/tests/test_models.py -q`
 
 Expected: FAIL，原因是 `apps.wearables` 尚不存在。
 
-- [ ] **Step 4: 创建模型和数据库约束**
+- [x] **Step 4: 创建模型和数据库约束**
 
 `WearableBinding` 的数据库约束必须包含：
 
@@ -257,7 +259,7 @@ models.UniqueConstraint(
 
 `WearableSyncRun` 保存 `window_start`、`window_end`、`status`、`returned_count`、`error_code`、`error_message`、`retry_count`。`WearableCommandLog` 保存 `command_type`、`command_code`、`request_payload`、`provider_code`、`status`、`requested_by`、`completed_at`。
 
-- [ ] **Step 5: 注册应用并生成 migration**
+- [x] **Step 5: 注册应用并生成 migration**
 
 在 `INSTALLED_APPS` 中把 `"apps.wearables"` 放在 `"apps.health"` 之前。
 
@@ -265,13 +267,13 @@ Run: `cd backend && python manage.py makemigrations wearables`
 
 Expected: 生成 `apps/wearables/migrations/0001_initial.py`，包含八个模型和上述约束。
 
-- [ ] **Step 6: 验证 migration 和模型测试**
+- [x] **Step 6: 验证 migration 和模型测试**
 
 Run: `cd backend && python manage.py makemigrations --check && pytest apps/wearables/tests/test_models.py -q`
 
 Expected: `No changes detected`，测试 PASS。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add backend/apps/wearables backend/config/settings.py
