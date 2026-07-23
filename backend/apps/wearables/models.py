@@ -23,7 +23,11 @@ class WearableDevice(TimeStampedModel):
             models.UniqueConstraint(
                 fields=["provider", "external_device_id"],
                 name="uniq_wearable_device_external_identity",
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(short_code__regex=r"^\d{4}$"),
+                name="wearable_device_short_code_four_digits",
+            ),
         ]
 
     def clean(self):
