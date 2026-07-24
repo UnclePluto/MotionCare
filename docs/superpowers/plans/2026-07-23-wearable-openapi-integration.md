@@ -21,6 +21,8 @@
 > 执行记录（2026-07-24, codex）：Task 8 已落地于 commits `9da8841`、`8016655`、`c4a431e`、`a83ef9e`、`0bd0b2c`、`d4f2f94`，任务审查通过。
 >
 > 执行记录（2026-07-24, codex）：Task 9 已落地于 commits `4da43f0`、`daaf7e0`、`1761118`、`b028b75`、`cb4ac83`、`96562cd`、`289bfa4`、`b8f07d5`、`8136c13`、`7c18178`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 10 已落地于 commit `d3cc1cb`，任务审查通过。为避免删除模型后患者端后端无法启动，Task 11 的后端健康接口移除步骤已前移到本任务。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -1121,16 +1123,20 @@ git commit -m "feat(frontend): 升级训练与健康双页签"
 - Modify: `backend/apps/health/views.py`
 - Modify: `backend/apps/health/urls.py`
 - Modify: `backend/apps/health/tests/test_daily_health_unique.py`
+- Modify: `backend/apps/patient_app/serializers.py`
+- Modify: `backend/apps/patient_app/views.py`
+- Modify: `backend/apps/patient_app/urls.py`
+- Modify: `backend/apps/patient_app/tests/test_patient_app_api.py`
 - Modify: `backend/config/urls.py`
 - Delete: `frontend/src/pages/health/DailyHealthPage.tsx`
 - Modify: `frontend/src/app/App.tsx`
 - Modify: `frontend/src/app/App.test.tsx`
 
 **Interfaces:**
-- Produces: 不再存在可写手工健康 API 和 Web 页面。
+- Produces: 不再存在可写手工健康 API、患者端后端健康接口和 Web 页面。
 - Consumes: Task 1 新穿戴日汇总，不复用旧 `DailyHealthRecord`。
 
-- [ ] **Step 1: 写能力移除测试**
+- [x] **Step 1: 写能力移除测试**
 
 ```python
 @pytest.mark.django_db
@@ -1141,15 +1147,15 @@ def test_manual_health_api_is_removed(doctor):
     assert response.status_code == 404
 ```
 
-前端测试访问 `/health` 应重定向到默认页面，且应用中不出现“保存健康数据”。
+患者端后端测试断言 `/api/patient-app/daily-health/today/` 为 404，且首页响应不再包含 `has_daily_health_today`。前端测试访问 `/health` 应重定向到默认页面，且应用中不出现“保存健康数据”。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd backend && pytest apps/health/tests -q && cd ../frontend && npm run test -- App`
 
 Expected: FAIL，旧接口和页面仍存在。
 
-- [ ] **Step 3: 创建带数据保护的删除 migration**
+- [x] **Step 3: 创建带数据保护的删除 migration**
 
 Migration 必须先检查：
 
@@ -1167,26 +1173,27 @@ migrations.RunPython(assert_no_manual_health_records, migrations.RunPython.noop)
 migrations.DeleteModel(name="DailyHealthRecord"),
 ```
 
-保留 `apps.health` 在 `INSTALLED_APPS` 中，以确保部署时 deletion migration 会执行；只移除 URL、模型业务代码和测试。
+保留 `apps.health` 在 `INSTALLED_APPS` 中，以确保部署时 deletion migration 会执行；移除旧健康 URL、模型业务代码，以及直接依赖该模型的患者端后端能力和测试。
 
-- [ ] **Step 4: 删除 Web 路由和页面**
+- [x] **Step 4: 删除后端患者端健康代码、Web 路由和页面**
 
 - 从 `backend/config/urls.py` 删除 `path("api/health/", ...)`。
+- 删除患者端后端的 `DailyHealthRecord` import、serializer、view、URL 和首页旧状态字段，避免删除模型后 Django 启动失败。
 - 从 `frontend/src/app/App.tsx` 删除 `DailyHealthPage` import 和 `/health` Route。
 - 删除 `DailyHealthPage.tsx`。
 
-- [ ] **Step 5: 运行 migration 和测试**
+- [x] **Step 5: 运行 migration 和测试**
 
-Run: `cd backend && python manage.py makemigrations --check && pytest apps/health/tests tests/test_api_smoke.py -q`
+Run: `cd backend && python manage.py makemigrations --check && pytest apps/health/tests apps/patient_app/tests tests/test_api_smoke.py -q`
 
 Run: `cd frontend && npm run test -- App`
 
 Expected: PASS；`/api/health/` 为 404。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
-git add -A backend/apps/health backend/config/urls.py frontend/src/app frontend/src/pages/health
+git add -A backend/apps/health backend/apps/patient_app backend/config/urls.py frontend/src/app frontend/src/pages/health
 git commit -m "refactor(health): 移除手工健康录入"
 ```
 
@@ -1195,10 +1202,6 @@ git commit -m "refactor(health): 移除手工健康录入"
 ### Task 11: 移除微信小程序健康填报
 
 **Files:**
-- Modify: `backend/apps/patient_app/views.py`
-- Modify: `backend/apps/patient_app/serializers.py`
-- Modify: `backend/apps/patient_app/urls.py`
-- Modify: `backend/apps/patient_app/tests/test_patient_app_api.py`
 - Modify: `miniapp/src/app.config.ts`
 - Modify: `miniapp/src/pages/home/index.tsx`
 - Create: `miniapp/src/pages/home/homeActions.ts`
@@ -1207,25 +1210,10 @@ git commit -m "refactor(health): 移除手工健康录入"
 - Delete: `miniapp/src/pages/daily-health/index.tsx`
 
 **Interfaces:**
-- Produces: 患者端首页、类型和路由不再依赖健康填报。
+- Produces: 微信小程序首页、类型和路由不再依赖健康填报。
 - Consumes: 现有患者端绑定、处方和训练接口保持不变。
 
 - [ ] **Step 1: 写患者端能力移除测试**
-
-后端：
-
-```python
-def test_patient_app_daily_health_endpoint_is_removed(project_patient, doctor):
-    client = _auth_client(project_patient, doctor)
-    response = client.get("/api/patient-app/daily-health/today/")
-    assert response.status_code == 404
-
-
-def test_patient_app_home_has_no_manual_health_flag(project_patient, doctor):
-    client = _auth_client(project_patient, doctor)
-    response = client.get("/api/patient-app/home/")
-    assert "has_daily_health_today" not in response.data
-```
 
 `homeActions.test.ts` 断言首页快捷操作不包含健康填报：
 
@@ -1239,19 +1227,15 @@ it("does not expose manual health entry", () => {
 
 - [ ] **Step 2: 运行失败测试**
 
-Run: `cd backend && pytest apps/patient_app/tests/test_patient_app_api.py -q`
-
 Run: `cd miniapp && npm run test`
 
 Expected: FAIL，旧接口和入口仍存在。
 
-- [ ] **Step 3: 删除后端患者端健康代码**
+- [x] **Step 3: 确认后端患者端健康代码已在 Task 10 前移删除**
 
-- 删除 `DailyHealthRecord` import。
-- 删除 `PatientAppDailyHealthSerializer`。
-- 删除 `PatientAppDailyHealthTodayView`。
-- 删除 `daily-health/today/` URL。
-- 从 `PatientAppHomeView` 响应删除 `has_daily_health_today`。
+- `/api/patient-app/daily-health/today/` 已返回 404。
+- `PatientAppHomeView` 响应已删除 `has_daily_health_today`。
+- 后端不再导入 `DailyHealthRecord`。
 
 - [ ] **Step 4: 删除小程序页面和入口**
 
@@ -1263,8 +1247,6 @@ Expected: FAIL，旧接口和入口仍存在。
 
 - [ ] **Step 5: 运行测试和构建**
 
-Run: `cd backend && pytest apps/patient_app/tests -q`
-
 Run: `cd miniapp && npm run test && npm run build:weapp`
 
 Expected: 全部 PASS。
@@ -1272,7 +1254,7 @@ Expected: 全部 PASS。
 - [ ] **Step 6: 提交**
 
 ```bash
-git add -A backend/apps/patient_app miniapp/src
+git add -A miniapp/src
 git commit -m "refactor(patient-app): 移除患者手工健康填报"
 ```
 
