@@ -51,7 +51,7 @@ describe("ProjectPatientBindingCard", () => {
 
   afterEach(() => cleanup());
 
-  it("shows binding status and generated code", async () => {
+  it("将小程序区域明确标注为临时绑定码", async () => {
     mockPost.mockResolvedValueOnce({
       data: {
         code: "0387",
@@ -61,6 +61,8 @@ describe("ProjectPatientBindingCard", () => {
 
     renderCard();
 
+    expect(await screen.findByRole("heading", { name: "患者接入" })).toBeInTheDocument();
+    expect(screen.getByText("小程序临时绑定码")).toBeInTheDocument();
     expect(await screen.findByText("未绑定")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "生成绑定码" }));
 
