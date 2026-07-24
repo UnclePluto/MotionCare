@@ -249,7 +249,7 @@ def test_sync_status_exposes_safe_bound_device_capabilities_without_contacting_p
             measure_blood_pressure="safe-code",
         ),
     )
-    WearableBinding.objects.create(
+    binding = WearableBinding.objects.create(
         patient=project_patient.patient,
         device=wearable_device,
         bound_at=datetime.now(UTC),
@@ -271,6 +271,7 @@ def test_sync_status_exposes_safe_bound_device_capabilities_without_contacting_p
     )
 
     assert response.status_code == 200
+    assert response.data["binding_id"] == binding.id
     assert response.data["device_id"] == wearable_device.id
     assert response.data["model"] == wearable_device.model
     assert response.data["last_device_status"] == "offline"

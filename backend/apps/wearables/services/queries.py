@@ -224,6 +224,7 @@ def sync_status(*, user, patient_id):
     if binding is None:
         return {
             "is_bound": False,
+            "binding_id": None,
             "device_id": None,
             "model": None,
             "device_short_code": None,
@@ -256,6 +257,7 @@ def sync_status(*, user, patient_id):
     capability_profile = get_capability_profile(binding.device.provider, binding.device.model)
     return {
         "is_bound": True,
+        "binding_id": binding.id,
         "device_id": binding.device_id,
         "model": binding.device.model,
         "device_short_code": binding.device.short_code,
