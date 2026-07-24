@@ -121,7 +121,10 @@ export function ProjectPatientBindingCard({ projectPatientId }: { projectPatient
       </Typography.Title>
       <MiniappBindingSection projectPatientId={projectPatientId} />
       <Divider style={{ margin: 0 }} />
-      <WearableBindingPanel projectPatientId={projectPatientId} />
+      <WearableBindingPanel
+        key={projectPatientId}
+        projectPatientId={projectPatientId}
+      />
     </Space>
   );
 }

@@ -2,7 +2,7 @@ import { BellOutlined, DisconnectOutlined, ReloadOutlined } from "@ant-design/ic
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Descriptions, Input, Modal, Space, Typography } from "antd";
 import dayjs from "dayjs";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { apiClient } from "../../api/client";
 import type { ProjectPatientWearableBinding, WearableBinding, WearableStatus } from "./types";
@@ -23,8 +23,12 @@ function formatTime(value: string | null | undefined) {
 export function WearableBindingPanel({ projectPatientId }: { projectPatientId: number }) {
   const queryClient = useQueryClient();
   const queryKey = ["project-patient-wearable-binding", projectPatientId];
+  const currentProjectPatientId = useRef(projectPatientId);
+  currentProjectPatientId.current = projectPatientId;
+  const previousProjectPatientId = useRef(projectPatientId);
   const [shortCode, setShortCode] = useState("");
   const [bindingSuccess, setBindingSuccess] = useState(false);
+  const [unbindSuccess, setUnbindSuccess] = useState(false);
   const [statusResult, setStatusResult] = useState<WearableStatus | null>(null);
   const [unbindOpen, setUnbindOpen] = useState(false);
 
@@ -35,45 +39,135 @@ export function WearableBindingPanel({ projectPatientId }: { projectPatientId: n
   });
 
   const statusCheck = useMutation({
-    mutationFn: async (deviceId: number) =>
-      (await apiClient.post<WearableStatus>(`/wearables/devices/${deviceId}/check-status/`)).data,
-    onSuccess: (data) => setStatusResult(data),
+    mutationFn: async ({
+      deviceId,
+    }: {
+      targetProjectPatientId: number;
+      deviceId: number;
+    }) =>
+      (await apiClient.post<WearableStatus>(`/wearables/devices/${deviceId}/check-status/`))
+        .data,
+    onSuccess: (data, variables) => {
+      if (currentProjectPatientId.current === variables.targetProjectPatientId) {
+        setStatusResult(data);
+      }
+    },
   });
 
   const bind = useMutation({
-    mutationFn: async (value: string) =>
+    mutationFn: async ({
+      targetProjectPatientId,
+      value,
+    }: {
+      targetProjectPatientId: number;
+      value: string;
+    }) =>
       (
-        await apiClient.post<WearableBinding>(`/wearables/project-patients/${projectPatientId}/bind/`, {
-          short_code: value,
-        })
+        await apiClient.post<WearableBinding>(
+          `/wearables/project-patients/${targetProjectPatientId}/bind/`,
+          {
+            short_code: value,
+          },
+        )
       ).data,
-    onSuccess: (binding) => {
+    onSuccess: async (binding, variables) => {
+      const targetQueryKey = [
+        "project-patient-wearable-binding",
+        variables.targetProjectPatientId,
+      ];
+      await queryClient.cancelQueries({ queryKey: targetQueryKey });
+      queryClient.setQueryData<ProjectPatientWearableBinding>(targetQueryKey, {
+        project_patient_id: variables.targetProjectPatientId,
+        patient_id: binding.patient_id,
+        binding,
+      });
+      void queryClient.invalidateQueries({ queryKey: targetQueryKey });
+      if (currentProjectPatientId.current !== variables.targetProjectPatientId) return;
       setBindingSuccess(true);
+      setUnbindSuccess(false);
       setShortCode("");
       setStatusResult(null);
-      queryClient.setQueryData<ProjectPatientWearableBinding | undefined>(queryKey, (current) =>
-        current ? { ...current, binding } : current,
-      );
-      statusCheck.mutate(binding.device_id);
+      statusCheck.mutate({
+        targetProjectPatientId: variables.targetProjectPatientId,
+        deviceId: binding.device_id,
+      });
     },
   });
 
   const unbind = useMutation({
-    mutationFn: async (bindingId: number) =>
-      apiClient.post(`/wearables/bindings/${bindingId}/unbind/`, { reason: "项目患者页解绑" }),
-    onSuccess: async () => {
+    mutationFn: async ({
+      bindingId,
+    }: {
+      targetProjectPatientId: number;
+      patientId: number;
+      bindingId: number;
+    }) =>
+      apiClient.post(`/wearables/bindings/${bindingId}/unbind/`, {
+        reason: "项目患者页解绑",
+      }),
+    onSuccess: async (_data, variables) => {
+      const targetQueryKey = [
+        "project-patient-wearable-binding",
+        variables.targetProjectPatientId,
+      ];
+      await queryClient.cancelQueries({ queryKey: targetQueryKey });
+      queryClient.setQueryData<ProjectPatientWearableBinding>(targetQueryKey, {
+        project_patient_id: variables.targetProjectPatientId,
+        patient_id: variables.patientId,
+        binding: null,
+      });
+      void queryClient.invalidateQueries({ queryKey: targetQueryKey });
+      if (currentProjectPatientId.current !== variables.targetProjectPatientId) return;
       setUnbindOpen(false);
       setBindingSuccess(false);
+      setUnbindSuccess(true);
       setStatusResult(null);
-      await queryClient.invalidateQueries({ queryKey });
     },
   });
 
   const binding = bindingQuery.data?.binding ?? null;
   const canRing = statusResult?.capabilities?.ring === true;
   const ring = useMutation({
-    mutationFn: async (deviceId: number) => apiClient.post(`/wearables/devices/${deviceId}/ring/`),
+    mutationFn: async ({
+      deviceId,
+    }: {
+      targetProjectPatientId: number;
+      deviceId: number;
+    }) => apiClient.post(`/wearables/devices/${deviceId}/ring/`),
   });
+  const { reset: resetBind } = bind;
+  const { reset: resetUnbind } = unbind;
+  const { reset: resetStatusCheck } = statusCheck;
+  const { reset: resetRing } = ring;
+
+  useEffect(() => {
+    if (previousProjectPatientId.current === projectPatientId) return;
+    setShortCode("");
+    setBindingSuccess(false);
+    setUnbindSuccess(false);
+    setStatusResult(null);
+    setUnbindOpen(false);
+    resetBind();
+    resetUnbind();
+    resetStatusCheck();
+    resetRing();
+    previousProjectPatientId.current = projectPatientId;
+  }, [
+    projectPatientId,
+    resetBind,
+    resetRing,
+    resetStatusCheck,
+    resetUnbind,
+  ]);
+
+  const bindTargetsCurrent =
+    bind.variables?.targetProjectPatientId === projectPatientId;
+  const unbindTargetsCurrent =
+    unbind.variables?.targetProjectPatientId === projectPatientId;
+  const statusTargetsCurrent =
+    statusCheck.variables?.targetProjectPatientId === projectPatientId;
+  const ringTargetsCurrent =
+    ring.variables?.targetProjectPatientId === projectPatientId;
 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -84,13 +178,28 @@ export function WearableBindingPanel({ projectPatientId }: { projectPatientId: n
             <Button
               aria-label="通信测试"
               icon={<ReloadOutlined />}
-              loading={statusCheck.isPending}
-              onClick={() => statusCheck.mutate(binding.device_id)}
+              loading={statusCheck.isPending && statusTargetsCurrent}
+              onClick={() =>
+                statusCheck.mutate({
+                  targetProjectPatientId: projectPatientId,
+                  deviceId: binding.device_id,
+                })
+              }
             >
               通信测试
             </Button>
             {canRing ? (
-              <Button aria-label="让设备响铃" icon={<BellOutlined />} loading={ring.isPending} onClick={() => ring.mutate(binding.device_id)}>
+              <Button
+                aria-label="让设备响铃"
+                icon={<BellOutlined />}
+                loading={ring.isPending && ringTargetsCurrent}
+                onClick={() =>
+                  ring.mutate({
+                    targetProjectPatientId: projectPatientId,
+                    deviceId: binding.device_id,
+                  })
+                }
+              >
                 让设备响铃
               </Button>
             ) : null}
@@ -101,7 +210,9 @@ export function WearableBindingPanel({ projectPatientId }: { projectPatientId: n
         ) : null}
       </Space>
 
-      {binding ? (
+      {bindingQuery.isPending ? (
+        <Alert type="info" showIcon message="设备绑定状态加载中" />
+      ) : binding ? (
         <Descriptions size="small" bordered column={{ xs: 1, sm: 2 }}>
           <Descriptions.Item label="当前设备">{binding.short_code}</Descriptions.Item>
           <Descriptions.Item label="绑定时间">{formatTime(binding.bound_at)}</Descriptions.Item>
@@ -115,18 +226,34 @@ export function WearableBindingPanel({ projectPatientId }: { projectPatientId: n
             placeholder="设备固定简码"
             value={shortCode}
             onChange={(event) => setShortCode(event.target.value.replace(/\D/g, ""))}
-            onPressEnter={() => bind.mutate(shortCode)}
+            onPressEnter={() =>
+              bind.mutate({
+                targetProjectPatientId: projectPatientId,
+                value: shortCode,
+              })
+            }
           />
-          <Button type="primary" loading={bind.isPending} disabled={!/^\d{4}$/.test(shortCode)} onClick={() => bind.mutate(shortCode)}>
+          <Button
+            type="primary"
+            loading={bind.isPending && bindTargetsCurrent}
+            disabled={!/^\d{4}$/.test(shortCode)}
+            onClick={() =>
+              bind.mutate({
+                targetProjectPatientId: projectPatientId,
+                value: shortCode,
+              })
+            }
+          >
             绑定设备
           </Button>
         </Space.Compact>
       )}
 
       {bindingSuccess ? <Alert type="success" showIcon message="患者设备绑定成功" /> : null}
-      {bind.isError ? <Alert type="error" showIcon message={errorMessage(bind.error, "设备绑定失败")} /> : null}
+      {unbindSuccess ? <Alert type="success" showIcon message="设备解绑成功" /> : null}
+      {bind.isError && bindTargetsCurrent ? <Alert type="error" showIcon message={errorMessage(bind.error, "设备绑定失败")} /> : null}
       {bindingQuery.isError ? <Alert type="error" showIcon message={errorMessage(bindingQuery.error, "设备绑定状态加载失败")} /> : null}
-      {statusCheck.isError ? <Alert type="warning" showIcon message={errorMessage(statusCheck.error, "设备通信测试失败")} /> : null}
+      {statusCheck.isError && statusTargetsCurrent ? <Alert type="warning" showIcon message={errorMessage(statusCheck.error, "设备通信测试失败")} /> : null}
       {statusResult ? (
         <Alert
           type={statusResult.online ? "success" : "warning"}
@@ -135,20 +262,27 @@ export function WearableBindingPanel({ projectPatientId }: { projectPatientId: n
           description={`最近通信：${formatTime(statusResult.last_communication_at)}；电量：${statusResult.battery_level ?? "—"}%`}
         />
       ) : null}
-      {ring.isError ? <Alert type="warning" showIcon message={errorMessage(ring.error, "设备响铃请求失败")} /> : null}
+      {ring.isError && ringTargetsCurrent ? <Alert type="warning" showIcon message={errorMessage(ring.error, "设备响铃请求失败")} /> : null}
 
       <Modal
         open={unbindOpen}
         title="确认解绑设备"
         okText="确认解绑"
         cancelText="取消"
-        okButtonProps={{ danger: true, loading: unbind.isPending }}
+        okButtonProps={{ danger: true, loading: unbind.isPending && unbindTargetsCurrent }}
         onCancel={() => setUnbindOpen(false)}
-        onOk={() => binding && unbind.mutate(binding.id)}
+        onOk={() =>
+          binding &&
+          unbind.mutate({
+            targetProjectPatientId: projectPatientId,
+            patientId: binding.patient_id,
+            bindingId: binding.id,
+          })
+        }
       >
         <Typography.Paragraph>解绑后，设备将停止为该患者归属新的数据。</Typography.Paragraph>
         <Typography.Paragraph strong>历史研究数据不会删除。</Typography.Paragraph>
-        {unbind.isError ? <Alert type="error" showIcon message={errorMessage(unbind.error, "设备解绑失败")} /> : null}
+        {unbind.isError && unbindTargetsCurrent ? <Alert type="error" showIcon message={errorMessage(unbind.error, "设备解绑失败")} /> : null}
       </Modal>
     </Space>
   );

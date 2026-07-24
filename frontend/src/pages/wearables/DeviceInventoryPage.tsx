@@ -5,7 +5,7 @@ import dayjs from "dayjs";
 import { useMemo, useState } from "react";
 
 import { apiClient } from "../../api/client";
-import type { WearableDevice } from "./types";
+import type { WearableDevice, WearableStatus } from "./types";
 
 type DeviceFormValues = Pick<WearableDevice, "provider" | "external_device_id" | "identifier_type" | "model">;
 type DeviceFilter = "all" | "bound" | "unbound" | "disabled";
@@ -22,16 +22,13 @@ function errorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function isBound(device: WearableDevice) {
-  return Boolean(device.current_patient_name);
-}
-
 export function DeviceInventoryPage() {
   const queryClient = useQueryClient();
   const [form] = Form.useForm<DeviceFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<DeviceFilter>("all");
+  const [statusResult, setStatusResult] = useState<WearableStatus | null>(null);
 
   const devicesQuery = useQuery({
     queryKey: ["wearable-devices"],
@@ -57,8 +54,12 @@ export function DeviceInventoryPage() {
 
   const statusCheck = useMutation({
     mutationFn: async (deviceId: number) =>
-      (await apiClient.post(`/wearables/devices/${deviceId}/check-status/`)).data,
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["wearable-devices"] }),
+      (await apiClient.post<WearableStatus>(`/wearables/devices/${deviceId}/check-status/`)).data,
+    onMutate: () => setStatusResult(null),
+    onSuccess: (result) => {
+      setStatusResult(result);
+      void queryClient.invalidateQueries({ queryKey: ["wearable-devices"] });
+    },
   });
 
   const dataSource = useMemo(() => {
@@ -69,8 +70,8 @@ export function DeviceInventoryPage() {
         device.short_code.includes(normalizedSearch) ||
         device.external_device_id.toLowerCase().includes(normalizedSearch);
       if (!matchesSearch) return false;
-      if (filter === "bound") return device.enabled && isBound(device);
-      if (filter === "unbound") return device.enabled && !isBound(device);
+      if (filter === "bound") return device.enabled && device.is_bound;
+      if (filter === "unbound") return device.enabled && !device.is_bound;
       if (filter === "disabled") return !device.enabled;
       return true;
     });
@@ -108,6 +109,24 @@ export function DeviceInventoryPage() {
         />
       </Space>
 
+      {statusResult ? (
+        <Alert
+          type={statusResult.online ? "success" : "warning"}
+          showIcon
+          message={statusResult.online ? "设备通信正常" : "设备通信异常"}
+          description={`最近通信：${formatTime(statusResult.last_communication_at)}；电量：${statusResult.battery_level ?? "—"}%`}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+      {statusCheck.isError ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={errorMessage(statusCheck.error, "设备通信测试失败")}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+
       {devicesQuery.isError ? (
         <Alert type="error" showIcon message={errorMessage(devicesQuery.error, "设备台账加载失败")} />
       ) : (
@@ -126,7 +145,15 @@ export function DeviceInventoryPage() {
               dataIndex: "current_patient_name",
               width: 150,
               render: (value: string | null | undefined, device) =>
-                !device.enabled ? <Tag>已停用</Tag> : value ? value : "未绑定",
+                !device.enabled ? (
+                  <Tag>已停用</Tag>
+                ) : value ? (
+                  value
+                ) : device.is_bound ? (
+                  "已绑定（无访问权限）"
+                ) : (
+                  "未绑定"
+                ),
             },
             { title: "最近通信", dataIndex: "last_communication_at", width: 170, render: formatTime },
             { title: "最近同步", dataIndex: "last_sync_at", width: 170, render: formatTime },

@@ -6,10 +6,11 @@ export type WearableDevice = {
   model: string;
   short_code: string;
   enabled: boolean;
+  is_bound: boolean;
+  current_patient_name: string | null;
   last_communication_at: string | null;
-  last_status_checked_at?: string | null;
-  last_sync_at?: string | null;
-  current_patient_name?: string | null;
+  last_status_checked_at: string | null;
+  last_sync_at: string | null;
 };
 
 export type WearableBinding = {
@@ -29,10 +30,11 @@ export type ProjectPatientWearableBinding = {
 
 export type WearableStatus = {
   device_id: number;
+  model: string;
   online: boolean;
   battery_level: number | null;
   last_communication_at: string | null;
-  capabilities?: {
-    ring?: boolean;
+  capabilities: {
+    ring: boolean;
   };
 };
