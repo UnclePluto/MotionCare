@@ -17,6 +17,8 @@
 > 执行记录（2026-07-24, codex）：Task 6 已落地于 commits `cbcd7d0`、`1c25d18`、`0ef175e`，任务审查通过。
 >
 > 执行记录（2026-07-24, codex）：Task 7 已落地于 commits `ac25023`、`468e0b0`、`d4e7e94`、`4936d7c`、`595fdcf`、`e07dc60`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 8 已落地于 commits `9da8841`、`8016655`、`c4a431e`、`a83ef9e`、`0bd0b2c`、`d4f2f94`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -968,7 +970,7 @@ git commit -m "feat(wearables): 提供穿戴趋势与研究汇总接口"
 - Produces: `/wearable-devices` 设备台账；项目患者页“患者接入”双区域。
 - Consumes: Task 3/6 设备、绑定、解绑和通信测试 API。
 
-- [ ] **Step 1: 写界面失败测试**
+- [x] **Step 1: 写界面失败测试**
 
 验证：
 
@@ -980,13 +982,13 @@ git commit -m "feat(wearables): 提供穿戴趋势与研究汇总接口"
 - 解绑确认文案包含“历史研究数据不会删除”。
 - 设备已绑其他患者时显示后端脱敏冲突信息。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd frontend && npm run test -- DeviceInventoryPage ProjectPatientBindingCard WearableBindingPanel`
 
 Expected: FAIL。
 
-- [ ] **Step 3: 创建设备台账**
+- [x] **Step 3: 创建设备台账**
 
 页面包含：
 
@@ -998,7 +1000,7 @@ Expected: FAIL。
 
 路由使用 `/wearable-devices`，侧边栏文案“设备台账”；它是基础管理入口，不承载患者健康趋势。
 
-- [ ] **Step 4: 升级项目患者绑定区域**
+- [x] **Step 4: 升级项目患者绑定区域**
 
 保留 `ProjectPatientBindingCard` 作为外层组件：
 
@@ -1010,13 +1012,13 @@ Expected: FAIL。
 
 绑定后自动调用 `check-status`；通信失败只显示 Warning，不撤销本地绑定。响铃按钮仅在后端返回 `capabilities.ring === true` 时出现。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `cd frontend && npm run test -- DeviceInventoryPage ProjectPatientBindingCard WearableBindingPanel`
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add frontend/src/pages/wearables frontend/src/pages/research-entry frontend/src/app
