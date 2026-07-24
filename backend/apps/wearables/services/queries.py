@@ -227,6 +227,9 @@ def sync_status(*, user, patient_id):
             "device_id": None,
             "model": None,
             "device_short_code": None,
+            "last_device_status": None,
+            "last_battery_level": None,
+            "last_communication_at": None,
             "capabilities": {field: False for field in COMMAND_CAPABILITY_FIELDS},
             "last_sync_at": None,
             "metrics": [],
@@ -256,6 +259,13 @@ def sync_status(*, user, patient_id):
         "device_id": binding.device_id,
         "model": binding.device.model,
         "device_short_code": binding.device.short_code,
+        "last_device_status": binding.device.last_device_status or None,
+        "last_battery_level": binding.device.last_battery_level,
+        "last_communication_at": (
+            _serialize_datetime(binding.device.last_communication_at)
+            if binding.device.last_communication_at
+            else None
+        ),
         "capabilities": {
             field: bool(getattr(capability_profile, field))
             for field in COMMAND_CAPABILITY_FIELDS

@@ -255,6 +255,16 @@ def test_sync_status_exposes_safe_bound_device_capabilities_without_contacting_p
         bound_at=datetime.now(UTC),
         bound_by=doctor,
     )
+    wearable_device.last_device_status = "offline"
+    wearable_device.last_battery_level = 37
+    wearable_device.last_communication_at = datetime(2026, 7, 24, 16, 30, tzinfo=UTC)
+    wearable_device.save(
+        update_fields=[
+            "last_device_status",
+            "last_battery_level",
+            "last_communication_at",
+        ]
+    )
 
     response = _client(doctor).get(
         f"/api/wearables/patients/{project_patient.patient_id}/sync-status/"
@@ -263,6 +273,9 @@ def test_sync_status_exposes_safe_bound_device_capabilities_without_contacting_p
     assert response.status_code == 200
     assert response.data["device_id"] == wearable_device.id
     assert response.data["model"] == wearable_device.model
+    assert response.data["last_device_status"] == "offline"
+    assert response.data["last_battery_level"] == 37
+    assert response.data["last_communication_at"] == "2026-07-25T00:30:00+08:00"
     assert response.data["capabilities"] == {
         "ring": False,
         "measure_heart_rate": True,
