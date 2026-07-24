@@ -1,10 +1,13 @@
 import re
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from django.utils import timezone
 
 from apps.accounts.models import User
-from apps.wearables.models import WearableBinding, WearableDevice
+from apps.patients.models import Patient
+from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
+from apps.wearables.models import WearableBinding, WearableDevice, WearableSyncRun
 
 
 def _device_payload(**overrides):
@@ -40,6 +43,184 @@ def test_device_crud_assigns_four_digit_short_code(api_client, doctor):
     assert patched.status_code == 200, patched.data
     assert patched.data["enabled"] is False
     assert patched.data["model"] == "UPDATED-MODEL"
+
+
+@pytest.mark.django_db
+def test_device_list_returns_permission_safe_binding_and_successful_sync_contract_in_one_query(
+    api_client,
+    doctor,
+    project,
+    group,
+    project_patient,
+    other_project_patient,
+    wearable_device,
+    django_assert_num_queries,
+):
+    successful_at = datetime(2026, 7, 24, 2, 30, tzinfo=UTC)
+    older_success = WearableSyncRun.objects.create(
+        device=wearable_device,
+        metric_type="heart_rate",
+        status=WearableSyncRun.Status.SUCCEEDED,
+    )
+    latest_success = WearableSyncRun.objects.create(
+        device=wearable_device,
+        metric_type="steps",
+        status=WearableSyncRun.Status.SUCCEEDED,
+    )
+    later_failure = WearableSyncRun.objects.create(
+        device=wearable_device,
+        metric_type="blood_oxygen",
+        status=WearableSyncRun.Status.FAILED,
+    )
+    WearableSyncRun.objects.filter(pk=older_success.pk).update(
+        updated_at=successful_at - timedelta(hours=1)
+    )
+    WearableSyncRun.objects.filter(pk=latest_success.pk).update(updated_at=successful_at)
+    WearableSyncRun.objects.filter(pk=later_failure.pk).update(
+        updated_at=successful_at + timedelta(hours=1)
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=wearable_device,
+        bound_at=successful_at - timedelta(days=1),
+        bound_by=doctor,
+    )
+
+    previously_bound_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="dev-unbound",
+        identifier_type="device_id",
+        model="TEST-MODEL",
+        short_code="1001",
+    )
+    WearableBinding.objects.create(
+        patient=other_project_patient.patient,
+        device=previously_bound_device,
+        bound_at=successful_at - timedelta(days=2),
+        unbound_at=successful_at - timedelta(days=1),
+        bound_by=doctor,
+        unbound_by=doctor,
+    )
+    historical_success = WearableSyncRun.objects.create(
+        device=previously_bound_device,
+        metric_type="steps",
+        status=WearableSyncRun.Status.SUCCEEDED,
+    )
+    WearableSyncRun.objects.filter(pk=historical_success.pk).update(
+        updated_at=successful_at - timedelta(days=1)
+    )
+
+    bound_without_sync = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="dev-no-sync",
+        identifier_type="device_id",
+        model="TEST-MODEL",
+        short_code="1002",
+    )
+    WearableBinding.objects.create(
+        patient=other_project_patient.patient,
+        device=bound_without_sync,
+        bound_at=successful_at,
+        bound_by=doctor,
+    )
+
+    disabled_patient = Patient.objects.create(
+        name="王小明",
+        gender=Patient.Gender.UNKNOWN,
+        age=66,
+        phone="13900004444",
+        primary_doctor=doctor,
+    )
+    ProjectPatient.objects.create(
+        project=project,
+        patient=disabled_patient,
+        group=group,
+    )
+    disabled_bound_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="dev-disabled",
+        identifier_type="device_id",
+        model="TEST-MODEL",
+        short_code="1003",
+        enabled=False,
+    )
+    WearableBinding.objects.create(
+        patient=disabled_patient,
+        device=disabled_bound_device,
+        bound_at=successful_at,
+        bound_by=doctor,
+    )
+
+    foreign_doctor = User.objects.create_user(
+        phone="13800005555",
+        password="pass123456",
+        name="外部医生",
+        role=User.Role.DOCTOR,
+    )
+    foreign_patient = Patient.objects.create(
+        name="赵敏",
+        gender=Patient.Gender.UNKNOWN,
+        age=65,
+        phone="13900005555",
+        primary_doctor=foreign_doctor,
+    )
+    foreign_project = StudyProject.objects.create(name="外部研究", created_by=foreign_doctor)
+    foreign_group = StudyGroup.objects.create(
+        project=foreign_project,
+        name="外部组",
+        target_ratio=1,
+    )
+    ProjectPatient.objects.create(
+        project=foreign_project,
+        patient=foreign_patient,
+        group=foreign_group,
+    )
+    inaccessible_bound_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="dev-inaccessible",
+        identifier_type="device_id",
+        model="TEST-MODEL",
+        short_code="1004",
+    )
+    WearableBinding.objects.create(
+        patient=foreign_patient,
+        device=inaccessible_bound_device,
+        bound_at=successful_at,
+        bound_by=foreign_doctor,
+    )
+
+    api_client.force_authenticate(doctor)
+    with django_assert_num_queries(1):
+        response = api_client.get("/api/wearables/devices/")
+
+    assert response.status_code == 200, response.data
+    devices = {item["short_code"]: item for item in response.data}
+    assert devices["0826"]["is_bound"] is True
+    assert devices["0826"]["current_patient_name"] == "患*"
+    assert devices["0826"]["last_sync_at"] == "2026-07-24T10:30:00+08:00"
+    assert devices["1001"]["is_bound"] is False
+    assert devices["1001"]["current_patient_name"] is None
+    assert devices["1001"]["last_sync_at"] == "2026-07-23T10:30:00+08:00"
+    assert devices["1002"]["is_bound"] is True
+    assert devices["1002"]["current_patient_name"] == "患*"
+    assert devices["1002"]["last_sync_at"] is None
+    assert devices["1003"]["enabled"] is False
+    assert devices["1003"]["is_bound"] is True
+    assert devices["1003"]["current_patient_name"] == "王*"
+    assert devices["1004"]["is_bound"] is True
+    assert devices["1004"]["current_patient_name"] is None
+
+    admin = User.objects.create_user(
+        phone="13800006666",
+        password="pass123456",
+        name="管理员",
+        role=User.Role.ADMIN,
+    )
+    api_client.force_authenticate(admin)
+    admin_response = api_client.get("/api/wearables/devices/")
+    admin_devices = {item["short_code"]: item for item in admin_response.data}
+    assert admin_devices["1004"]["is_bound"] is True
+    assert admin_devices["1004"]["current_patient_name"] == "赵*"
 
 
 @pytest.mark.django_db
@@ -267,6 +448,88 @@ def test_rebound_device_does_not_overlap_previous_patient(
     assert first.status_code == 201, first.data
     assert response.status_code == 409, response.data
     assert "设备" in str(response.data)
+
+
+@pytest.mark.django_db
+def test_device_binding_conflict_includes_masked_name_only_when_patient_is_accessible(
+    api_client,
+    doctor,
+    project,
+    group,
+    project_patient,
+    wearable_device,
+):
+    visible_patient = Patient.objects.create(
+        name="王小明",
+        gender=Patient.Gender.UNKNOWN,
+        age=67,
+        phone="13900006666",
+        primary_doctor=doctor,
+    )
+    visible_project_patient = ProjectPatient.objects.create(
+        project=project,
+        patient=visible_patient,
+        group=group,
+    )
+    WearableBinding.objects.create(
+        patient=visible_patient,
+        device=wearable_device,
+        bound_at=timezone.now(),
+        bound_by=doctor,
+    )
+    api_client.force_authenticate(doctor)
+
+    visible_response = api_client.post(
+        f"/api/wearables/project-patients/{project_patient.id}/bind/",
+        {"short_code": wearable_device.short_code},
+        format="json",
+    )
+
+    assert visible_project_patient.patient_id == visible_patient.id
+    assert visible_response.status_code == 409, visible_response.data
+    assert visible_response.data == {"detail": "设备已绑定患者王*。"}
+
+    WearableBinding.objects.filter(device=wearable_device).delete()
+    foreign_doctor = User.objects.create_user(
+        phone="13800007778",
+        password="pass123456",
+        name="外部医生",
+        role=User.Role.DOCTOR,
+    )
+    foreign_patient = Patient.objects.create(
+        name="赵敏",
+        gender=Patient.Gender.UNKNOWN,
+        age=65,
+        phone="13900007778",
+        primary_doctor=foreign_doctor,
+    )
+    foreign_project = StudyProject.objects.create(name="外部项目", created_by=foreign_doctor)
+    foreign_group = StudyGroup.objects.create(
+        project=foreign_project,
+        name="外部组",
+        target_ratio=1,
+    )
+    ProjectPatient.objects.create(
+        project=foreign_project,
+        patient=foreign_patient,
+        group=foreign_group,
+    )
+    WearableBinding.objects.create(
+        patient=foreign_patient,
+        device=wearable_device,
+        bound_at=timezone.now(),
+        bound_by=foreign_doctor,
+    )
+
+    hidden_response = api_client.post(
+        f"/api/wearables/project-patients/{project_patient.id}/bind/",
+        {"short_code": wearable_device.short_code},
+        format="json",
+    )
+
+    assert hidden_response.status_code == 409, hidden_response.data
+    assert hidden_response.data == {"detail": "设备已绑定至其他患者。"}
+    assert "赵" not in str(hidden_response.data)
 
 
 @pytest.mark.django_db

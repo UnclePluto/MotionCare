@@ -161,6 +161,7 @@ def check_device_status(device: WearableDevice) -> dict[str, Any]:
             "updated_at",
         ]
     )
+    capability = get_capability_profile(device.provider, device.model)
     return {
         "device_id": device.id,
         "model": device.model,
@@ -169,6 +170,7 @@ def check_device_status(device: WearableDevice) -> dict[str, Any]:
         "last_communication_at": result.last_communication_at.isoformat()
         if result.last_communication_at
         else None,
+        "capabilities": {"ring": bool(capability.ring)},
     }
 
 

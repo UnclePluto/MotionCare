@@ -8,6 +8,10 @@ from apps.wearables.models import WearableBinding, WearableDevice
 class BindingConflict(Exception):
     """有效绑定与请求发生冲突。"""
 
+    def __init__(self, message: str, *, conflicting_patient_id: int | None = None):
+        super().__init__(message)
+        self.conflicting_patient_id = conflicting_patient_id
+
 
 class DeviceNotFound(Exception):
     """未找到启用的设备。"""
@@ -19,6 +23,12 @@ class BindingAlreadyUnbound(Exception):
 
 class InvalidUnbindTime(ValueError):
     """解绑时间不在有效绑定区间之后。"""
+
+
+def mask_patient_name(name: str) -> str:
+    """患者姓名统一仅保留首字符。"""
+    normalized = name.strip()
+    return f"{normalized[0]}*" if normalized else "*"
 
 
 def bind_device(*, project_patient, short_code: str, actor, bound_at=None):
@@ -50,7 +60,10 @@ def bind_device(*, project_patient, short_code: str, actor, bound_at=None):
         if active_for_patient:
             raise BindingConflict("患者已有其他有效设备绑定。")
         if active_for_device:
-            raise BindingConflict("设备已绑定至其他患者。")
+            raise BindingConflict(
+                "设备已绑定至其他患者。",
+                conflicting_patient_id=active_for_device.patient_id,
+            )
 
         return (
             WearableBinding.objects.create(

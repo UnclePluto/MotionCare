@@ -125,6 +125,7 @@ def test_unknown_model_can_check_safe_status_without_returning_location(wearable
         "online": True,
         "battery_level": 82,
         "last_communication_at": "2026-07-24T02:00:00+00:00",
+        "capabilities": {"ring": False},
     }
     wearable_device.refresh_from_db()
     assert wearable_device.last_device_status == "online"
@@ -142,6 +143,7 @@ def test_status_api_returns_only_the_safe_status_summary(api_client, doctor, wea
             "online": False,
             "battery_level": 12,
             "last_communication_at": None,
+            "capabilities": {"ring": False},
         },
     )
 
@@ -154,7 +156,59 @@ def test_status_api_returns_only_the_safe_status_summary(api_client, doctor, wea
         "online",
         "battery_level",
         "last_communication_at",
+        "capabilities",
     }
+    assert response.data["capabilities"] == {"ring": False}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("model", "verified", "expected_ring"),
+    [
+        ("UNKNOWN", False, False),
+        ("TEST-MODEL", True, True),
+    ],
+)
+def test_status_api_returns_only_boolean_ring_capability_for_verified_and_unverified_models(
+    api_client,
+    doctor,
+    wearable_device,
+    model,
+    verified,
+    expected_ring,
+    monkeypatch,
+):
+    api_client.force_authenticate(doctor)
+    wearable_device.model = model
+    wearable_device.save(update_fields=["model", "updated_at"])
+    if verified:
+        monkeypatch.setitem(MODEL_CAPABILITIES, ("miwitracker", model), TEST_PROFILE)
+    provider = StubProvider(
+        status=ProviderDeviceStatus(
+            external_device_id=wearable_device.external_device_id,
+            model=model,
+            status="online",
+            battery_level=82,
+            last_communication_at=datetime(2026, 7, 24, 2, tzinfo=UTC),
+            raw_payload={"Latitude": 31.2, "Longitude": 121.5},
+        )
+    )
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+
+    response = api_client.post(f"/api/wearables/devices/{wearable_device.id}/check-status/")
+
+    assert response.status_code == 200, response.data
+    assert set(response.data) == {
+        "device_id",
+        "model",
+        "online",
+        "battery_level",
+        "last_communication_at",
+        "capabilities",
+    }
+    assert response.data["capabilities"] == {"ring": expected_ring}
+    assert set(response.data["capabilities"]) == {"ring"}
+    assert "9018" not in str(response.data)
 
 
 @pytest.mark.django_db

@@ -1,4 +1,5 @@
 from django.db import IntegrityError
+from django.db.models import CharField, Exists, Max, OuterRef, Q, Subquery
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -8,7 +9,7 @@ from rest_framework.views import APIView
 
 from apps.common.permissions import IsAdminOrDoctor
 from apps.training.tracking import accessible_project_patients
-from apps.wearables.models import WearableBinding, WearableDevice
+from apps.wearables.models import WearableBinding, WearableDevice, WearableSyncRun
 from apps.wearables.tasks import METRIC_TYPES, sync_device_metric
 
 from .serializers import (
@@ -26,6 +27,7 @@ from .services.bindings import (
     DeviceNotFound,
     InvalidUnbindTime,
     bind_device,
+    mask_patient_name,
     unbind_device,
 )
 from .services.short_codes import ShortCodeExhausted
@@ -47,6 +49,37 @@ def _active_patient_binding(request, patient_id):
             patient_id=patient_id,
             unbound_at__isnull=True,
         )
+    )
+
+
+def _device_queryset_for_user(user):
+    accessible_patient_ids = (
+        accessible_project_patients(user).order_by().values("patient_id")
+    )
+    active_bindings = WearableBinding.objects.filter(
+        device_id=OuterRef("pk"),
+        unbound_at__isnull=True,
+    )
+    accessible_binding_names = (
+        active_bindings.filter(
+            patient_id__in=Subquery(accessible_patient_ids),
+        )
+        .order_by()
+        .values("patient__name")
+    )
+    return (
+        WearableDevice.objects.annotate(
+            _is_bound=Exists(active_bindings),
+            _current_patient_name=Subquery(
+                accessible_binding_names[:1],
+                output_field=CharField(),
+            ),
+            _last_sync_at=Max(
+                "sync_runs__updated_at",
+                filter=Q(sync_runs__status=WearableSyncRun.Status.SUCCEEDED),
+            ),
+        )
+        .order_by("-id")
     )
 
 
@@ -84,9 +117,11 @@ def _command_error(exc):
 
 
 class WearableDeviceListCreateView(ListCreateAPIView):
-    queryset = WearableDevice.objects.order_by("-id")
     serializer_class = WearableDeviceSerializer
     permission_classes = [IsAdminOrDoctor]
+
+    def get_queryset(self):
+        return _device_queryset_for_user(self.request.user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -101,9 +136,11 @@ class WearableDeviceListCreateView(ListCreateAPIView):
 
 
 class WearableDeviceDetailView(RetrieveUpdateAPIView):
-    queryset = WearableDevice.objects.order_by("-id")
     serializer_class = WearableDeviceSerializer
     permission_classes = [IsAdminOrDoctor]
+
+    def get_queryset(self):
+        return _device_queryset_for_user(self.request.user)
 
 
 class ProjectPatientBindingStatusView(APIView):
@@ -147,7 +184,18 @@ class ProjectPatientBindView(APIView):
         except DeviceNotFound:
             return Response({"detail": "未找到启用的设备。"}, status=status.HTTP_404_NOT_FOUND)
         except BindingConflict as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+            detail = str(exc)
+            if exc.conflicting_patient_id is not None:
+                patient_name = (
+                    accessible_project_patients(request.user)
+                    .filter(patient_id=exc.conflicting_patient_id)
+                    .order_by()
+                    .values_list("patient__name", flat=True)
+                    .first()
+                )
+                if patient_name:
+                    detail = f"设备已绑定患者{mask_patient_name(patient_name)}。"
+            return Response({"detail": detail}, status=status.HTTP_409_CONFLICT)
         return Response(
             WearableBindingSerializer(binding).data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,

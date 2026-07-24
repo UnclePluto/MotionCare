@@ -3,10 +3,15 @@ from rest_framework import serializers
 
 from apps.wearables.models import WearableBinding, WearableDevice
 
+from .services.bindings import mask_patient_name
 from .services.short_codes import ShortCodeExhausted, generate_device_short_code
 
 
 class WearableDeviceSerializer(serializers.ModelSerializer):
+    is_bound = serializers.SerializerMethodField()
+    current_patient_name = serializers.SerializerMethodField()
+    last_sync_at = serializers.SerializerMethodField()
+
     IDENTITY_FIELDS = {
         "provider",
         "external_device_id",
@@ -25,7 +30,10 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
             "model",
             "short_code",
             "enabled",
+            "is_bound",
+            "current_patient_name",
             "last_communication_at",
+            "last_sync_at",
             "last_battery_level",
             "last_device_status",
             "last_status_checked_at",
@@ -35,7 +43,10 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "short_code",
+            "is_bound",
+            "current_patient_name",
             "last_communication_at",
+            "last_sync_at",
             "last_battery_level",
             "last_device_status",
             "last_status_checked_at",
@@ -43,6 +54,17 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         validators = []
+
+    def get_is_bound(self, instance):
+        return bool(getattr(instance, "_is_bound", False))
+
+    def get_current_patient_name(self, instance):
+        name = getattr(instance, "_current_patient_name", None)
+        return mask_patient_name(name) if name else None
+
+    def get_last_sync_at(self, instance):
+        value = getattr(instance, "_last_sync_at", None)
+        return serializers.DateTimeField().to_representation(value) if value else None
 
     def validate(self, attrs):
         provided_fields = set(self.initial_data.keys())
