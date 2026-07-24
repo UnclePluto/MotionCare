@@ -220,6 +220,8 @@ def send_device_command(
         command.status = _COMMAND_STATUS_BY_PROVIDER_CODE.get(
             result.code, WearableCommandLog.Status.FAILED
         )
+        if result.code == 0 and command_type in _MEASUREMENT_COMMANDS:
+            command.status = WearableCommandLog.Status.QUEUED
     except Exception:
         command.status = WearableCommandLog.Status.FAILED
     finally:

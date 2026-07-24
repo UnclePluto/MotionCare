@@ -230,25 +230,130 @@ def test_unverified_model_rejects_all_remote_commands(wearable_device, command_t
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    ("command_type", "expected_code"),
+    ("command_type", "expected_code", "expected_status"),
     [
-        ("ring", "9018"),
-        ("measure_heart_rate", "9012"),
-        ("measure_blood_pressure", "9510"),
-        ("measure_blood_oxygen", "9511"),
+        ("ring", "9018", WearableCommandLog.Status.SUCCEEDED),
+        ("measure_heart_rate", "9012", WearableCommandLog.Status.QUEUED),
+        ("measure_blood_pressure", "9510", WearableCommandLog.Status.QUEUED),
+        ("measure_blood_oxygen", "9511", WearableCommandLog.Status.QUEUED),
     ],
 )
 def test_verified_capability_sends_expected_command_code(
-    wearable_device, verified_capability, command_type, expected_code, monkeypatch
+    wearable_device,
+    verified_capability,
+    command_type,
+    expected_code,
+    expected_status,
+    monkeypatch,
 ):
     provider = StubProvider()
     monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+    monkeypatch.setattr(
+        "apps.wearables.tasks.poll_queued_measurement.apply_async",
+        Mock(),
+    )
 
     command = send_device_command(wearable_device, command_type, actor=None)
 
     assert provider.commands[0][0:2] == (wearable_device.external_device_id, expected_code)
     assert command.command_code == expected_code
+    assert command.status == expected_status
+
+
+@pytest.mark.django_db
+def test_code_zero_measurement_is_queued_for_history_polling(
+    wearable_device, verified_capability, active_binding, monkeypatch
+):
+    provider = StubProvider(command_result=ProviderCommandResult(0, "ok", {}))
+    schedule = Mock()
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+    monkeypatch.setattr(
+        "apps.wearables.tasks.poll_queued_measurement.apply_async",
+        schedule,
+    )
+
+    command = send_device_command(
+        wearable_device,
+        "measure_heart_rate",
+        actor=None,
+        require_binding=True,
+    )
+
+    assert command.provider_code == "0"
+    assert command.status == WearableCommandLog.Status.QUEUED
+    assert command.completed_at is None
+    assert command.poll_deadline_at == command.requested_at + timedelta(seconds=60)
+    assert command.next_poll_at == command.requested_at + timedelta(seconds=10)
+    schedule.assert_called_once_with(args=[command.id], countdown=10)
+
+
+@pytest.mark.django_db
+def test_code_zero_measurement_poll_persists_a_new_real_point(
+    wearable_device, verified_capability, active_binding, monkeypatch
+):
+    provider = StubProvider(command_result=ProviderCommandResult(0, "ok", {}))
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+    monkeypatch.setattr(
+        "apps.wearables.tasks.poll_queued_measurement.apply_async",
+        Mock(),
+    )
+    command = send_device_command(
+        wearable_device,
+        "measure_heart_rate",
+        actor=None,
+        require_binding=True,
+    )
+    provider.points = [
+        ProviderMeasurement(
+            metric_type="heart_rate",
+            measured_at=command.requested_at + timedelta(microseconds=1),
+            values={"heart_rate": 73},
+            raw_payload={},
+        )
+    ]
+    monkeypatch.setattr("apps.wearables.tasks._get_command_provider", lambda _: provider)
+    monkeypatch.setattr(
+        "apps.wearables.tasks.timezone.now",
+        lambda: command.requested_at + timedelta(seconds=10),
+    )
+
+    poll_queued_measurement.run(command.id)
+
+    command.refresh_from_db()
     assert command.status == WearableCommandLog.Status.SUCCEEDED
+    assert command.completed_at is not None
+    assert WearableMeasurement.objects.get(device=wearable_device).heart_rate == 73
+
+
+@pytest.mark.django_db
+def test_code_zero_measurement_poll_times_out_after_sixty_seconds(
+    wearable_device, verified_capability, active_binding, monkeypatch
+):
+    provider = StubProvider(command_result=ProviderCommandResult(0, "ok", {}))
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+    monkeypatch.setattr(
+        "apps.wearables.tasks.poll_queued_measurement.apply_async",
+        Mock(),
+    )
+    command = send_device_command(
+        wearable_device,
+        "measure_heart_rate",
+        actor=None,
+        require_binding=True,
+    )
+    monkeypatch.setattr("apps.wearables.tasks._get_command_provider", lambda _: provider)
+    now = {"value": command.requested_at}
+    monkeypatch.setattr("apps.wearables.tasks.timezone.now", lambda: now["value"])
+
+    for second in (10, 20, 30, 40, 50, 60):
+        now["value"] = command.requested_at + timedelta(seconds=second)
+        poll_queued_measurement.run(command.id)
+
+    command.refresh_from_db()
+    assert command.poll_attempts == 6
+    assert command.status == WearableCommandLog.Status.TIMEOUT
+    assert command.completed_at is not None
+    assert WearableMeasurement.objects.count() == 0
 
 
 @pytest.mark.django_db
