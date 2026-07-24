@@ -52,6 +52,7 @@ describe("WearableBindingPanel", () => {
 
     expect(await screen.findByText("患者设备绑定成功")).toBeInTheDocument();
     expect(await screen.findByText("设备通信异常")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "让设备响铃" })).not.toBeInTheDocument();
     expect(mockPost).toHaveBeenCalledWith("/wearables/project-patients/12/bind/", { short_code: "0826" });
     expect(mockPost).toHaveBeenCalledWith("/wearables/devices/7/check-status/");
   });
@@ -80,5 +81,23 @@ describe("WearableBindingPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "解绑设备" }));
 
     expect(await screen.findByText(/历史研究数据不会删除/)).toBeInTheDocument();
+  });
+
+  it("仅在通信测试明确返回响铃能力时显示响铃操作", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        project_patient_id: 12,
+        patient_id: 101,
+        binding: { id: 33, patient_id: 101, device_id: 7, short_code: "0826", bound_at: "2026-07-24T10:00:00Z" },
+      },
+    });
+    mockPost.mockResolvedValue({
+      data: { device_id: 7, online: true, battery_level: 80, last_communication_at: null, capabilities: { ring: true } },
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "通信测试" }));
+
+    expect(await screen.findByRole("button", { name: "让设备响铃" })).toBeInTheDocument();
   });
 });

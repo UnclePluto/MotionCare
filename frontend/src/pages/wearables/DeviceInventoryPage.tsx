@@ -150,7 +150,7 @@ export function DeviceInventoryPage() {
         />
       )}
 
-      <Modal title="新增设备" open={createOpen} footer={null} destroyOnClose onCancel={() => setCreateOpen(false)}>
+      <Modal title="新增设备" open={createOpen} footer={null} destroyOnHidden onCancel={() => setCreateOpen(false)}>
         <Form form={form} layout="vertical" onFinish={(values) => createDevice.mutate(values)}>
           <Form.Item label="厂商" name="provider" rules={[{ required: true, message: "请输入厂商" }]}>
             <Input placeholder="例如 miwitracker" />

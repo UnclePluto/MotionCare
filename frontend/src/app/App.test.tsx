@@ -81,6 +81,7 @@ describe("App", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
       if (url === "/prescriptions/actions/") return Promise.resolve({ data: [] });
+      if (url === "/wearables/devices/") return Promise.resolve({ data: [] });
       if (url === "/studies/groups/" && params?.project === 1) {
         return Promise.resolve({
           data: [
@@ -572,5 +573,21 @@ describe("App", () => {
     );
 
     expect(await screen.findByText("患者训练追踪")).toBeInTheDocument();
+  });
+
+  it("opens wearable device inventory route", async () => {
+    window.history.pushState({}, "", "/wearable-devices");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect((await screen.findAllByText("设备台账")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("button", { name: "新增设备" })).toBeInTheDocument();
   });
 });

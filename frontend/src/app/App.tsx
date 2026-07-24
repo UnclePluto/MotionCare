@@ -25,6 +25,7 @@ import { CrfPreviewPage } from "../pages/crf/CrfPreviewPage";
 import { DoctorCreatePage } from "../pages/doctors/DoctorCreatePage";
 import { DoctorEditPage } from "../pages/doctors/DoctorEditPage";
 import { DoctorListPage } from "../pages/doctors/DoctorListPage";
+import { DeviceInventoryPage } from "../pages/wearables/DeviceInventoryPage";
 
 function PrescriptionRouteWrapper() {
   const { projectPatientId } = useParams<{ projectPatientId: string }>();
@@ -70,6 +71,7 @@ export function App() {
               <Route path="/training" element={<TrainingEntryPage />} />
               <Route path="/training-tracking" element={<TrainingTrackingPage />} />
               <Route path="/training-tracking/patients/:patientId" element={<TrainingTrackingDetailPage />} />
+              <Route path="/wearable-devices" element={<DeviceInventoryPage />} />
               <Route path="/health" element={<DailyHealthPage />} />
               <Route path="/crf" element={<CrfPreviewPage />} />
               <Route path="*" element={<Navigate to="/patients" replace />} />
