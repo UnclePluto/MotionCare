@@ -19,6 +19,8 @@
 > 执行记录（2026-07-24, codex）：Task 7 已落地于 commits `ac25023`、`468e0b0`、`d4e7e94`、`4936d7c`、`595fdcf`、`e07dc60`，任务审查通过。
 >
 > 执行记录（2026-07-24, codex）：Task 8 已落地于 commits `9da8841`、`8016655`、`c4a431e`、`a83ef9e`、`0bd0b2c`、`d4f2f94`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 9 已落地于 commits `4da43f0`、`daaf7e0`、`1761118`、`b028b75`、`cb4ac83`、`96562cd`、`289bfa4`、`b8f07d5`、`8136c13`、`7c18178`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -1045,7 +1047,7 @@ git commit -m "feat(frontend): 增加设备台账与患者设备绑定"
 - Produces: 用户可见一级类目“训练与健康”，详情双页签。
 - Consumes: 现有训练追踪 API 和 Task 7 穿戴查询 API。
 
-- [ ] **Step 1: 写双页签失败测试**
+- [x] **Step 1: 写双页签失败测试**
 
 断言：
 
@@ -1065,20 +1067,20 @@ expect(screen.queryByText("设备在线")).not.toBeInTheDocument()
 - 未验证型号时远程操作按钮禁用并显示原因。
 - 页面不存在“CRF 关联数据”或“预览 CRF”按钮。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd frontend && npm run test -- TrainingTrackingPage TrainingTrackingDetailPage WearableHealthTab`
 
 Expected: FAIL。
 
-- [ ] **Step 3: 升级列表文案和字段**
+- [x] **Step 3: 升级列表文案和字段**
 
 - `患者训练追踪` 改为 `患者训练与健康`。
 - “查看追踪”改为“查看训练与健康”。
 - 增加“设备绑定”“最近健康同步”“近 30 天数据完整率”列。
 - 保留现有 `/training-tracking` 和 `/training-tracking/patients/:id` 路由，避免旧链接失效。
 
-- [ ] **Step 4: 增加详情双页签**
+- [x] **Step 4: 增加详情双页签**
 
 患者、项目选择器和研究周期描述放在 Tabs 外部共享。Tabs key：
 
@@ -1093,13 +1095,15 @@ items={[
 
 `WearableMetricChart` 支持心率单线、血压收缩/舒张双线、血氧单线。筛选间隔为 `raw/5m/15m/30m/1h`；步数只用日汇总表和日趋势。
 
-- [ ] **Step 5: 运行前端测试、lint 和构建**
+穿戴健康页同时提供按型号能力安全关闭的远程配置入口：心率、血压、血氧采集间隔限制为 `1..1440` 分钟，步数使用开关配置；未验证能力不得下发。
+
+- [x] **Step 5: 运行前端测试、lint 和构建**
 
 Run: `cd frontend && npm run test && npm run lint && npm run build`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add frontend/src/pages/training-tracking frontend/src/pages/wearables frontend/src/app/layout/AdminLayout.tsx
