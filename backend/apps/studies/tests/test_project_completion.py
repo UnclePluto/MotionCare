@@ -112,6 +112,20 @@ def test_general_project_writes_must_use_complete_action_for_archiving_and_keep_
 
 
 @pytest.mark.django_db
+def test_archived_empty_project_cannot_be_deleted_but_active_empty_project_can(doctor, project):
+    client = _client(doctor)
+    client.post(f"/api/studies/projects/{project.id}/complete/")
+
+    archived_delete = client.delete(f"/api/studies/projects/{project.id}/")
+    active = StudyProject.objects.create(name="空进行中项目", created_by=doctor)
+    active_delete = client.delete(f"/api/studies/projects/{active.id}/")
+
+    assert archived_delete.status_code == 400
+    assert StudyProject.objects.filter(pk=project.id).exists()
+    assert active_delete.status_code == 204
+
+
+@pytest.mark.django_db
 def test_completed_project_rejects_confirm_grouping_without_saving_ratios(doctor, project):
     project.status = StudyProject.Status.ARCHIVED
     project.save(update_fields=["status"])

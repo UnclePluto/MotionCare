@@ -50,6 +50,8 @@ class StudyProjectViewSet(ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         project = self.get_object()
+        if project.status == StudyProject.Status.ARCHIVED:
+            raise ValidationError({"detail": "项目已完结，只允许只读查看。"})
         if ProjectPatient.objects.filter(project=project).exists():
             raise ValidationError({"detail": "项目中仍有患者，无法删除。"})
         return super().destroy(request, *args, **kwargs)

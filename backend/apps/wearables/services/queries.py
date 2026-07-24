@@ -267,6 +267,8 @@ def project_summary(*, user, project_id, metric_type, start, end):
                     lower, upper = windows[point.patient_id]
                     if not (_utc(lower) <= point.measured_at < _utc(upper)):
                         continue
+                    if point.measured_at.astimezone(SHANGHAI_TZ).date() not in days:
+                        continue
                     if metric_type == "heart_rate":
                         value = point.heart_rate
                         minimum = maximum = value
@@ -301,6 +303,9 @@ def project_summary(*, user, project_id, metric_type, start, end):
             "missing_rate": round((eligible_days - valid_data_days) / eligible_days * 100, 2) if eligible_days else None,
         }
         if metric_type == "blood_pressure":
+            result.pop("mean")
+            result.pop("min")
+            result.pop("max")
             result["systolic"] = {"mean": round(sum(values) / len(values), 2) if values else None, "min": min(minimums) if minimums else None, "max": max(maximums) if maximums else None}
             result["diastolic"] = {"mean": round(sum(diastolic_values) / len(diastolic_values), 2) if diastolic_values else None, "min": min(diastolic_minimums) if diastolic_minimums else None, "max": max(diastolic_maximums) if diastolic_maximums else None}
         response_groups.append(result)

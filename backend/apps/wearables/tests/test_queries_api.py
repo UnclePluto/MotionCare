@@ -143,6 +143,24 @@ def test_project_window_clips_raw_points_and_excludes_partial_summary_days(
 
 
 @pytest.mark.django_db
+def test_project_summary_excludes_raw_points_from_partial_enrollment_and_completion_days(
+    doctor, project_patient, patient, wearable_device
+):
+    ProjectPatient.objects.filter(pk=project_patient.pk).update(enrolled_at=datetime(2026, 7, 21, 20, tzinfo=UTC))
+    project_patient.project.completed_at = datetime(2026, 7, 23, 4, tzinfo=UTC)
+    project_patient.project.save(update_fields=["completed_at"])
+    _measurement(patient=patient, device=wearable_device, metric_type="heart_rate", measured_at=datetime(2026, 7, 21, 21, tzinfo=UTC), heart_rate=60)
+    _measurement(patient=patient, device=wearable_device, metric_type="heart_rate", measured_at=datetime(2026, 7, 23, 3, tzinfo=UTC), heart_rate=80)
+
+    response = _client(doctor).get(
+        f"/api/wearables/projects/{project_patient.project_id}/summary/",
+        {"metric_type": "heart_rate", "start": "2026-07-22", "end": "2026-07-23"},
+    )
+    group = response.data["groups"][0]
+    assert (group["eligible_days"], group["valid_data_days"], group["mean"], group["measurement_count"]) == (0, 0, None, 0)
+
+
+@pytest.mark.django_db
 def test_daily_steps_are_only_daily_and_project_summary_is_group_scoped(
     doctor, project_patient, patient, wearable_device
 ):
