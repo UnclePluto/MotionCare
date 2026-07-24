@@ -23,12 +23,10 @@ class StudyProjectSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if "completed_at" in self.initial_data:
             raise serializers.ValidationError({"completed_at": "项目完结时间只能由完结操作写入。"})
-        if (
-            self.instance is not None
-            and self.instance.status == StudyProject.Status.ARCHIVED
-            and attrs.get("status", StudyProject.Status.ARCHIVED) != StudyProject.Status.ARCHIVED
-        ):
-            raise serializers.ValidationError({"status": "项目已完结，不能恢复为未完结状态。"})
+        if self.instance is not None and self.instance.status == StudyProject.Status.ARCHIVED:
+            raise serializers.ValidationError({"detail": "项目已完结，只允许只读查看。"})
+        if attrs.get("status") == StudyProject.Status.ARCHIVED:
+            raise serializers.ValidationError({"status": "项目完结请使用 complete 操作。"})
         return attrs
 
 

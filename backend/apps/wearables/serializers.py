@@ -126,10 +126,14 @@ class WearableMeasurementsQuerySerializer(serializers.Serializer):
     bucket = serializers.ChoiceField(
         choices=["raw", "5m", "15m", "30m", "1h"], default="raw", required=False
     )
+    page = serializers.IntegerField(min_value=1, default=1, required=False)
+    page_size = serializers.IntegerField(min_value=1, max_value=500, default=200, required=False)
 
     def validate(self, attrs):
         if attrs["start"] > attrs["end"]:
             raise serializers.ValidationError({"end": "结束日期不能早于开始日期。"})
+        if (attrs["end"] - attrs["start"]).days + 1 > 31:
+            raise serializers.ValidationError({"end": "趋势查询最多 31 个自然日。"})
         return attrs
 
 
@@ -142,6 +146,8 @@ class WearableDailySummariesQuerySerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs["start"] > attrs["end"]:
             raise serializers.ValidationError({"end": "结束日期不能早于开始日期。"})
+        if (attrs["end"] - attrs["start"]).days + 1 > 366:
+            raise serializers.ValidationError({"end": "汇总查询最多 366 个自然日。"})
         if attrs.get("bucket") not in (None, "raw"):
             raise serializers.ValidationError({"bucket": "步数只提供按日总量，不支持分时分桶。"})
         return attrs
@@ -157,4 +163,6 @@ class WearableProjectSummaryQuerySerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs["start"] > attrs["end"]:
             raise serializers.ValidationError({"end": "结束日期不能早于开始日期。"})
+        if (attrs["end"] - attrs["start"]).days + 1 > 366:
+            raise serializers.ValidationError({"end": "汇总查询最多 366 个自然日。"})
         return attrs

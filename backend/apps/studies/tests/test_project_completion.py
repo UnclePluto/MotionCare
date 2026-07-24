@@ -80,6 +80,38 @@ def test_project_update_cannot_restore_archived_status_or_set_completed_at(docto
 
 
 @pytest.mark.django_db
+def test_general_project_writes_must_use_complete_action_for_archiving_and_keep_archived_read_only(
+    doctor, project
+):
+    client = _client(doctor)
+
+    create_archived = client.post(
+        "/api/studies/projects/", {"name": "伪造完结", "status": "archived"}, format="json"
+    )
+    patch_archived = client.patch(
+        f"/api/studies/projects/{project.id}/", {"status": "archived"}, format="json"
+    )
+    activate = client.patch(
+        f"/api/studies/projects/{project.id}/", {"status": "active"}, format="json"
+    )
+    client.post(f"/api/studies/projects/{project.id}/complete/")
+    archived_name_change = client.patch(
+        f"/api/studies/projects/{project.id}/", {"name": "不应保存"}, format="json"
+    )
+    archived_put = client.put(
+        f"/api/studies/projects/{project.id}/",
+        {"name": "不应保存", "status": "archived", "description": ""},
+        format="json",
+    )
+
+    assert create_archived.status_code == 400
+    assert patch_archived.status_code == 400
+    assert activate.status_code == 200
+    assert archived_name_change.status_code == 400
+    assert archived_put.status_code == 400
+
+
+@pytest.mark.django_db
 def test_completed_project_rejects_confirm_grouping_without_saving_ratios(doctor, project):
     project.status = StudyProject.Status.ARCHIVED
     project.save(update_fields=["status"])

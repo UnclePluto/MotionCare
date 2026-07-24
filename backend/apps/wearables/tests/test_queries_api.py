@@ -9,8 +9,10 @@ from apps.accounts.models import User
 from apps.patients.models import Patient
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 from apps.wearables.models import (
+    WearableBinding,
     WearableDailySummary,
     WearableMeasurement,
+    WearableSyncRun,
 )
 
 
@@ -104,6 +106,20 @@ def test_measurement_buckets_use_shanghai_boundaries_and_hide_raw_payload(
     assert [response.data["items"][0]["heart_rate_avg"] for response in larger_buckets] == [70.0, 70.0, 70.0]
     assert bp.data["items"] == [{"start": "2026-07-22T00:00:00+08:00", "end": "2026-07-22T00:05:00+08:00", "count": 2, "systolic_avg": 125.0, "diastolic_avg": 85.0}]
 
+    invalid_page = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/measurements/",
+        {**params, "metric_type": "heart_rate", "page": 2, "page_size": 2},
+    )
+    oversized_page = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/measurements/",
+        {**params, "metric_type": "heart_rate", "page_size": 501},
+    )
+    too_long = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/measurements/",
+        {"project_patient": project_patient.id, "metric_type": "heart_rate", "start": "2026-06-01", "end": "2026-07-02"},
+    )
+    assert invalid_page.status_code == oversized_page.status_code == too_long.status_code == 400
+
 
 @pytest.mark.django_db
 def test_project_window_clips_raw_points_and_excludes_partial_summary_days(
@@ -136,6 +152,8 @@ def test_daily_steps_are_only_daily_and_project_summary_is_group_scoped(
     WearableDailySummary.objects.create(
         patient=patient, record_date=date(2026, 7, 22), steps=5000, heart_rate_avg=Decimal("70"), heart_rate_min=60, heart_rate_max=80, heart_rate_count=2
     )
+    _measurement(patient=patient, device=wearable_device, metric_type="heart_rate", measured_at=datetime(2026, 7, 21, 16, tzinfo=UTC), heart_rate=60)
+    _measurement(patient=patient, device=wearable_device, metric_type="heart_rate", measured_at=datetime(2026, 7, 21, 17, tzinfo=UTC), heart_rate=80)
     invalid_steps = _client(doctor).get(
         f"/api/wearables/patients/{patient.id}/daily-summaries/",
         {"project_patient": project_patient.id, "start": "2026-07-22", "end": "2026-07-22", "bucket": "15m"},
@@ -155,3 +173,46 @@ def test_daily_steps_are_only_daily_and_project_summary_is_group_scoped(
     assert group["max"] == 80
     assert group["measurement_count"] == 2
     assert group["missing_rate"] == 0.0
+
+
+@pytest.mark.django_db
+def test_sync_status_does_not_expose_previous_patients_sync_runs_after_device_rebinding(
+    doctor, project_patient, other_project_patient, wearable_device
+):
+    old_bound_at = datetime(2026, 7, 20, tzinfo=UTC)
+    switch_at = datetime(2026, 7, 21, tzinfo=UTC)
+    first = WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=wearable_device,
+        bound_at=old_bound_at,
+        unbound_at=switch_at,
+        bound_by=doctor,
+        unbound_by=doctor,
+    )
+    old_run = WearableSyncRun.objects.create(
+        device=wearable_device, metric_type="heart_rate", status=WearableSyncRun.Status.SUCCEEDED
+    )
+    WearableSyncRun.objects.filter(pk=old_run.pk).update(created_at=datetime(2026, 7, 20, 1, tzinfo=UTC))
+    second = WearableBinding.objects.create(
+        patient=other_project_patient.patient,
+        device=wearable_device,
+        bound_at=switch_at,
+        bound_by=doctor,
+    )
+
+    before_new_run = _client(doctor).get(
+        f"/api/wearables/patients/{other_project_patient.patient_id}/sync-status/"
+    )
+    new_run = WearableSyncRun.objects.create(
+        device=wearable_device, metric_type="heart_rate", status=WearableSyncRun.Status.FAILED
+    )
+    WearableSyncRun.objects.filter(pk=new_run.pk).update(created_at=datetime(2026, 7, 21, 1, tzinfo=UTC))
+    after_new_run = _client(doctor).get(
+        f"/api/wearables/patients/{other_project_patient.patient_id}/sync-status/"
+    )
+
+    assert first.id != second.id
+    assert before_new_run.data["last_sync_at"] is None
+    assert before_new_run.data["metrics"][0]["status"] is None
+    assert after_new_run.data["metrics"][0]["status"] == "failed"
+    assert after_new_run.data["metrics"][0]["last_success_at"] is None

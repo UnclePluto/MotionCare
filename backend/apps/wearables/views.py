@@ -310,8 +310,8 @@ class PatientMeasurementsView(APIView):
     def get(self, request, patient_id):
         serializer = WearableMeasurementsQuerySerializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
-        return Response(
-            measurements(
+        try:
+            data = measurements(
                 user=request.user,
                 patient_id=patient_id,
                 project_patient_id=serializer.validated_data.get("project_patient"),
@@ -319,8 +319,12 @@ class PatientMeasurementsView(APIView):
                 start=serializer.validated_data["start"],
                 end=serializer.validated_data["end"],
                 bucket=serializer.validated_data["bucket"],
+                page=serializer.validated_data["page"],
+                page_size=serializer.validated_data["page_size"],
             )
-        )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data)
 
 
 class PatientDailySummariesView(APIView):
