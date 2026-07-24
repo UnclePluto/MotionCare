@@ -2,10 +2,11 @@ import { DualAxes, type DualAxesConfig } from "@ant-design/charts";
 import { ExperimentOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Descriptions, Drawer, Empty, Segmented, Select, Space, Spin, Statistic, Table, Tabs, Tag } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { formatShanghaiDate, formatShanghaiDateTime } from "../../utils/shanghaiTime";
 import { WearableHealthTab } from "../wearables/WearableHealthTab";
 import type {
   TrackingDailyTrendPoint,
@@ -60,14 +61,6 @@ function isGameRecord(record: TrackingRecentRecord) {
   return record.internal_type === "game";
 }
 
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return "—";
-
-  const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-  if (!match) return value;
-  return `${match[1]} ${match[2]}`;
-}
-
 function formatTrendDateLabel(value: string) {
   const match = value.match(/^\d{4}-(\d{2})-(\d{2})$/);
   if (!match) return value;
@@ -82,7 +75,7 @@ function errorMessage(error: unknown) {
       if (typeof detail === "string" && detail.trim()) return detail;
     }
   }
-  return "加载训练追踪数据失败";
+  return "加载训练与健康数据失败";
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -172,6 +165,14 @@ function makeCompletionChartConfig(rows: TrackingPrescriptionCompletionRow[]): D
   };
 }
 
+function TrainingTrackingContent({ children }: { children: ReactNode }) {
+  return (
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      {children}
+    </Space>
+  );
+}
+
 export function TrainingTrackingDetailPage() {
   const { patientId } = useParams<{ patientId: string }>();
   const numericPatientId = Number(patientId);
@@ -184,6 +185,8 @@ export function TrainingTrackingDetailPage() {
   const [videoError, setVideoError] = useState("");
   const [analysisError, setAnalysisError] = useState("");
   const queryClient = useQueryClient();
+  const patientIdRef = useRef(numericPatientId);
+  patientIdRef.current = numericPatientId;
   const [selectedProjectPatient, setSelectedProjectPatient] = useState<{
     patientId: number;
     projectPatientId: number;
@@ -194,6 +197,11 @@ export function TrainingTrackingDetailPage() {
   useEffect(() => {
     setSelectedProjectPatient(null);
     setActiveTab("training");
+    setVideoRecord(null);
+    setVideoUrl("");
+    setVideoLoading(false);
+    setVideoError("");
+    setAnalysisError("");
   }, [numericPatientId]);
 
   const queryParams = useMemo(() => {
@@ -211,7 +219,8 @@ export function TrainingTrackingDetailPage() {
       return response.data;
     },
     enabled: isValidPatientId,
-    placeholderData: (previousData) => previousData,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === numericPatientId ? previousData : undefined,
   });
 
   const latestAnalysisQuery = useQuery({
@@ -233,7 +242,7 @@ export function TrainingTrackingDetailPage() {
       return response.data;
     },
     onMutate: () => setAnalysisError(""),
-    onError: (reason) => setAnalysisError(errorMessage(reason).replace("加载训练追踪数据失败", "动作分析请求失败")),
+    onError: (reason) => setAnalysisError(errorMessage(reason).replace("加载训练与健康数据失败", "动作分析请求失败")),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["training-video-analysis"] }),
@@ -244,17 +253,20 @@ export function TrainingTrackingDetailPage() {
 
   async function openVideo(record: TrackingRecentRecord) {
     if (!record.video_id) return;
+    const requestPatientId = numericPatientId;
     setVideoRecord(record);
     setVideoUrl("");
     setVideoError("");
     setVideoLoading(true);
     try {
       const response = await apiClient.get<{ url: string }>(`/training/videos/${record.video_id}/download-url/`);
+      if (patientIdRef.current !== requestPatientId) return;
       setVideoUrl(response.data.url);
     } catch (reason) {
-      setVideoError(errorMessage(reason).replace("加载训练追踪数据失败", "视频地址获取失败"));
+      if (patientIdRef.current !== requestPatientId) return;
+      setVideoError(errorMessage(reason).replace("加载训练与健康数据失败", "视频地址获取失败"));
     } finally {
-      setVideoLoading(false);
+      if (patientIdRef.current === requestPatientId) setVideoLoading(false);
     }
   }
 
@@ -272,7 +284,7 @@ export function TrainingTrackingDetailPage() {
 
   if (isError) {
     return (
-      <Card title="患者训练追踪">
+      <Card title="患者训练与健康">
         <Alert type="error" showIcon message={errorMessage(error)} />
       </Card>
     );
@@ -280,22 +292,25 @@ export function TrainingTrackingDetailPage() {
 
   if (!data) {
     return (
-      <Card title="患者训练追踪">
-        <Empty description="暂无训练追踪数据" />
+      <Card title="患者训练与健康">
+        <Empty description="暂无训练与健康数据" />
       </Card>
     );
   }
 
   if (data.project_patients.length === 0 || !data.selected_project_patient) {
     return (
-      <Card title="患者训练追踪">
+      <Card title="患者训练与健康">
         <Empty description="暂无可追踪项目" />
       </Card>
     );
   }
 
-  const currentProject = data.selected_project_patient;
-  const currentProjectPatientId = selectedProjectPatientId ?? currentProject.id;
+  const currentProjectPatientId = selectedProjectPatientId ?? data.selected_project_patient.id;
+  const currentProject =
+    data.project_patients.find((projectPatient) => projectPatient.id === currentProjectPatientId) ??
+    data.selected_project_patient;
+  const currentProjectDataReady = data.selected_project_patient.id === currentProjectPatientId;
   const activeTrendData =
     range === "weekly"
       ? buildWeeklyTrendData(data.trend.weekly)
@@ -335,7 +350,11 @@ export function TrainingTrackingDetailPage() {
               {
                 key: "period",
                 label: "研究周期",
-                children: `研究周期：${currentProject.enrolled_at.slice(0, 10)} 至 ${currentProject.project_completed_at?.slice(0, 10) ?? "进行中"}`,
+                children: `研究周期：${formatShanghaiDate(currentProject.enrolled_at)} 至 ${
+                  currentProject.project_completed_at
+                    ? formatShanghaiDate(currentProject.project_completed_at)
+                    : "进行中"
+                }`,
               },
               {
                 key: "prescription",
@@ -351,15 +370,11 @@ export function TrainingTrackingDetailPage() {
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as "training" | "wearable")}
         items={[
-          { key: "training", label: "训练跟踪" },
-          { key: "wearable", label: "穿戴健康" },
-        ]}
-      />
-
-      {activeTab === "wearable" ? (
-        <WearableHealthTab patientId={numericPatientId} projectPatientId={currentProjectPatientId} />
-      ) : (
-        <>
+          {
+            key: "training",
+            label: "训练跟踪",
+            children: (
+              <TrainingTrackingContent>
 
       <Card title="处方完成情况">
         {data.prescription_completion.length === 0 ? (
@@ -383,7 +398,7 @@ export function TrainingTrackingDetailPage() {
                 {
                   title: "最近完成",
                   dataIndex: "recent_record_at",
-                  render: (value: string | null) => formatDateTime(value),
+                  render: (value: string | null) => formatShanghaiDateTime(value),
                 },
               ]}
             />
@@ -445,7 +460,7 @@ export function TrainingTrackingDetailPage() {
               {
                 title: "最近记录",
                 dataIndex: "recent_record_at",
-                render: (value: string | null) => formatDateTime(value),
+                render: (value: string | null) => formatShanghaiDateTime(value),
               },
             ]}
           />
@@ -655,8 +670,22 @@ export function TrainingTrackingDetailPage() {
           )}
         </Card>
       </Drawer>
-        </>
-      )}
+              </TrainingTrackingContent>
+            ),
+          },
+          {
+            key: "wearable",
+            label: "穿戴健康",
+            children: currentProjectDataReady ? (
+              <WearableHealthTab patientId={numericPatientId} projectPatientId={currentProjectPatientId} />
+            ) : (
+              <Card>
+                <Spin />
+              </Card>
+            ),
+          },
+        ]}
+      />
     </Space>
   );
 }

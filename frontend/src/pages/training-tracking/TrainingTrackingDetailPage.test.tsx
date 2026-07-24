@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,9 @@ vi.mock("../../api/client", () => ({
 vi.mock("@ant-design/charts", () => ({
   DualAxes: (props: Record<string, unknown>) => (
     <pre data-testid="dual-axes-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
+  ),
+  Line: (props: Record<string, unknown>) => (
+    <pre data-testid="line-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
   ),
 }));
 
@@ -72,8 +75,8 @@ const trackingDetail = {
       project_status: "active",
       group: 10,
       group_name: "试验组",
-      enrolled_at: "2026-05-01T09:00:00+08:00",
-      project_completed_at: "2026-06-01T09:00:00+08:00",
+      enrolled_at: "2026-04-30T16:00:00Z",
+      project_completed_at: "2026-05-31T16:00:00Z",
     },
     {
       id: 9002,
@@ -93,8 +96,8 @@ const trackingDetail = {
     project_status: "active",
     group: 10,
     group_name: "试验组",
-    enrolled_at: "2026-05-01T09:00:00+08:00",
-    project_completed_at: "2026-06-01T09:00:00+08:00",
+    enrolled_at: "2026-04-30T16:00:00Z",
+    project_completed_at: "2026-05-31T16:00:00Z",
   },
   current_prescription: {
     id: 501,
@@ -297,6 +300,45 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.queryByText("不应展示")).not.toBeInTheDocument();
   });
 
+  it("Tabs 提供实际面板语义并可双向切换后保留训练功能", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        return Promise.resolve({ data: trackingDetail });
+      }
+      if (url === "/wearables/patients/201/sync-status/") {
+        return Promise.resolve({
+          data: {
+            patient_id: 201,
+            is_bound: false,
+            binding_id: null,
+            device_id: null,
+            device_code_masked: null,
+            device_model: null,
+            capabilities: null,
+            last_synced_at: null,
+            last_sync_metric: null,
+            last_device_status: null,
+            last_battery_level: null,
+            last_communication_at: null,
+          },
+        });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+    await screen.findByText("训练患者甲");
+
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("处方完成情况");
+    fireEvent.click(screen.getByRole("tab", { name: "穿戴健康" }));
+    await screen.findByText("请先在患者接入中绑定穿戴设备。");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("请先在患者接入中绑定穿戴设备。");
+
+    fireEvent.click(screen.getByRole("tab", { name: "训练跟踪" }));
+    expect(await screen.findByRole("tabpanel")).toHaveTextContent("处方完成情况");
+    expect(screen.getByRole("button", { name: /查看视频/ })).toBeInTheDocument();
+  });
+
   it("初次请求不带 project_patient，并按 range 切换趋势图数据", async () => {
     renderAt("/training-tracking/patients/201");
 
@@ -426,6 +468,90 @@ describe("TrainingTrackingDetailPage", () => {
     ).toBe(false);
   });
 
+  it("切换患者的请求延迟时立即清空旧患者和录像状态且不挂载错配健康页", async () => {
+    let resolvePatientB: ((value: { data: typeof trackingDetail }) => void) | undefined;
+    const patientB = {
+      ...trackingDetail,
+      patient: { id: 202, name: "训练患者乙", phone_masked: "139****0202" },
+      project_patients: [
+        {
+          ...trackingDetail.project_patients[0],
+          id: 9201,
+          project: 21,
+          project_name: "研究项目乙",
+        },
+      ],
+      selected_project_patient: {
+        ...trackingDetail.selected_project_patient,
+        id: 9201,
+        project: 21,
+        project_name: "研究项目乙",
+      },
+    };
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        return Promise.resolve({ data: trackingDetail });
+      }
+      if (url === "/training/tracking/patients/202/") {
+        return new Promise((resolve) => {
+          resolvePatientB = resolve;
+        });
+      }
+      if (url === "/training/videos/55/download-url/") {
+        return Promise.resolve({ data: { url: "https://cdn.example.com/video.mp4" } });
+      }
+      if (url === "/training/videos/55/analysis-jobs/latest/") {
+        return Promise.resolve({ data: null });
+      }
+      if (url === "/wearables/patients/201/sync-status/") {
+        return Promise.resolve({
+          data: {
+            patient_id: 201,
+            is_bound: false,
+            binding_id: null,
+            device_id: null,
+            device_code_masked: null,
+            device_model: null,
+            capabilities: null,
+            last_synced_at: null,
+            last_sync_metric: null,
+            last_device_status: null,
+            last_battery_level: null,
+            last_communication_at: null,
+          },
+        });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    renderWithRouteSwitcher("/training-tracking/patients/201");
+
+    await screen.findByText("训练患者甲");
+    fireEvent.click(screen.getByRole("button", { name: /查看视频/ }));
+    await screen.findByText("坐站转移训练训练录像");
+    fireEvent.click(screen.getByRole("tab", { name: "穿戴健康" }));
+    await screen.findByText("请先在患者接入中绑定穿戴设备。");
+
+    fireEvent.click(screen.getByRole("button", { name: "切换患者" }));
+
+    await waitFor(() =>
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/tracking/patients/202/",
+        { params: { range: "30d" } },
+      ),
+    );
+    expect(screen.queryByText("训练患者甲")).not.toBeInTheDocument();
+    expect(screen.queryByText("研究项目 A")).not.toBeInTheDocument();
+    expect(
+      mockGet.mock.calls.some(([url]) => url === "/wearables/patients/202/sync-status/"),
+    ).toBe(false);
+
+    await act(async () => {
+      resolvePatientB?.({ data: patientB });
+    });
+    expect(await screen.findByText("训练患者乙")).toBeInTheDocument();
+    expect(screen.queryByText("坐站转移训练训练录像")).not.toBeInTheDocument();
+  });
+
   it("无效 patientId 不请求接口", () => {
     renderAt("/training-tracking/patients/not-a-number");
 
@@ -439,6 +565,7 @@ describe("TrainingTrackingDetailPage", () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("暂无可追踪项目")).toBeInTheDocument();
+    expect(screen.getByText("患者训练与健康")).toBeInTheDocument();
   });
 
   it("请求失败时展示后端错误而不是空态", async () => {
@@ -447,6 +574,7 @@ describe("TrainingTrackingDetailPage", () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("患者不存在或无权访问")).toBeInTheDocument();
-    expect(screen.queryByText("暂无训练追踪数据")).not.toBeInTheDocument();
+    expect(screen.getByText("患者训练与健康")).toBeInTheDocument();
+    expect(screen.queryByText("暂无训练与健康数据")).not.toBeInTheDocument();
   });
 });
