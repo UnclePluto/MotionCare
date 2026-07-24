@@ -320,6 +320,24 @@ describe("App", () => {
     });
   });
 
+  it("redirects the removed manual health route without rendering its form", async () => {
+    window.history.pushState({}, "", "/health");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/patients");
+    });
+    expect(screen.queryByText("保存健康数据")).not.toBeInTheDocument();
+  });
+
   it("does not mount business routes while default password must be changed", async () => {
     window.history.pushState({}, "", "/patients");
     mockGet.mockImplementation((url: string) => {

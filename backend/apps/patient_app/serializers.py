@@ -1,6 +1,5 @@
 from rest_framework import serializers
 
-from apps.health.models import DailyHealthRecord
 from apps.patient_app.services import BINDING_CODE_PATTERN
 from apps.training.models import TrainingRecord
 
@@ -72,20 +71,3 @@ class PatientAppTrainingVideoFinishSerializer(serializers.Serializer):
     segment_count = serializers.IntegerField(min_value=1, max_value=2147483647)
     duration_seconds = serializers.IntegerField(min_value=1)
     training_date = serializers.DateField()
-
-
-class PatientAppDailyHealthSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DailyHealthRecord
-        fields = [
-            "id",
-            "record_date",
-            "steps",
-            "exercise_minutes",
-            "average_heart_rate",
-            "max_heart_rate",
-            "min_heart_rate",
-            "sleep_hours",
-            "note",
-        ]
-        read_only_fields = ["id", "record_date"]

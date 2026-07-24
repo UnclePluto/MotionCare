@@ -20,7 +20,6 @@ import { VisitFormPage } from "../pages/visits/VisitFormPage";
 import { TrainingEntryPage } from "../pages/training/TrainingEntryPage";
 import { TrainingTrackingDetailPage } from "../pages/training-tracking/TrainingTrackingDetailPage";
 import { TrainingTrackingPage } from "../pages/training-tracking/TrainingTrackingPage";
-import { DailyHealthPage } from "../pages/health/DailyHealthPage";
 import { CrfPreviewPage } from "../pages/crf/CrfPreviewPage";
 import { DoctorCreatePage } from "../pages/doctors/DoctorCreatePage";
 import { DoctorEditPage } from "../pages/doctors/DoctorEditPage";
@@ -72,7 +71,6 @@ export function App() {
               <Route path="/training-tracking" element={<TrainingTrackingPage />} />
               <Route path="/training-tracking/patients/:patientId" element={<TrainingTrackingDetailPage />} />
               <Route path="/wearable-devices" element={<DeviceInventoryPage />} />
-              <Route path="/health" element={<DailyHealthPage />} />
               <Route path="/crf" element={<CrfPreviewPage />} />
               <Route path="*" element={<Navigate to="/patients" replace />} />
             </Route>
