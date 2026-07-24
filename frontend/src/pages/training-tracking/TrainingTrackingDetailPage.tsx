@@ -194,16 +194,6 @@ export function TrainingTrackingDetailPage() {
   const selectedProjectPatientId =
     selectedProjectPatient?.patientId === numericPatientId ? selectedProjectPatient.projectPatientId : undefined;
 
-  useEffect(() => {
-    setSelectedProjectPatient(null);
-    setActiveTab("training");
-    setVideoRecord(null);
-    setVideoUrl("");
-    setVideoLoading(false);
-    setVideoError("");
-    setAnalysisError("");
-  }, [numericPatientId]);
-
   const queryParams = useMemo(() => {
     const params: { range: TrainingTrackingRange; project_patient?: number } = { range };
     if (selectedProjectPatientId != null) params.project_patient = selectedProjectPatientId;
@@ -250,6 +240,18 @@ export function TrainingTrackingDetailPage() {
       ]);
     },
   });
+  const resetAnalysisMutation = analysisMutation.reset;
+
+  useEffect(() => {
+    setSelectedProjectPatient(null);
+    setActiveTab("training");
+    setVideoRecord(null);
+    setVideoUrl("");
+    setVideoLoading(false);
+    setVideoError("");
+    setAnalysisError("");
+    resetAnalysisMutation();
+  }, [numericPatientId, resetAnalysisMutation]);
 
   async function openVideo(record: TrackingRecentRecord) {
     if (!record.video_id) return;
