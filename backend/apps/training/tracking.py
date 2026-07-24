@@ -53,6 +53,11 @@ def serialize_project_patient(project_patient: ProjectPatient) -> dict:
         "group": project_patient.group_id,
         "group_name": project_patient.group.name if project_patient.group_id else None,
         "enrolled_at": project_patient.enrolled_at.isoformat(),
+        "project_completed_at": (
+            project_patient.project.completed_at.isoformat()
+            if project_patient.project.completed_at
+            else None
+        ),
     }
 
 

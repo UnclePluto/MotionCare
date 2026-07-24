@@ -234,3 +234,43 @@ def test_sync_status_does_not_expose_previous_patients_sync_runs_after_device_re
     assert before_new_run.data["metrics"][0]["status"] is None
     assert after_new_run.data["metrics"][0]["status"] == "failed"
     assert after_new_run.data["metrics"][0]["last_success_at"] is None
+
+
+@pytest.mark.django_db
+def test_sync_status_exposes_safe_bound_device_capabilities_without_contacting_provider(
+    doctor, project_patient, wearable_device, monkeypatch
+):
+    from apps.wearables.capabilities import CapabilityProfile
+
+    monkeypatch.setattr(
+        "apps.wearables.services.queries.get_capability_profile",
+        lambda provider, model: CapabilityProfile(
+            measure_heart_rate="safe-code",
+            measure_blood_pressure="safe-code",
+        ),
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=wearable_device,
+        bound_at=datetime.now(UTC),
+        bound_by=doctor,
+    )
+
+    response = _client(doctor).get(
+        f"/api/wearables/patients/{project_patient.patient_id}/sync-status/"
+    )
+
+    assert response.status_code == 200
+    assert response.data["device_id"] == wearable_device.id
+    assert response.data["model"] == wearable_device.model
+    assert response.data["capabilities"] == {
+        "ring": False,
+        "measure_heart_rate": True,
+        "measure_blood_pressure": True,
+        "measure_blood_oxygen": False,
+        "configure_heart_rate_interval": False,
+        "configure_blood_pressure_interval": False,
+        "configure_blood_oxygen_interval": False,
+        "configure_step_switch": False,
+    }
+    assert "safe-code" not in str(response.data)

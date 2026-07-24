@@ -12,7 +12,7 @@ from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 from apps.training.models import TrainingRecord
-from apps.training.tracking import list_patient_tracking_summaries
+from apps.training.tracking import list_patient_tracking_summaries, serialize_project_patient
 from apps.wearables.models import (
     WearableBinding,
     WearableDailySummary,
@@ -59,6 +59,17 @@ def _project_patient(doctor, patient, project_name="研究项目", group_name="�
     project = StudyProject.objects.create(name=project_name, created_by=doctor)
     group = StudyGroup.objects.create(project=project, name=group_name, target_ratio=1)
     return ProjectPatient.objects.create(project=project, patient=patient, group=group)
+
+
+@pytest.mark.django_db
+def test_tracking_project_patient_includes_authoritative_project_completed_at(doctor):
+    patient = _patient(doctor)
+    project_patient = _project_patient(doctor, patient)
+    completed_at = datetime(2026, 7, 23, 4, tzinfo=UTC)
+    project_patient.project.completed_at = completed_at
+    project_patient.project.save(update_fields=["completed_at"])
+
+    assert serialize_project_patient(project_patient)["project_completed_at"] == completed_at.isoformat()
 
 
 def _active_prescription(project_patient, doctor, version=1):
@@ -699,6 +710,7 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
             "group": project_patient.group_id,
             "group_name": project_patient.group.name,
             "enrolled_at": project_patient.enrolled_at.isoformat(),
+            "project_completed_at": None,
         }
     ]
     assert response.data["current_prescription"] == {

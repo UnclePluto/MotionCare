@@ -13,11 +13,22 @@ from apps.wearables.models import (
     WearableMeasurement,
     WearableSyncRun,
 )
+from apps.wearables.capabilities import get_capability_profile
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 MEASUREMENT_METRICS = {"heart_rate", "blood_pressure", "blood_oxygen"}
 BUCKET_MINUTES = {"5m": 5, "15m": 15, "30m": 30, "1h": 60}
+COMMAND_CAPABILITY_FIELDS = (
+    "ring",
+    "measure_heart_rate",
+    "measure_blood_pressure",
+    "measure_blood_oxygen",
+    "configure_heart_rate_interval",
+    "configure_blood_pressure_interval",
+    "configure_blood_oxygen_interval",
+    "configure_step_switch",
+)
 
 
 def day_bounds(record_date):
@@ -211,7 +222,15 @@ def sync_status(*, user, patient_id):
         .first()
     )
     if binding is None:
-        return {"is_bound": False, "device_short_code": None, "last_sync_at": None, "metrics": []}
+        return {
+            "is_bound": False,
+            "device_id": None,
+            "model": None,
+            "device_short_code": None,
+            "capabilities": {field: False for field in COMMAND_CAPABILITY_FIELDS},
+            "last_sync_at": None,
+            "metrics": [],
+        }
     runs = _runs_for_binding(binding)
     last_sync = runs.filter(status=WearableSyncRun.Status.SUCCEEDED).aggregate(
         last_sync_at=Max("created_at")
@@ -231,9 +250,16 @@ def sync_status(*, user, patient_id):
                 else None,
             }
         )
+    capability_profile = get_capability_profile(binding.device.provider, binding.device.model)
     return {
         "is_bound": True,
+        "device_id": binding.device_id,
+        "model": binding.device.model,
         "device_short_code": binding.device.short_code,
+        "capabilities": {
+            field: bool(getattr(capability_profile, field))
+            for field in COMMAND_CAPABILITY_FIELDS
+        },
         "last_sync_at": _serialize_datetime(last_sync) if last_sync else None,
         "metrics": latest,
     }
