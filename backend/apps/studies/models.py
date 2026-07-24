@@ -16,6 +16,7 @@ class StudyProject(UserStampedModel):
     status = models.CharField(
         "项目状态", max_length=20, choices=Status.choices, default=Status.DRAFT
     )
+    completed_at = models.DateTimeField("项目完结时间", null=True, blank=True)
 
     def __str__(self) -> str:
         return self.name

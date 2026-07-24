@@ -15,9 +15,21 @@ class StudyProjectSerializer(serializers.ModelSerializer):
             "crf_template_version",
             "visit_plan",
             "status",
+            "completed_at",
             "patient_count",
         ]
-        read_only_fields = ["id", "patient_count"]
+        read_only_fields = ["id", "completed_at", "patient_count"]
+
+    def validate(self, attrs):
+        if "completed_at" in self.initial_data:
+            raise serializers.ValidationError({"completed_at": "项目完结时间只能由完结操作写入。"})
+        if (
+            self.instance is not None
+            and self.instance.status == StudyProject.Status.ARCHIVED
+            and attrs.get("status", StudyProject.Status.ARCHIVED) != StudyProject.Status.ARCHIVED
+        ):
+            raise serializers.ValidationError({"status": "项目已完结，不能恢复为未完结状态。"})
+        return attrs
 
 
 class StudyGroupSerializer(serializers.ModelSerializer):

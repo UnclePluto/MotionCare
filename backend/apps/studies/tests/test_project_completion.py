@@ -1,4 +1,6 @@
 import pytest
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.test import APIClient
 
 from apps.patients.models import Patient
@@ -30,6 +32,51 @@ def test_complete_project_sets_archived_and_is_idempotent(doctor, project):
     second = client.post(f"/api/studies/projects/{project.id}/complete/")
     assert second.status_code == 200, second.data
     assert second.data["status"] == StudyProject.Status.ARCHIVED
+
+
+@pytest.mark.django_db
+def test_complete_project_records_completed_at_once_and_returns_it_read_only(doctor, project):
+    client = _client(doctor)
+    before = timezone.now()
+
+    first = client.post(f"/api/studies/projects/{project.id}/complete/")
+
+    assert first.status_code == 200, first.data
+    assert first.data["completed_at"] is not None
+    project.refresh_from_db()
+    assert project.completed_at >= before
+    completed_at = project.completed_at
+
+    second = client.post(f"/api/studies/projects/{project.id}/complete/")
+    project.refresh_from_db()
+    assert second.status_code == 200, second.data
+    assert project.completed_at == completed_at
+    assert parse_datetime(second.data["completed_at"]) == completed_at
+
+
+@pytest.mark.django_db
+def test_project_update_cannot_restore_archived_status_or_set_completed_at(doctor, project):
+    client = _client(doctor)
+    client.post(f"/api/studies/projects/{project.id}/complete/")
+    project.refresh_from_db()
+    completed_at = project.completed_at
+
+    restore = client.patch(
+        f"/api/studies/projects/{project.id}/",
+        {"status": StudyProject.Status.ACTIVE},
+        format="json",
+    )
+    forge = client.patch(
+        f"/api/studies/projects/{project.id}/",
+        {"completed_at": "2026-07-01T00:00:00Z"},
+        format="json",
+    )
+
+    assert restore.status_code == 400
+    assert forge.status_code == 400
+    project.refresh_from_db()
+    assert project.status == StudyProject.Status.ARCHIVED
+    assert project.completed_at == completed_at
 
 
 @pytest.mark.django_db

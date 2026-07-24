@@ -59,9 +59,15 @@ class StudyProjectViewSet(ModelViewSet):
     def complete(self, request, pk=None):
         project = self.get_object()
         project = StudyProject.objects.select_for_update(of=("self",)).get(pk=project.pk)
+        update_fields = []
         if project.status != StudyProject.Status.ARCHIVED:
             project.status = StudyProject.Status.ARCHIVED
-            project.save(update_fields=["status", "updated_at"])
+            update_fields.append("status")
+        if project.completed_at is None:
+            project.completed_at = timezone.now()
+            update_fields.append("completed_at")
+        if update_fields:
+            project.save(update_fields=[*update_fields, "updated_at"])
         return Response(StudyProjectSerializer(project).data)
 
     @action(detail=True, methods=["post"], url_path="confirm-grouping")
