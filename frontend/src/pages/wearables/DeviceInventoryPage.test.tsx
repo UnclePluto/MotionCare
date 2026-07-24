@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DeviceInventoryPage } from "./DeviceInventoryPage";
@@ -135,7 +135,7 @@ describe("DeviceInventoryPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "通信测试" }));
 
-    expect(await screen.findByText("设备通信正常")).toBeInTheDocument();
+    expect(await screen.findByText("设备 0826 通信正常")).toBeInTheDocument();
     expect(
       screen.getByText((content) =>
         content.includes("最近通信：") && content.includes("电量：82%"),
@@ -170,6 +170,126 @@ describe("DeviceInventoryPage", () => {
     expect(activeRow).not.toBeNull();
     fireEvent.click(within(activeRow!).getByRole("button", { name: "通信测试" }));
 
+    expect(await screen.findByText("设备 0826 通信测试失败")).toBeInTheDocument();
     expect(await screen.findByText("厂商暂时不可用。")).toBeInTheDocument();
+  });
+
+  it("连续测试两台设备时忽略前一台迟到的成功结果", async () => {
+    let resolveFirst!: (value: { data: WearableStatus }) => void;
+    const firstStatus = new Promise<{ data: WearableStatus }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    mockGet.mockResolvedValue({
+      data: [
+        device(),
+        device({
+          id: 8,
+          short_code: "1002",
+          external_device_id: "device-002",
+        }),
+      ],
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/devices/7/check-status/") return firstStatus;
+      if (url === "/wearables/devices/8/check-status/") {
+        return Promise.resolve({
+          data: {
+            device_id: 8,
+            model: "M2",
+            online: false,
+            battery_level: 21,
+            last_communication_at: null,
+            capabilities: { ring: false },
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    renderPage();
+
+    const firstRow = (await screen.findByText("0826")).closest("tr");
+    const secondRow = screen.getByText("1002").closest("tr");
+    expect(firstRow).not.toBeNull();
+    expect(secondRow).not.toBeNull();
+    fireEvent.click(within(firstRow!).getByRole("button", { name: "通信测试" }));
+    fireEvent.click(within(secondRow!).getByRole("button", { name: "通信测试" }));
+
+    expect(await screen.findByText(/设备.*通信异常/)).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("电量：21%"))).toBeInTheDocument();
+
+    await act(async () => {
+      resolveFirst({
+        data: {
+          device_id: 7,
+          model: "M1",
+          online: true,
+          battery_level: 82,
+          last_communication_at: "2026-07-24T02:00:00Z",
+          capabilities: { ring: false },
+        },
+      });
+      await firstStatus;
+    });
+
+    expect(screen.getByText("设备 1002 通信异常")).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("电量：21%"))).toBeInTheDocument();
+    expect(screen.queryByText("设备 0826 通信正常")).not.toBeInTheDocument();
+  });
+
+  it("连续测试两台设备时忽略前一台迟到的失败结果", async () => {
+    let rejectFirst!: (reason: unknown) => void;
+    const firstStatus = new Promise<{ data: WearableStatus }>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    mockGet.mockResolvedValue({
+      data: [
+        device(),
+        device({
+          id: 8,
+          short_code: "1002",
+          external_device_id: "device-002",
+        }),
+      ],
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/devices/7/check-status/") return firstStatus;
+      if (url === "/wearables/devices/8/check-status/") {
+        return Promise.resolve({
+          data: {
+            device_id: 8,
+            model: "M2",
+            online: true,
+            battery_level: 66,
+            last_communication_at: "2026-07-24T03:00:00Z",
+            capabilities: { ring: false },
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    renderPage();
+
+    const firstRow = (await screen.findByText("0826")).closest("tr");
+    const secondRow = screen.getByText("1002").closest("tr");
+    expect(firstRow).not.toBeNull();
+    expect(secondRow).not.toBeNull();
+    fireEvent.click(within(firstRow!).getByRole("button", { name: "通信测试" }));
+    fireEvent.click(within(secondRow!).getByRole("button", { name: "通信测试" }));
+    expect(await screen.findByText(/设备.*通信正常/)).toBeInTheDocument();
+
+    await act(async () => {
+      rejectFirst({
+        isAxiosError: true,
+        response: { data: { detail: "前一台设备通信失败。" } },
+      });
+      try {
+        await firstStatus;
+      } catch {
+        // mutation 会消费该失败；这里仅等待迟到请求完成。
+      }
+    });
+
+    expect(screen.getByText("设备 1002 通信正常")).toBeInTheDocument();
+    expect(screen.queryByText("前一台设备通信失败。")).not.toBeInTheDocument();
   });
 });

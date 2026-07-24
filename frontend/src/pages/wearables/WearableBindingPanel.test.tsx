@@ -282,6 +282,144 @@ describe("WearableBindingPanel", () => {
     expect(screen.queryByText("设备通信正常")).not.toBeInTheDocument();
   });
 
+  it("解绑后忽略原绑定迟到的通信成功结果", async () => {
+    let resolveStatus!: (value: { data: WearableStatus }) => void;
+    const pendingStatus = new Promise<{ data: WearableStatus }>((resolve) => {
+      resolveStatus = resolve;
+    });
+    mockGet
+      .mockResolvedValueOnce({
+        data: { ...emptyBinding(), binding: binding() },
+      })
+      .mockResolvedValue({ data: emptyBinding() });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/devices/7/check-status/") return pendingStatus;
+      if (url === "/wearables/bindings/33/unbind/") {
+        return Promise.resolve({
+          data: {
+            binding: binding({ unbound_at: "2026-07-24T11:00:00Z" }),
+            historical_data_preserved: true,
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "通信测试" }));
+    fireEvent.click(screen.getByRole("button", { name: "解绑设备" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认解绑" }));
+    expect(await screen.findByText("设备解绑成功")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStatus({
+        data: status({
+          online: true,
+          last_communication_at: "2026-07-24T02:00:00Z",
+          capabilities: { ring: true },
+        }),
+      });
+      await pendingStatus;
+    });
+
+    expect(screen.queryByText("设备通信正常")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "让设备响铃" })).not.toBeInTheDocument();
+  });
+
+  it("解绑后忽略原绑定迟到的通信失败结果", async () => {
+    let rejectStatus!: (reason: unknown) => void;
+    const pendingStatus = new Promise<{ data: WearableStatus }>((_resolve, reject) => {
+      rejectStatus = reject;
+    });
+    mockGet
+      .mockResolvedValueOnce({
+        data: { ...emptyBinding(), binding: binding() },
+      })
+      .mockResolvedValue({ data: emptyBinding() });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/devices/7/check-status/") return pendingStatus;
+      if (url === "/wearables/bindings/33/unbind/") {
+        return Promise.resolve({
+          data: {
+            binding: binding({ unbound_at: "2026-07-24T11:00:00Z" }),
+            historical_data_preserved: true,
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "通信测试" }));
+    fireEvent.click(screen.getByRole("button", { name: "解绑设备" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认解绑" }));
+    expect(await screen.findByText("设备解绑成功")).toBeInTheDocument();
+
+    await act(async () => {
+      rejectStatus({ response: { data: { detail: "原设备通信失败。" } } });
+      try {
+        await pendingStatus;
+      } catch {
+        // mutation 会消费该失败；这里仅等待迟到请求完成。
+      }
+    });
+
+    expect(screen.queryByText("原设备通信失败。")).not.toBeInTheDocument();
+  });
+
+  it("绑定对象变化后忽略原绑定迟到的通信结果", async () => {
+    let resolveStatus!: (value: { data: WearableStatus }) => void;
+    const pendingStatus = new Promise<{ data: WearableStatus }>((resolve) => {
+      resolveStatus = resolve;
+    });
+    mockGet.mockResolvedValue({
+      data: { ...emptyBinding(), binding: binding() },
+    });
+    mockPost.mockReturnValue(pendingStatus);
+    const { queryClient } = renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "通信测试" }));
+    act(() => {
+      queryClient.setQueryData<ProjectPatientWearableBinding>(
+        ["project-patient-wearable-binding", 12],
+        {
+          ...emptyBinding(),
+          binding: binding({ id: 44, device_id: 8, short_code: "1002" }),
+        },
+      );
+    });
+    expect(await screen.findByText("1002")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveStatus({
+        data: status({
+          online: true,
+          last_communication_at: "2026-07-24T02:00:00Z",
+          capabilities: { ring: true },
+        }),
+      });
+      await pendingStatus;
+    });
+
+    expect(screen.queryByText("设备通信正常")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "让设备响铃" })).not.toBeInTheDocument();
+  });
+
+  it("三位简码按回车不会提交绑定", async () => {
+    mockPost.mockResolvedValue({ data: binding() });
+    renderPanel();
+
+    const input = await screen.findByLabelText("设备固定简码");
+    fireEvent.change(input, { target: { value: "082" } });
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
   it("解绑成功立即清空绑定、显示成功反馈并在后台校准", async () => {
     let resolveRefresh!: (value: { data: ProjectPatientWearableBinding }) => void;
     const pendingRefresh = new Promise<{ data: ProjectPatientWearableBinding }>((resolve) => {

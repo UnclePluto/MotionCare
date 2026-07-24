@@ -2,13 +2,22 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { isAxiosError } from "axios";
 import dayjs from "dayjs";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { apiClient } from "../../api/client";
 import type { WearableDevice, WearableStatus } from "./types";
 
 type DeviceFormValues = Pick<WearableDevice, "provider" | "external_device_id" | "identifier_type" | "model">;
 type DeviceFilter = "all" | "bound" | "unbound" | "disabled";
+type StatusRequest = {
+  deviceId: number;
+  shortCode: string;
+  generation: number;
+};
+type StatusFeedback = StatusRequest & {
+  result: WearableStatus | null;
+  error: unknown | null;
+};
 
 function formatTime(value: string | null | undefined) {
   return value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—";
@@ -28,7 +37,8 @@ export function DeviceInventoryPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<DeviceFilter>("all");
-  const [statusResult, setStatusResult] = useState<WearableStatus | null>(null);
+  const statusRequestGeneration = useRef(0);
+  const [statusFeedback, setStatusFeedback] = useState<StatusFeedback | null>(null);
 
   const devicesQuery = useQuery({
     queryKey: ["wearable-devices"],
@@ -53,14 +63,33 @@ export function DeviceInventoryPage() {
   });
 
   const statusCheck = useMutation({
-    mutationFn: async (deviceId: number) =>
+    mutationFn: async ({ deviceId }: StatusRequest) =>
       (await apiClient.post<WearableStatus>(`/wearables/devices/${deviceId}/check-status/`)).data,
-    onMutate: () => setStatusResult(null),
-    onSuccess: (result) => {
-      setStatusResult(result);
+    onSuccess: (result, variables) => {
+      if (
+        statusRequestGeneration.current === variables.generation &&
+        result.device_id === variables.deviceId
+      ) {
+        setStatusFeedback({ ...variables, result, error: null });
+      }
       void queryClient.invalidateQueries({ queryKey: ["wearable-devices"] });
     },
+    onError: (error, variables) => {
+      if (statusRequestGeneration.current !== variables.generation) return;
+      setStatusFeedback({ ...variables, result: null, error });
+    },
   });
+
+  const runStatusCheck = (device: WearableDevice) => {
+    const generation = statusRequestGeneration.current + 1;
+    statusRequestGeneration.current = generation;
+    setStatusFeedback(null);
+    statusCheck.mutate({
+      deviceId: device.id,
+      shortCode: device.short_code,
+      generation,
+    });
+  };
 
   const dataSource = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -76,6 +105,9 @@ export function DeviceInventoryPage() {
       return true;
     });
   }, [devicesQuery.data, filter, search]);
+
+  const statusResult = statusFeedback?.result ?? null;
+  const statusError = statusFeedback?.error ?? null;
 
   return (
     <Card
@@ -113,16 +145,17 @@ export function DeviceInventoryPage() {
         <Alert
           type={statusResult.online ? "success" : "warning"}
           showIcon
-          message={statusResult.online ? "设备通信正常" : "设备通信异常"}
+          message={`设备 ${statusFeedback?.shortCode} ${statusResult.online ? "通信正常" : "通信异常"}`}
           description={`最近通信：${formatTime(statusResult.last_communication_at)}；电量：${statusResult.battery_level ?? "—"}%`}
           style={{ marginBottom: 16 }}
         />
       ) : null}
-      {statusCheck.isError ? (
+      {statusError ? (
         <Alert
           type="warning"
           showIcon
-          message={errorMessage(statusCheck.error, "设备通信测试失败")}
+          message={`设备 ${statusFeedback?.shortCode} 通信测试失败`}
+          description={errorMessage(statusError, "设备通信测试失败")}
           style={{ marginBottom: 16 }}
         />
       ) : null}
@@ -166,8 +199,12 @@ export function DeviceInventoryPage() {
                   type="link"
                   style={{ paddingInline: 0 }}
                   disabled={!device.enabled}
-                  loading={statusCheck.isPending && statusCheck.variables === device.id}
-                  onClick={() => statusCheck.mutate(device.id)}
+                  loading={
+                    statusCheck.isPending &&
+                    statusCheck.variables?.deviceId === device.id &&
+                    statusCheck.variables.generation === statusRequestGeneration.current
+                  }
+                  onClick={() => runStatusCheck(device)}
                 >
                   通信测试
                 </Button>
