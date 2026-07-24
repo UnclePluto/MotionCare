@@ -23,6 +23,8 @@
 > 执行记录（2026-07-24, codex）：Task 9 已落地于 commits `4da43f0`、`daaf7e0`、`1761118`、`b028b75`、`cb4ac83`、`96562cd`、`289bfa4`、`b8f07d5`、`8136c13`、`7c18178`，任务审查通过。
 >
 > 执行记录（2026-07-24, codex）：Task 10 已落地于 commit `d3cc1cb`，任务审查通过。为避免删除模型后患者端后端无法启动，Task 11 的后端健康接口移除步骤已前移到本任务。
+>
+> 执行记录（2026-07-24, codex）：Task 11 已落地于 commit `9e4955a`，任务审查通过。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -1213,7 +1215,7 @@ git commit -m "refactor(health): 移除手工健康录入"
 - Produces: 微信小程序首页、类型和路由不再依赖健康填报。
 - Consumes: 现有患者端绑定、处方和训练接口保持不变。
 
-- [ ] **Step 1: 写患者端能力移除测试**
+- [x] **Step 1: 写患者端能力移除测试**
 
 `homeActions.test.ts` 断言首页快捷操作不包含健康填报：
 
@@ -1225,7 +1227,7 @@ it("does not expose manual health entry", () => {
 })
 ```
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd miniapp && npm run test`
 
@@ -1237,7 +1239,7 @@ Expected: FAIL，旧接口和入口仍存在。
 - `PatientAppHomeView` 响应已删除 `has_daily_health_today`。
 - 后端不再导入 `DailyHealthRecord`。
 
-- [ ] **Step 4: 删除小程序页面和入口**
+- [x] **Step 4: 删除小程序页面和入口**
 
 - 从 `app.config.ts` pages 删除 `pages/daily-health/index`。
 - 删除页面文件。
@@ -1245,13 +1247,13 @@ Expected: FAIL，旧接口和入口仍存在。
 - 从首页删除健康状态卡片和跳转按钮。
 - 从 `PatientAppHome` 类型删除 `has_daily_health_today`。
 
-- [ ] **Step 5: 运行测试和构建**
+- [x] **Step 5: 运行测试和构建**
 
 Run: `cd miniapp && npm run test && npm run build:weapp`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add -A miniapp/src
