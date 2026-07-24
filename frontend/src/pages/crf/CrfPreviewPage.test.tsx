@@ -118,7 +118,11 @@ describe("CrfPreviewPage", () => {
     );
 
     expect(await screen.findByText("张三")).toBeInTheDocument();
-    expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining("/wearables/"));
+    expect(
+      mockGet.mock.calls.some(
+        ([url]) => typeof url === "string" && url.includes("/wearables/"),
+      ),
+    ).toBe(false);
     expect(screen.queryByText("穿戴健康")).not.toBeInTheDocument();
     expect(screen.queryByText("心率")).not.toBeInTheDocument();
     expect(screen.queryByText("血压")).not.toBeInTheDocument();
