@@ -103,4 +103,25 @@ describe("CrfPreviewPage", () => {
       expect(mockPost).toHaveBeenCalledWith("/crf/project-patients/1/export/", {});
     });
   });
+
+  it("keeps wearable health outside the CRF preview flow", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/?projectPatientId=1"]}>
+          <CrfPreviewPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("张三")).toBeInTheDocument();
+    expect(mockGet).not.toHaveBeenCalledWith(expect.stringContaining("/wearables/"));
+    expect(screen.queryByText("穿戴健康")).not.toBeInTheDocument();
+    expect(screen.queryByText("心率")).not.toBeInTheDocument();
+    expect(screen.queryByText("血压")).not.toBeInTheDocument();
+    expect(screen.queryByText("血氧")).not.toBeInTheDocument();
+  });
 });
