@@ -25,6 +25,8 @@
 > 执行记录（2026-07-24, codex）：Task 10 已落地于 commit `d3cc1cb`，任务审查通过。为避免删除模型后患者端后端无法启动，Task 11 的后端健康接口移除步骤已前移到本任务。
 >
 > 执行记录（2026-07-24, codex）：Task 11 已落地于 commit `9e4955a`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 12 已落地于 commits `93623c4`、`4b51e5e`，自动化、真实浏览器和最终分支审查通过；真实厂商 OpenAPI、小程序真机命令与生产 Celery 调度保留为现场验收项。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -1275,7 +1277,7 @@ git commit -m "refactor(patient-app): 移除患者手工健康填报"
 - Produces: 可部署配置、文档索引、CRF 不变的回归证据。
 - Consumes: Tasks 1–11 全部能力。
 
-- [ ] **Step 1: 增加配置失败测试**
+- [x] **Step 1: 增加配置失败测试**
 
 `backend/tests/test_settings.py` 断言：
 
@@ -1300,31 +1302,31 @@ CRF 测试断言 preview 顶层 key 仍严格为：
 }
 ```
 
-- [ ] **Step 2: 运行针对性回归**
+- [x] **Step 2: 运行针对性回归**
 
 Run: `cd backend && pytest apps/crf/tests tests/test_settings.py -q`
 
 Expected: PASS；CRF 响应无穿戴健康字段。
 
-- [ ] **Step 3: 运行后端全量验证**
+- [x] **Step 3: 运行后端全量验证**
 
 Run: `cd backend && python manage.py makemigrations --check && pytest`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 4: 运行前端全量验证**
+- [x] **Step 4: 运行前端全量验证**
 
 Run: `cd frontend && npm run test && npm run lint && npm run build`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: 运行小程序全量验证**
+- [x] **Step 5: 运行小程序全量验证**
 
 Run: `cd miniapp && npm run test && npm run build:weapp`
 
 Expected: 全部 PASS。
 
-- [ ] **Step 6: 人工验收关键链路**
+- [x] **Step 6: 人工验收关键链路**
 
 按顺序验证：
 
@@ -1339,7 +1341,7 @@ Expected: 全部 PASS。
 9. 确认 Web、小程序均无手工健康入口。
 10. 打开 CRF 预览和导出，确认没有穿戴健康内容。
 
-- [ ] **Step 7: 最终提交**
+- [x] **Step 7: 最终提交**
 
 ```bash
 git add .env.example deploy/env.production.example backend frontend miniapp
