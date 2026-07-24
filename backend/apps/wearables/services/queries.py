@@ -1,3 +1,4 @@
+from collections import defaultdict
 from datetime import UTC, datetime, time, timedelta
 from statistics import mean
 from zoneinfo import ZoneInfo
@@ -426,24 +427,51 @@ def tracking_wearable_summaries(patient_ids, *, today):
     patient_ids = list(dict.fromkeys(patient_ids))
     if not patient_ids:
         return {}
-    bindings = list(
-        WearableBinding.objects.select_related("device").filter(patient_id__in=patient_ids)
+
+    active_bindings = list(
+        WearableBinding.objects.select_related("device").filter(
+            patient_id__in=patient_ids,
+            unbound_at__isnull=True,
+        )
     )
-    active = {binding.patient_id: binding for binding in bindings if binding.unbound_at is None}
-    device_ids = {binding.device_id for binding in bindings}
-    runs = list(
-        WearableSyncRun.objects.filter(device_id__in=device_ids).order_by("created_at", "id")
-    )
+    active_by_patient = {binding.patient_id: binding for binding in active_bindings}
+    active_device_ids = {binding.device_id for binding in active_bindings}
+
     days = [today - timedelta(days=offset) for offset in range(30, 0, -1)]
-    summaries = {
+    completeness_start = _utc(day_bounds(days[0])[0])
+    completeness_end = _utc(day_bounds(days[-1])[1])
+    completeness_bindings_by_patient = defaultdict(list)
+    completeness_bindings = WearableBinding.objects.filter(
+        patient_id__in=patient_ids,
+        bound_at__lt=completeness_end,
+    ).filter(
+        Q(unbound_at__isnull=True) | Q(unbound_at__gt=completeness_start)
+    )
+    for binding in completeness_bindings:
+        completeness_bindings_by_patient[binding.patient_id].append(binding)
+
+    runs_by_device = defaultdict(list)
+    if active_device_ids:
+        earliest_active_bound_at = min(binding.bound_at for binding in active_bindings)
+        runs = WearableSyncRun.objects.filter(
+            device_id__in=active_device_ids,
+            created_at__gte=earliest_active_bound_at,
+            status=WearableSyncRun.Status.SUCCEEDED,
+        ).order_by("device_id", "created_at", "id")
+        for run in runs:
+            runs_by_device[run.device_id].append(run)
+
+    summaries_by_patient_and_date = {
         (summary.patient_id, summary.record_date): summary
         for summary in WearableDailySummary.objects.filter(
-            patient_id__in=patient_ids, record_date__in=days
+            patient_id__in=patient_ids,
+            record_date__gte=days[0],
+            record_date__lte=days[-1],
         )
     }
     result = {}
     for patient_id in patient_ids:
-        patient_bindings = [binding for binding in bindings if binding.patient_id == patient_id]
+        patient_bindings = completeness_bindings_by_patient[patient_id]
         eligible = []
         for record_date in days:
             day_start, day_end = day_bounds(record_date)
@@ -458,7 +486,10 @@ def tracking_wearable_summaries(patient_ids, *, today):
         numerator = sum(
             1
             for record_date in eligible
-            if (summary := summaries.get((patient_id, record_date))) is not None
+            if (
+                summary := summaries_by_patient_and_date.get((patient_id, record_date))
+            )
+            is not None
             and (
                 summary.heart_rate_count > 0
                 or summary.blood_pressure_count > 0
@@ -470,7 +501,7 @@ def tracking_wearable_summaries(patient_ids, *, today):
                 )
             )
         )
-        binding = active.get(patient_id)
+        binding = active_by_patient.get(patient_id)
         if binding is None:
             result[patient_id] = {
                 "is_bound": False,
@@ -483,11 +514,8 @@ def tracking_wearable_summaries(patient_ids, *, today):
             continue
         binding_runs = [
             run
-            for run in runs
-            if run.device_id == binding.device_id
-            and run.created_at >= binding.bound_at
-            and (binding.unbound_at is None or run.created_at < binding.unbound_at)
-            and run.status == WearableSyncRun.Status.SUCCEEDED
+            for run in runs_by_device[binding.device_id]
+            if run.created_at >= binding.bound_at
         ]
         last_sync = binding_runs[-1].created_at if binding_runs else None
         result[patient_id] = {
