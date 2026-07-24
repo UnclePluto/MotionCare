@@ -15,6 +15,8 @@
 > 执行记录（2026-07-24, codex）：Task 5 审查修复已落地于 commit `a2c4c0a`，任务审查通过。
 >
 > 执行记录（2026-07-24, codex）：Task 6 已落地于 commits `cbcd7d0`、`1c25d18`、`0ef175e`，任务审查通过。
+>
+> 执行记录（2026-07-24, codex）：Task 7 已落地于 commits `ac25023`、`468e0b0`。
 
 **Goal:** 在 MotionCare 中完成穿戴设备台账与患者绑定、miwitracker OpenAPI 同步和非破坏性远程操作，并把现有“训练追踪”升级为包含“训练跟踪/穿戴健康”双页签的“训练与健康”，同时移除手工健康录入且保持 CRF 完全不变。
 
@@ -876,7 +878,7 @@ git commit -m "feat(wearables): 增加设备通信与远程操作"
 - Produces: 患者原始趋势、日汇总、同步状态、项目/分组汇总 API；训练与健康患者列表的穿戴摘要字段。
 - Consumes: `accessible_project_patients(user)`、Wearable 原始数据和日汇总。
 
-- [ ] **Step 1: 写查询失败测试**
+- [x] **Step 1: 写查询失败测试**
 
 覆盖：
 
@@ -889,13 +891,13 @@ git commit -m "feat(wearables): 增加设备通信与远程操作"
 - 项目汇总按 group 返回患者数、有效数据日、均值、范围、测量次数和缺失率。
 - CRF preview 响应快照没有新增 `health` 或 `wearable` key。
 
-- [ ] **Step 2: 运行失败测试**
+- [x] **Step 2: 运行失败测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_queries_api.py apps/training/tests/test_tracking_api.py -q`
 
 Expected: FAIL，新字段和新接口不存在。
 
-- [ ] **Step 3: 实现患者查询**
+- [x] **Step 3: 实现患者查询**
 
 路由：
 
@@ -918,7 +920,7 @@ bucket=raw|5m|15m|30m|1h
 
 所有患者查询先验证该患者至少存在一条 `accessible_project_patients(user)`。提供 `project_patient` 时，必须验证其属于当前患者并在用户可访问范围内。
 
-- [ ] **Step 4: 扩展训练追踪列表**
+- [x] **Step 4: 扩展训练追踪列表**
 
 `list_patient_tracking_summaries()` 每行新增：
 
@@ -933,13 +935,13 @@ bucket=raw|5m|15m|30m|1h
 
 不要在列表或页签名旁添加“在线” Tag；在线状态只在穿戴健康内容区按需查询。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `cd backend && pytest apps/wearables/tests/test_queries_api.py apps/training/tests/test_tracking_api.py apps/crf/tests -q`
 
 Expected: PASS，CRF 回归无变化。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add backend/apps/wearables backend/apps/training
