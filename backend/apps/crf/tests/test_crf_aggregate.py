@@ -16,6 +16,21 @@ def test_crf_preview_reports_missing_visit_fields(project_patient):
 
 
 @pytest.mark.django_db
+def test_crf_preview_snapshot_has_no_wearable_or_health_sections(project_patient):
+    preview = build_crf_preview(project_patient)
+
+    assert set(preview) == {
+        "project_patient_id",
+        "patient",
+        "patient_baseline",
+        "project",
+        "group",
+        "visits",
+        "missing_fields",
+    }
+
+
+@pytest.mark.django_db
 def test_crf_preview_reports_missing_visit_assessment_fields(project_patient):
     preview = build_crf_preview(project_patient)
     for vt in ("T0", "T1", "T2"):

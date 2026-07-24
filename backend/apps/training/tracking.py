@@ -114,6 +114,8 @@ def _raw_int(form_data, key):
 
 
 def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[dict]:
+    from apps.wearables.services.queries import tracking_wearable_summary
+
     today = today or timezone.localdate()
     last_30_start = today - timezone.timedelta(days=29)
     qs = accessible_project_patients(user)
@@ -148,6 +150,7 @@ def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[di
                 row["last_training_at"].isoformat() if row["last_training_at"] else None
             ),
             "last_30_days_completed_count": row["last_30_days_completed_count"],
+            "wearable": tracking_wearable_summary(row["patient_id"], today=today),
         }
         for row in rows
     ]

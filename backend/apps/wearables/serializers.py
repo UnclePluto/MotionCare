@@ -114,3 +114,47 @@ class WearableBindingSerializer(serializers.ModelSerializer):
             "unbind_reason",
         ]
         read_only_fields = fields
+
+
+class WearableMeasurementsQuerySerializer(serializers.Serializer):
+    project_patient = serializers.IntegerField(required=False, min_value=1)
+    metric_type = serializers.ChoiceField(
+        choices=["heart_rate", "blood_pressure", "blood_oxygen"]
+    )
+    start = serializers.DateField()
+    end = serializers.DateField()
+    bucket = serializers.ChoiceField(
+        choices=["raw", "5m", "15m", "30m", "1h"], default="raw", required=False
+    )
+
+    def validate(self, attrs):
+        if attrs["start"] > attrs["end"]:
+            raise serializers.ValidationError({"end": "结束日期不能早于开始日期。"})
+        return attrs
+
+
+class WearableDailySummariesQuerySerializer(serializers.Serializer):
+    project_patient = serializers.IntegerField(required=False, min_value=1)
+    start = serializers.DateField()
+    end = serializers.DateField()
+    bucket = serializers.CharField(required=False)
+
+    def validate(self, attrs):
+        if attrs["start"] > attrs["end"]:
+            raise serializers.ValidationError({"end": "结束日期不能早于开始日期。"})
+        if attrs.get("bucket") not in (None, "raw"):
+            raise serializers.ValidationError({"bucket": "步数只提供按日总量，不支持分时分桶。"})
+        return attrs
+
+
+class WearableProjectSummaryQuerySerializer(serializers.Serializer):
+    metric_type = serializers.ChoiceField(
+        choices=["heart_rate", "blood_pressure", "blood_oxygen", "steps"]
+    )
+    start = serializers.DateField()
+    end = serializers.DateField()
+
+    def validate(self, attrs):
+        if attrs["start"] > attrs["end"]:
+            raise serializers.ValidationError({"end": "结束日期不能早于开始日期。"})
+        return attrs

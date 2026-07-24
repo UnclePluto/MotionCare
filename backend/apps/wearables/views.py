@@ -15,7 +15,10 @@ from .serializers import (
     BindDeviceSerializer,
     UnbindDeviceSerializer,
     WearableBindingSerializer,
+    WearableDailySummariesQuerySerializer,
     WearableDeviceSerializer,
+    WearableMeasurementsQuerySerializer,
+    WearableProjectSummaryQuerySerializer,
 )
 from .services.bindings import (
     BindingAlreadyUnbound,
@@ -33,6 +36,7 @@ from .services.commands import (
     check_device_status,
     send_device_command,
 )
+from .services.queries import daily_summaries, measurements, project_summary, sync_status
 
 
 def _active_patient_binding(request, patient_id):
@@ -298,3 +302,63 @@ class PatientSyncView(APIView):
         for value in metric_types:
             sync_device_metric.delay(binding.device.id, value)
         return Response({"metric_types": metric_types, "status": "queued"}, status=status.HTTP_202_ACCEPTED)
+
+
+class PatientMeasurementsView(APIView):
+    permission_classes = [IsAdminOrDoctor]
+
+    def get(self, request, patient_id):
+        serializer = WearableMeasurementsQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        return Response(
+            measurements(
+                user=request.user,
+                patient_id=patient_id,
+                project_patient_id=serializer.validated_data.get("project_patient"),
+                metric_type=serializer.validated_data["metric_type"],
+                start=serializer.validated_data["start"],
+                end=serializer.validated_data["end"],
+                bucket=serializer.validated_data["bucket"],
+            )
+        )
+
+
+class PatientDailySummariesView(APIView):
+    permission_classes = [IsAdminOrDoctor]
+
+    def get(self, request, patient_id):
+        serializer = WearableDailySummariesQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        return Response(
+            daily_summaries(
+                user=request.user,
+                patient_id=patient_id,
+                project_patient_id=serializer.validated_data.get("project_patient"),
+                start=serializer.validated_data["start"],
+                end=serializer.validated_data["end"],
+            )
+        )
+
+
+class PatientSyncStatusView(APIView):
+    permission_classes = [IsAdminOrDoctor]
+
+    def get(self, request, patient_id):
+        return Response(sync_status(user=request.user, patient_id=patient_id))
+
+
+class ProjectWearableSummaryView(APIView):
+    permission_classes = [IsAdminOrDoctor]
+
+    def get(self, request, project_id):
+        serializer = WearableProjectSummaryQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        return Response(
+            project_summary(
+                user=request.user,
+                project_id=project_id,
+                metric_type=serializer.validated_data["metric_type"],
+                start=serializer.validated_data["start"],
+                end=serializer.validated_data["end"],
+            )
+        )

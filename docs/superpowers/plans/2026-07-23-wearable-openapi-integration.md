@@ -38,6 +38,7 @@
 - Web 和微信小程序均移除手工健康录入。
 - 后端 API 必须使用 `IsAdminOrDoctor` 并复用现有行级数据范围规则。
 - 所有新增或修改 API 行为必须先写失败测试，再写实现。
+- `StudyProject.completed_at` 是项目研究期上界：窗口为 `[ProjectPatient.enrolled_at, completed_at)`；日汇总和项目聚合只使用完整落入该窗口的上海自然日。
 - 所有提交信息使用中文；执行者不得覆盖任务开始前已有的未提交改动。
 
 ---
@@ -865,6 +866,11 @@ git commit -m "feat(wearables): 增加设备通信与远程操作"
 - Modify: `backend/apps/wearables/urls.py`
 - Modify: `backend/apps/training/tracking.py`
 - Modify: `backend/apps/training/tests/test_tracking_api.py`
+- Modify: `backend/apps/studies/models.py`
+- Create: `backend/apps/studies/migrations/0004_studyproject_completed_at.py`
+- Modify: `backend/apps/studies/serializers.py`
+- Modify: `backend/apps/studies/views.py`
+- Modify: `backend/apps/studies/tests/test_project_completion.py`
 
 **Interfaces:**
 - Produces: 患者原始趋势、日汇总、同步状态、项目/分组汇总 API；训练与健康患者列表的穿戴摘要字段。
@@ -876,6 +882,7 @@ git commit -m "feat(wearables): 增加设备通信与远程操作"
 
 - 医生只能查询可访问 `ProjectPatient` 所属患者。
 - 同一患者多项目时，切换 `project_patient` 后日期裁剪到对应 `enrolled_at` 与项目研究结束日期。
+- 项目完结首次原子写入 `completed_at`，重复调用保持原值；通用 PATCH 不得恢复已完结项目或伪造完结时间。
 - 原始、5m、15m、30m、1h 分桶返回正确平均值。
 - 血压分桶分别计算收缩压和舒张压。
 - 步数查询拒绝 `bucket=15m`，只返回日总量。

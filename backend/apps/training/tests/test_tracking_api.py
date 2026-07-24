@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import UTC, datetime
 
 import pytest
 from django.utils import timezone
@@ -9,6 +10,8 @@ from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 from apps.training.models import TrainingRecord
+from apps.training.tracking import list_patient_tracking_summaries
+from apps.wearables.models import WearableBinding, WearableDailySummary, WearableDevice
 
 
 def _client(user):
@@ -248,6 +251,76 @@ def test_patient_search_returns_accessible_patient_summaries(
     admin_response = _client(_admin()).get("/api/training/tracking/patients/")
     admin_patient_ids = {item["patient"]["id"] for item in admin_response.data}
     assert {project_patient.patient_id, other_patient.id}.issubset(admin_patient_ids)
+
+
+@pytest.mark.django_db
+def test_tracking_summary_includes_global_wearable_binding_and_completed_day_completeness(
+    doctor, project_patient
+):
+    device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="tracking-device", identifier_type="device_id", model="TEST", short_code="1288"
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=device,
+        bound_at=datetime(2026, 6, 24, 16, tzinfo=UTC),  # 上海 6 月 25 日零点
+        bound_by=doctor,
+    )
+    WearableDailySummary.objects.create(
+        patient=project_patient.patient,
+        record_date=timezone.datetime(2026, 7, 23).date(),
+        heart_rate_count=1,
+    )
+
+    rows = list_patient_tracking_summaries(doctor, today=timezone.datetime(2026, 7, 24).date())
+    row = next(item for item in rows if item["patient"]["id"] == project_patient.patient_id)
+
+    assert row["wearable"] == {
+        "is_bound": True,
+        "device_short_code": "1288",
+        "last_sync_at": None,
+        "last_30_days_data_completeness": 3.45,
+    }
+
+
+@pytest.mark.django_db
+def test_tracking_completeness_uses_only_full_bound_days_and_never_duplicates_multi_project_patient(
+    doctor, project_patient
+):
+    today = timezone.datetime(2026, 7, 24).date()
+    patient = project_patient.patient
+    second_project = StudyProject.objects.create(name="第二研究", created_by=doctor)
+    second_group = StudyGroup.objects.create(project=second_project, name="对照组", target_ratio=1)
+    ProjectPatient.objects.create(project=second_project, patient=patient, group=second_group)
+    full_device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="complete-device", identifier_type="device_id", model="TEST", short_code="1289"
+    )
+    WearableBinding.objects.create(
+        patient=patient, device=full_device, bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC), bound_by=doctor
+    )
+    WearableDailySummary.objects.create(patient=patient, record_date=timezone.datetime(2026, 7, 23).date(), steps=100, steps_attribution_status="attributed")
+
+    no_data_patient = _patient(doctor, name="无数据", phone="13900008881")
+    no_data_pp = _project_patient(doctor, no_data_patient, project_name="无数据项目")
+    no_data_device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="no-data-device", identifier_type="device_id", model="TEST", short_code="1290"
+    )
+    WearableBinding.objects.create(patient=no_data_patient, device=no_data_device, bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC), bound_by=doctor)
+
+    half_day_patient = _patient(doctor, name="半日", phone="13900008882")
+    half_day_pp = _project_patient(doctor, half_day_patient, project_name="半日项目")
+    half_day_device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="half-day-device", identifier_type="device_id", model="TEST", short_code="1291"
+    )
+    WearableBinding.objects.create(patient=half_day_patient, device=half_day_device, bound_at=datetime(2026, 7, 23, 4, tzinfo=UTC), bound_by=doctor)
+
+    rows = list_patient_tracking_summaries(doctor, today=today)
+    by_patient = {item["patient"]["id"]: item for item in rows}
+
+    assert len([item for item in rows if item["patient"]["id"] == patient.id]) == 1
+    assert by_patient[patient.id]["wearable"]["last_30_days_data_completeness"] == 3.33
+    assert by_patient[no_data_pp.patient_id]["wearable"]["last_30_days_data_completeness"] == 0.0
+    assert by_patient[half_day_pp.patient_id]["wearable"]["last_30_days_data_completeness"] is None
 
 
 @pytest.mark.django_db
