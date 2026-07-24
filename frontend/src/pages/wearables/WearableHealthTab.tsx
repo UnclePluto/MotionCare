@@ -29,7 +29,11 @@ import {
   WearableMetricChart,
   WearableStepsChart,
 } from "./WearableMetricChart";
-import { fetchWearableMeasurements } from "./measurementQueries";
+import {
+  fetchWearableMeasurementsByIdentity,
+  wearableMeasurementQueryKey,
+  type WearableMeasurementQueryIdentity,
+} from "./measurementQueries";
 import type {
   PatientWearableSyncStatus,
   WearableBucket,
@@ -184,16 +188,47 @@ type Feedback = {
 
 type ActionRequest = {
   id: number;
-  scopeGeneration: number;
+  scopeKey: string;
   patientId: number;
   projectPatientId: number;
   metricType: WearableMetricType;
   deviceId: number;
   bindingId: number;
+  measurementIdentity: WearableMeasurementQueryIdentity | null;
 };
 
-const MEASUREMENT_POLL_ATTEMPTS = 3;
-const MEASUREMENT_POLL_INTERVAL_MS = 1_000;
+type ScopedFeedback = {
+  scopeKey: string;
+  value: Feedback;
+};
+
+type ScopedDeviceStatus = {
+  scopeKey: string;
+  value: WearableStatus;
+};
+
+type PendingOperation = {
+  scopeKey: string;
+  action: string;
+};
+
+type DeviceDraftState = {
+  deviceIdentity: string;
+  heartRateInterval: number | null;
+  bloodPressureInterval: number | null;
+  bloodOxygenInterval: number | null;
+  stepEnabled: boolean;
+};
+
+const DEFAULT_DEVICE_DRAFTS = {
+  heartRateInterval: 60,
+  bloodPressureInterval: 60,
+  bloodOxygenInterval: 60,
+  stepEnabled: true,
+} as const;
+
+const MEASUREMENT_POLL_ATTEMPTS = 6;
+const MEASUREMENT_POLL_INTERVAL_MS = 10_000;
 
 function waitForPollInterval() {
   return new Promise<void>((resolve) => {
@@ -229,37 +264,12 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
   const [metricType, setMetricType] = useState<WearableMetricType>("heart_rate");
   const [bucket, setBucket] = useState<WearableBucket>("raw");
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>(rangeDefaults);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const [checkedStatus, setCheckedStatus] = useState<WearableStatus | null>(null);
-  const [pendingAction, setPendingAction] = useState<string | null>(null);
-  const [heartRateInterval, setHeartRateInterval] = useState<number | null>(60);
-  const [bloodPressureInterval, setBloodPressureInterval] = useState<number | null>(60);
-  const [bloodOxygenInterval, setBloodOxygenInterval] = useState<number | null>(60);
-  const [stepEnabled, setStepEnabled] = useState(true);
-  const scopeRef = useRef(0);
+  const [feedbackState, setFeedbackState] = useState<ScopedFeedback | null>(null);
+  const [checkedStatusState, setCheckedStatusState] =
+    useState<ScopedDeviceStatus | null>(null);
+  const [pendingOperation, setPendingOperation] =
+    useState<PendingOperation | null>(null);
   const actionRequestRef = useRef(0);
-  const scopeKey = `${patientId}:${projectPatientId}:${metricType}`;
-  const currentScopeKey = useRef(scopeKey);
-  if (currentScopeKey.current !== scopeKey) {
-    currentScopeKey.current = scopeKey;
-    scopeRef.current += 1;
-  }
-
-  useEffect(() => {
-    scopeRef.current += 1;
-    actionRequestRef.current += 1;
-    setFeedback(null);
-    setCheckedStatus(null);
-    setPendingAction(null);
-  }, [scopeKey]);
-
-  useEffect(
-    () => () => {
-      scopeRef.current += 1;
-      actionRequestRef.current += 1;
-    },
-    [],
-  );
 
   const params = useMemo(
     () => ({
@@ -274,23 +284,101 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
     queryFn: async () => (await apiClient.get<PatientWearableSyncStatus>(`/wearables/patients/${patientId}/sync-status/`)).data,
   });
   const isBound = syncQuery.data?.is_bound === true;
+  const deviceIdentity = syncQuery.isSuccess
+    ? isBound
+      ? `bound:${syncQuery.data.binding_id}:${syncQuery.data.device_id}`
+      : "unbound"
+    : "loading";
+  const [deviceDraftState, setDeviceDraftState] = useState<DeviceDraftState>(
+    () => ({
+      deviceIdentity,
+      ...DEFAULT_DEVICE_DRAFTS,
+    }),
+  );
+  const activeDeviceDrafts =
+    deviceDraftState.deviceIdentity === deviceIdentity
+      ? deviceDraftState
+      : { deviceIdentity, ...DEFAULT_DEVICE_DRAFTS };
+  const updateDeviceDrafts = (
+    update: Partial<Omit<DeviceDraftState, "deviceIdentity">>,
+  ) => {
+    setDeviceDraftState((current) => ({
+      ...(current.deviceIdentity === deviceIdentity
+        ? current
+        : DEFAULT_DEVICE_DRAFTS),
+      deviceIdentity,
+      ...update,
+    }));
+  };
+  const {
+    heartRateInterval,
+    bloodPressureInterval,
+    bloodOxygenInterval,
+    stepEnabled,
+  } = activeDeviceDrafts;
+  const actionScopeKey = [
+    patientId,
+    projectPatientId,
+    deviceIdentity,
+    metricType,
+    bucket,
+    params.start,
+    params.end,
+  ].join(":");
+  const currentActionScopeKey = useRef(actionScopeKey);
+  if (currentActionScopeKey.current !== actionScopeKey) {
+    currentActionScopeKey.current = actionScopeKey;
+    actionRequestRef.current += 1;
+  }
+
+  useEffect(() => {
+    actionRequestRef.current += 1;
+    setFeedbackState(null);
+    setCheckedStatusState(null);
+    setPendingOperation(null);
+  }, [actionScopeKey]);
+
+  useEffect(
+    () => () => {
+      actionRequestRef.current += 1;
+    },
+    [],
+  );
+
   const deviceIdRef = useRef<number | null>(syncQuery.data?.device_id ?? null);
   const bindingIdRef = useRef<number | null>(syncQuery.data?.binding_id ?? null);
   deviceIdRef.current = syncQuery.data?.device_id ?? null;
   bindingIdRef.current = syncQuery.data?.binding_id ?? null;
-  const measurementsQuery = useQuery({
-    queryKey: ["wearable-measurements", patientId, projectPatientId, metricType, bucket, params],
-    enabled: isBound && metricType !== "steps",
-    queryFn: ({ signal }) =>
-      fetchWearableMeasurements({
-        patientId,
-        params: {
-          ...params,
-          metric_type: metricType as Exclude<WearableMetricType, "steps">,
+  const measurementIdentity: WearableMeasurementQueryIdentity | null =
+    isBound &&
+    metricType !== "steps" &&
+    syncQuery.data?.binding_id != null &&
+    syncQuery.data.device_id != null
+      ? {
+          patientId,
+          projectPatientId,
+          bindingId: syncQuery.data.binding_id,
+          deviceId: syncQuery.data.device_id,
+          metricType,
           bucket,
-        },
+          start: params.start,
+          end: params.end,
+        }
+      : null;
+  const measurementsQuery = useQuery({
+    queryKey: measurementIdentity
+      ? wearableMeasurementQueryKey(measurementIdentity)
+      : ["wearable-measurements", "disabled", patientId, projectPatientId],
+    enabled: measurementIdentity != null,
+    queryFn: ({ signal }) => {
+      if (!measurementIdentity) {
+        throw new Error("当前没有可用的穿戴设备测量查询。");
+      }
+      return fetchWearableMeasurementsByIdentity({
+        identity: measurementIdentity,
         signal,
-      }),
+      });
+    },
   });
   const dailyQuery = useQuery({
     queryKey: ["wearable-daily-summaries", patientId, projectPatientId, params],
@@ -300,18 +388,36 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
   });
 
   const measurementCapability = metricType === "steps" ? false : syncQuery.data?.capabilities?.[`measure_${metricType}`] === true;
+  const measurementReady =
+    measurementIdentity != null &&
+    measurementsQuery.isSuccess &&
+    !measurementsQuery.isFetching;
+  const pendingAction =
+    pendingOperation?.scopeKey === actionScopeKey
+      ? pendingOperation.action
+      : null;
+  const operationBusy = pendingAction != null;
+  const feedback =
+    feedbackState?.scopeKey === actionScopeKey ? feedbackState.value : null;
+  const checkedStatus =
+    checkedStatusState?.scopeKey === actionScopeKey
+      ? checkedStatusState.value
+      : null;
   const changeMetric = (value: WearableMetricType) => {
     setMetricType(value);
     setDateRange((current) => clampHealthDateRange(current, value));
   };
-  const startRequest = (): ActionRequest | null => {
+  const startRequest = (
+    requiresMeasurement = false,
+  ): ActionRequest | null => {
     const deviceId = syncQuery.data?.device_id;
     const bindingId = syncQuery.data?.binding_id;
     if (
-      pendingAction ||
+      operationBusy ||
       !isBound ||
       deviceId == null ||
-      bindingId == null
+      bindingId == null ||
+      (requiresMeasurement && !measurementReady)
     ) {
       return null;
     }
@@ -319,12 +425,13 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
     actionRequestRef.current = id;
     return {
       id,
-      scopeGeneration: scopeRef.current,
+      scopeKey: actionScopeKey,
       patientId,
       projectPatientId,
       metricType,
       deviceId,
       bindingId,
+      measurementIdentity,
     };
   };
 
@@ -336,7 +443,7 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
       ]);
     return (
       actionRequestRef.current === request.id &&
-      scopeRef.current === request.scopeGeneration &&
+      currentActionScopeKey.current === request.scopeKey &&
       patientId === request.patientId &&
       projectPatientId === request.projectPatientId &&
       metricType === request.metricType &&
@@ -374,22 +481,36 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
     request: ActionRequest,
     baselineSignature: string,
   ) => {
+    const identity = request.measurementIdentity;
+    if (!identity) return;
     for (let attempt = 0; attempt < MEASUREMENT_POLL_ATTEMPTS; attempt += 1) {
       await waitForPollInterval();
       if (!isCurrentRequest(request)) return;
-      const result = await measurementsQuery.refetch();
-      if (!isCurrentRequest(request)) return;
-      if (result.isError) {
-        setFeedback({
-          type: "error",
-          message: errorMessage(
-            result.error,
-            "刷新主动测量趋势失败，请稍后重试。",
-          ),
+      let result;
+      try {
+        result = await queryClient.fetchQuery({
+          queryKey: wearableMeasurementQueryKey(identity),
+          queryFn: ({ signal }) =>
+            fetchWearableMeasurementsByIdentity({ identity, signal }),
+          staleTime: 0,
         });
+      } catch (error) {
+        if (isCurrentRequest(request)) {
+          setFeedbackState({
+            scopeKey: request.scopeKey,
+            value: {
+              type: "error",
+              message: errorMessage(
+                error,
+                "刷新主动测量趋势失败，请稍后重试。",
+              ),
+            },
+          });
+        }
         return;
       }
-      if (measurementSignature(result.data) !== baselineSignature) {
+      if (!isCurrentRequest(request)) return;
+      if (measurementSignature(result) !== baselineSignature) {
         await Promise.all([
           queryClient.invalidateQueries({
             queryKey: [
@@ -407,28 +528,40 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
             METRIC_OPTIONS.find(
               (option) => option.value === request.metricType,
             )?.label ?? "健康";
-          setFeedback({
-            type: "success",
-            message: `已获取新的${metricLabel}测量点。`,
+          setFeedbackState({
+            scopeKey: request.scopeKey,
+            value: {
+              type: "success",
+              message: `已获取新的${metricLabel}测量点。`,
+            },
           });
         }
         return;
       }
     }
     if (isCurrentRequest(request)) {
-      setFeedback({
-        type: "warning",
-        message: "等待窗口内尚未发现新测量点，请稍后查看。",
+      setFeedbackState({
+        scopeKey: request.scopeKey,
+        value: {
+          type: "warning",
+          message: "等待窗口内尚未发现新测量点，请稍后查看。",
+        },
       });
     }
   };
 
   const runAction = async (action: "status" | "measure" | "sync") => {
-    const request = startRequest();
+    const request = startRequest(action === "measure");
     if (!request) return;
-    const baselineSignature = measurementSignature(measurementsQuery.data);
-    setPendingAction(action);
-    setFeedback(null);
+    const baselineSignature = request.measurementIdentity
+      ? measurementSignature(
+          queryClient.getQueryData(
+            wearableMeasurementQueryKey(request.measurementIdentity),
+          ),
+        )
+      : measurementSignature(undefined);
+    setPendingOperation({ scopeKey: request.scopeKey, action });
+    setFeedbackState(null);
     try {
       if (action === "status") {
         const status = (
@@ -437,13 +570,19 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
           )
         ).data;
         if (isCurrentRequest(request) && status.device_id === request.deviceId) {
-          setCheckedStatus(status);
-          setFeedback({
-            type: status.online ? "success" : "warning",
-            message: status.online
-              ? "通信测试完成，设备当前在线。"
-              : "通信测试完成，设备当前离线。",
-            description: `电量：${status.battery_level ?? "—"}%；最近通信：${formatShanghaiDateTime(status.last_communication_at)}`,
+          setCheckedStatusState({
+            scopeKey: request.scopeKey,
+            value: status,
+          });
+          setFeedbackState({
+            scopeKey: request.scopeKey,
+            value: {
+              type: status.online ? "success" : "warning",
+              message: status.online
+                ? "通信测试完成，设备当前在线。"
+                : "通信测试完成，设备当前离线。",
+              description: `电量：${status.battery_level ?? "—"}%；最近通信：${formatShanghaiDateTime(status.last_communication_at)}`,
+            },
           });
           await queryClient.invalidateQueries({
             queryKey: ["wearable-sync-status", request.patientId],
@@ -458,7 +597,10 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
           )
         ).data;
         if (!isCurrentRequest(request)) return;
-        setFeedback(commandFeedback(command.status, "主动测量"));
+        setFeedbackState({
+          scopeKey: request.scopeKey,
+          value: commandFeedback(command.status, "主动测量"),
+        });
         if (command.status === "succeeded" || command.status === "queued") {
           await pollForMeasurement(request, baselineSignature);
         }
@@ -471,19 +613,28 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
           )
         ).data;
         if (isCurrentRequest(request) && result.status === "queued") {
-          setFeedback({
-            type: "info",
-            message: "健康数据同步已排队，尚未确认新数据到达。",
+          setFeedbackState({
+            scopeKey: request.scopeKey,
+            value: {
+              type: "info",
+              message: "健康数据同步已排队，尚未确认新数据到达。",
+            },
           });
           await invalidateHealthQueries();
         }
       }
     } catch (error) {
       if (isCurrentRequest(request)) {
-        setFeedback({ type: "error", message: errorMessage(error, "设备操作失败，请稍后重试。") });
+        setFeedbackState({
+          scopeKey: request.scopeKey,
+          value: {
+            type: "error",
+            message: errorMessage(error, "设备操作失败，请稍后重试。"),
+          },
+        });
       }
     } finally {
-      if (isCurrentRequest(request)) setPendingAction(null);
+      if (isCurrentRequest(request)) setPendingOperation(null);
     }
   };
 
@@ -494,8 +645,8 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
   ) => {
     const request = startRequest();
     if (!request) return;
-    setPendingAction(action);
-    setFeedback(null);
+    setPendingOperation({ scopeKey: request.scopeKey, action });
+    setFeedbackState(null);
     try {
       const command = (
         await apiClient.post<WearableCommandResponse>(
@@ -504,17 +655,23 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
         )
       ).data;
       if (isCurrentRequest(request)) {
-        setFeedback(commandFeedback(command.status, label));
+        setFeedbackState({
+          scopeKey: request.scopeKey,
+          value: commandFeedback(command.status, label),
+        });
       }
     } catch (error) {
       if (isCurrentRequest(request)) {
-        setFeedback({
-          type: "error",
-          message: errorMessage(error, "设备配置失败，请稍后重试。"),
+        setFeedbackState({
+          scopeKey: request.scopeKey,
+          value: {
+            type: "error",
+            message: errorMessage(error, "设备配置失败，请稍后重试。"),
+          },
         });
       }
     } finally {
-      if (isCurrentRequest(request)) setPendingAction(null);
+      if (isCurrentRequest(request)) setPendingOperation(null);
     }
   };
 
@@ -524,7 +681,6 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
   if (!syncStatus?.is_bound) return <Empty description="请先在患者接入中绑定穿戴设备。" />;
 
   const metricName = METRIC_OPTIONS.find((option) => option.value === metricType)?.label;
-  const operationBusy = pendingAction != null;
   const latestDeviceStatus = checkedStatus
     ? checkedStatus.online
       ? "online"
@@ -582,7 +738,11 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
         </Button>
         {metricType !== "steps" ? (
           <Button
-            disabled={operationBusy || !measurementCapability}
+            disabled={
+              operationBusy ||
+              !measurementCapability ||
+              !measurementReady
+            }
             loading={pendingAction === "measure"}
             onClick={() => void runAction("measure")}
           >
@@ -613,7 +773,9 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
             max={1440}
             precision={0}
             value={heartRateInterval}
-            onChange={setHeartRateInterval}
+            onChange={(value) =>
+              updateDeviceDrafts({ heartRateInterval: value })
+            }
           />
           <Button
             disabled={
@@ -647,7 +809,9 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
             max={1440}
             precision={0}
             value={bloodPressureInterval}
-            onChange={setBloodPressureInterval}
+            onChange={(value) =>
+              updateDeviceDrafts({ bloodPressureInterval: value })
+            }
           />
           <Button
             disabled={
@@ -681,7 +845,9 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
             max={1440}
             precision={0}
             value={bloodOxygenInterval}
-            onChange={setBloodOxygenInterval}
+            onChange={(value) =>
+              updateDeviceDrafts({ bloodOxygenInterval: value })
+            }
           />
           <Button
             disabled={
@@ -712,7 +878,9 @@ export function WearableHealthTab({ patientId, projectPatientId }: { patientId: 
           <Select
             aria-label="步数开关待下发值"
             value={stepEnabled}
-            onChange={setStepEnabled}
+            onChange={(value) =>
+              updateDeviceDrafts({ stepEnabled: value })
+            }
             style={{ width: 120 }}
             options={[
               { value: true, label: "开启", title: "开启" },

@@ -14,6 +14,53 @@ type MeasurementQueryParams = {
   bucket: WearableBucket;
 };
 
+export type WearableMeasurementQueryIdentity = {
+  patientId: number;
+  projectPatientId: number;
+  bindingId: number;
+  deviceId: number;
+  metricType: Exclude<WearableMetricType, "steps">;
+  start: string;
+  end: string;
+  bucket: WearableBucket;
+};
+
+export function wearableMeasurementQueryKey(
+  identity: WearableMeasurementQueryIdentity,
+) {
+  return [
+    "wearable-measurements",
+    identity.patientId,
+    identity.projectPatientId,
+    identity.bindingId,
+    identity.deviceId,
+    identity.metricType,
+    identity.bucket,
+    identity.start,
+    identity.end,
+  ] as const;
+}
+
+export function fetchWearableMeasurementsByIdentity({
+  identity,
+  signal,
+}: {
+  identity: WearableMeasurementQueryIdentity;
+  signal?: AbortSignal;
+}) {
+  return fetchWearableMeasurements({
+    patientId: identity.patientId,
+    params: {
+      project_patient: identity.projectPatientId,
+      metric_type: identity.metricType,
+      start: identity.start,
+      end: identity.end,
+      bucket: identity.bucket,
+    },
+    signal,
+  });
+}
+
 export async function fetchWearableMeasurements({
   patientId,
   params,

@@ -33,6 +33,54 @@ const capabilities = {
   configure_step_switch: false,
 };
 
+function boundSyncStatus(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    is_bound: true,
+    binding_id: 17,
+    device_id: 7,
+    model: "M1",
+    device_short_code: "0826",
+    last_device_status: "online",
+    last_battery_level: 82,
+    last_communication_at: "2026-07-24T02:00:00Z",
+    capabilities,
+    last_sync_at: null,
+    metrics: [],
+    ...overrides,
+  };
+}
+
+function unboundSyncStatus() {
+  return {
+    is_bound: false,
+    binding_id: null,
+    device_id: null,
+    model: null,
+    device_short_code: null,
+    last_device_status: null,
+    last_battery_level: null,
+    last_communication_at: null,
+    capabilities: {
+      ...capabilities,
+      measure_heart_rate: false,
+      measure_blood_pressure: false,
+      measure_blood_oxygen: false,
+    },
+    last_sync_at: null,
+    metrics: [],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = render(
@@ -836,7 +884,56 @@ describe("WearableHealthTab", () => {
     expect(screen.getByRole("button", { name: /主动同步/ })).toBeDisabled();
   });
 
-  it("主动测量排队后短轮询到新点并刷新反馈", async () => {
+  it("初始趋势尚未成功时禁用主动测量，稳定基线就绪后才开放", async () => {
+    const measurements = deferred<{
+      data: {
+        metric_type: "heart_rate";
+        bucket: "raw";
+        start: string;
+        end: string;
+        total: number;
+        page: number;
+        page_size: number;
+        next_page: null;
+        items: Array<Record<string, string | number>>;
+      };
+    }>();
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes("sync-status")) {
+        return Promise.resolve({ data: boundSyncStatus() });
+      }
+      if (url.includes("measurements")) return measurements.promise;
+      if (url.includes("daily-summaries")) {
+        return Promise.resolve({ data: { items: [] } });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    renderTab();
+
+    await screen.findByText("设备 0826");
+    expect(screen.getByRole("button", { name: "主动测量" })).toBeDisabled();
+
+    measurements.resolve({
+      data: {
+        metric_type: "heart_rate",
+        bucket: "raw",
+        start: "2026-06-25",
+        end: "2026-07-24",
+        total: 1,
+        page: 1,
+        page_size: 500,
+        next_page: null,
+        items: [
+          { measured_at: "2026-07-24T16:20:00Z", heart_rate: 68 },
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "主动测量" })).toBeEnabled(),
+    );
+  });
+
+  it("主动测量在后端首个十秒计划点后发现新点", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let measurementCalls = 0;
     mockGet.mockImplementation((url: string) => {
@@ -860,7 +957,7 @@ describe("WearableHealthTab", () => {
       if (url.includes("measurements")) {
         measurementCalls += 1;
         const items =
-          measurementCalls >= 3
+          measurementCalls >= 2
             ? [{ measured_at: "2026-07-24T16:31:00Z", heart_rate: 72 }]
             : [];
         return Promise.resolve({
@@ -898,13 +995,21 @@ describe("WearableHealthTab", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(2_000);
+        await vi.advanceTimersByTimeAsync(9_000);
+      });
+      expect(measurementCalls).toBe(1);
+      expect(
+        screen.queryByText("已获取新的心率测量点。"),
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
       });
 
       expect(
         await screen.findByText("已获取新的心率测量点。"),
       ).toBeInTheDocument();
-      expect(measurementCalls).toBe(3);
+      expect(measurementCalls).toBe(2);
       await waitFor(() =>
         expect(
           screen.getByRole("button", { name: /主动测量/ }),
@@ -915,7 +1020,7 @@ describe("WearableHealthTab", () => {
     }
   });
 
-  it("主动测量最多轮询三次后停止并显示等待超时", async () => {
+  it("主动测量轮询到六十秒后停止并明确未发现新点", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let measurementCalls = 0;
     mockGet.mockImplementation((url: string) => {
@@ -973,20 +1078,223 @@ describe("WearableHealthTab", () => {
       fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(3_000);
+        await vi.advanceTimersByTimeAsync(59_000);
+      });
+      expect(measurementCalls).toBe(6);
+      expect(
+        screen.queryByText("等待窗口内尚未发现新测量点，请稍后查看。"),
+      ).not.toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
       });
       expect(
         await screen.findByText("等待窗口内尚未发现新测量点，请稍后查看。"),
       ).toBeInTheDocument();
-      expect(measurementCalls).toBe(4);
+      expect(measurementCalls).toBe(7);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });
-      expect(measurementCalls).toBe(4);
+      expect(measurementCalls).toBe(7);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("主动测量轮询中切换 bucket 会终止旧视图反馈并开放新视图操作", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rawCalls = 0;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("daily-summaries")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("measurements")) {
+          const bucket = config?.params?.bucket;
+          if (bucket === "raw") rawCalls += 1;
+          const items =
+            bucket === "raw" && rawCalls >= 2
+              ? [{ measured_at: "2026-07-24T16:31:00Z", heart_rate: 72 }]
+              : [];
+          return Promise.resolve({
+            data:
+              bucket === "raw"
+                ? {
+                    metric_type: "heart_rate",
+                    bucket: "raw",
+                    start: "2026-06-25",
+                    end: "2026-07-24",
+                    total: items.length,
+                    page: 1,
+                    page_size: 500,
+                    next_page: null,
+                    items,
+                  }
+                : {
+                    metric_type: "heart_rate",
+                    bucket: "15m",
+                    start: "2026-06-25",
+                    end: "2026-07-24",
+                    items,
+                  },
+          });
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    mockPost.mockResolvedValue({
+      data: {
+        id: 95,
+        command_type: "measure_heart_rate",
+        status: "queued",
+        provider_code: "0",
+        completed_at: null,
+      },
+    });
+    try {
+      renderTab();
+      await screen.findByText("设备 0826");
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "主动测量" })).toBeEnabled(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
+
+      fireEvent.mouseDown(screen.getByRole("combobox", { name: "图表间隔" }));
+      fireEvent.click(await screen.findByTitle("15 分钟"));
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /主动测量/ })).toBeEnabled(),
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(70_000);
+      });
+      expect(rawCalls).toBe(1);
+      expect(
+        screen.queryByText("已获取新的心率测量点。"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("等待窗口内尚未发现新测量点，请稍后查看。"),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("操作中解绑后重绑会清理旧锁并允许新设备操作", async () => {
+    mockPost.mockImplementation(() => new Promise(() => undefined));
+    const { queryClient } = renderTab();
+    await screen.findByText("设备 0826");
+    fireEvent.click(screen.getByRole("button", { name: /通信测试/ }));
+
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        unboundSyncStatus(),
+      );
+    });
+    await screen.findByText("请先在患者接入中绑定穿戴设备。");
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus({
+          binding_id: 18,
+          device_id: 8,
+          device_short_code: "9008",
+        }),
+      );
+    });
+
+    expect(await screen.findByText("设备 9008")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /通信测试/ })).toBeEnabled(),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "主动测量" })).toBeEnabled(),
+    );
+  });
+
+  it("同患者直接换绑会重置配置草案并释放进行中的操作", async () => {
+    mockPost.mockImplementation(() => new Promise(() => undefined));
+    const { queryClient } = renderTab();
+    await screen.findByText("设备 0826");
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "心率间隔（分钟）" }),
+      { target: { value: "15" } },
+    );
+    fireEvent.mouseDown(
+      screen.getByRole("combobox", { name: "步数开关待下发值" }),
+    );
+    fireEvent.click(await screen.findByTitle("关闭"));
+    fireEvent.click(screen.getByRole("button", { name: /通信测试/ }));
+
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus({
+          binding_id: 19,
+          device_id: 9,
+          device_short_code: "9009",
+          last_battery_level: 55,
+        }),
+      );
+    });
+
+    expect(await screen.findByText("设备 9009")).toBeInTheDocument();
+    expect(
+      screen.getByRole("spinbutton", { name: "心率间隔（分钟）" }),
+    ).toHaveValue("60");
+    expect(
+      screen
+        .getAllByTitle("开启")
+        .some((element) =>
+          element.classList.contains("ant-select-selection-item"),
+        ),
+    ).toBe(true);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /通信测试/ })).toBeEnabled(),
+    );
+  });
+
+  it("已完成通信测试后换绑不展示旧设备状态或反馈", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        device_id: 7,
+        model: "M1",
+        online: false,
+        battery_level: 1,
+        last_communication_at: "2026-07-24T16:30:00Z",
+        capabilities: { ring: false },
+      },
+    });
+    const { queryClient } = renderTab();
+    await screen.findByText("设备 0826");
+    fireEvent.click(screen.getByRole("button", { name: /通信测试/ }));
+    await screen.findByText("通信测试完成，设备当前离线。");
+
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus({
+          binding_id: 20,
+          device_id: 10,
+          device_short_code: "9010",
+          last_device_status: "online",
+          last_battery_level: 99,
+          last_communication_at: "2026-07-24T17:00:00Z",
+        }),
+      );
+    });
+
+    expect(await screen.findByText("设备 9010")).toBeInTheDocument();
+    expect(
+      screen.queryByText("通信测试完成，设备当前离线。"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("设备在线")).toBeInTheDocument();
+    expect(screen.getByText("99%")).toBeInTheDocument();
   });
 
   it("绑定代际变化后忽略旧设备操作的迟到结果", async () => {
