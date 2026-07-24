@@ -11,6 +11,12 @@ export type TrackingPatientRow = {
   project_count: number;
   last_training_at: string | null;
   last_30_days_completed_count: number;
+  wearable: {
+    is_bound: boolean;
+    device_short_code: string | null;
+    last_sync_at: string | null;
+    last_30_days_data_completeness: number | null;
+  };
 };
 
 export type TrackingProjectPatient = {
@@ -21,6 +27,7 @@ export type TrackingProjectPatient = {
   group: number | null;
   group_name: string | null;
   enrolled_at: string;
+  project_completed_at: string | null;
 };
 
 export type TrackingCurrentPrescription = {

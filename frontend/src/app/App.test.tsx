@@ -572,7 +572,8 @@ describe("App", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("患者训练追踪")).toBeInTheDocument();
+    expect(await screen.findByText("患者训练与健康")).toBeInTheDocument();
+    expect(screen.getByText("训练与健康")).toBeInTheDocument();
   });
 
   it("opens wearable device inventory route", async () => {

@@ -1,11 +1,12 @@
 import { DualAxes, type DualAxesConfig } from "@ant-design/charts";
 import { ExperimentOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Descriptions, Drawer, Empty, Segmented, Select, Space, Spin, Statistic, Table, Tag } from "antd";
+import { Alert, Button, Card, Descriptions, Drawer, Empty, Segmented, Select, Space, Spin, Statistic, Table, Tabs, Tag } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { WearableHealthTab } from "../wearables/WearableHealthTab";
 import type {
   TrackingDailyTrendPoint,
   TrackingDetail,
@@ -176,6 +177,7 @@ export function TrainingTrackingDetailPage() {
   const numericPatientId = Number(patientId);
   const isValidPatientId = Number.isSafeInteger(numericPatientId) && numericPatientId > 0;
   const [range, setRange] = useState<TrainingTrackingRange>("30d");
+  const [activeTab, setActiveTab] = useState<"training" | "wearable">("training");
   const [videoRecord, setVideoRecord] = useState<TrackingRecentRecord | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [videoLoading, setVideoLoading] = useState(false);
@@ -191,6 +193,7 @@ export function TrainingTrackingDetailPage() {
 
   useEffect(() => {
     setSelectedProjectPatient(null);
+    setActiveTab("training");
   }, [numericPatientId]);
 
   const queryParams = useMemo(() => {
@@ -319,7 +322,7 @@ export function TrainingTrackingDetailPage() {
           </Space>
 
           <Descriptions
-            title="患者训练追踪"
+            title="患者训练与健康"
             bordered
             size="small"
             column={{ xs: 1, sm: 2, lg: 3 }}
@@ -330,6 +333,11 @@ export function TrainingTrackingDetailPage() {
               { key: "projectId", label: "项目 ID", children: currentProject.project },
               { key: "group", label: "分组", children: currentProject.group_name ?? "—" },
               {
+                key: "period",
+                label: "研究周期",
+                children: `研究周期：${currentProject.enrolled_at.slice(0, 10)} 至 ${currentProject.project_completed_at?.slice(0, 10) ?? "进行中"}`,
+              },
+              {
                 key: "prescription",
                 label: "当前处方版本",
                 children: data.current_prescription ? `当前处方 v${data.current_prescription.version}` : "暂无当前处方",
@@ -338,6 +346,20 @@ export function TrainingTrackingDetailPage() {
           />
         </Space>
       </Card>
+
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as "training" | "wearable")}
+        items={[
+          { key: "training", label: "训练跟踪" },
+          { key: "wearable", label: "穿戴健康" },
+        ]}
+      />
+
+      {activeTab === "wearable" ? (
+        <WearableHealthTab patientId={numericPatientId} projectPatientId={currentProjectPatientId} />
+      ) : (
+        <>
 
       <Card title="处方完成情况">
         {data.prescription_completion.length === 0 ? (
@@ -633,6 +655,8 @@ export function TrainingTrackingDetailPage() {
           )}
         </Card>
       </Drawer>
+        </>
+      )}
     </Space>
   );
 }

@@ -73,6 +73,7 @@ const trackingDetail = {
       group: 10,
       group_name: "试验组",
       enrolled_at: "2026-05-01T09:00:00+08:00",
+      project_completed_at: "2026-06-01T09:00:00+08:00",
     },
     {
       id: 9002,
@@ -82,6 +83,7 @@ const trackingDetail = {
       group: 20,
       group_name: "对照组",
       enrolled_at: "2026-05-02T09:00:00+08:00",
+      project_completed_at: null,
     },
   ],
   selected_project_patient: {
@@ -92,6 +94,7 @@ const trackingDetail = {
     group: 10,
     group_name: "试验组",
     enrolled_at: "2026-05-01T09:00:00+08:00",
+    project_completed_at: "2026-06-01T09:00:00+08:00",
   },
   current_prescription: {
     id: 501,
@@ -255,10 +258,14 @@ describe("TrainingTrackingDetailPage", () => {
 
   afterEach(() => cleanup());
 
-  it("展示项目下拉、当前处方、完成率、趋势图、游戏摘要和最近记录", async () => {
+  it("默认展示训练跟踪并保留训练统计与录像动作", async () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "训练跟踪" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "穿戴健康" })).toBeInTheDocument();
+    expect(screen.queryByText("设备在线")).not.toBeInTheDocument();
+    expect(screen.getByText(/研究周期：2026-05-01 至 2026-06-01/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "切换项目" })).toBeInTheDocument();
     expect(screen.getAllByText("研究项目 A").length).toBeGreaterThan(0);
     expect(screen.getByText("试验组")).toBeInTheDocument();
