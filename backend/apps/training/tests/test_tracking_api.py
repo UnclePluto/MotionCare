@@ -21,6 +21,35 @@ from apps.wearables.models import (
 )
 
 
+def _sql_datetime_param_matches(value, expected):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return False
+    if not isinstance(value, datetime):
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    if expected.tzinfo is None:
+        expected = expected.replace(tzinfo=UTC)
+    return value.astimezone(UTC) == expected.astimezone(UTC)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-01 00:00:00",
+        datetime(2026, 7, 1, tzinfo=UTC),
+    ],
+)
+def test_sql_datetime_param_matcher_accepts_sqlite_and_psycopg_shapes(value):
+    assert _sql_datetime_param_matches(
+        value,
+        datetime(2026, 7, 1, tzinfo=UTC),
+    )
+
+
 def _client(user):
     client = APIClient()
     client.force_authenticate(user=user)
@@ -567,7 +596,10 @@ def test_tracking_batch_queries_limit_binding_history_runs_and_summaries_to_need
     assert '"created_at" >=' in run_sql
     assert active_device.id in run_params
     assert stale_device.id not in run_params
-    assert active_bound_at.replace(tzinfo=None).isoformat(" ") in run_params
+    assert any(
+        _sql_datetime_param_matches(param, active_bound_at)
+        for param in run_params
+    )
     assert len(summary_queries) == 1
     assert '"record_date" >=' in summary_queries[0][0]
     assert '"record_date" <=' in summary_queries[0][0]
