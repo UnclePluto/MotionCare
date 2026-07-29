@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrainingTrackingDetailPage } from "./TrainingTrackingDetailPage";
 
-const { mockGet } = vi.hoisted(() => ({ mockGet: vi.fn() }));
+const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
 
 vi.mock("../../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
+    post: (...args: unknown[]) => mockPost(...args),
   },
 }));
 
@@ -160,7 +161,63 @@ const trackingDetail = {
       game_accuracy_rate: 95,
       game_error_count: 1,
       game_difficulty: "中",
+      game_ended_early: true,
+      game_difficulty_adjust_reason: "今天状态不佳",
+      game_upload_mode: "retry",
+      game_retry_count: 2,
+      game_total_retry_count: 12,
       note: "完成顺利",
+      video_id: 55,
+      video_status: "attached",
+      latest_analysis_status: null,
+      analysis_total_count: null,
+      analysis_standard_count: null,
+      analysis_nonstandard_count: null,
+      analysis_failure_reason: "",
+    },
+    {
+      id: 7002,
+      training_date: "2026-05-13",
+      prescription: 501,
+      prescription_version: 3,
+      prescription_action: 1002,
+      action_name: "旧游戏记录",
+      internal_type: "game",
+      action_type: "认知训练",
+      status: "completed",
+      actual_duration_minutes: 10,
+      score: 80,
+      game_accuracy_rate: 90,
+      game_error_count: 2,
+      game_difficulty: "易",
+      game_ended_early: null,
+      game_difficulty_adjust_reason: null,
+      game_upload_mode: null,
+      game_retry_count: null,
+      game_total_retry_count: null,
+      note: "旧版明细缺失",
+    },
+    {
+      id: 7003,
+      training_date: "2026-05-13",
+      prescription: 501,
+      prescription_version: 3,
+      prescription_action: 1003,
+      action_name: "坐站训练",
+      internal_type: "motion",
+      action_type: "下肢训练",
+      status: "completed",
+      actual_duration_minutes: 12,
+      score: null,
+      game_accuracy_rate: null,
+      game_error_count: null,
+      game_difficulty: null,
+      game_ended_early: true,
+      game_difficulty_adjust_reason: "不应展示",
+      game_upload_mode: "retry",
+      game_retry_count: 8,
+      game_total_retry_count: 88,
+      note: "非游戏记录",
     },
   ],
 };
@@ -180,9 +237,17 @@ function trendChartData() {
 describe("TrainingTrackingDetailPage", () => {
   beforeEach(() => {
     mockGet.mockReset();
+    mockPost.mockReset();
+    mockPost.mockResolvedValue({ data: { id: 88, status: "pending" } });
     mockGet.mockImplementation((url: string) => {
       if (url === "/training/tracking/patients/201/") {
         return Promise.resolve({ data: trackingDetail });
+      }
+      if (url === "/training/videos/55/download-url/") {
+        return Promise.resolve({ data: { url: "https://cdn.example.com/video.mp4" } });
+      }
+      if (url === "/training/videos/55/analysis-jobs/latest/") {
+        return Promise.resolve({ data: null });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
@@ -215,7 +280,14 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getByText("18")).toBeInTheDocument();
     expect(screen.getByText("95%")).toBeInTheDocument();
     expect(screen.getByText("中")).toBeInTheDocument();
+    expect(screen.getByText("提前结束")).toBeInTheDocument();
+    expect(screen.getByText("补传")).toBeInTheDocument();
+    expect(screen.getByText("12 次")).toBeInTheDocument();
+    expect(screen.getByText("今天状态不佳")).toBeInTheDocument();
     expect(screen.getByText("完成顺利")).toBeInTheDocument();
+    expect(screen.queryByText("到时完成")).not.toBeInTheDocument();
+    expect(screen.queryByText("88 次")).not.toBeInTheDocument();
+    expect(screen.queryByText("不应展示")).not.toBeInTheDocument();
   });
 
   it("初次请求不带 project_patient，并按 range 切换趋势图数据", async () => {
@@ -257,6 +329,19 @@ describe("TrainingTrackingDetailPage", () => {
         moving_average: 5,
       }),
     ]);
+  });
+
+  it("打开录像并触发动作分析", async () => {
+    renderAt("/training-tracking/patients/201");
+    await screen.findByText("训练患者甲");
+
+    fireEvent.click(screen.getByRole("button", { name: /查看视频/ }));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/training/videos/55/download-url/"));
+    await waitFor(() => expect(document.querySelector("video")?.getAttribute("src")).toContain("video.mp4"));
+
+    const buttons = screen.getAllByRole("button", { name: /动作分析/ });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/training/videos/55/analysis-jobs/"));
   });
 
   it("切换日期范围重新请求时保留详情页内容", async () => {

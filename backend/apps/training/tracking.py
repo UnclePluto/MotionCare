@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
-from .models import TrainingRecord
+from .models import TrainingRecord, TrainingVideo
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
 
@@ -89,6 +89,28 @@ def _form_error_count(form_data):
 def _form_difficulty(form_data):
     value = form_data.get("difficulty") if isinstance(form_data, dict) else None
     return value if isinstance(value, str) else None
+
+
+def _form_raw_detail(form_data):
+    value = form_data.get("raw_detail") if isinstance(form_data, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _raw_bool(form_data, key):
+    value = _form_raw_detail(form_data).get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _raw_text(form_data, key):
+    value = _form_raw_detail(form_data).get(key)
+    return value if isinstance(value, str) else None
+
+
+def _raw_int(form_data, key):
+    value = _form_raw_detail(form_data).get(key)
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
 
 
 def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[dict]:
@@ -385,29 +407,69 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
 def recent_records(project_patient: ProjectPatient) -> list[dict]:
     records = (
         TrainingRecord.objects.filter(project_patient=project_patient)
-        .select_related("prescription", "prescription_action")
+        .select_related("prescription", "prescription_action", "video")
+        .prefetch_related("motion_analysis_jobs")
         .order_by("-training_date", "-id")[:30]
     )
-    return [
-        {
-            "id": record.id,
-            "training_date": record.training_date.isoformat(),
-            "status": record.status,
-            "prescription": record.prescription_id,
-            "prescription_version": record.prescription.version,
-            "prescription_action": record.prescription_action_id,
-            "action_name": record.prescription_action.action_name_snapshot,
-            "internal_type": record.prescription_action.internal_type_snapshot,
-            "action_type": record.prescription_action.action_type_snapshot,
-            "actual_duration_minutes": record.actual_duration_minutes,
-            "score": _float_or_none(record.score),
-            "game_accuracy_rate": _form_number(record.form_data, "accuracy_rate"),
-            "game_error_count": _form_error_count(record.form_data),
-            "game_difficulty": _form_difficulty(record.form_data),
-            "note": record.note,
-        }
-        for record in records
-    ]
+    rows = []
+    for record in records:
+        video = getattr(record, "video", None)
+        analysis_jobs = list(record.motion_analysis_jobs.all())
+        latest_job = max(analysis_jobs, key=lambda item: (item.created_at, item.id)) if analysis_jobs else None
+        is_game = (
+            record.prescription_action.internal_type_snapshot
+            == ActionLibraryItem.InternalType.GAME
+        )
+        game_fields = (
+            {
+                "game_ended_early": _raw_bool(record.form_data, "ended_early"),
+                "game_difficulty_adjust_reason": _raw_text(
+                    record.form_data,
+                    "difficulty_adjust_reason",
+                ),
+                "game_upload_mode": _raw_text(record.form_data, "upload_mode"),
+                "game_retry_count": _raw_int(record.form_data, "retry_count"),
+                "game_total_retry_count": _raw_int(record.form_data, "total_retry_count"),
+            }
+            if is_game
+            else {
+                "game_ended_early": None,
+                "game_difficulty_adjust_reason": None,
+                "game_upload_mode": None,
+                "game_retry_count": None,
+                "game_total_retry_count": None,
+            }
+        )
+        rows.append(
+            {
+                "id": record.id,
+                "training_date": record.training_date.isoformat(),
+                "status": record.status,
+                "prescription": record.prescription_id,
+                "prescription_version": record.prescription.version,
+                "prescription_action": record.prescription_action_id,
+                "action_name": record.prescription_action.action_name_snapshot,
+                "internal_type": record.prescription_action.internal_type_snapshot,
+                "action_type": record.prescription_action.action_type_snapshot,
+                "actual_duration_minutes": record.actual_duration_minutes,
+                "score": _float_or_none(record.score),
+                "game_accuracy_rate": _form_number(record.form_data, "accuracy_rate"),
+                "game_error_count": _form_error_count(record.form_data),
+                "game_difficulty": _form_difficulty(record.form_data),
+                **game_fields,
+                "note": record.note,
+                "video_id": (
+                    video.id if video and video.status == TrainingVideo.Status.ATTACHED else None
+                ),
+                "video_status": video.status if video else None,
+                "latest_analysis_status": latest_job.status if latest_job else None,
+                "analysis_total_count": latest_job.total_count if latest_job else None,
+                "analysis_standard_count": latest_job.standard_count if latest_job else None,
+                "analysis_nonstandard_count": latest_job.nonstandard_count if latest_job else None,
+                "analysis_failure_reason": latest_job.failure_reason if latest_job else "",
+            }
+        )
+    return rows
 
 
 def _project_patients_for_patient(user, patient_id):

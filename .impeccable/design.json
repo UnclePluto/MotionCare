@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-08T22:15:54+08:00",
+  "title": "Design System: MotionCare Patient Miniapp",
+  "extensions": {
+    "colorMeta": {
+      "ink": {
+        "role": "neutral",
+        "displayName": "深海墨蓝",
+        "canonical": "#073b4c",
+        "tonalRamp": ["#073b4c", "#164e63", "#52727d"]
+      },
+      "primary": {
+        "role": "primary",
+        "displayName": "海水青蓝",
+        "canonical": "#0798b2",
+        "tonalRamp": ["#056271", "#0798b2", "#e9fbff"]
+      },
+      "action": {
+        "role": "primary",
+        "displayName": "康复行动绿",
+        "canonical": "#11a36a",
+        "tonalRamp": ["#087148", "#11a36a", "#eafbf0"]
+      },
+      "sun": {
+        "role": "secondary",
+        "displayName": "阳光黄",
+        "canonical": "#ffb84d",
+        "tonalRamp": ["#8a4f05", "#ffb84d", "#fff4d6"]
+      },
+      "coral": {
+        "role": "secondary",
+        "displayName": "活力珊瑚",
+        "canonical": "#ff6b5a",
+        "tonalRamp": ["#c2412d", "#ff6b5a", "#ffebe5"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "页面标题",
+        "purpose": "基础页面主任务标题，例如今日康复、当前处方。"
+      },
+      "headline": {
+        "displayName": "游戏标题",
+        "purpose": "游戏页标题和游戏 hero。"
+      },
+      "title": {
+        "displayName": "操作与数值",
+        "purpose": "按钮文字、数值、章节标题。"
+      },
+      "body": {
+        "displayName": "说明文字",
+        "purpose": "短说明、段落、加载提示和辅助文案。"
+      },
+      "label": {
+        "displayName": "字段标签",
+        "purpose": "表单标签、统计标签和状态标签。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-ambient",
+        "value": "0 6px 14px rgba(7, 59, 76, 0.08)",
+        "purpose": "页面 hero、主要面板、动作卡和字段卡。"
+      },
+      {
+        "name": "button-lift",
+        "value": "0 8px 14px rgba(17, 163, 106, 0.18)",
+        "purpose": "主按钮，表达可执行行动。"
+      },
+      {
+        "name": "game-card-lift",
+        "value": "0 6px 14px rgba(7, 59, 76, 0.08)",
+        "purpose": "游戏方块、数字题、声音卡、拼图块。"
+      },
+      {
+        "name": "selected-ring",
+        "value": "0 0 0 6px rgba(255, 107, 90, 0.16)",
+        "purpose": "拼图和游戏选中态。"
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "180ms ease",
+        "purpose": "触摸、选中、拼图块和图片卡状态变化。"
+      },
+      {
+        "name": "card-flip",
+        "value": "260ms ease-out",
+        "purpose": "声音辨别卡片翻开反馈。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "taro-design-width",
+        "value": "750px"
+      }
+    ],
+    "rules": [
+      "患者端不复刻医生后台或 Ant Design 表单。",
+      "适老化不等于儿童化。",
+      "海南线索服务康复任务，不做旅游宣传页。",
+      "状态必须有文字辅助，不能只靠颜色。",
+      "主动作必须清楚、足够大、文案可执行。"
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "患者端主要行动按钮，用于开始训练、保存、继续训练。",
+      "html": "<button class=\"primary-button\">开始游戏</button>",
+      "css": ".primary-button { display: flex; min-height: 94px; align-items: center; justify-content: center; border-radius: 999px; color: #fff; background: linear-gradient(135deg, #11a36a, #0798b2); box-shadow: 0 8px 14px rgba(17, 163, 106, 0.18); font-size: 27px; font-weight: 900; line-height: 1.25; } .primary-button[disabled] { opacity: 0.58; box-shadow: none; }"
+    },
+    {
+      "name": "Page Hero",
+      "kind": "card",
+      "refersTo": "card-panel",
+      "description": "页面顶部任务说明区，承载当前页面的主任务和一句短说明。",
+      "html": "<section class=\"page-hero\"><span class=\"eyebrow\">MotionCare</span><h1 class=\"title\">今日康复</h1><p class=\"muted\">按处方完成训练，记录每天的身体状态。</p></section>",
+      "css": ".page-hero { display: flex; flex-direction: column; gap: 14px; margin-bottom: 30px; padding: 38px 30px; border: 1px solid rgba(7, 59, 76, 0.12); border-radius: 16px; background: linear-gradient(135deg, rgba(255,255,255,0.94), rgba(233,251,255,0.86) 54%, rgba(255,244,214,0.82)); box-shadow: 0 6px 14px rgba(7, 59, 76, 0.08); } .page-hero .title { color: #073b4c; font-size: 42px; line-height: 1.18; } .page-hero .muted { color: #52727d; }"
+    },
+    {
+      "name": "Field Card",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "健康填报、训练提交和难度原因输入使用的字段块。",
+      "html": "<label class=\"field-card\"><span class=\"label\">运动时长</span><input class=\"input\" placeholder=\"分钟\" /></label>",
+      "css": ".field-card { display: flex; flex-direction: column; gap: 16px; margin: 22px 0; padding: 28px; border: 1px solid rgba(7, 59, 76, 0.12); border-radius: 16px; background: rgba(255,255,255,0.92); box-shadow: 0 6px 14px rgba(7, 59, 76, 0.08); } .input { min-height: 94px; padding: 0 22px; border: 2px solid rgba(7, 152, 178, 0.18); border-radius: 16px; color: #073b4c; background: rgba(255,255,255,0.9); font-size: 27px; font-weight: 700; }"
+    },
+    {
+      "name": "Game Feedback Pill",
+      "kind": "custom",
+      "refersTo": "game-feedback",
+      "description": "认知游戏每题后的短句反馈，必须和音频反馈一致。",
+      "html": "<div class=\"game-feedback\">继续保持</div>",
+      "css": ".game-feedback { display: block; margin-top: 20px; padding: 18px 22px; border-radius: 999px; color: #087148; background: rgba(234, 251, 240, 0.96); font-size: 30px; font-weight: 900; text-align: center; box-shadow: 0 6px 14px rgba(17, 163, 106, 0.12); }"
+    }
+  ]
+}

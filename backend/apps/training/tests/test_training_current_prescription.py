@@ -128,6 +128,184 @@ def test_training_create_rejects_invalid_game_result_form_data(active_prescripti
 
 
 @pytest.mark.django_db
+def test_training_create_accepts_real_game_raw_detail(active_prescription):
+    game = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    game_action = active_prescription.add_action_snapshot(game)
+
+    record = create_training_record(
+        project_patient=active_prescription.project_patient,
+        training_date="2026-05-16",
+        prescription_action=game_action,
+        status=TrainingRecord.Status.COMPLETED,
+        actual_duration_minutes=10,
+        score=90,
+        form_data={
+            "accuracy_rate": 90,
+            "error_count": 1,
+            "difficulty": "中等",
+            "raw_detail": {
+                "game_code": "game-memory-color-sequence",
+                "ended_by": "timer",
+                "ended_early": False,
+                "prescribed_difficulty": "简单",
+                "difficulty_adjusted": True,
+                "difficulty_adjust_reason": "太简单，想提高难度",
+                "upload_mode": "retry",
+                "retry_count": 2,
+                "total_retry_count": 12,
+                "session_duration_seconds": 600,
+                "suggested_duration_minutes": 10,
+                "completed_units": 10,
+                "correct_units": 9,
+            },
+        },
+    )
+
+    assert record.form_data["raw_detail"]["total_retry_count"] == 12
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "source_key",
+    [
+        "game-memory-pattern-sequence",
+        "game-executive-category-switch",
+        "game-audiovisual-sound-discrimination",
+        "game-audiovisual-puzzle",
+    ],
+)
+def test_training_api_accepts_remaining_official_game_codes(
+    active_prescription,
+    doctor,
+    source_key,
+):
+    game = ActionLibraryItem.objects.get(source_key=source_key)
+    game_action = active_prescription.add_action_snapshot(game, sort_order=9)
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        "/api/training/",
+        {
+            "project_patient": active_prescription.project_patient_id,
+            "prescription_action": game_action.id,
+            "training_date": "2026-05-16",
+            "status": TrainingRecord.Status.COMPLETED,
+            "actual_duration_minutes": 10,
+            "score": 88,
+            "form_data": {
+                "accuracy_rate": 80,
+                "error_count": 2,
+                "difficulty": "中等",
+                "raw_detail": {
+                    "game_code": source_key,
+                    "ended_by": "timer",
+                    "ended_early": False,
+                    "prescribed_difficulty": "中等",
+                    "difficulty_adjusted": False,
+                    "difficulty_adjust_reason": "",
+                    "upload_mode": "direct",
+                    "retry_count": 0,
+                    "total_retry_count": 0,
+                    "session_duration_seconds": 600,
+                    "suggested_duration_minutes": 10,
+                    "completed_units": 10,
+                    "correct_units": 8,
+                },
+            },
+            "note": "",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["form_data"]["raw_detail"]["game_code"] == source_key
+    record = TrainingRecord.objects.get(prescription_action=game_action)
+    assert record.prescription_action == game_action
+    assert record.form_data["raw_detail"]["game_code"] == source_key
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("raw_detail", "message"),
+    [
+        ({"ended_by": "unknown"}, "游戏结束方式必须是 timer 或 manual"),
+        ({"ended_early": "false"}, "游戏提前结束标记必须是布尔值"),
+        ({"retry_count": -1}, "游戏补传次数必须是非负整数"),
+        ({"total_retry_count": True}, "游戏累计补传次数必须是非负整数"),
+        ({"upload_mode": "later"}, "游戏上传方式必须是 direct 或 retry"),
+        ({"game_code": "wrong-game"}, "游戏编码必须匹配处方动作"),
+        ({"completed_units": True}, "游戏会话数值必须是非负整数"),
+    ],
+)
+def test_training_create_rejects_invalid_real_game_raw_detail(
+    active_prescription,
+    raw_detail,
+    message,
+):
+    game = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    game_action = active_prescription.add_action_snapshot(game)
+
+    with pytest.raises(ValidationError, match=message):
+        create_training_record(
+            project_patient=active_prescription.project_patient,
+            training_date="2026-05-16",
+            prescription_action=game_action,
+            status=TrainingRecord.Status.COMPLETED,
+            form_data={
+                "accuracy_rate": 90,
+                "error_count": 1,
+                "difficulty": "中等",
+                "raw_detail": raw_detail,
+            },
+        )
+
+
+@pytest.mark.django_db
+def test_training_create_rejects_game_code_when_action_has_no_source_key(active_prescription):
+    game = ActionLibraryItem.objects.create(
+        name="院内自定义游戏",
+        training_type="认知训练",
+        internal_type=ActionLibraryItem.InternalType.GAME,
+        action_type="记忆力训练",
+    )
+    game_action = active_prescription.add_action_snapshot(game)
+
+    with pytest.raises(ValidationError, match="游戏编码必须匹配处方动作"):
+        create_training_record(
+            project_patient=active_prescription.project_patient,
+            training_date="2026-05-16",
+            prescription_action=game_action,
+            status=TrainingRecord.Status.COMPLETED,
+            form_data={
+                "raw_detail": {
+                    "game_code": "game-memory-color-sequence",
+                },
+            },
+        )
+
+
+@pytest.mark.django_db
+def test_training_create_allows_empty_string_for_optional_game_flags(active_prescription):
+    game = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    game_action = active_prescription.add_action_snapshot(game)
+
+    record = create_training_record(
+        project_patient=active_prescription.project_patient,
+        training_date="2026-05-16",
+        prescription_action=game_action,
+        status=TrainingRecord.Status.COMPLETED,
+        form_data={
+            "raw_detail": {
+                "ended_early": "",
+            },
+        },
+    )
+
+    assert record.form_data["raw_detail"]["ended_early"] == ""
+
+
+@pytest.mark.django_db
 def test_training_api_rejects_invalid_game_result_form_data(active_prescription, doctor):
     game = ActionLibraryItem.objects.create(
         name="颜色顺序记忆",

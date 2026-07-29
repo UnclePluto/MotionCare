@@ -111,6 +111,86 @@ def _record(
 
 
 @pytest.mark.django_db
+def test_tracking_recent_record_includes_video_analysis_summary(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    from apps.training.models import MotionAnalysisJob, TrainingVideo
+
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record,
+        bucket="motioncare",
+        object_key="tracking/video.mp4",
+        object_hash="final-hash",
+        content_type="video/mp4",
+        size_bytes=10,
+        duration_seconds=30,
+        status=TrainingVideo.Status.ATTACHED,
+    )
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+        total_count=8,
+        standard_count=6,
+        nonstandard_count=2,
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+    recent = response.data["recent_records"][0]
+    assert recent["video_id"] == video.id
+    assert recent["latest_analysis_status"] == "succeeded"
+    assert (recent["analysis_total_count"], recent["analysis_standard_count"]) == (8, 6)
+
+
+@pytest.mark.django_db
+def test_tracking_hides_video_until_server_cleanup_is_complete(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    from apps.training.models import TrainingVideo
+
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record,
+        bucket="motioncare",
+        object_key="tracking/cleaning.mp4",
+        object_hash="final-hash",
+        content_type="video/mp4",
+        size_bytes=10,
+        duration_seconds=30,
+        status=TrainingVideo.Status.CLEANING,
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    recent = response.data["recent_records"][0]
+    assert recent["video_id"] is None
+    assert recent["video_status"] == TrainingVideo.Status.CLEANING
+
+
+@pytest.mark.django_db
 def test_patient_search_returns_accessible_patient_summaries(
     doctor,
     project_patient,
@@ -194,6 +274,15 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         prescription_action,
         training_date=today,
         duration=20,
+        form_data={
+            "raw_detail": {
+                "ended_early": True,
+                "difficulty_adjust_reason": "不应展示",
+                "upload_mode": "retry",
+                "retry_count": 9,
+                "total_retry_count": 99,
+            },
+        },
         note="第一次运动",
     )
     _record(
@@ -212,10 +301,16 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         duration=8,
         score=Decimal("90.00"),
         form_data={
-            "accuracy_rate": 92,
-            "error_count": 3,
+            "accuracy_rate": 95,
+            "error_count": 1,
             "difficulty": "简单",
-            "raw_detail": {"rounds": 6},
+            "raw_detail": {
+                "ended_early": True,
+                "difficulty_adjust_reason": "今天状态不佳",
+                "upload_mode": "retry",
+                "retry_count": 2,
+                "total_retry_count": 12,
+            },
         },
         note="游戏顺利",
     )
@@ -338,15 +433,15 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
 
     game_summary = response.data["game_summary"]
     assert game_summary["average_score"] == 80.0
-    assert game_summary["average_accuracy_rate"] == 80.67
-    assert game_summary["total_error_count"] == 9
+    assert game_summary["average_accuracy_rate"] == 81.67
+    assert game_summary["total_error_count"] == 7
     assert game_summary["by_game"] == [
         {
             "prescription_action": game_action.id,
             "action_name": "颜色记忆",
             "record_count": 5,
             "average_score": 80.0,
-            "average_accuracy_rate": 80.67,
+            "average_accuracy_rate": 81.67,
             "recent_record_at": today.isoformat(),
         }
     ]
@@ -355,9 +450,20 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
     assert len(recent) == 7
     completed_game = next(item for item in recent if item["note"] == "游戏顺利")
     assert completed_game["score"] == 90.0
-    assert completed_game["game_accuracy_rate"] == 92.0
-    assert completed_game["game_error_count"] == 3
+    assert completed_game["game_accuracy_rate"] == 95.0
+    assert completed_game["game_error_count"] == 1
     assert completed_game["game_difficulty"] == "简单"
+    assert completed_game["game_ended_early"] is True
+    assert completed_game["game_difficulty_adjust_reason"] == "今天状态不佳"
+    assert completed_game["game_upload_mode"] == "retry"
+    assert completed_game["game_retry_count"] == 2
+    assert completed_game["game_total_retry_count"] == 12
+    completed_motion = next(item for item in recent if item["note"] == "第一次运动")
+    assert completed_motion["game_ended_early"] is None
+    assert completed_motion["game_difficulty_adjust_reason"] is None
+    assert completed_motion["game_upload_mode"] is None
+    assert completed_motion["game_retry_count"] is None
+    assert completed_motion["game_total_retry_count"] is None
     bool_metric_game = next(item for item in recent if item["note"] == "部分完成布尔指标")
     assert bool_metric_game["game_accuracy_rate"] is None
     assert bool_metric_game["game_error_count"] is None

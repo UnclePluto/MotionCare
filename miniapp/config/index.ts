@@ -1,7 +1,22 @@
+import { resolve } from 'node:path'
+
+import { dotenvParse } from '@tarojs/helper'
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
+import {
+  resolveApiBaseUrl,
+  resolveConfigEnvironment,
+} from './buildEnvironment'
 import devConfig from './dev'
 import prodConfig from './prod'
+
+const configEnvironment = resolveConfigEnvironment(process.env)
+const localEnv = dotenvParse(resolve(__dirname, '..'), ['TARO_APP_'], configEnvironment)
+const apiBaseUrl = resolveApiBaseUrl({
+  configuredUrl: process.env.TARO_APP_API_BASE_URL || localEnv.TARO_APP_API_BASE_URL,
+  target: process.env.TARO_ENV,
+  environment: configEnvironment,
+})
 
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
 export default defineConfig<'webpack5'>(async (merge) => {
@@ -21,12 +36,22 @@ export default defineConfig<'webpack5'>(async (merge) => {
       "@tarojs/plugin-generator"
     ],
     defineConstants: {
-      'process.env.TARO_APP_API_BASE_URL': JSON.stringify(
-        process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
-      )
+      'process.env.TARO_APP_API_BASE_URL': JSON.stringify(apiBaseUrl)
     },
     copy: {
       patterns: [
+        {
+          from: 'src/pages/game-session/assets/audio/game-session',
+          to: 'dist/pages/game-session/assets/audio/game-session'
+        },
+        {
+          from: 'src/pages/game-session/assets/audio/sound-discrimination',
+          to: 'dist/pages/game-session/assets/audio/sound-discrimination'
+        },
+        {
+          from: 'src/pages/game-session/assets/images/game-session',
+          to: 'dist/pages/game-session/assets/images/game-session'
+        }
       ],
       options: {
       }

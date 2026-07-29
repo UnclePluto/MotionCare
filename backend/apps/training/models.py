@@ -25,3 +25,10 @@ class TrainingRecord(UserStampedModel):
     form_data = models.JSONField("分类表单数据", default=dict)
     note = models.TextField("备注", blank=True)
 
+
+from .video_models import (  # noqa: E402,F401
+    MotionAnalysisJob,
+    TrainingVideo,
+    TrainingVideoSegment,
+    VideoProcessingJob,
+)

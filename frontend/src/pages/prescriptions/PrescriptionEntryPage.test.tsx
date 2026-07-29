@@ -63,6 +63,10 @@ describe("PrescriptionEntryPage", () => {
 
     expect(screen.getByText("处方管理")).toBeInTheDocument();
     expect(await screen.findByText("项目患者甲")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "患者姓名" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "手机号" })).toBeInTheDocument();
+    expect(screen.getByText("138****0201")).toBeInTheDocument();
+    expect(screen.queryByText("13800000201")).not.toBeInTheDocument();
     expect(screen.getByText("研究项目 A")).toBeInTheDocument();
     expect(screen.getByText("进行中")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "处方" })).toHaveAttribute(
