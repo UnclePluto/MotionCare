@@ -6,6 +6,7 @@ import {
   createShoulderPressVideoSession,
   uploadShoulderPressSegment,
 } from './api'
+import { startCameraRecordingWithRetry } from './cameraRecording'
 import { SegmentQueueRunner } from './segmentQueue'
 import {
   classifyTimedOutSegment,
@@ -20,11 +21,18 @@ import {
   type PendingShoulderPressSegment,
   type ShoulderPressSession,
 } from './session'
+import { getSessionTotalBytes } from './uploadMetrics'
 
 const SEGMENT_DURATION_SECONDS = 30
 const STOP_RECORD_TIMEOUT_MS = 10_000
+const INITIAL_START_RETRY_DELAYS_MS = [300, 800]
+const ROLLOVER_START_RETRY_DELAYS_MS = [200, 500, 1_000]
 
 type CameraPosition = 'front' | 'back'
+type RolloverFallback = {
+  tempVideoPath: string
+  sequenceIndex: number
+}
 
 function displayDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60).toString().padStart(2, '0')
@@ -76,6 +84,8 @@ export default function ShoulderPressCameraPage() {
   const recordingRef = useRef(false)
   const finalizingRef = useRef(false)
   const pageHiddenRef = useRef(false)
+  const disposedRef = useRef(false)
+  const rolloverFallbackRef = useRef<RolloverFallback | null>(null)
 
   if (!queueRunnerRef.current) {
     queueRunnerRef.current = new SegmentQueueRunner({
@@ -91,12 +101,14 @@ export default function ShoulderPressCameraPage() {
   }
 
   useEffect(() => {
+    disposedRef.current = false
     void Taro.setKeepScreenOn({ keepScreenOn: true })
     Taro.authorize({ scope: 'scope.camera' })
       .then(() => setCameraAllowed(true))
       .catch(() => setError('需要摄像头权限才能开始训练'))
 
     return () => {
+      disposedRef.current = true
       if (countdownTimerRef.current) clearInterval(countdownTimerRef.current)
       if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
       if (stopTimeoutRef.current) clearTimeout(stopTimeoutRef.current)
@@ -119,7 +131,9 @@ export default function ShoulderPressCameraPage() {
       countdownTimerRef.current = null
       setCountdown(null)
     }
-    if (recordingRef.current && !finalizingRef.current) stopRecording('hidden')
+    if (!finalizingRef.current && (recordingRef.current || rolloverFallbackRef.current)) {
+      stopRecording('hidden')
+    }
   })
 
   function trackPersistence(promise: Promise<void>) {
@@ -156,6 +170,7 @@ export default function ShoulderPressCameraPage() {
       ...latest,
       durationSeconds: Math.max(latest.durationSeconds, elapsedRef.current),
       segmentCount: Math.max(latest.segmentCount ?? 0, sequenceIndex + 1),
+      totalBytes: getSessionTotalBytes(latest) + segment.sizeBytes,
       segments: [...latest.segments, segment].sort(
         (left, right) => left.sequenceIndex - right.sequenceIndex,
       ),
@@ -188,7 +203,12 @@ export default function ShoulderPressCameraPage() {
         unrecoverableReason: message,
       })
     }
-    if (recordingRef.current && !finalizingRef.current) stopRecording('manual')
+    if (
+      !finalizingRef.current
+      && (recordingRef.current || rolloverFallbackRef.current)
+    ) {
+      stopRecording('manual')
+    }
   }
 
   function handleTimedOutSegment(tempVideoPath: string) {
@@ -205,9 +225,11 @@ export default function ShoulderPressCameraPage() {
     if (handledSequencesRef.current.has(completedSequence)) return
     handledSequencesRef.current.add(completedSequence)
     currentSequenceRef.current += 1
+    recordingRef.current = false
+    rolloverFallbackRef.current = { tempVideoPath, sequenceIndex: completedSequence }
 
     // WeChat limits one recording to 30 seconds. Start the next segment first.
-    startCameraRecording()
+    void startCameraRecording('rollover')
     const persistence = persistSegment(
       tempVideoPath,
       completedSequence,
@@ -217,27 +239,68 @@ export default function ShoulderPressCameraPage() {
     void persistence.catch(handlePersistenceFailure)
   }
 
-  function startCameraRecording() {
+  function sleep(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds))
+  }
+
+  async function startCameraRecording(mode: 'initial' | 'rollover') {
     const cameraContext = cameraContextRef.current ?? Taro.createCameraContext()
     cameraContextRef.current = cameraContext
-    segmentStartedAtRef.current = Date.now()
-    cameraContext.startRecord({
-      success() {
-        recordingRef.current = true
-        setRecording(true)
-        setPreparing(false)
-        startRecordingTimer()
-      },
-      timeoutCallback(result) {
-        handleTimedOutSegment(result.tempVideoPath)
-      },
-      fail(reason) {
-        recordingRef.current = false
+    try {
+      await startCameraRecordingWithRetry({
+        startRecord: (options) => cameraContext.startRecord(options),
+        timeoutCallback: (result) => handleTimedOutSegment(result.tempVideoPath),
+        retryDelaysMs: mode === 'rollover'
+          ? ROLLOVER_START_RETRY_DELAYS_MS
+          : INITIAL_START_RETRY_DELAYS_MS,
+        sleep,
+        isCancelled: () => (
+          disposedRef.current
+          || finalizingRef.current
+          || pageHiddenRef.current
+        ),
+      })
+      if (disposedRef.current) return
+      segmentStartedAtRef.current = Date.now()
+      rolloverFallbackRef.current = null
+      recordingRef.current = true
+      setRecording(true)
+      setPreparing(false)
+      setError('')
+      startRecordingTimer()
+      if (pageHiddenRef.current && !finalizingRef.current) stopRecording('hidden')
+    } catch (reason) {
+      recordingRef.current = false
+      setPreparing(false)
+      if (finalizingRef.current || finalCompletionRef.current) return
+      if (mode === 'rollover' && rolloverFallbackRef.current) {
+        const fallback = rolloverFallbackRef.current
+        finalizingRef.current = true
+        if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
+        recordingTimerRef.current = null
         setRecording(false)
-        setPreparing(false)
-        setError(reason.errMsg || '无法开始录像')
-      },
-    })
+        setFinishing(true)
+        setError('下一段录像启动失败，正在保存已完成的训练视频')
+        void finalizeCompletedSegment(fallback.tempVideoPath, fallback.sequenceIndex)
+        return
+      }
+      setRecording(false)
+      const message = reason instanceof Error ? reason.message : '无法开始录像'
+      const session = loadShoulderPressSession(Taro)
+      if (session) {
+        saveShoulderPressSession(Taro, {
+          ...session,
+          phase: 'uploading',
+          segmentCount: 0,
+          trainingDate: localDate(),
+          unrecoverableReason: message,
+        })
+      }
+      setError(message)
+      if (!pageHiddenRef.current) {
+        void Taro.redirectTo({ url: buildShoulderPressUploadUrl() })
+      }
+    }
   }
 
   async function beginRecording() {
@@ -255,6 +318,8 @@ export default function ShoulderPressCameraPage() {
         startedAt: Date.now(),
         durationSeconds: 0,
         phase: 'recording',
+        totalBytes: 0,
+        uploadedBytes: 0,
         segments: [],
       }
       saveShoulderPressSession(Taro, session)
@@ -262,7 +327,7 @@ export default function ShoulderPressCameraPage() {
       elapsedRef.current = 0
       handledSequencesRef.current.clear()
       setElapsedSeconds(0)
-      startCameraRecording()
+      void startCameraRecording('initial')
     } catch (reason) {
       setPreparing(false)
       setError(reason instanceof Error ? reason.message : '无法创建训练录像会话')
@@ -320,6 +385,7 @@ export default function ShoulderPressCameraPage() {
     if (finalCompletionRef.current) return finalCompletionRef.current
     if (stopTimeoutRef.current) clearTimeout(stopTimeoutRef.current)
     stopTimeoutRef.current = null
+    rolloverFallbackRef.current = null
     finalCompletionRef.current = completeRecording(tempVideoPath, sequenceIndex)
       .then(() => {
         setFinishing(false)
@@ -355,11 +421,21 @@ export default function ShoulderPressCameraPage() {
   }
 
   function stopRecording(reason: 'manual' | 'hidden') {
-    if (!recordingRef.current || finalizingRef.current) return
+    if (finalizingRef.current) return
+    const rolloverFallback = rolloverFallbackRef.current
+    if (!recordingRef.current && !rolloverFallback) return
     finalizingRef.current = true
     setFinishing(true)
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current)
     recordingTimerRef.current = null
+    if (rolloverFallback && !recordingRef.current) {
+      setError('正在保存已完成的训练视频')
+      void finalizeCompletedSegment(
+        rolloverFallback.tempVideoPath,
+        rolloverFallback.sequenceIndex,
+      )
+      return
+    }
     const sequenceIndex = currentSequenceRef.current
     stopTimeoutRef.current = setTimeout(() => {
       stopTimeoutRef.current = null

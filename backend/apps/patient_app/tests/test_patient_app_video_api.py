@@ -2,6 +2,7 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from rest_framework.test import APIClient
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
@@ -127,6 +128,27 @@ def test_segment_upload_rejects_same_sequence_with_different_content(
 
     assert conflict.status_code == 409, conflict.data
     assert TrainingVideoSegment.objects.filter(training_video_id=video_id).count() == 1
+
+
+@pytest.mark.django_db
+def test_segment_upload_rejects_when_server_disk_reserve_would_be_exhausted(
+    project_patient, doctor, active_prescription, settings, tmp_path
+):
+    settings.TRAINING_VIDEO_TEMP_ROOT = tmp_path / "training_video_temp"
+    settings.TRAINING_VIDEO_SERVER_MIN_FREE_BYTES = 1_024
+    action = _shoulder_action(active_prescription)
+    client = _client(project_patient, doctor)
+    video_id = _create_session(client, action.id).data["video_id"]
+
+    with patch(
+        "apps.training.video_services.shutil.disk_usage",
+        return_value=SimpleNamespace(free=1_030),
+    ):
+        response = _upload_segment(client, video_id, content=b"segment-over-reserve")
+
+    assert response.status_code == 400, response.data
+    assert "存储空间不足" in response.data["detail"]
+    assert not TrainingVideoSegment.objects.filter(training_video_id=video_id).exists()
 
 
 @pytest.mark.django_db

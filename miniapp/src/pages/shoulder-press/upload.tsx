@@ -13,6 +13,11 @@ import {
   loadShoulderPressSession,
 } from './session'
 import { runShoulderPressUploadFlow } from './uploadFlow'
+import {
+  formatBytes,
+  formatTransferSpeed,
+  getSessionTotalBytes,
+} from './uploadMetrics'
 
 type PageStage = 'uploading' | 'processing' | 'done' | 'expired' | 'waiting'
 
@@ -51,26 +56,66 @@ export default function ShoulderPressUploadPage() {
   const [progress, setProgress] = useState(0)
   const [stageText, setStageText] = useState('正在准备上传视频分片')
   const [segmentText, setSegmentText] = useState('')
+  const [uploadedBytes, setUploadedBytes] = useState(stored?.uploadedBytes ?? 0)
+  const [totalBytes, setTotalBytes] = useState(stored ? getSessionTotalBytes(stored) : 0)
+  const [bytesPerSecond, setBytesPerSecond] = useState(0)
+  const [lastMeasuredSpeed, setLastMeasuredSpeed] = useState(0)
   const [error, setError] = useState('')
   const duration = stored?.durationSeconds ?? 0
   const cancelledRef = useRef(false)
   const runnerRef = useRef<SegmentQueueRunner | null>(null)
+  const lastProgressAtRef = useRef(0)
 
   if (!runnerRef.current) {
     runnerRef.current = new SegmentQueueRunner({
       storage: Taro,
-      upload: ({ videoId, segment }) => uploadShoulderPressSegment({
+      upload: ({ videoId, segment, onProgress }) => uploadShoulderPressSegment({
         videoId,
         sequenceIndex: segment.sequenceIndex,
         durationSeconds: segment.durationSeconds,
         filePath: segment.savedFilePath,
+        onProgress,
       }),
       removeFile: removeSavedFile,
+      onProgress: ({
+        sequenceIndex,
+        progress: segmentProgress,
+        uploadedBytes: currentUploadedBytes,
+        totalBytes: currentTotalBytes,
+        bytesPerSecond: currentBytesPerSecond,
+      }) => {
+        const session = loadShoulderPressSession(Taro)
+        const segmentCount = session?.segmentCount ?? 0
+        if (!session || segmentCount <= 0) return
+        const now = Date.now()
+        const uploadProgress = currentTotalBytes > 0
+          ? Math.round((currentUploadedBytes / currentTotalBytes) * 60)
+          : 0
+        lastProgressAtRef.current = now
+        setUploadedBytes(currentUploadedBytes)
+        setTotalBytes(currentTotalBytes)
+        setBytesPerSecond(currentBytesPerSecond)
+        if (currentBytesPerSecond > 0) setLastMeasuredSpeed(currentBytesPerSecond)
+        setStage('uploading')
+        setStageText('正在上传训练视频')
+        setSegmentText(
+          `分片 ${Math.min(sequenceIndex + 1, segmentCount)}/${segmentCount} · ${segmentProgress}%`,
+        )
+        setProgress(Math.min(60, uploadProgress))
+      },
     })
   }
 
   useEffect(() => {
     cancelledRef.current = false
+    const speedTimer = setInterval(() => {
+      if (
+        lastProgressAtRef.current > 0
+        && Date.now() - lastProgressAtRef.current > 2_500
+      ) {
+        setBytesPerSecond(0)
+      }
+    }, 1_000)
     async function runUntilComplete() {
       while (!cancelledRef.current) {
         try {
@@ -84,11 +129,14 @@ export default function ShoulderPressUploadPage() {
             isCancelled: () => cancelledRef.current,
             onUpdate(update) {
               setProgress(update.progressPercent)
+              setUploadedBytes(update.uploadedBytes)
+              setTotalBytes(update.totalBytes)
               if (update.stage === 'uploading') {
                 setStage('uploading')
                 setStageText('正在上传训练视频')
                 setSegmentText(`分片 ${update.uploadedSegmentCount}/${update.segmentCount}`)
               } else {
+                setBytesPerSecond(0)
                 setStage('processing')
                 setStageText(
                   PROCESSING_LABEL[update.processingStatus ?? ''] ?? '视频正在自动处理',
@@ -122,6 +170,7 @@ export default function ShoulderPressUploadPage() {
     void runUntilComplete()
     return () => {
       cancelledRef.current = true
+      clearInterval(speedTimer)
     }
   }, [])
 
@@ -159,6 +208,28 @@ export default function ShoulderPressUploadPage() {
         <Text className='muted'>{segmentText || displayTitle}</Text>
         <View className='progress-track'>
           <View className='progress-fill' style={{ width: `${progress}%` }} />
+        </View>
+        <View className='upload-transfer-metrics'>
+          <View className='upload-transfer-metric'>
+            <Text className='label'>已上传</Text>
+            <Text className='value'>
+              {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)}
+            </Text>
+          </View>
+          <View className='upload-transfer-metric'>
+            <Text className='label'>
+              {stage === 'processing' ? '最近上传速度' : '传输速度'}
+            </Text>
+            <Text className='value'>
+              {stage === 'processing'
+                ? lastMeasuredSpeed > 0
+                  ? formatTransferSpeed(lastMeasuredSpeed)
+                  : '上传已完成'
+                : lastProgressAtRef.current === 0
+                  ? '等待传输'
+                  : formatTransferSpeed(bytesPerSecond)}
+            </Text>
+          </View>
         </View>
       </View>
 

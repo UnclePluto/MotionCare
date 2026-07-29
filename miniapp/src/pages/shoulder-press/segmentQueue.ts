@@ -6,20 +6,37 @@ import {
   loadShoulderPressSession,
   saveShoulderPressSession,
 } from './session'
+import { getSessionTotalBytes, TransferSpeedMeter } from './uploadMetrics'
+
+type SegmentUploadProgress = {
+  progress: number
+  totalBytesSent: number
+  totalBytesExpectedToSend: number
+}
 
 type QueueRunnerOptions = {
   storage: StorageLike
   upload: (input: {
     videoId: number
     segment: PendingShoulderPressSegment
+    onProgress?: (progress: SegmentUploadProgress) => void
   }) => Promise<unknown>
   removeFile: (filePath: string) => Promise<void>
+  onProgress?: (progress: {
+    sequenceIndex: number
+    progress: number
+    uploadedBytes: number
+    totalBytes: number
+    bytesPerSecond: number
+  }) => void
   now?: () => number
 }
 
 function retryDelay(retryCount: number): number {
   return Math.min(1_000 * (2 ** Math.max(retryCount - 1, 0)), 60_000)
 }
+
+let sharedInFlight: Promise<boolean> | null = null
 
 export class SegmentQueueRunner {
   private readonly options: QueueRunnerOptions
@@ -32,9 +49,13 @@ export class SegmentQueueRunner {
 
   runNext(): Promise<boolean> {
     if (this.inFlight) return this.inFlight
-    this.inFlight = this.processNext().finally(() => {
+    if (sharedInFlight) return sharedInFlight
+    const flight = this.processNext().finally(() => {
       this.inFlight = null
+      if (sharedInFlight === flight) sharedInFlight = null
     })
+    this.inFlight = flight
+    sharedInFlight = flight
     return this.inFlight
   }
 
@@ -71,11 +92,54 @@ export class SegmentQueueRunner {
           ...session,
           segments: [...session.segments],
         })
-        await this.options.upload({ videoId: session.videoId, segment })
+        const speedMeter = new TransferSpeedMeter()
+        speedMeter.sample(
+          session.uploadedBytes ?? 0,
+          this.options.now?.() ?? Date.now(),
+        )
+        let lastReportedProgress = 0
+        const reportProgress = (progress: SegmentUploadProgress) => {
+          const progressSession = loadShoulderPressSession(this.options.storage)
+          if (!progressSession) return
+          const completedBytes = progressSession.uploadedBytes ?? 0
+          const expectedBytes = Math.max(progress.totalBytesExpectedToSend, 0)
+          const currentBytes = expectedBytes > 0
+            ? Math.round(
+              segment.sizeBytes
+                * Math.min(Math.max(progress.totalBytesSent / expectedBytes, 0), 1),
+            )
+            : Math.round(
+              segment.sizeBytes * Math.min(Math.max(progress.progress / 100, 0), 1),
+            )
+          lastReportedProgress = Math.max(lastReportedProgress, progress.progress)
+          this.options.onProgress?.({
+            sequenceIndex: segment.sequenceIndex,
+            progress: progress.progress,
+            uploadedBytes: completedBytes + currentBytes,
+            totalBytes: getSessionTotalBytes(progressSession),
+            bytesPerSecond: speedMeter.sample(
+              completedBytes + currentBytes,
+              this.options.now?.() ?? Date.now(),
+            ),
+          })
+        }
+        await this.options.upload({
+          videoId: session.videoId,
+          segment,
+          onProgress: reportProgress,
+        })
+        if (lastReportedProgress < 100) {
+          reportProgress({
+            progress: 100,
+            totalBytesSent: segment.sizeBytes,
+            totalBytesExpectedToSend: segment.sizeBytes,
+          })
+        }
         const confirmedSession = loadShoulderPressSession(this.options.storage)
         if (!confirmedSession) return false
         saveShoulderPressSession(this.options.storage, {
           ...confirmedSession,
+          uploadedBytes: (confirmedSession.uploadedBytes ?? 0) + segment.sizeBytes,
           segments: confirmedSession.segments.map((item) => (
             item.sequenceIndex === segment.sequenceIndex
               ? { ...item, status: 'confirmed', lastError: undefined }

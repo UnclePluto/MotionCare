@@ -1,8 +1,3 @@
-import base64
-import hashlib
-import hmac
-from urllib.parse import quote, urlencode
-
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
@@ -13,22 +8,16 @@ def _credentials():
     return settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY
 
 
-def _urlsafe_base64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
-
-
-def _sign(data: str) -> str:
-    _, secret_key = _credentials()
-    digest = hmac.new(secret_key.encode(), data.encode(), hashlib.sha1).digest()
-    return _urlsafe_base64(digest)
-
-
-def private_download_url(base_url: str, *, expires_at: int) -> str:
-    access_key, _ = _credentials()
-    separator = "&" if "?" in base_url else "?"
-    unsigned = f"{base_url}{separator}{urlencode({'e': expires_at})}"
-    token = f"{access_key}:{_sign(unsigned)}"
-    return f"{unsigned}&token={quote(token)}"
+def private_download_url(base_url: str, *, expires_in_seconds: int) -> str:
+    access_key, secret_key = _credentials()
+    try:
+        from qiniu import Auth
+    except ImportError as exc:
+        raise ImproperlyConfigured("七牛 Python SDK 未安装") from exc
+    return Auth(access_key, secret_key).private_download_url(
+        base_url,
+        expires=expires_in_seconds,
+    )
 
 
 class QiniuStorageClient:

@@ -21,6 +21,8 @@ export type ShoulderPressSession = {
   durationSeconds: number
   phase: 'recording' | 'uploading' | 'processing'
   segmentCount?: number
+  totalBytes?: number
+  uploadedBytes?: number
   trainingDate?: string
   unrecoverableReason?: string
   segments: PendingShoulderPressSegment[]

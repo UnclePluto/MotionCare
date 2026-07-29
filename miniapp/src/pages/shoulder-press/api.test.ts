@@ -36,12 +36,21 @@ describe('肩部推举分片 API', () => {
   })
 
   it('分片固定上传业务服务器且携带患者 token', async () => {
+    const onProgress = vi.fn()
     mockUploadFile.mockImplementation((options) => {
       options.success({
         statusCode: 201,
         data: '{"sequence_index":0,"object_hash":"segment-hash"}',
       })
-      return { onProgressUpdate: vi.fn() }
+      return {
+        onProgressUpdate(callback) {
+          callback({
+            progress: 25,
+            totalBytesSent: 250,
+            totalBytesExpectedToSend: 1_000,
+          })
+        },
+      }
     })
 
     await expect(uploadShoulderPressSegment({
@@ -49,6 +58,7 @@ describe('肩部推举分片 API', () => {
       sequenceIndex: 0,
       durationSeconds: 30,
       filePath: 'wxfile://segment-0.mp4',
+      onProgress,
     })).resolves.toEqual({ sequence_index: 0, object_hash: 'segment-hash' })
 
     expect(mockUploadFile).toHaveBeenCalledWith(expect.objectContaining({
@@ -56,6 +66,11 @@ describe('肩部推举分片 API', () => {
       header: { Authorization: 'Bearer patient-token' },
       formData: { sequence_index: '0', duration_seconds: '30' },
     }))
+    expect(onProgress).toHaveBeenCalledWith({
+      progress: 25,
+      totalBytesSent: 250,
+      totalBytesExpectedToSend: 1_000,
+    })
   })
 
   it('结束会话后只轮询服务端处理状态', async () => {

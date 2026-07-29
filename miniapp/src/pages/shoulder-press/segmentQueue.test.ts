@@ -16,6 +16,8 @@ function storageWithSegment() {
     startedAt: 1,
     durationSeconds: 30,
     phase: 'recording',
+    totalBytes: 100,
+    uploadedBytes: 0,
     segments: [{
       sequenceIndex: 0,
       savedFilePath: 'wxfile://saved-0.mp4',
@@ -40,6 +42,7 @@ describe('肩部推举分片重试队列', () => {
     expect(upload).toHaveBeenCalledTimes(1)
     expect(removeFile).toHaveBeenCalledWith('wxfile://saved-0.mp4')
     expect(loadShoulderPressSession(storage)?.segments).toEqual([])
+    expect(loadShoulderPressSession(storage)?.uploadedBytes).toBe(100)
   })
 
   it('上传失败保留文件并写入递增退避时间', async () => {
@@ -82,6 +85,25 @@ describe('肩部推举分片重试队列', () => {
     await Promise.all([first, second])
   })
 
+  it('摄像页与上传页的不同 runner 也不会重复上传同一分片', async () => {
+    const { storage } = storageWithSegment()
+    let resolveUpload: (value: unknown) => void = () => undefined
+    const upload = vi.fn(() => new Promise((resolve) => { resolveUpload = resolve }))
+    const options = {
+      storage,
+      upload,
+      removeFile: vi.fn().mockResolvedValue(undefined),
+    }
+    const cameraRunner = new SegmentQueueRunner(options)
+    const uploadRunner = new SegmentQueueRunner(options)
+
+    const fromCamera = cameraRunner.runNext()
+    const fromUploadPage = uploadRunner.runNext()
+    expect(upload).toHaveBeenCalledTimes(1)
+    resolveUpload({ object_hash: 'hash' })
+    await Promise.all([fromCamera, fromUploadPage])
+  })
+
   it('服务端确认后本地删除失败时不会重复上传', async () => {
     const { storage } = storageWithSegment()
     const upload = vi.fn().mockResolvedValue({ object_hash: 'hash' })
@@ -98,5 +120,71 @@ describe('肩部推举分片重试队列', () => {
     expect(upload).toHaveBeenCalledTimes(1)
     expect(removeFile).toHaveBeenCalledTimes(2)
     expect(loadShoulderPressSession(storage)?.segments).toEqual([])
+  })
+
+  it('把当前分片的真实上传进度透传给页面', async () => {
+    const { storage } = storageWithSegment()
+    const onProgress = vi.fn()
+    const timestamps = [0, 1_000, 2_000, 2_500]
+    const upload = vi.fn(async ({ onProgress: reportProgress }) => {
+      reportProgress?.({
+        progress: 37,
+        totalBytesSent: 37,
+        totalBytesExpectedToSend: 100,
+      })
+      reportProgress?.({
+        progress: 100,
+        totalBytesSent: 100,
+        totalBytesExpectedToSend: 100,
+      })
+      return { object_hash: 'hash' }
+    })
+    const runner = new SegmentQueueRunner({
+      storage,
+      upload,
+      removeFile: vi.fn().mockResolvedValue(undefined),
+      onProgress,
+      now: () => timestamps.shift() ?? 2_500,
+    })
+
+    await runner.runNext()
+
+    expect(onProgress).toHaveBeenNthCalledWith(1, {
+      sequenceIndex: 0,
+      progress: 37,
+      uploadedBytes: 37,
+      totalBytes: 100,
+      bytesPerSecond: 37,
+    })
+    expect(onProgress).toHaveBeenNthCalledWith(2, {
+      sequenceIndex: 0,
+      progress: 100,
+      uploadedBytes: 100,
+      totalBytes: 100,
+      bytesPerSecond: 126,
+    })
+  })
+
+  it('微信没有触发中间进度事件时用请求耗时生成最终速度', async () => {
+    const { storage } = storageWithSegment()
+    const onProgress = vi.fn()
+    const timestamps = [0, 1_000, 3_000]
+    const runner = new SegmentQueueRunner({
+      storage,
+      upload: vi.fn().mockResolvedValue({ object_hash: 'hash' }),
+      removeFile: vi.fn().mockResolvedValue(undefined),
+      onProgress,
+      now: () => timestamps.shift() ?? 3_000,
+    })
+
+    await runner.runNext()
+
+    expect(onProgress).toHaveBeenCalledWith({
+      sequenceIndex: 0,
+      progress: 100,
+      uploadedBytes: 100,
+      totalBytes: 100,
+      bytesPerSecond: 50,
+    })
   })
 })

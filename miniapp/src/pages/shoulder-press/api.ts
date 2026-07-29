@@ -32,7 +32,11 @@ export function uploadShoulderPressSegment(input: {
   sequenceIndex: number
   durationSeconds: number
   filePath: string
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: {
+    progress: number
+    totalBytesSent: number
+    totalBytesExpectedToSend: number
+  }) => void
 }): Promise<{ sequence_index: number; object_hash: string }> {
   return new Promise((resolve, reject) => {
     const token = getPatientAppToken()
@@ -68,7 +72,11 @@ export function uploadShoulderPressSegment(input: {
         reject(new Error(error.errMsg || '视频分片上传失败'))
       },
     })
-    task.onProgressUpdate?.((event) => input.onProgress?.(event.progress))
+    task.onProgressUpdate?.((event) => input.onProgress?.({
+      progress: event.progress,
+      totalBytesSent: event.totalBytesSent,
+      totalBytesExpectedToSend: event.totalBytesExpectedToSend,
+    }))
   })
 }
 

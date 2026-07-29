@@ -30,6 +30,7 @@ describe('肩部推举上传与处理流程', () => {
     })
     const finish = vi.fn().mockResolvedValue({ status: 'queued' })
     const getStatus = vi.fn()
+      .mockResolvedValueOnce({ status: 'uploading', uploaded_segment_count: 3 })
       .mockResolvedValueOnce({ status: 'processing_failed', processing: { progress_percent: 70 } })
       .mockResolvedValueOnce({ status: 'attached', training_record_id: 99 })
 
@@ -42,7 +43,7 @@ describe('肩部推举上传与处理流程', () => {
     })
 
     expect(finish).toHaveBeenCalledTimes(1)
-    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(getStatus).toHaveBeenCalledTimes(3)
     expect(result).toBe('succeeded')
     expect(loadShoulderPressSession(storage)).toBeNull()
   })
@@ -76,7 +77,9 @@ describe('肩部推举上传与处理流程', () => {
       storage,
       drainSegments,
       finish,
-      getStatus: vi.fn().mockResolvedValue({ status: 'attached', training_record_id: 99 }),
+      getStatus: vi.fn()
+        .mockResolvedValueOnce({ status: 'uploading', uploaded_segment_count: 1 })
+        .mockResolvedValueOnce({ status: 'attached', training_record_id: 99 }),
       sleep: vi.fn().mockResolvedValue(undefined),
     })
 
@@ -159,5 +162,66 @@ describe('肩部推举上传与处理流程', () => {
 
     expect(result).toBe('unrecoverable')
     expect(loadShoulderPressSession(storage)?.unrecoverableReason).toContain('有效录像分片')
+  })
+
+  it('服务端缺少分片且手机本地已无文件时停止自动重试', async () => {
+    const storage = createStorage()
+    saveShoulderPressSession(storage, {
+      actionId: 42,
+      videoId: 7,
+      startedAt: 1,
+      durationSeconds: 61,
+      phase: 'uploading',
+      segmentCount: 3,
+      trainingDate: '2026-07-14',
+      totalBytes: 300,
+      uploadedBytes: 300,
+      segments: [],
+    })
+    const finish = vi.fn()
+
+    const result = await runShoulderPressUploadFlow({
+      storage,
+      drainSegments: vi.fn(),
+      finish,
+      getStatus: vi.fn().mockResolvedValue({
+        status: 'uploading',
+        uploaded_segment_count: 1,
+      }),
+      sleep: vi.fn(),
+    })
+
+    expect(result).toBe('unrecoverable')
+    expect(finish).not.toHaveBeenCalled()
+    expect(loadShoulderPressSession(storage)?.unrecoverableReason).toContain('服务端仅收到 1/3 个视频分片')
+  })
+
+  it('本地已进入处理阶段但服务端尚未 finish 时自动补交结束请求', async () => {
+    const storage = createStorage()
+    saveShoulderPressSession(storage, {
+      actionId: 42,
+      videoId: 7,
+      startedAt: 1,
+      durationSeconds: 30,
+      phase: 'processing',
+      segmentCount: 1,
+      trainingDate: '2026-07-14',
+      segments: [],
+    })
+    const finish = vi.fn().mockResolvedValue({ status: 'queued' })
+    const getStatus = vi.fn()
+      .mockResolvedValueOnce({ status: 'uploading', uploaded_segment_count: 1 })
+      .mockResolvedValueOnce({ status: 'attached', training_record_id: 99 })
+
+    const result = await runShoulderPressUploadFlow({
+      storage,
+      drainSegments: vi.fn(),
+      finish,
+      getStatus,
+      sleep: vi.fn().mockResolvedValue(undefined),
+    })
+
+    expect(result).toBe('succeeded')
+    expect(finish).toHaveBeenCalledTimes(1)
   })
 })

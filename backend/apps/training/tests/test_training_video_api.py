@@ -70,3 +70,23 @@ def test_doctor_cannot_download_or_analyze_processing_video(
 
     assert download.status_code == 400
     assert analysis.status_code == 400
+
+
+@pytest.mark.django_db
+@override_settings(
+    DEBUG=False,
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_DOWNLOAD_DOMAIN="http://cdn.example.com",
+)
+def test_production_rejects_insecure_qiniu_download_domain(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    video = _attached_video(project_patient, active_prescription, prescription_action)
+    client = APIClient()
+    client.force_authenticate(doctor)
+
+    response = client.get(f"/api/training/videos/{video.id}/download-url/")
+
+    assert response.status_code == 400
+    assert "HTTPS" in response.data["detail"]

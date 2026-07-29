@@ -4,6 +4,7 @@ import {
   saveShoulderPressSession,
   type StorageLike,
 } from './session'
+import { getSessionTotalBytes } from './uploadMetrics'
 
 type UploadFlowStatus = {
   status: string
@@ -18,6 +19,8 @@ type UploadFlowUpdate = {
   segmentCount: number
   processingStatus?: string
   progressPercent: number
+  uploadedBytes: number
+  totalBytes: number
 }
 
 type UploadFlowOptions = {
@@ -71,13 +74,17 @@ export async function runShoulderPressUploadFlow(
     }
 
     const segmentCount = session.segmentCount ?? 0
+    const totalBytes = getSessionTotalBytes(session)
     if (session.segments.length > 0) {
+      const uploadedBytes = session.uploadedBytes ?? 0
       options.onUpdate?.({
         stage: 'uploading',
         uploadedSegmentCount: Math.max(0, segmentCount - session.segments.length),
         segmentCount,
-        progressPercent: segmentCount > 0
-          ? Math.round(((segmentCount - session.segments.length) / segmentCount) * 60)
+        uploadedBytes,
+        totalBytes,
+        progressPercent: totalBytes > 0
+          ? Math.round((uploadedBytes / totalBytes) * 60)
           : 0,
       })
       await options.drainSegments()
@@ -88,9 +95,26 @@ export async function runShoulderPressUploadFlow(
 
     if (session.unrecoverableReason) return 'unrecoverable'
 
-    if (session.phase === 'uploading') {
+    const status = await options.getStatus(session.videoId)
+    if (status.status === 'attached' && status.training_record_id) {
+      clearShoulderPressSession(options.storage)
+      return 'succeeded'
+    }
+    if (status.status === 'expired') return 'expired'
+
+    if (status.status === 'recording' || status.status === 'uploading') {
       if (!session.segmentCount || !session.trainingDate) {
         throw new Error('训练录像结束信息不完整')
+      }
+      const uploadedSegmentCount = status.uploaded_segment_count ?? 0
+      if (uploadedSegmentCount < session.segmentCount) {
+        session = {
+          ...session,
+          phase: 'uploading',
+          unrecoverableReason: `服务端仅收到 ${uploadedSegmentCount}/${session.segmentCount} 个视频分片，手机本地文件已不存在，请重新训练`,
+        }
+        saveShoulderPressSession(options.storage, session)
+        return 'unrecoverable'
       }
       await options.finish({
         videoId: session.videoId,
@@ -100,20 +124,31 @@ export async function runShoulderPressUploadFlow(
       })
       session = { ...session, phase: 'processing' }
       saveShoulderPressSession(options.storage, session)
+      options.onUpdate?.({
+        stage: 'processing',
+        uploadedSegmentCount: segmentCount,
+        segmentCount,
+        processingStatus: 'queued',
+        progressPercent: 60,
+        uploadedBytes: totalBytes,
+        totalBytes,
+      })
+      await options.sleep(2_000)
+      continue
     }
 
-    const status = await options.getStatus(session.videoId)
-    if (status.status === 'attached' && status.training_record_id) {
-      clearShoulderPressSession(options.storage)
-      return 'succeeded'
+    if (session.phase !== 'processing') {
+      session = { ...session, phase: 'processing' }
+      saveShoulderPressSession(options.storage, session)
     }
-    if (status.status === 'expired') return 'expired'
     options.onUpdate?.({
       stage: 'processing',
       uploadedSegmentCount: session.segmentCount ?? 0,
       segmentCount: session.segmentCount ?? 0,
       processingStatus: status.processing?.status ?? status.status,
       progressPercent: Math.max(60, status.processing?.progress_percent ?? 60),
+      uploadedBytes: totalBytes,
+      totalBytes,
     })
     await options.sleep(2_000)
   }

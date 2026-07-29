@@ -3,13 +3,20 @@ import { resolve } from 'node:path'
 import { dotenvParse } from '@tarojs/helper'
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
+import {
+  resolveApiBaseUrl,
+  resolveConfigEnvironment,
+} from './buildEnvironment'
 import devConfig from './dev'
 import prodConfig from './prod'
 
-const localEnv = dotenvParse(resolve(__dirname, '..'), ['TARO_APP_'], 'development')
-const apiBaseUrl = process.env.TARO_APP_API_BASE_URL
-  || localEnv.TARO_APP_API_BASE_URL
-  || 'http://127.0.0.1:8000/api'
+const configEnvironment = resolveConfigEnvironment(process.env)
+const localEnv = dotenvParse(resolve(__dirname, '..'), ['TARO_APP_'], configEnvironment)
+const apiBaseUrl = resolveApiBaseUrl({
+  configuredUrl: process.env.TARO_APP_API_BASE_URL || localEnv.TARO_APP_API_BASE_URL,
+  target: process.env.TARO_ENV,
+  environment: configEnvironment,
+})
 
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
 export default defineConfig<'webpack5'>(async (merge) => {

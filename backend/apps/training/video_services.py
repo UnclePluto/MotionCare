@@ -1,7 +1,9 @@
 import hashlib
 import os
+import shutil
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
@@ -98,7 +100,13 @@ def create_training_video_session(*, project_patient, prescription_action_id):
 def _write_uploaded_segment(*, video_id, sequence_index, uploaded_file):
     if uploaded_file.size > settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES:
         raise ValidationError("训练视频分片文件过大")
-    directory = Path(settings.TRAINING_VIDEO_TEMP_ROOT) / str(video_id)
+    temp_root = Path(settings.TRAINING_VIDEO_TEMP_ROOT)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    free_bytes = shutil.disk_usage(temp_root).free
+    required_bytes = uploaded_file.size + settings.TRAINING_VIDEO_SERVER_MIN_FREE_BYTES
+    if free_bytes < required_bytes:
+        raise ValidationError("业务服务器视频存储空间不足，请稍后重试")
+    directory = temp_root / str(video_id)
     directory.mkdir(parents=True, exist_ok=True)
     temporary_path = directory / f".{sequence_index}-{uuid.uuid4().hex}.uploading"
     digest = hashlib.sha256()
@@ -337,12 +345,17 @@ def create_private_download_url(video):
         raise ValidationError("训练视频尚未处理完成")
     if not settings.QINIU_DOWNLOAD_DOMAIN:
         raise ValidationError("七牛下载域名未配置")
-    expires_at = timezone.now() + timezone.timedelta(
-        seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS
-    )
+    parsed_domain = urlparse(settings.QINIU_DOWNLOAD_DOMAIN)
+    if parsed_domain.scheme not in {"http", "https"} or not parsed_domain.netloc:
+        raise ValidationError("七牛下载域名格式无效")
+    if not settings.DEBUG and parsed_domain.scheme != "https":
+        raise ValidationError("生产环境七牛下载域名必须使用 HTTPS")
     base = f"{settings.QINIU_DOWNLOAD_DOMAIN.rstrip('/')}/{video.object_key}"
     try:
-        return private_download_url(base, expires_at=int(expires_at.timestamp()))
+        return private_download_url(
+            base,
+            expires_in_seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS,
+        )
     except ImproperlyConfigured as exc:
         raise ValidationError(str(exc)) from exc
 
