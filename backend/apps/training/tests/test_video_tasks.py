@@ -154,10 +154,12 @@ def test_process_job_attaches_one_historical_training_record_after_upload(
     assemble = Mock(return_value=result)
     upload = Mock(return_value=_remote_metadata(result))
     cleanup_delay = Mock()
+    tombstone_delay = Mock()
     module = _video_tasks()
     monkeypatch.setattr(module, "assemble_video", assemble)
     monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
     monkeypatch.setattr(module.cleanup_training_video_files, "delay", cleanup_delay)
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", tombstone_delay)
 
     with django_capture_on_commit_callbacks(execute=True):
         attached = module.process_video_assembly_job(job.id)
@@ -192,6 +194,7 @@ def test_process_job_attaches_one_historical_training_record_after_upload(
     assemble.assert_called_once()
     upload.assert_called_once()
     cleanup_delay.assert_called_once_with(job.id)
+    tombstone_delay.assert_called_once_with(tombstone.id)
 
 
 @pytest.mark.django_db
