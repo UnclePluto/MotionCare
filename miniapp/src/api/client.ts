@@ -2,6 +2,7 @@ import Taro from '@tarojs/taro'
 
 import { clearPatientAppToken, getPatientAppToken } from '../auth/token'
 import { resolveApiBaseUrl } from './baseUrl'
+import { containsSensitiveCredentialText } from './safeError'
 
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
 
@@ -11,10 +12,6 @@ export function runtimeApiBaseUrl(): string {
   } catch {
     return API_BASE_URL
   }
-}
-
-export function apiUrl(path: string): string {
-  return `${runtimeApiBaseUrl()}${path}`
 }
 
 type Method = 'GET' | 'POST' | 'PUT'
@@ -28,31 +25,57 @@ function resolveErrorMessage(data: unknown): string {
   if (data && typeof data === 'object') {
     const detail = (data as { detail?: unknown }).detail
     const message = (data as { message?: unknown }).message
+    const error = (data as { error?: unknown }).error
     if (typeof detail === 'string') return detail
     if (typeof message === 'string') return message
+    if (typeof error === 'string') return error
   }
   return '请求失败'
 }
 
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export function apiUrl(path: string): string {
+  return `${runtimeApiBaseUrl()}${path}`
+}
+
+export function patientAuthorizationHeader(): Record<string, string> {
   const token = getPatientAppToken()
-  const response = await Taro.request<T>({
-    url: apiUrl(path),
-    method: options.method ?? 'GET',
-    data: options.data,
-    header: {
-      'content-type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    }
-  })
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export function handlePatientUnauthorized(): never {
+  clearPatientAppToken()
+  Taro.redirectTo({ url: '/pages/bind/index' })
+  throw new Error('登录已失效')
+}
+
+export function safeApiErrorMessage(data: unknown): string {
+  const message = resolveErrorMessage(data)
+  if (containsSensitiveCredentialText(message)) return '请求失败'
+  return message
+}
+
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  let response: Taro.request.SuccessCallbackResult<T>
+  try {
+    response = await Taro.request<T>({
+      url: apiUrl(path),
+      method: options.method ?? 'GET',
+      data: options.data,
+      header: {
+        'content-type': 'application/json',
+        ...patientAuthorizationHeader()
+      }
+    })
+  } catch {
+    throw new Error('请求失败，请检查网络后重试')
+  }
 
   if (response.statusCode === 401 || response.statusCode === 403) {
-    clearPatientAppToken()
-    Taro.redirectTo({ url: '/pages/bind/index' })
-    throw new Error('登录已失效')
+    handlePatientUnauthorized()
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(resolveErrorMessage(response.data))
+    throw new Error(safeApiErrorMessage(response.data))
   }
   return response.data
 }

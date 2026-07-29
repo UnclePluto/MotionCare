@@ -1,4 +1,5 @@
 export default definePageConfig({
-  navigationBarTitleText: '保存训练视频',
-  disableScroll: true,
+  navigationBarTitleText: '上传训练视频',
+  navigationBarBackgroundColor: '#e9fbff',
+  navigationBarTextStyle: 'black'
 })

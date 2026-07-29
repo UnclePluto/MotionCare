@@ -58,20 +58,23 @@ class PatientAppTrainingRecordCreateSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
 
 
-class PatientAppTrainingVideoSessionCreateSerializer(serializers.Serializer):
+class PatientAppTrainingVideoSessionSerializer(serializers.Serializer):
+    client_session_id = serializers.UUIDField()
     prescription_action = serializers.IntegerField(min_value=1)
+    training_date = serializers.DateField()
+    expected_duration_seconds = serializers.IntegerField(min_value=1)
 
 
 class PatientAppTrainingVideoSegmentSerializer(serializers.Serializer):
-    sequence_index = serializers.IntegerField(min_value=0, max_value=2147483647)
-    duration_seconds = serializers.IntegerField(min_value=1)
     file = serializers.FileField()
+    duration_ms = serializers.IntegerField(min_value=1)
+    size_bytes = serializers.IntegerField(min_value=1)
 
 
-class PatientAppTrainingVideoFinishSerializer(serializers.Serializer):
-    segment_count = serializers.IntegerField(min_value=1, max_value=2147483647)
-    duration_seconds = serializers.IntegerField(min_value=1)
-    training_date = serializers.DateField()
+class PatientAppTrainingVideoFinalizeSerializer(serializers.Serializer):
+    segment_count = serializers.IntegerField(min_value=1)
+    actual_duration_seconds = serializers.IntegerField(min_value=1)
+    note = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class PatientAppDailyHealthSerializer(serializers.ModelSerializer):

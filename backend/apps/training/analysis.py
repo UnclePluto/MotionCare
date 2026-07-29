@@ -1,71 +1,258 @@
-import json
-import shlex
-import shutil
-import subprocess
-import tempfile
-import urllib.request
-from pathlib import Path
+import math
+from statistics import mean, pstdev
 
-from django.conf import settings
+
+REQUIRED_JOINTS = ("shoulder", "elbow", "wrist", "hip")
+MIN_CONFIDENCE_SCORE = 0.4
+MIN_STATE_CONSECUTIVE_FRAMES = 2
+MIN_STATE_DURATION_MS = 120
+BILATERAL_STABILITY_TOLERANCE = 0.08
+UP_WRIST_LIFT_TORSO_RATIO = 0.55
+UP_ELBOW_EXTENSION_DEGREES = 150.0
+DOWN_WRIST_LIFT_MAX_TORSO_RATIO = 0.12
+DOWN_ELBOW_FLEXION_MAX_DEGREES = 145.0
+MIN_ATTEMPT_PEAK_RISE_TORSO_RATIO = 0.2
+MIN_ATTEMPT_ASCENT_HYSTERESIS_TORSO_RATIO = 0.08
+MIN_ATTEMPT_RETURN_HYSTERESIS_TORSO_RATIO = 0.08
+MIN_REPETITION_DURATION_MS = 800
+MAX_REPETITION_DURATION_MS = 8000
 
 
 def _point(frame, name):
     return frame.get("keypoints", {}).get(name, {})
 
 
-def _frame_state(frame):
-    shoulder = _point(frame, "left_shoulder")
-    wrist = _point(frame, "left_wrist")
-    score = min(float(shoulder.get("score", 0)), float(wrist.get("score", 0)))
-    shoulder_y = float(shoulder.get("y", 0.5))
-    wrist_y = float(wrist.get("y", 0.5))
-    if wrist_y <= shoulder_y - 0.16:
-        return "up", score
-    if wrist_y >= shoulder_y - 0.02:
-        return "down", score
-    return "transition", score
+def _point_score(frame, side, joint):
+    try:
+        return float(_point(frame, f"{side}_{joint}").get("score", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _side_stability(frames, side):
+    scores = [
+        min(_point_score(frame, side, joint) for joint in REQUIRED_JOINTS)
+        for frame in frames
+    ]
+    if not scores:
+        return 0.0
+    return max(0.0, mean(scores) - pstdev(scores))
+
+
+def _select_side(frames):
+    left = _side_stability(frames, "left")
+    right = _side_stability(frames, "right")
+    if left > 0 and right > 0 and abs(left - right) <= BILATERAL_STABILITY_TOLERANCE:
+        return "bilateral"
+    return "left" if left >= right else "right"
+
+
+def _coordinates(point):
+    try:
+        return float(point["x"]), float(point["y"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0, 0.0
+
+
+def _selected_point(frame, side, joint):
+    if side != "bilateral":
+        point = _point(frame, f"{side}_{joint}")
+        x, y = _coordinates(point)
+        return {"x": x, "y": y, "score": _point_score(frame, side, joint)}
+
+    left = _point(frame, f"left_{joint}")
+    right = _point(frame, f"right_{joint}")
+    left_x, left_y = _coordinates(left)
+    right_x, right_y = _coordinates(right)
+    return {
+        "x": (left_x + right_x) / 2,
+        "y": (left_y + right_y) / 2,
+        "score": min(
+            _point_score(frame, "left", joint),
+            _point_score(frame, "right", joint),
+        ),
+    }
+
+
+def _distance(first, second):
+    return math.hypot(second["x"] - first["x"], second["y"] - first["y"])
+
+
+def _angle(first, vertex, third):
+    first_vector = (first["x"] - vertex["x"], first["y"] - vertex["y"])
+    third_vector = (third["x"] - vertex["x"], third["y"] - vertex["y"])
+    denominator = math.hypot(*first_vector) * math.hypot(*third_vector)
+    if denominator == 0:
+        return 0.0
+    cosine = sum(a * b for a, b in zip(first_vector, third_vector, strict=True)) / denominator
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def _measurement(frame, side):
+    points = {joint: _selected_point(frame, side, joint) for joint in REQUIRED_JOINTS}
+    torso_length = _distance(points["shoulder"], points["hip"])
+    wrist_lift = (
+        (points["shoulder"]["y"] - points["wrist"]["y"]) / torso_length
+        if torso_length > 0
+        else 0.0
+    )
+    elbow_angle = _angle(points["shoulder"], points["elbow"], points["wrist"])
+    if (
+        wrist_lift >= UP_WRIST_LIFT_TORSO_RATIO
+        and elbow_angle >= UP_ELBOW_EXTENSION_DEGREES
+    ):
+        state = "up"
+    elif (
+        wrist_lift <= DOWN_WRIST_LIFT_MAX_TORSO_RATIO
+        and elbow_angle <= DOWN_ELBOW_FLEXION_MAX_DEGREES
+    ):
+        state = "down"
+    else:
+        state = "transition"
+    return {
+        "timestamp_ms": int(frame.get("timestamp_ms", 0)),
+        "state": state,
+        "score": min(point["score"] for point in points.values()),
+        "wrist_lift": wrist_lift,
+    }
+
+
+def _is_confirmed(run):
+    if not run:
+        return False
+    duration = run[-1]["timestamp_ms"] - run[0]["timestamp_ms"]
+    return len(run) >= MIN_STATE_CONSECUTIVE_FRAMES or duration >= MIN_STATE_DURATION_MS
+
+
+def _is_attempt(measurements, *, down_baseline):
+    if len(measurements) < 3:
+        return False
+
+    wrist_lifts = [item["wrist_lift"] for item in measurements]
+    peak_index = max(range(len(wrist_lifts)), key=wrist_lifts.__getitem__)
+    if peak_index == 0 or peak_index == len(wrist_lifts) - 1:
+        return False
+
+    peak = wrist_lifts[peak_index]
+    return (
+        peak - down_baseline >= MIN_ATTEMPT_PEAK_RISE_TORSO_RATIO
+        and peak - min(wrist_lifts[:peak_index])
+        >= MIN_ATTEMPT_ASCENT_HYSTERESIS_TORSO_RATIO
+        and peak - min(wrist_lifts[peak_index + 1 :])
+        >= MIN_ATTEMPT_RETURN_HYSTERESIS_TORSO_RATIO
+    )
+
+
+def _confirmed_events(measurements):
+    events = []
+    candidate_state = None
+    candidate_run = []
+
+    for index, item in enumerate(measurements):
+        state = item["state"]
+        if state == "transition":
+            candidate_state = None
+            candidate_run = []
+            continue
+        if state != candidate_state:
+            candidate_state = state
+            candidate_run = [item]
+        else:
+            candidate_run.append(item)
+        if not _is_confirmed(candidate_run):
+            continue
+
+        run_start_index = index - len(candidate_run) + 1
+        event = {
+            "state": state,
+            "run_start_index": run_start_index,
+            "confirmed_index": index,
+            "run_start_ms": candidate_run[0]["timestamp_ms"],
+            "confirmed_ms": candidate_run[-1]["timestamp_ms"],
+            "wrist_lift_baseline": mean(
+                measurement["wrist_lift"] for measurement in candidate_run
+            ),
+        }
+        previous = events[-1] if events else None
+        if previous is None or previous["state"] != state:
+            events.append(event)
+        elif state == "down" and _is_attempt(
+            measurements[previous["confirmed_index"] + 1 : run_start_index + 1],
+            down_baseline=previous["wrist_lift_baseline"],
+        ):
+            events.append(event)
+        candidate_run = []
+
+    return events
+
+
+def _flags_for_segment(measurements, start_index, end_index, *, range_too_small=False):
+    segment = measurements[start_index : end_index + 1]
+    duration = segment[-1]["timestamp_ms"] - segment[0]["timestamp_ms"]
+    flags = []
+    if range_too_small:
+        flags.append("range_too_small")
+    if duration < MIN_REPETITION_DURATION_MS or duration > MAX_REPETITION_DURATION_MS:
+        flags.append("tempo_abnormal")
+    if min(item["score"] for item in segment) < MIN_CONFIDENCE_SCORE:
+        flags.append("low_confidence")
+    return flags
 
 
 def analyze_shoulder_press_keypoints(frames):
-    compressed = []
-    for frame in frames:
-        state, score = _frame_state(frame)
-        if state == "transition":
-            continue
-        if not compressed or compressed[-1]["state"] != state:
-            compressed.append(
-                {
-                    "state": state,
-                    "timestamp_ms": int(frame.get("timestamp_ms", 0)),
-                    "min_score": score,
-                }
-            )
-        else:
-            compressed[-1]["min_score"] = min(compressed[-1]["min_score"], score)
+    ordered_frames = sorted(frames, key=lambda item: int(item.get("timestamp_ms", 0)))
+    side = _select_side(ordered_frames)
+    measurements = [_measurement(frame, side) for frame in ordered_frames]
+    events = _confirmed_events(measurements)
 
     rep_details = []
     index = 0
-    while index + 2 < len(compressed):
-        first, second, third = compressed[index : index + 3]
-        if first["state"] == "down" and second["state"] == "up" and third["state"] == "down":
-            duration = third["timestamp_ms"] - first["timestamp_ms"]
-            flags = []
-            if min(first["min_score"], second["min_score"], third["min_score"]) < 0.4:
-                flags.append("low_confidence")
-            if duration < 800 or duration > 8000:
-                flags.append("tempo_abnormal")
+    while index + 1 < len(events):
+        first = events[index]
+        if first["state"] != "down":
+            index += 1
+            continue
+
+        if index + 2 < len(events):
+            second, third = events[index + 1 : index + 3]
+            if second["state"] == "up" and third["state"] == "down":
+                flags = _flags_for_segment(
+                    measurements,
+                    first["run_start_index"],
+                    third["confirmed_index"],
+                )
+                rep_details.append(
+                    {
+                        "index": len(rep_details) + 1,
+                        "start_ms": first["run_start_ms"],
+                        "end_ms": third["confirmed_ms"],
+                        "is_standard": not flags,
+                        "flags": flags,
+                        "side": side,
+                    }
+                )
+                index += 2
+                continue
+
+        second = events[index + 1]
+        if second["state"] == "down":
+            flags = _flags_for_segment(
+                measurements,
+                first["run_start_index"],
+                second["confirmed_index"],
+                range_too_small=True,
+            )
             rep_details.append(
                 {
                     "index": len(rep_details) + 1,
-                    "start_ms": first["timestamp_ms"],
-                    "end_ms": third["timestamp_ms"],
-                    "is_standard": not flags,
+                    "start_ms": first["run_start_ms"],
+                    "end_ms": second["confirmed_ms"],
+                    "is_standard": False,
                     "flags": flags,
+                    "side": side,
                 }
             )
-            index += 2
-        else:
-            index += 1
+        index += 1
 
     standard_count = sum(item["is_standard"] for item in rep_details)
     total_count = len(rep_details)
@@ -76,43 +263,3 @@ def analyze_shoulder_press_keypoints(frames):
         "rep_details": rep_details,
         "quality_flags": ["camera_angle_unverified"],
     }
-
-
-def extract_keypoint_frames(video_url: str) -> tuple[list[dict], str]:
-    """Run an external PP-TinyPose adapter.
-
-    The command receives ``--input <video> --output <json>``. The JSON must be
-    either a frame list or ``{"frames": [...], "algorithm_version": "..."}``.
-    """
-    command = shlex.split(settings.PP_TINYPOSE_COMMAND)
-    if not command:
-        raise RuntimeError("PP-TinyPose 推理命令未配置")
-
-    with tempfile.TemporaryDirectory(prefix="motioncare-pose-") as temp_dir:
-        video_path = Path(temp_dir) / "input.mp4"
-        output_path = Path(temp_dir) / "keypoints.json"
-        source_path = Path(video_url)
-        if source_path.is_file():
-            shutil.copyfile(source_path, video_path)
-        else:
-            urllib.request.urlretrieve(video_url, video_path)
-        completed = subprocess.run(
-            [*command, "--input", str(video_path), "--output", str(output_path)],
-            capture_output=True,
-            text=True,
-            timeout=settings.PP_TINYPOSE_TIMEOUT_SECONDS,
-            check=False,
-        )
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip()
-            raise RuntimeError(f"PP-TinyPose 推理失败：{detail[-500:]}")
-        if not output_path.exists():
-            raise RuntimeError("PP-TinyPose 未生成关键点结果")
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-
-    if isinstance(payload, list):
-        return payload, ""
-    frames = payload.get("frames") if isinstance(payload, dict) else None
-    if not isinstance(frames, list):
-        raise RuntimeError("PP-TinyPose 关键点结果格式错误")
-    return frames, str(payload.get("algorithm_version", ""))

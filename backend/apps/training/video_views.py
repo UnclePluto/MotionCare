@@ -24,7 +24,8 @@ class TrainingVideoDownloadUrlView(APIView):
             url = create_private_download_url(video)
         except DjangoValidationError as exc:
             return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": validation_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         return Response({"url": url})
 
@@ -38,9 +39,13 @@ class TrainingVideoAnalysisJobView(APIView):
             job = create_analysis_job(video=video, requested_by=request.user)
         except DjangoValidationError as exc:
             return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": validation_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-        return Response(MotionAnalysisJobSerializer(job).data, status=status.HTTP_201_CREATED)
+        return Response(
+            MotionAnalysisJobSerializer(job).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class TrainingVideoLatestAnalysisJobView(APIView):

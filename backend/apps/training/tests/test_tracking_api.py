@@ -1,6 +1,9 @@
+import uuid
 from decimal import Decimal
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -8,7 +11,7 @@ from apps.accounts.models import User
 from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
-from apps.training.models import TrainingRecord
+from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 
 
 def _client(user):
@@ -65,12 +68,14 @@ def _action(
     prescription,
     *,
     name="坐立训练",
+    source_key=None,
     internal_type=ActionLibraryItem.InternalType.MOTION,
     action_type="平衡训练",
     weekly_target_count=2,
     sort_order=0,
 ):
     item = ActionLibraryItem.objects.create(
+        source_key=source_key,
         name=name,
         training_type="康复训练",
         internal_type=internal_type,
@@ -107,6 +112,35 @@ def _record(
         score=score,
         form_data=form_data or {},
         note=note,
+    )
+
+
+def _training_video(
+    project_patient,
+    prescription,
+    action,
+    *,
+    status=TrainingVideo.Status.QUEUED,
+    training_record=None,
+    failure_reason="",
+    training_date=None,
+):
+    return TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=prescription,
+        prescription_action=action,
+        training_record=training_record,
+        training_date=training_date or timezone.localdate(),
+        bucket="motioncare-training",
+        object_key=f"training-videos/{project_patient.id}/{uuid.uuid4().hex}.mp4"
+        if status == TrainingVideo.Status.ATTACHED
+        else None,
+        content_type="video/mp4",
+        size_bytes=1024 if status == TrainingVideo.Status.ATTACHED else 0,
+        duration_seconds=120 if status == TrainingVideo.Status.ATTACHED else 0,
+        status=status,
+        uploaded_at=timezone.now() if status == TrainingVideo.Status.ATTACHED else None,
+        failure_reason=failure_reason,
     )
 
 
@@ -156,7 +190,7 @@ def test_tracking_recent_record_includes_video_analysis_summary(
 
 
 @pytest.mark.django_db
-def test_tracking_hides_video_until_server_cleanup_is_complete(
+def test_tracking_hides_video_until_qiniu_publish_is_complete(
     doctor, project_patient, active_prescription, prescription_action
 ):
     from apps.training.models import TrainingVideo
@@ -173,12 +207,12 @@ def test_tracking_hides_video_until_server_cleanup_is_complete(
         prescription_action=prescription_action,
         training_record=record,
         bucket="motioncare",
-        object_key="tracking/cleaning.mp4",
+        object_key="tracking/uploading.mp4",
         object_hash="final-hash",
         content_type="video/mp4",
         size_bytes=10,
         duration_seconds=30,
-        status=TrainingVideo.Status.CLEANING,
+        status=TrainingVideo.Status.UPLOADING_QINIU,
     )
 
     response = _client(doctor).get(
@@ -187,7 +221,7 @@ def test_tracking_hides_video_until_server_cleanup_is_complete(
 
     recent = response.data["recent_records"][0]
     assert recent["video_id"] is None
-    assert recent["video_status"] == TrainingVideo.Status.CLEANING
+    assert recent["video_status"] == TrainingVideo.Status.UPLOADING_QINIU
 
 
 @pytest.mark.django_db
@@ -631,3 +665,427 @@ def test_tracking_detail_returns_empty_prescription_sections_without_active_pres
         "total_error_count": 0,
         "by_game": [],
     }
+
+
+@pytest.mark.django_db
+def test_tracking_recent_records_return_null_video_and_analysis_fields_when_missing(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    today = timezone.localdate()
+    record_without_video = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=today - timezone.timedelta(days=1),
+    )
+    record_without_analysis = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=today,
+    )
+    TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record_without_analysis,
+        bucket="motioncare-training",
+        object_key="training-videos/missing-analysis.mp4",
+        content_type="video/mp4",
+        size_bytes=1024,
+        duration_seconds=120,
+        status=TrainingVideo.Status.ATTACHED,
+        uploaded_at=timezone.now(),
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    assert response.status_code == 200, response.data
+    nullable_summary_fields = (
+        "action_source_key",
+        "latest_analysis_status",
+        "analysis_total_count",
+        "analysis_standard_count",
+        "analysis_nonstandard_count",
+    )
+    recent_by_id = {item["id"]: item for item in response.data["recent_records"]}
+    assert recent_by_id[record_without_video.id]["video_id"] is None
+    assert recent_by_id[record_without_video.id]["video_status"] is None
+    assert all(
+        recent_by_id[record_without_video.id][field] is None
+        for field in nullable_summary_fields
+    )
+    assert recent_by_id[record_without_analysis.id]["video_id"] is not None
+    assert recent_by_id[record_without_analysis.id]["video_status"] == TrainingVideo.Status.ATTACHED
+    assert all(
+        recent_by_id[record_without_analysis.id][field] is None
+        for field in nullable_summary_fields
+    )
+
+
+@pytest.mark.django_db
+def test_tracking_recent_records_use_latest_analysis_job_by_created_at_and_id(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record,
+        bucket="motioncare-training",
+        object_key="training-videos/latest-analysis.mp4",
+        content_type="video/mp4",
+        size_bytes=1024,
+        duration_seconds=120,
+        status=TrainingVideo.Status.ATTACHED,
+        uploaded_at=timezone.now(),
+    )
+    previous_job = MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+        total_count=8,
+        standard_count=6,
+        nonstandard_count=2,
+    )
+    latest_job = MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.FAILED,
+    )
+    now = timezone.now()
+    MotionAnalysisJob.objects.filter(pk=previous_job.pk).update(
+        created_at=now - timezone.timedelta(minutes=1)
+    )
+    MotionAnalysisJob.objects.filter(pk=latest_job.pk).update(created_at=now)
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    assert response.status_code == 200, response.data
+    recent = response.data["recent_records"][0]
+    assert recent["video_id"] == video.id
+    assert recent["video_status"] == TrainingVideo.Status.ATTACHED
+    assert recent["latest_analysis_status"] == MotionAnalysisJob.Status.FAILED
+    assert recent["analysis_total_count"] is None
+    assert recent["analysis_standard_count"] is None
+    assert recent["analysis_nonstandard_count"] is None
+
+
+@pytest.mark.django_db
+def test_tracking_recent_records_include_video_and_analysis_summary(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    shoulder_press_action = ActionLibraryItem.objects.get(
+        source_key="motion-resistance-shoulder-press"
+    )
+    prescription_action.action_library_item = shoulder_press_action
+    prescription_action.save(update_fields=["action_library_item", "updated_at"])
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=prescription_action,
+        training_record=record,
+        bucket="motioncare-training",
+        object_key="training-videos/summary.mp4",
+        content_type="video/mp4",
+        size_bytes=1024,
+        duration_seconds=120,
+        status=TrainingVideo.Status.ATTACHED,
+        uploaded_at=timezone.now(),
+    )
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+        total_count=8,
+        standard_count=6,
+        nonstandard_count=2,
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    assert response.status_code == 200, response.data
+    recent = response.data["recent_records"][0]
+    assert recent["action_source_key"] == "motion-resistance-shoulder-press"
+    assert recent["video_id"] == video.id
+    assert recent["video_status"] == TrainingVideo.Status.ATTACHED
+    assert recent["latest_analysis_status"] == MotionAnalysisJob.Status.SUCCEEDED
+    assert recent["analysis_total_count"] == 8
+    assert recent["analysis_standard_count"] == 6
+    assert recent["analysis_nonstandard_count"] == 2
+
+
+@pytest.mark.django_db
+def test_tracking_detail_returns_only_selected_project_pending_training_videos_with_safe_fields(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    today = timezone.localdate()
+    queued = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.QUEUED,
+        training_date=today,
+    )
+    assembling = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.ASSEMBLING,
+        training_date=today - timezone.timedelta(days=1),
+    )
+    uploading = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.UPLOADING_QINIU,
+        training_date=today - timezone.timedelta(days=2),
+    )
+    failed = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.FAILED,
+        failure_reason="视频合并失败，请重新上传",
+        training_date=today - timezone.timedelta(days=3),
+    )
+    TrainingVideo.objects.filter(pk=failed.pk).update(
+        bucket="secret-bucket",
+        object_key="training-videos/secret/raw-file.mp4",
+    )
+
+    attached_record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=today,
+    )
+    attached = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.ATTACHED,
+        training_record=attached_record,
+    )
+    _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.RECORDING,
+    )
+    _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.EXPIRED,
+    )
+
+    other_project_patient = _project_patient(
+        doctor,
+        project_patient.patient,
+        project_name="同患者其他项目",
+        group_name="其他组",
+    )
+    other_prescription = _active_prescription(other_project_patient, doctor)
+    other_action = _action(other_prescription, name="其他项目动作")
+    other_video = _training_video(
+        other_project_patient,
+        other_prescription,
+        other_action,
+        status=TrainingVideo.Status.QUEUED,
+    )
+    other_patient = _patient(doctor, name="其他患者", phone="13900008888")
+    other_patient_project = _project_patient(doctor, other_patient, project_name="其他患者项目")
+    other_patient_prescription = _active_prescription(other_patient_project, doctor)
+    other_patient_action = _action(other_patient_prescription, name="其他患者动作")
+    other_patient_video = _training_video(
+        other_patient_project,
+        other_patient_prescription,
+        other_patient_action,
+        status=TrainingVideo.Status.FAILED,
+        failure_reason="其他患者失败",
+    )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/",
+        {"project_patient": project_patient.id},
+    )
+
+    assert response.status_code == 200, response.data
+    pending = response.data["pending_training_videos"]
+    expected = sorted(
+        [queued, assembling, uploading, failed],
+        key=lambda item: (item.created_at, item.id),
+        reverse=True,
+    )
+    assert [item["id"] for item in pending] == [item.id for item in expected]
+    assert {item["status"] for item in pending} == {
+        TrainingVideo.Status.QUEUED,
+        TrainingVideo.Status.ASSEMBLING,
+        TrainingVideo.Status.UPLOADING_QINIU,
+        TrainingVideo.Status.FAILED,
+    }
+    assert all(item["id"] != attached.id for item in pending)
+    assert other_video.id not in {item["id"] for item in pending}
+    assert other_patient_video.id not in {item["id"] for item in pending}
+    failed_row = next(item for item in pending if item["id"] == failed.id)
+    assert failed_row == {
+        "id": failed.id,
+        "training_date": failed.training_date.isoformat(),
+        "action_name": prescription_action.action_name_snapshot,
+        "status": TrainingVideo.Status.FAILED,
+        "failure_reason": "视频合并失败，请重新上传",
+        "created_at": failed.created_at.isoformat(),
+    }
+    assert all(
+        forbidden not in failed_row
+        for forbidden in (
+            "bucket",
+            "object_key",
+            "url",
+            "segments",
+            "training_record",
+            "training_record_id",
+        )
+    )
+    assert "secret" not in str(pending)
+    assert "raw-file" not in str(pending)
+
+
+@pytest.mark.django_db
+def test_tracking_detail_limits_pending_training_videos_to_thirty_and_orders_by_created_at_and_id(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    base_created_at = timezone.now()
+    videos = []
+    for index in range(32):
+        video = _training_video(
+            project_patient,
+            active_prescription,
+            prescription_action,
+            status=TrainingVideo.Status.QUEUED,
+            training_date=timezone.localdate() - timezone.timedelta(days=index),
+        )
+        created_at = base_created_at - timezone.timedelta(minutes=index)
+        if index in {0, 1}:
+            created_at = base_created_at
+        TrainingVideo.objects.filter(pk=video.pk).update(created_at=created_at)
+        video.created_at = created_at
+        videos.append(video)
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    assert response.status_code == 200, response.data
+    expected = sorted(videos, key=lambda item: (item.created_at, item.id), reverse=True)[:30]
+    pending = response.data["pending_training_videos"]
+    assert len(pending) == 30
+    assert [item["id"] for item in pending] == [item.id for item in expected]
+
+
+@pytest.mark.django_db
+def test_tracking_recent_records_related_queries_do_not_scale_with_record_count(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    shoulder_press_action = ActionLibraryItem.objects.get(
+        source_key="motion-resistance-shoulder-press"
+    )
+    prescription_action.action_library_item = shoulder_press_action
+    prescription_action.save(update_fields=["action_library_item", "updated_at"])
+
+    def create_record_with_video(index):
+        record = _record(
+            project_patient,
+            active_prescription,
+            prescription_action,
+            training_date=timezone.localdate() - timezone.timedelta(days=index),
+        )
+        video = TrainingVideo.objects.create(
+            project_patient=project_patient,
+            prescription=active_prescription,
+            prescription_action=prescription_action,
+            training_record=record,
+            bucket="motioncare-training",
+            object_key=f"training-videos/query-count-{index}.mp4",
+            content_type="video/mp4",
+            size_bytes=1024,
+            duration_seconds=120,
+            status=TrainingVideo.Status.ATTACHED,
+            uploaded_at=timezone.now(),
+        )
+        MotionAnalysisJob.objects.create(
+            training_video=video,
+            training_record=record,
+            project_patient=project_patient,
+            prescription_action=prescription_action,
+            status=MotionAnalysisJob.Status.SUCCEEDED,
+            total_count=8,
+            standard_count=6,
+            nonstandard_count=2,
+        )
+
+    create_record_with_video(0)
+    url = f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    with CaptureQueriesContext(connection) as one_record_queries:
+        one_record_response = _client(doctor).get(url)
+
+    create_record_with_video(1)
+    with CaptureQueriesContext(connection) as two_record_queries:
+        two_record_response = _client(doctor).get(url)
+
+    assert one_record_response.status_code == 200, one_record_response.data
+    assert two_record_response.status_code == 200, two_record_response.data
+    assert all(
+        item["action_source_key"] == "motion-resistance-shoulder-press"
+        for item in one_record_response.data["recent_records"]
+    )
+    assert all(
+        item["action_source_key"] == "motion-resistance-shoulder-press"
+        for item in two_record_response.data["recent_records"]
+    )
+    assert all(item["video_id"] is not None for item in one_record_response.data["recent_records"])
+    assert all(item["video_id"] is not None for item in two_record_response.data["recent_records"])
+    assert len(two_record_queries) == len(one_record_queries)

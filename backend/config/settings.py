@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -89,6 +90,61 @@ STATIC_URL = "/static/"
 STATIC_ROOT = ROOT_DIR / os.getenv("STATIC_ROOT", "staticfiles")
 MEDIA_URL = "media/"
 MEDIA_ROOT = ROOT_DIR / "media"
+QINIU_ACCESS_KEY = os.getenv("QINIU_ACCESS_KEY", "")
+QINIU_SECRET_KEY = os.getenv("QINIU_SECRET_KEY", "")
+QINIU_BUCKET = os.getenv("QINIU_BUCKET", "motioncare-training")
+QINIU_DOWNLOAD_DOMAIN = os.getenv("QINIU_DOWNLOAD_DOMAIN", "")
+QINIU_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv("QINIU_DOWNLOAD_TOKEN_TTL_SECONDS", "600"))
+TRAINING_VIDEO_MAX_SIZE_BYTES = int(
+    os.getenv("TRAINING_VIDEO_MAX_SIZE_BYTES", str(200 * 1024 * 1024))
+)
+TRAINING_VIDEO_MAX_DURATION_SECONDS = int(
+    os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "600")
+)
+TRAINING_VIDEO_STAGING_ROOT = Path(os.getenv(
+    "TRAINING_VIDEO_STAGING_ROOT",
+    "/var/lib/motioncare/training-video-staging",
+))
+TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = int(os.getenv(
+    "TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES", str(32 * 1024 * 1024)
+))
+TRAINING_VIDEO_MAX_SEGMENTS = int(os.getenv("TRAINING_VIDEO_MAX_SEGMENTS", "120"))
+TRAINING_VIDEO_STAGING_TTL_SECONDS = int(os.getenv(
+    "TRAINING_VIDEO_STAGING_TTL_SECONDS", "86400"
+))
+TRAINING_VIDEO_MIN_FREE_BYTES = int(os.getenv(
+    "TRAINING_VIDEO_MIN_FREE_BYTES", str(5 * 1024 * 1024 * 1024)
+))
+VIDEO_ASSEMBLY_TIMEOUT_SECONDS = int(os.getenv("VIDEO_ASSEMBLY_TIMEOUT_SECONDS", "1800"))
+QINIU_UPLOAD_TIMEOUT_SECONDS = int(os.getenv("QINIU_UPLOAD_TIMEOUT_SECONDS", "900"))
+QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS = int(
+    os.getenv("QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS", "30")
+)
+QINIU_MOVE_REQUEST_TIMEOUT_SECONDS = int(
+    os.getenv("QINIU_MOVE_REQUEST_TIMEOUT_SECONDS", "10")
+)
+QINIU_UPLOAD_REQUEST_RETRIES = int(os.getenv("QINIU_UPLOAD_REQUEST_RETRIES", "3"))
+QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS = int(
+    os.getenv("QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS", "300")
+)
+VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS = int(os.getenv(
+    "VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS", "3600"
+))
+if min(
+    QINIU_UPLOAD_TIMEOUT_SECONDS,
+    QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS,
+    QINIU_MOVE_REQUEST_TIMEOUT_SECONDS,
+    QINIU_UPLOAD_LATE_COMPLETION_GRACE_SECONDS,
+) <= 0 or QINIU_UPLOAD_REQUEST_RETRIES <= 0:
+    raise ImproperlyConfigured("七牛上传超时与补偿配置无效")
+if VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS <= (
+    VIDEO_ASSEMBLY_TIMEOUT_SECONDS + QINIU_UPLOAD_TIMEOUT_SECONDS
+):
+    raise ImproperlyConfigured(
+        "VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS 必须大于合并与七牛上传超时之和"
+    )
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", "/usr/bin/ffmpeg")
+FFPROBE_PATH = os.getenv("FFPROBE_PATH", "/usr/bin/ffprobe")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Task 2 will switch to custom user model ("accounts.User").
 AUTH_USER_MODEL = "accounts.User"
@@ -103,55 +159,44 @@ REST_FRAMEWORK = {
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_TASK_ROUTES = {
+    "apps.training.video_tasks.run_video_assembly_job": {"queue": "video-assembly"},
+}
+MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS = int(
+    os.getenv("MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS", "30")
+)
+MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS = int(
+    os.getenv("MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS", "120")
+)
+MOTION_ANALYSIS_SAMPLE_FPS = float(os.getenv("MOTION_ANALYSIS_SAMPLE_FPS", "5"))
+MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS = int(
+    os.getenv("MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS", "1800")
+)
+MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS = int(
+    os.getenv("MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS", "300")
+)
 CELERY_BEAT_SCHEDULE = {
-    "retry-failed-training-video-jobs": {
-        "task": "apps.training.tasks.retry_failed_video_processing_jobs",
-        "schedule": 60.0,
+    "recover-stale-motion-analysis-jobs": {
+        "task": "apps.training.tasks.recover_stale_motion_analysis_jobs",
+        "schedule": MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS,
     },
-    "expire-training-video-jobs": {
-        "task": "apps.training.tasks.expire_training_video_jobs",
-        "schedule": 3600.0,
+    "recover-stale-video-assembly-jobs": {
+        "task": "apps.training.video_tasks.recover_stale_video_assembly_jobs",
+        "schedule": 300,
+    },
+    "expire-stale-training-video-sessions": {
+        "task": "apps.training.video_tasks.expire_stale_training_video_sessions",
+        "schedule": 900,
+    },
+    "recover-training-video-cleanup": {
+        "task": "apps.training.video_tasks.recover_training_video_cleanup",
+        "schedule": 900,
+    },
+    "cleanup-qiniu-tombstones": {
+        "task": "apps.training.video_tasks.cleanup_qiniu_tombstones",
+        "schedule": 300,
     },
 }
-QINIU_ACCESS_KEY = os.getenv("QINIU_ACCESS_KEY", "")
-QINIU_SECRET_KEY = os.getenv("QINIU_SECRET_KEY", "")
-QINIU_BUCKET = os.getenv("QINIU_BUCKET", "motioncare")
-QINIU_DOWNLOAD_DOMAIN = os.getenv("QINIU_DOWNLOAD_DOMAIN", "")
-QINIU_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv("QINIU_DOWNLOAD_TOKEN_TTL_SECONDS", "600"))
-TRAINING_VIDEO_TEMP_ROOT = ROOT_DIR / os.getenv(
-    "TRAINING_VIDEO_TEMP_ROOT", "media/training_video_temp"
-)
-TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = int(
-    os.getenv("TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES", str(64 * 1024 * 1024))
-)
-TRAINING_VIDEO_SEGMENT_MAX_DURATION_SECONDS = int(
-    os.getenv("TRAINING_VIDEO_SEGMENT_MAX_DURATION_SECONDS", "35")
-)
-TRAINING_VIDEO_SERVER_MIN_FREE_BYTES = int(
-    os.getenv("TRAINING_VIDEO_SERVER_MIN_FREE_BYTES", str(2 * 1024 * 1024 * 1024))
-)
-TRAINING_VIDEO_PROCESSING_RETENTION_HOURS = int(
-    os.getenv("TRAINING_VIDEO_PROCESSING_RETENTION_HOURS", "48")
-)
-TRAINING_VIDEO_PROCESSING_MAX_ATTEMPTS = int(
-    os.getenv("TRAINING_VIDEO_PROCESSING_MAX_ATTEMPTS", "96")
-)
-TRAINING_VIDEO_RETRY_BASE_SECONDS = int(
-    os.getenv("TRAINING_VIDEO_RETRY_BASE_SECONDS", "60")
-)
-TRAINING_VIDEO_RETRY_MAX_SECONDS = int(
-    os.getenv("TRAINING_VIDEO_RETRY_MAX_SECONDS", "3600")
-)
-TRAINING_VIDEO_STALE_JOB_SECONDS = int(
-    os.getenv("TRAINING_VIDEO_STALE_JOB_SECONDS", "600")
-)
-TRAINING_VIDEO_FFMPEG_COMMAND = os.getenv("TRAINING_VIDEO_FFMPEG_COMMAND", "ffmpeg")
-TRAINING_VIDEO_FFPROBE_COMMAND = os.getenv("TRAINING_VIDEO_FFPROBE_COMMAND", "ffprobe")
-TRAINING_VIDEO_PROCESS_TIMEOUT_SECONDS = int(
-    os.getenv("TRAINING_VIDEO_PROCESS_TIMEOUT_SECONDS", "900")
-)
-PP_TINYPOSE_COMMAND = os.getenv("PP_TINYPOSE_COMMAND", "")
-PP_TINYPOSE_TIMEOUT_SECONDS = int(os.getenv("PP_TINYPOSE_TIMEOUT_SECONDS", "900"))
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "CRF_TEMPLATE_PATH",
     "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",

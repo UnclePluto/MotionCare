@@ -1,6 +1,6 @@
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { request } from '../../api/client'
 import type { CurrentPrescription } from '../../types/patientApp'
@@ -10,9 +10,12 @@ import {
   subscribePendingGameUploadRetryLoop,
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
-import { gameSessionUrl, loadGameSessionSubpackage } from './gameSubpackage'
+import {
+  SHOULDER_PRESS_SOURCE_KEY
+} from '../shoulder-press/session'
+import { reLaunchPendingShoulderPressUploadIfNeeded } from '../shoulder-press/pageState'
 import { actionButtonLabel, actionEntryUrl } from './actionRouting'
-import { buildShoulderPressUploadUrl, loadShoulderPressSession } from '../shoulder-press/session'
+import { loadGameSessionSubpackage } from './gameSubpackage'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -30,6 +33,7 @@ export default function PrescriptionPage() {
   const [gameLoadingActionId, setGameLoadingActionId] = useState<number | null>(null)
   const [gameLoadProgress, setGameLoadProgress] = useState(0)
   const [gameLoadError, setGameLoadError] = useState('')
+  const mountedRef = useRef(true)
 
   function refreshPendingUploadBanner() {
     setPendingUploadBanner(pendingGameUploadBannerText())
@@ -38,10 +42,12 @@ export default function PrescriptionPage() {
   function loadPrescriptionData() {
     request<CurrentPrescription>('/patient-app/current-prescription/')
       .then((body) => {
+        if (!mountedRef.current) return
         setData(body)
         setLoaded(true)
       })
       .catch((err) => {
+        if (!mountedRef.current) return
         setError(err instanceof Error ? err.message : '加载失败')
         setLoaded(true)
       })
@@ -49,7 +55,7 @@ export default function PrescriptionPage() {
 
   async function startAction(action: NonNullable<CurrentPrescription>['actions'][number]) {
     setGameLoadError('')
-    if (action.internal_type !== 'game') {
+    if (action.internal_type !== 'game' || action.source_key === SHOULDER_PRESS_SOURCE_KEY) {
       Taro.navigateTo({ url: actionEntryUrl(action) })
       return
     }
@@ -58,17 +64,26 @@ export default function PrescriptionPage() {
     setGameLoadingActionId(action.id)
     setGameLoadProgress(0)
     try {
-      await loadGameSessionSubpackage((event) => setGameLoadProgress(event.progress))
-      Taro.navigateTo({ url: gameSessionUrl(action.id) })
+      await loadGameSessionSubpackage((event) => {
+        if (mountedRef.current) setGameLoadProgress(event.progress)
+      })
+      if (!mountedRef.current) return
+      Taro.navigateTo({ url: actionEntryUrl(action) })
     } catch (err) {
+      if (!mountedRef.current) return
       setGameLoadError(err instanceof Error ? err.message : '游戏资源加载失败，请稍后重试')
     } finally {
-      setGameLoadingActionId(null)
+      if (mountedRef.current) setGameLoadingActionId(null)
     }
   }
 
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
+
   useEffect(() => {
     return subscribePendingGameUploadRetryLoop((result) => {
+      if (!mountedRef.current) return
       refreshPendingUploadBanner()
       if (result === 'uploaded') {
         loadPrescriptionData()
@@ -77,26 +92,26 @@ export default function PrescriptionPage() {
   }, [])
 
   useDidShow(() => {
-    if (loadShoulderPressSession(Taro)) {
-      Taro.navigateTo({ url: buildShoulderPressUploadUrl() })
-      return
-    }
     setError('')
     setLoaded(false)
     setData(null)
     setGameLoadError('')
-    refreshPendingUploadBanner()
-    void tryUploadPendingGameRecord(Taro)
-      .then((result) => {
-        if (result === 'uploaded') {
-          loadPrescriptionData()
-        }
-      })
-      .finally(() => {
-        refreshPendingUploadBanner()
-        startPendingGameUploadRetryLoop(Taro)
-      })
-    loadPrescriptionData()
+    void reLaunchPendingShoulderPressUploadIfNeeded(Taro).then((redirected) => {
+      if (!mountedRef.current) return
+      if (redirected) return
+      refreshPendingUploadBanner()
+      void tryUploadPendingGameRecord(Taro)
+        .then((result) => {
+          if (result === 'uploaded') {
+            loadPrescriptionData()
+          }
+        })
+        .finally(() => {
+          refreshPendingUploadBanner()
+          startPendingGameUploadRetryLoop(Taro)
+        })
+      loadPrescriptionData()
+    })
   })
 
   if (!loaded) {

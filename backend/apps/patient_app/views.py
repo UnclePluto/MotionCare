@@ -5,7 +5,6 @@ from django.db.models import Count, Prefetch
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DrfValidationError
-from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,13 +16,13 @@ from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
 from apps.training.video_services import (
-    SegmentConflictError,
+    SegmentConflict,
+    SessionConflict,
+    SHOULDER_PRESS_SOURCE_KEY,
     create_training_video_session,
-    finish_training_video_session,
-    get_patient_training_video,
-    MissingSegmentsError,
-    serialize_patient_training_video,
+    finalize_training_video_session,
     store_training_video_segment,
+    training_video_session_status,
 )
 from apps.training.views import validation_detail
 
@@ -32,9 +31,9 @@ from .serializers import (
     PatientAppBindSerializer,
     PatientAppDailyHealthSerializer,
     PatientAppTrainingRecordCreateSerializer,
+    PatientAppTrainingVideoFinalizeSerializer,
     PatientAppTrainingVideoSegmentSerializer,
-    PatientAppTrainingVideoFinishSerializer,
-    PatientAppTrainingVideoSessionCreateSerializer,
+    PatientAppTrainingVideoSessionSerializer,
 )
 from .services import bind_project_patient_with_code
 
@@ -232,6 +231,11 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
                     {"detail": "处方已更新，请返回当前处方重新进入"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if action.action_library_item.source_key == SHOULDER_PRESS_SOURCE_KEY:
+                return Response(
+                    {"detail": "肩部推举必须完成录像上传"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             record = create_training_record(
                 project_patient=project_patient,
                 prescription_action=action,
@@ -250,100 +254,99 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
         return Response(TrainingRecordSerializer(record).data, status=status.HTTP_201_CREATED)
 
 
-class PatientAppTrainingVideoSessionCollectionView(PatientAppBaseView):
+class PatientAppTrainingVideoSessionView(PatientAppBaseView):
     def post(self, request):
-        serializer = PatientAppTrainingVideoSessionCreateSerializer(data=request.data)
+        serializer = PatientAppTrainingVideoSessionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            video = create_training_video_session(
+            video, created = create_training_video_session(
                 project_patient=self.project_patient(),
+                client_session_id=serializer.validated_data["client_session_id"],
                 prescription_action_id=serializer.validated_data["prescription_action"],
+                training_date=serializer.validated_data["training_date"],
+                expected_duration_seconds=serializer.validated_data["expected_duration_seconds"],
             )
+        except SessionConflict as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except DjangoValidationError as exc:
-            return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
-        return Response(
-            {
-                "video_id": video.id,
-                "status": video.status,
-                "uploaded_segment_count": video.uploaded_segment_count,
-            },
-            status=status.HTTP_201_CREATED,
+            return Response({"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        data = training_video_session_status(
+            project_patient=self.project_patient(),
+            video_id=video.id,
         )
+        response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(data, status=response_status)
 
 
 class PatientAppTrainingVideoSegmentView(PatientAppBaseView):
-    parser_classes = [MultiPartParser]
-
-    def post(self, request, video_id):
+    def post(self, request, video_id, index):
         serializer = PatientAppTrainingVideoSegmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
             segment, created = store_training_video_segment(
                 project_patient=self.project_patient(),
                 video_id=video_id,
-                sequence_index=serializer.validated_data["sequence_index"],
-                duration_seconds=serializer.validated_data["duration_seconds"],
+                index=index,
                 uploaded_file=serializer.validated_data["file"],
+                duration_ms=serializer.validated_data["duration_ms"],
+                declared_size_bytes=serializer.validated_data["size_bytes"],
             )
-        except SegmentConflictError as exc:
+        except SegmentConflict as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except DjangoValidationError as exc:
+            return Response({"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        response_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response(
+            {
+                "index": segment.index,
+                "duration_ms": segment.duration_ms,
+                "size_bytes": segment.size_bytes,
+                "sha256": segment.sha256,
+                "uploaded_segment_count": segment.training_video.uploaded_segment_count,
+            },
+            status=response_status,
+        )
+
+
+class PatientAppTrainingVideoFinalizeView(PatientAppBaseView):
+    def post(self, request, video_id):
+        serializer = PatientAppTrainingVideoFinalizeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            video, job, created = finalize_training_video_session(
+                project_patient=self.project_patient(),
+                video_id=video_id,
+                segment_count=serializer.validated_data["segment_count"],
+                actual_duration_seconds=serializer.validated_data[
+                    "actual_duration_seconds"
+                ],
+                note=serializer.validated_data["note"],
+            )
+        except SessionConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except DjangoValidationError as exc:
             return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
-            )
-        return Response(
-            {
-                "sequence_index": segment.sequence_index,
-                "status": segment.status,
-                "object_hash": segment.object_hash,
-                "size_bytes": segment.size_bytes,
-            },
-            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
-        )
-
-
-class PatientAppTrainingVideoSessionDetailView(PatientAppBaseView):
-    def get(self, request, video_id):
-        video = get_patient_training_video(
-            project_patient=self.project_patient(), video_id=video_id
-        )
-        return Response(serialize_patient_training_video(video))
-
-
-class PatientAppTrainingVideoSessionFinishView(PatientAppBaseView):
-    def post(self, request, video_id):
-        serializer = PatientAppTrainingVideoFinishSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        try:
-            video, job, created = finish_training_video_session(
-                project_patient=self.project_patient(),
-                video_id=video_id,
-                **serializer.validated_data,
-            )
-        except MissingSegmentsError as exc:
-            return Response(
-                {
-                    "detail": str(exc),
-                    "missing_segments": exc.missing_segments,
-                    "missing_segments_truncated": exc.truncated,
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-        except DjangoValidationError as exc:
-            return Response(
-                {"detail": validation_detail(exc)}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": validation_detail(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(
             {
                 "video_id": video.id,
                 "status": video.status,
-                "processing_job_id": job.id,
-                "processing_status": job.status,
+                "assembly_job_id": job.id,
+                "processing_stage": job.status,
             },
             status=status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK,
         )
+
+
+class PatientAppTrainingVideoStatusView(PatientAppBaseView):
+    def get(self, request, video_id):
+        data = training_video_session_status(
+            project_patient=self.project_patient(),
+            video_id=video_id,
+        )
+        return Response(data)
 
 
 class PatientAppActionHistoryView(PatientAppBaseView):

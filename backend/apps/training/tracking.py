@@ -2,7 +2,7 @@ from collections import defaultdict
 from decimal import Decimal
 from statistics import mean
 
-from django.db.models import Count, F, Max, Q
+from django.db.models import Count, F, Max, Prefetch, Q
 from django.http import Http404
 from django.utils import timezone
 
@@ -10,7 +10,7 @@ from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
-from .models import TrainingRecord, TrainingVideo
+from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
 
@@ -407,15 +407,25 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
 def recent_records(project_patient: ProjectPatient) -> list[dict]:
     records = (
         TrainingRecord.objects.filter(project_patient=project_patient)
-        .select_related("prescription", "prescription_action", "video")
-        .prefetch_related("motion_analysis_jobs")
+        .select_related(
+            "prescription",
+            "prescription_action",
+            "prescription_action__action_library_item",
+            "video",
+        )
+        .prefetch_related(
+            Prefetch(
+                "motion_analysis_jobs",
+                queryset=MotionAnalysisJob.objects.order_by("-created_at", "-id"),
+                to_attr="ordered_analysis_jobs",
+            )
+        )
         .order_by("-training_date", "-id")[:30]
     )
     rows = []
     for record in records:
         video = getattr(record, "video", None)
-        analysis_jobs = list(record.motion_analysis_jobs.all())
-        latest_job = max(analysis_jobs, key=lambda item: (item.created_at, item.id)) if analysis_jobs else None
+        latest_job = record.ordered_analysis_jobs[0] if record.ordered_analysis_jobs else None
         is_game = (
             record.prescription_action.internal_type_snapshot
             == ActionLibraryItem.InternalType.GAME
@@ -449,6 +459,9 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "prescription_version": record.prescription.version,
                 "prescription_action": record.prescription_action_id,
                 "action_name": record.prescription_action.action_name_snapshot,
+                "action_source_key": (
+                    record.prescription_action.action_library_item.source_key or None
+                ),
                 "internal_type": record.prescription_action.internal_type_snapshot,
                 "action_type": record.prescription_action.action_type_snapshot,
                 "actual_duration_minutes": record.actual_duration_minutes,
@@ -466,10 +479,37 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "analysis_total_count": latest_job.total_count if latest_job else None,
                 "analysis_standard_count": latest_job.standard_count if latest_job else None,
                 "analysis_nonstandard_count": latest_job.nonstandard_count if latest_job else None,
-                "analysis_failure_reason": latest_job.failure_reason if latest_job else "",
             }
         )
     return rows
+
+
+def pending_training_videos(project_patient: ProjectPatient) -> list[dict]:
+    videos = (
+        TrainingVideo.objects.filter(
+            project_patient=project_patient,
+            training_record__isnull=True,
+            status__in=[
+                TrainingVideo.Status.QUEUED,
+                TrainingVideo.Status.ASSEMBLING,
+                TrainingVideo.Status.UPLOADING_QINIU,
+                TrainingVideo.Status.FAILED,
+            ],
+        )
+        .select_related("prescription_action")
+        .order_by("-created_at", "-id")[:30]
+    )
+    return [
+        {
+            "id": video.id,
+            "training_date": video.training_date.isoformat(),
+            "action_name": video.prescription_action.action_name_snapshot,
+            "status": video.status,
+            "failure_reason": video.failure_reason,
+            "created_at": video.created_at.isoformat(),
+        }
+        for video in videos
+    ]
 
 
 def _project_patients_for_patient(user, patient_id):
@@ -515,4 +555,5 @@ def get_patient_tracking_detail(
         "trend": trend(selected, range_value=range_value),
         "game_summary": game_summary(selected),
         "recent_records": recent_records(selected),
+        "pending_training_videos": pending_training_videos(selected),
     }

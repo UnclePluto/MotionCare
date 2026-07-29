@@ -1,266 +1,386 @@
 import { Button, Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
-import { useEffect, useRef, useState } from 'react'
+import Taro, { useDidShow } from '@tarojs/taro'
+import { useRef, useState } from 'react'
 
 import {
-  finishShoulderPressVideoSession,
-  getShoulderPressVideoSession,
-  uploadShoulderPressSegment,
-} from './api'
-import { SegmentQueueRunner } from './segmentQueue'
+  isServerRetryableFinalizeStatus,
+  isServerSafeFinalizeStatus,
+  loadOwnedPendingShoulderPressSession,
+  saveOwnedPendingShoulderPressSession,
+  shoulderPressUploadCounters,
+  type TrainingVideoStatus
+} from './pageState'
 import {
-  clearShoulderPressSession,
-  loadShoulderPressSession,
+  clearPendingShoulderPressSession,
+  loadPendingShoulderPressSession,
+  type PendingShoulderPressSegment,
+  type PendingShoulderPressSession
 } from './session'
-import { runShoulderPressUploadFlow } from './uploadFlow'
 import {
-  formatBytes,
-  formatTransferSpeed,
-  getSessionTotalBytes,
-} from './uploadMetrics'
+  createVideoSession,
+  finalizeVideoSession,
+  getVideoSessionStatus,
+  uploadVideoSegment,
+  type VideoSessionStatus
+} from './api'
 
-type PageStage = 'uploading' | 'processing' | 'done' | 'expired' | 'waiting'
+type UploadPhase = 'session' | 'status' | 'segments' | 'finalize' | 'done'
+const ABANDONED_SHOULDER_PRESS_FILES_KEY = 'motioncare.shoulderPress.abandonedFiles.v1'
 
-const PROCESSING_LABEL: Record<string, string> = {
-  queued: '视频等待处理',
-  validating_segments: '正在校验视频分片',
-  merging: '正在合并完整视频',
-  verifying_merge: '正在校验完整视频',
-  uploading_qiniu: '正在保存完整视频',
-  verifying_qiniu: '正在确认视频保存结果',
-  cleaning: '正在完成训练记录',
-  processing_failed: '视频处理正在自动重试',
-  failed: '视频处理正在自动重试',
+const PHASE_LABELS: Record<UploadPhase, string> = {
+  session: '建立上传会话',
+  status: '确认已上传片段',
+  segments: '上传训练分段',
+  finalize: '提交处理',
+  done: '已提交'
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+function updateSegment(
+  session: PendingShoulderPressSession,
+  index: number,
+  update: Partial<PendingShoulderPressSegment>
+): PendingShoulderPressSession {
+  return {
+    ...session,
+    segments: session.segments.map((segment) => (
+      segment.index === index ? { ...segment, ...update } : segment
+    ))
+  }
 }
 
-function removeSavedFile(filePath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    Taro.getFileSystemManager().unlink({
-      filePath,
-      success: () => resolve(),
-      fail: (reason) => {
-        if (reason.errMsg?.includes('no such file')) resolve()
-        else reject(new Error(reason.errMsg || '删除本地视频分片失败'))
-      },
+function mergeServerUploaded(
+  session: PendingShoulderPressSession,
+  uploadedSegments: number[] | undefined
+): PendingShoulderPressSession {
+  const uploaded = new Set((uploadedSegments ?? []).filter((index) => (
+    Number.isInteger(index) && index >= 0 && index < session.segments.length
+  )))
+  return {
+    ...session,
+    segments: session.segments.map((segment) => {
+      if (uploaded.has(segment.index)) return { ...segment, uploadState: 'uploaded' }
+      if (segment.uploadState === 'uploading') return { ...segment, uploadState: 'pending', sha256: undefined }
+      return segment
     })
+  }
+}
+
+function statusMessage(status: TrainingVideoStatus | string): string {
+  if (status === 'failed') return '处理失败，本地视频仍保留。请重试上传或重新训练。'
+  if (status === 'expired') return '上传会话已过期，本地视频仍保留。请重新训练。'
+  return '上传失败，本地视频仍保留。请检查网络后重试。'
+}
+
+function deleteSavedFile(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      Taro.getFileSystemManager().unlink({
+        filePath: path,
+        success: () => resolve(true),
+        fail: () => resolve(false)
+      })
+    } catch {
+      resolve(false)
+    }
   })
 }
 
-export default function ShoulderPressUploadPage() {
-  const stored = loadShoulderPressSession(Taro)
-  const [stage, setStage] = useState<PageStage>('uploading')
-  const [progress, setProgress] = useState(0)
-  const [stageText, setStageText] = useState('正在准备上传视频分片')
-  const [segmentText, setSegmentText] = useState('')
-  const [uploadedBytes, setUploadedBytes] = useState(stored?.uploadedBytes ?? 0)
-  const [totalBytes, setTotalBytes] = useState(stored ? getSessionTotalBytes(stored) : 0)
-  const [bytesPerSecond, setBytesPerSecond] = useState(0)
-  const [lastMeasuredSpeed, setLastMeasuredSpeed] = useState(0)
-  const [error, setError] = useState('')
-  const duration = stored?.durationSeconds ?? 0
-  const cancelledRef = useRef(false)
-  const runnerRef = useRef<SegmentQueueRunner | null>(null)
-  const lastProgressAtRef = useRef(0)
+async function cleanupAfterServerReceipt(session: PendingShoulderPressSession): Promise<void> {
+  const failedPaths: string[] = []
+  try {
+    for (const segment of session.segments) {
+      if (!await deleteSavedFile(segment.savedFilePath)) {
+        failedPaths.push(segment.savedFilePath)
+      }
+    }
+    if (failedPaths.length > 0) {
+      Taro.setStorageSync(ABANDONED_SHOULDER_PRESS_FILES_KEY, {
+        paths: failedPaths,
+        recordedAt: Date.now()
+      })
+    } else {
+      Taro.removeStorageSync(ABANDONED_SHOULDER_PRESS_FILES_KEY)
+    }
+  } finally {
+    clearPendingShoulderPressSession(Taro)
+  }
+}
 
-  if (!runnerRef.current) {
-    runnerRef.current = new SegmentQueueRunner({
-      storage: Taro,
-      upload: ({ videoId, segment, onProgress }) => uploadShoulderPressSegment({
-        videoId,
-        sequenceIndex: segment.sequenceIndex,
-        durationSeconds: segment.durationSeconds,
-        filePath: segment.savedFilePath,
-        onProgress,
-      }),
-      removeFile: removeSavedFile,
-      onProgress: ({
-        sequenceIndex,
-        progress: segmentProgress,
-        uploadedBytes: currentUploadedBytes,
-        totalBytes: currentTotalBytes,
-        bytesPerSecond: currentBytesPerSecond,
-      }) => {
-        const session = loadShoulderPressSession(Taro)
-        const segmentCount = session?.segmentCount ?? 0
-        if (!session || segmentCount <= 0) return
-        const now = Date.now()
-        const uploadProgress = currentTotalBytes > 0
-          ? Math.round((currentUploadedBytes / currentTotalBytes) * 60)
-          : 0
-        lastProgressAtRef.current = now
-        setUploadedBytes(currentUploadedBytes)
-        setTotalBytes(currentTotalBytes)
-        setBytesPerSecond(currentBytesPerSecond)
-        if (currentBytesPerSecond > 0) setLastMeasuredSpeed(currentBytesPerSecond)
-        setStage('uploading')
-        setStageText('正在上传训练视频')
-        setSegmentText(
-          `分片 ${Math.min(sequenceIndex + 1, segmentCount)}/${segmentCount} · ${segmentProgress}%`,
-        )
-        setProgress(Math.min(60, uploadProgress))
-      },
+export default function ShoulderPressUploadPage() {
+  const [pending, setPending] = useState<PendingShoulderPressSession | null>(() => (
+    loadPendingShoulderPressSession(Taro)
+  ))
+  const [phase, setPhase] = useState<UploadPhase>('session')
+  const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const [segmentProgress, setSegmentProgress] = useState(0)
+  const [running, setRunning] = useState(false)
+  const [missing, setMissing] = useState(pending === null)
+  const [error, setError] = useState('')
+  const runningRef = useRef(false)
+
+  function persist(session: PendingShoulderPressSession): PendingShoulderPressSession | null {
+    const saved = saveOwnedPendingShoulderPressSession(Taro, session)
+    if (!saved) return null
+    setPending(saved)
+    return saved
+  }
+
+  async function leaveAfterSafeReceipt(session: PendingShoulderPressSession) {
+    setPhase('done')
+    await cleanupAfterServerReceipt(session)
+    await Taro.reLaunch({ url: '/pages/prescription/index' })
+  }
+
+  async function ensureVideoSession(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
+    setPhase('session')
+    if (session.videoId) return session
+    const created = await createVideoSession({
+      actionId: session.actionId,
+      clientSessionId: session.clientSessionId,
+      trainingDate: session.trainingDate,
+      expectedDurationSeconds: session.expectedDurationSeconds
+    })
+    const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
+    if (!latest) return null
+    const nextSession = persist({
+      ...mergeServerUploaded(latest, created.uploaded_segments),
+      videoId: created.video_id
+    })
+    if (!nextSession) return null
+    if (isServerRetryableFinalizeStatus(created.status)) {
+      throw new Error(statusMessage(created.status))
+    }
+    if (isServerSafeFinalizeStatus(created.status)) {
+      await leaveAfterSafeReceipt({ ...nextSession, finalized: true })
+      return null
+    }
+    return nextSession
+  }
+
+  async function mergeRemoteStatus(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
+    if (!session.videoId) return session
+    setPhase('status')
+    const status = await getVideoSessionStatus(session.videoId)
+    const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
+    if (!latest) return null
+    const nextSession = persist(mergeServerUploaded({
+      ...latest,
+      videoId: session.videoId
+    }, status.uploaded_segments))
+    if (!nextSession) return null
+    if (isServerSafeFinalizeStatus(status.status)) {
+      await leaveAfterSafeReceipt({ ...nextSession, finalized: true })
+      return null
+    }
+    if (isServerRetryableFinalizeStatus(status.status)) {
+      throw new Error(statusMessage(status.status))
+    }
+    return nextSession
+  }
+
+  async function uploadSegments(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
+    if (!session.videoId) return session
+    setPhase('segments')
+    const clientSessionId = session.clientSessionId
+    let current = session
+
+    for (;;) {
+      const latest = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+      if (!latest) return null
+      current = latest
+      if (!current.videoId) return null
+      const segment = current.segments.find((item) => item.uploadState !== 'uploaded')
+      if (!segment) break
+      setActiveIndex(segment.index)
+      setSegmentProgress(0)
+
+      current = persist(updateSegment(current, segment.index, {
+        uploadState: 'uploading',
+        sha256: undefined
+      }))
+      if (!current || !current.videoId) return null
+
+      try {
+        const uploaded = await uploadVideoSegment({
+          videoId: current.videoId,
+          index: segment.index,
+          filePath: segment.savedFilePath,
+          durationMs: segment.durationMs,
+          sizeBytes: segment.sizeBytes,
+          onProgress: (progress) => setSegmentProgress(progress)
+        })
+        current = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!current) return null
+        current = persist(updateSegment(current, uploaded.index, {
+          uploadState: 'uploaded',
+          sha256: uploaded.sha256
+        }))
+        if (!current) return null
+        setSegmentProgress(100)
+      } catch (uploadError) {
+        current = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!current) return null
+        persist({
+          ...updateSegment(current, segment.index, {
+            uploadState: 'pending',
+            sha256: undefined
+          }),
+          lastError: uploadError instanceof Error ? uploadError.message : '视频分段上传失败，请检查网络后重试'
+        })
+        throw uploadError
+      }
+    }
+
+    setActiveIndex(null)
+    return current
+  }
+
+  async function finalizeSession(session: PendingShoulderPressSession): Promise<VideoSessionStatus> {
+    if (!session.videoId) throw new Error('上传会话缺失，请重试')
+    setPhase('finalize')
+    return finalizeVideoSession({
+      videoId: session.videoId,
+      segmentCount: session.segments.length,
+      actualDurationSeconds: Math.ceil(session.actualDurationMs / 1000),
+      note: ''
     })
   }
 
-  useEffect(() => {
-    cancelledRef.current = false
-    const speedTimer = setInterval(() => {
-      if (
-        lastProgressAtRef.current > 0
-        && Date.now() - lastProgressAtRef.current > 2_500
-      ) {
-        setBytesPerSecond(0)
-      }
-    }, 1_000)
-    async function runUntilComplete() {
-      while (!cancelledRef.current) {
-        try {
-          setError('')
-          const result = await runShoulderPressUploadFlow({
-            storage: Taro,
-            drainSegments: () => runnerRef.current!.drainAvailable(),
-            finish: finishShoulderPressVideoSession,
-            getStatus: getShoulderPressVideoSession,
-            sleep,
-            isCancelled: () => cancelledRef.current,
-            onUpdate(update) {
-              setProgress(update.progressPercent)
-              setUploadedBytes(update.uploadedBytes)
-              setTotalBytes(update.totalBytes)
-              if (update.stage === 'uploading') {
-                setStage('uploading')
-                setStageText('正在上传训练视频')
-                setSegmentText(`分片 ${update.uploadedSegmentCount}/${update.segmentCount}`)
-              } else {
-                setBytesPerSecond(0)
-                setStage('processing')
-                setStageText(
-                  PROCESSING_LABEL[update.processingStatus ?? ''] ?? '视频正在自动处理',
-                )
-                setSegmentText('视频已上传，后台正在自动完成保存')
-              }
-            },
-          })
-          if (result === 'succeeded') {
-            setProgress(100)
-            setStage('done')
-            return
-          }
-          if (result === 'expired') {
-            setStage('expired')
-            setError('视频处理未能在 48 小时内完成，请重新训练')
-            return
-          }
-          if (result === 'unrecoverable') {
-            setStage('expired')
-            setError(loadShoulderPressSession(Taro)?.unrecoverableReason || '录像分片保存失败，请重新训练')
-            return
-          }
-        } catch (reason) {
-          setStage('waiting')
-          setError(reason instanceof Error ? reason.message : '网络连接异常，正在自动重试')
-          await sleep(2_000)
-        }
-      }
-    }
-    void runUntilComplete()
-    return () => {
-      cancelledRef.current = true
-      clearInterval(speedTimer)
-    }
-  }, [])
+  async function upload() {
+    if (runningRef.current) return
+    runningRef.current = true
+    setRunning(true)
+    setMissing(false)
+    setError('')
 
-  if (stage === 'done') {
+    const currentPending = loadPendingShoulderPressSession(Taro)
+    if (!currentPending) {
+      setPending(null)
+      setMissing(true)
+      runningRef.current = false
+      setRunning(false)
+      return
+    }
+    setPending(currentPending)
+
+    try {
+      let session = await ensureVideoSession(currentPending)
+      if (!session) return
+      session = await mergeRemoteStatus(session)
+      if (!session) return
+      session = await uploadSegments(session)
+      if (!session) return
+      const finalized = await finalizeSession(session)
+
+      if (isServerSafeFinalizeStatus(finalized.status)) {
+        await leaveAfterSafeReceipt({ ...session, finalized: true })
+        return
+      }
+
+      if (isServerRetryableFinalizeStatus(finalized.status)) {
+        persist({ ...session, lastError: statusMessage(finalized.status) })
+        setError(statusMessage(finalized.status))
+        return
+      }
+
+      throw new Error('服务端仍在接收视频，请稍后重试。')
+    } catch (uploadError) {
+      setPending(loadPendingShoulderPressSession(Taro))
+      setError(uploadError instanceof Error ? uploadError.message : '上传失败，请检查网络后重试')
+    } finally {
+      runningRef.current = false
+      setRunning(false)
+    }
+  }
+
+  async function restartTraining() {
+    const current = loadPendingShoulderPressSession(Taro)
+    if (!current) return
+    await cleanupAfterServerReceipt(current)
+    await Taro.reLaunch({ url: `/pages/shoulder-press/index?actionId=${encodeURIComponent(String(current.actionId))}` })
+  }
+
+  useDidShow(() => {
+    void upload()
+  })
+
+  const counters = shoulderPressUploadCounters(pending?.segments ?? [])
+  const phaseLabel = PHASE_LABELS[phase]
+
+  if (missing) {
     return (
-      <View className='page shoulder-upload-page shoulder-complete-page'>
-        <View className='training-complete-mark'>✓</View>
-        <Text className='training-complete-title'>训练结束</Text>
-        <Text className='training-complete-copy'>完整训练视频和训练记录已保存。</Text>
-        <View className='training-complete-summary'>
-          <Text className='label'>本次训练时长</Text>
-          <Text className='value'>{duration} 秒</Text>
+      <View className='page shoulder-press-upload-page upload-invalid-page'>
+        <View className='page-hero'>
+          <Text className='eyebrow'>录像信息失效</Text>
+          <Text className='title'>无法继续上传</Text>
+          <Text className='muted'>本地录像信息缺失，请返回当前处方重新开始训练。</Text>
         </View>
         <Button
-          className='primary-button full-button training-complete-button'
+          className='secondary-button full-button'
           onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
         >
-          确认并返回处方
+          返回当前处方
         </Button>
       </View>
     )
   }
 
-  const displayTitle = stage === 'waiting' ? '网络连接中断' : stageText
   return (
-    <View className='page shoulder-upload-page'>
-      <View className='page-hero'>
-        <Text className='eyebrow'>训练保存</Text>
-        <Text className='title'>{stage === 'expired' ? '训练视频未保存' : displayTitle}</Text>
-        <Text className='muted'>系统会自动完成上传和处理，请保持网络连接。</Text>
+    <View className='page shoulder-press-upload-page'>
+      <View className='page-hero upload-hero'>
+        <Text className='eyebrow'>训练上传</Text>
+        <Text className='title'>请保持小程序打开</Text>
+        <Text className='muted'>分段视频提交完成后，将自动返回当前处方。</Text>
       </View>
 
-      <View className='upload-progress-summary'>
-        <Text className='upload-progress-value'>{progress}%</Text>
-        <Text className='muted'>{segmentText || displayTitle}</Text>
-        <View className='progress-track'>
-          <View className='progress-fill' style={{ width: `${progress}%` }} />
+      <View className='upload-progress-panel segment-upload-panel'>
+        <View className='upload-stage upload-stage-active'>
+          <Text className='upload-stage-label'>{phaseLabel}</Text>
+          <Text className='upload-stage-status'>{running ? '进行中' : '等待重试'}</Text>
         </View>
-        <View className='upload-transfer-metrics'>
-          <View className='upload-transfer-metric'>
-            <Text className='label'>已上传</Text>
-            <Text className='value'>
-              {formatBytes(uploadedBytes)} / {formatBytes(totalBytes)}
-            </Text>
+        <View className='upload-meter'>
+          <View className='row upload-counter-row'>
+            <Text className='label'>分段上传</Text>
+            <Text className='value'>{counters.uploaded}/{counters.total}</Text>
           </View>
-          <View className='upload-transfer-metric'>
-            <Text className='label'>
-              {stage === 'processing' ? '最近上传速度' : '传输速度'}
-            </Text>
-            <Text className='value'>
-              {stage === 'processing'
-                ? lastMeasuredSpeed > 0
-                  ? formatTransferSpeed(lastMeasuredSpeed)
-                  : '上传已完成'
-                : lastProgressAtRef.current === 0
-                  ? '等待传输'
-                  : formatTransferSpeed(bytesPerSecond)}
-            </Text>
+          <View className='progress-track'>
+            <View className='progress-fill' style={{ width: `${counters.percent}%` }} />
+          </View>
+        </View>
+        <View className='upload-meter'>
+          <View className='row upload-counter-row'>
+            <Text className='label'>当前分段</Text>
+            <Text className='value'>{activeIndex === null ? '待提交' : `${activeIndex + 1}`}</Text>
+          </View>
+          <View className='progress-track'>
+            <View className='progress-fill' style={{ width: `${segmentProgress}%` }} />
           </View>
         </View>
       </View>
 
-      <View className='upload-steps'>
-        {['上传视频分片', '合并并保存完整视频', '生成训练记录'].map((label, index) => {
-          const current = stage === 'uploading' || stage === 'waiting' ? 0 : 1
-          const complete = index < current
-          return (
-            <View className='upload-step' key={label}>
-              <Text className={`upload-step-mark ${complete ? 'complete' : index === current ? 'active' : ''}`}>
-                {complete ? '✓' : index + 1}
-              </Text>
-              <Text className='value'>{label}</Text>
-            </View>
-          )
-        })}
-        <Text className='muted'>录像时长：{duration} 秒</Text>
-      </View>
-
+      <Text className='upload-lock-note'>完成前请不要退出此页。</Text>
       {error ? <Text className='error'>{error}</Text> : null}
-      {stage === 'expired' ? (
-        <Button
-          className='primary-button full-button'
-          onClick={() => {
-            clearShoulderPressSession(Taro)
-            void Taro.reLaunch({ url: '/pages/prescription/index' })
-          }}
-        >
-          返回处方
-        </Button>
-      ) : null}
+      {error ? (
+        <View className='button-row shoulder-press-action-row'>
+          <Button
+            className='primary-button'
+            loading={running}
+            disabled={running}
+            onClick={() => void upload()}
+          >
+            重试上传
+          </Button>
+          <Button
+            className='secondary-button'
+            disabled={running}
+            onClick={() => void restartTraining()}
+          >
+            重新训练
+          </Button>
+        </View>
+      ) : (
+        <Text className='muted upload-running-text'>正在自动处理，请稍候。</Text>
+      )}
     </View>
   )
 }

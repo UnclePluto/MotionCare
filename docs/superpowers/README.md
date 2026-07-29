@@ -26,14 +26,14 @@ docs/superpowers/
 | `specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` | 前端临时随机 + 确认时建绑定 | approved |
 | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved |
 | `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` | 微信小程序患者日常工作台 | approved |
-| `specs/2026-07-08-shoulder-press-video-analysis-design.md` | 肩部推举录像跟练与动作分析 | review |
+| `specs/2026-07-08-shoulder-press-video-analysis-design.md` | 肩部推举录像跟练与七牛直传（历史方案） | superseded |
+| `specs/2026-07-11-shoulder-press-segmented-server-upload-design.md` | 肩部推举分段录制、服务端合并与动作分析 | approved |
 | `specs/2026-07-14-segmented-training-video-pipeline-design.md` | 肩部推举 30 秒连续分片、服务端合并与七牛发布 | approved |
 
 ## 实施计划（plans/）当前清单
 
 | 文件 | 主题 | 状态 | 关联 spec |
 | --- | --- | --- | --- |
-| `plans/2026-07-14-segmented-training-video-pipeline.md` | 肩部推举分片录像、服务端合并、七牛自动上传与清理 | implementing | `specs/2026-07-14-segmented-training-video-pipeline-design.md` |
 | `plans/2026-05-08-crf-patient-baseline-mapping-phase1.md` | CRF 基线 + mapping 一期 | implementing | `specs/2026-05-08-crf-core-patient-fields-mapping-design.md` |
 | `plans/2026-05-08-frontend-fullscreen-and-create-actions.md` | 前端满屏 + 新增动作 | implementing | `specs/2026-05-08-frontend-fullscreen-and-create-actions-design.md` |
 | `plans/2026-05-11-drop-batch-concept.md` | **删除批次概念**，重构随机/确认/池语义 | ✅ **implemented** (`fa686e5`) | 来自 `2026-05-11-patient-project-admin-and-grouping-board-design.md` |
@@ -43,7 +43,9 @@ docs/superpowers/
 | `plans/2026-05-12-frontend-only-randomization-confirmed-binding.md` | 前端临时随机 + 确认入组绑定 | implementing | `specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md` |
 | `plans/2026-05-14-project-patient-research-entry-tabs.md` | 项目患者维度研究录入 + T0/T1/T2 Tab + 基线资料命名 | approved | `specs/2026-05-14-project-patient-research-entry-tabs-design.md` |
 | `plans/2026-05-14-wechat-miniapp-patient-daily-workbench.md` | 微信小程序患者日常工作台 | approved | `specs/2026-05-14-wechat-miniapp-patient-daily-workbench-design.md` |
-| `plans/2026-07-10-shoulder-press-video-analysis.md` | 肩部推举录像跟练与动作分析 | review | `specs/2026-07-08-shoulder-press-video-analysis-design.md` |
+| `plans/2026-07-10-shoulder-press-video-analysis.md` | 肩部推举录像跟练与七牛直传（历史计划，Task 1-4 可复用） | superseded | `specs/2026-07-08-shoulder-press-video-analysis-design.md` |
+| `plans/2026-07-11-shoulder-press-segmented-server-upload.md` | 肩部推举分段上传、服务端合并与动作分析 | implementing | `specs/2026-07-11-shoulder-press-segmented-server-upload-design.md` |
+| `plans/2026-07-14-segmented-training-video-pipeline.md` | 肩部推举分片录像、服务端合并、七牛自动上传与清理 | implementing | `specs/2026-07-14-segmented-training-video-pipeline-design.md` |
 
 ## 状态语义
 
@@ -89,4 +91,4 @@ docs/superpowers/
 
 3. plan 中的 `- [ ]` 改为 `- [x]` 时，同时在文件顶部"执行记录"区写明 commit short-sha 和工具名。
 
-_最后更新：2026-05-12_
+_最后更新：2026-07-11_

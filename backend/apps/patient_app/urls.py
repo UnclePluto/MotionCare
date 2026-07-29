@@ -8,10 +8,10 @@ from .views import (
     PatientAppHomeView,
     PatientAppMeView,
     PatientAppTrainingRecordView,
+    PatientAppTrainingVideoFinalizeView,
     PatientAppTrainingVideoSegmentView,
-    PatientAppTrainingVideoSessionCollectionView,
-    PatientAppTrainingVideoSessionDetailView,
-    PatientAppTrainingVideoSessionFinishView,
+    PatientAppTrainingVideoSessionView,
+    PatientAppTrainingVideoStatusView,
 )
 
 urlpatterns = [
@@ -30,23 +30,23 @@ urlpatterns = [
     ),
     path(
         "training-video-sessions/",
-        PatientAppTrainingVideoSessionCollectionView.as_view(),
-        name="patient-app-training-video-session-create",
+        PatientAppTrainingVideoSessionView.as_view(),
+        name="patient-app-training-video-session",
     ),
     path(
-        "training-video-sessions/<int:video_id>/segments/",
+        "training-video-sessions/<int:video_id>/segments/<int:index>/",
         PatientAppTrainingVideoSegmentView.as_view(),
-        name="patient-app-training-video-segment-upload",
+        name="patient-app-training-video-segment",
     ),
     path(
-        "training-video-sessions/<int:video_id>/",
-        PatientAppTrainingVideoSessionDetailView.as_view(),
-        name="patient-app-training-video-session-detail",
+        "training-video-sessions/<int:video_id>/finalize/",
+        PatientAppTrainingVideoFinalizeView.as_view(),
+        name="patient-app-training-video-finalize",
     ),
     path(
-        "training-video-sessions/<int:video_id>/finish/",
-        PatientAppTrainingVideoSessionFinishView.as_view(),
-        name="patient-app-training-video-session-finish",
+        "training-video-sessions/<int:video_id>/status/",
+        PatientAppTrainingVideoStatusView.as_view(),
+        name="patient-app-training-video-status",
     ),
     path(
         "actions/<int:prescription_action_id>/history/",

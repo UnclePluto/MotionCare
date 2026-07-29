@@ -86,6 +86,7 @@ export type TrackingRecentRecord = {
   prescription_version: number;
   prescription_action: number;
   action_name: string;
+  action_source_key: string | null;
   internal_type: string;
   action_type: string;
   actual_duration_minutes: number | null;
@@ -101,28 +102,18 @@ export type TrackingRecentRecord = {
   note: string;
   video_id: number | null;
   video_status: string | null;
-  latest_analysis_status: string | null;
+  latest_analysis_status: "pending" | "running" | "succeeded" | "failed" | null;
   analysis_total_count: number | null;
   analysis_standard_count: number | null;
   analysis_nonstandard_count: number | null;
-  analysis_failure_reason: string;
 };
 
-export type MotionAnalysisJob = {
+export type TrackingPendingVideo = {
   id: number;
-  training_video: number;
-  training_record: number | null;
-  status: "pending" | "running" | "succeeded" | "failed";
-  algorithm_name: string;
-  algorithm_version: string;
-  rule_version: string;
-  total_count: number | null;
-  standard_count: number | null;
-  nonstandard_count: number | null;
-  result_payload: Record<string, unknown>;
+  training_date: string;
+  action_name: string;
+  status: "queued" | "assembling" | "uploading_qiniu" | "failed";
   failure_reason: string;
-  started_at: string | null;
-  finished_at: string | null;
   created_at: string;
 };
 
@@ -139,4 +130,5 @@ export type TrackingDetail = {
   };
   game_summary: TrackingGameSummary;
   recent_records: TrackingRecentRecord[];
+  pending_training_videos: TrackingPendingVideo[];
 };

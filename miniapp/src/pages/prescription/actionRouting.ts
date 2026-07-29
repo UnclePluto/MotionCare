@@ -1,4 +1,5 @@
 import { buildShoulderPressSessionUrl, SHOULDER_PRESS_SOURCE_KEY } from '../shoulder-press/session'
+import { gameSessionUrl } from './gameSubpackage'
 
 type RoutableAction = {
   id: number
@@ -11,12 +12,13 @@ export function actionEntryUrl(action: RoutableAction): string {
     return buildShoulderPressSessionUrl(action.id)
   }
   if (action.internal_type === 'game') {
-    return `/pages/game-session/index?actionId=${action.id}`
+    return gameSessionUrl(action.id)
   }
-  return `/pages/training/index?actionId=${action.id}`
+  return `/pages/training/index?actionId=${encodeURIComponent(String(action.id))}`
 }
 
 export function actionButtonLabel(action: RoutableAction): string {
   if (action.source_key === SHOULDER_PRESS_SOURCE_KEY) return '开始跟练'
-  return action.internal_type === 'game' ? '开始游戏' : '开始训练'
+  if (action.internal_type === 'game') return '开始游戏'
+  return '开始训练'
 }

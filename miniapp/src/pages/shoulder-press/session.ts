@@ -1,73 +1,318 @@
 export const SHOULDER_PRESS_SOURCE_KEY = 'motion-resistance-shoulder-press'
 export const PENDING_SHOULDER_PRESS_SESSION_KEY = 'motioncare.pendingShoulderPressSession'
-
-export type ShoulderPressSegmentStatus = 'pending' | 'uploading' | 'retrying' | 'confirmed'
+export const PENDING_SHOULDER_PRESS_UPLOAD_KEY = PENDING_SHOULDER_PRESS_SESSION_KEY
 
 export type PendingShoulderPressSegment = {
-  sequenceIndex: number
+  index: number
   savedFilePath: string
-  durationSeconds: number
+  durationMs: number
   sizeBytes: number
-  status: ShoulderPressSegmentStatus
-  retryCount: number
-  nextRetryAt?: number
+  uploadState: 'pending' | 'uploading' | 'uploaded'
+  sha256?: string
+}
+
+export type PendingShoulderPressSession = {
+  clientSessionId: string
+  videoId?: number
+  actionId: number
+  trainingDate: string
+  expectedDurationSeconds: number
+  actualDurationMs: number
+  segments: PendingShoulderPressSegment[]
+  finalized: boolean
+  createdAt: number
   lastError?: string
 }
 
-export type ShoulderPressSession = {
-  actionId: number
-  videoId: number
-  startedAt: number
-  durationSeconds: number
-  phase: 'recording' | 'uploading' | 'processing'
-  segmentCount?: number
-  totalBytes?: number
-  uploadedBytes?: number
-  trainingDate?: string
-  unrecoverableReason?: string
-  segments: PendingShoulderPressSegment[]
+export type PendingShoulderPressUpload = PendingShoulderPressSession & {
+  tempFilePath?: string
+  durationSeconds?: number
+  sizeBytes?: number
+  hash?: string
 }
 
-export type StorageLike = {
+type StorageLike = {
   getStorageSync: (key: string) => unknown
   setStorageSync: (key: string, value: unknown) => void
-  removeStorageSync?: (key: string) => void
+  removeStorageSync: (key: string) => void
+}
+
+type VideoInfo = {
+  duration: number
+  size: number
+}
+
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS = 600_000
+
+function isPositiveNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return isPositiveNumber(value) && Number.isInteger(value)
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return isNonNegativeNumber(value) && Number.isInteger(value)
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isTrainingDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function assertValidClientSessionId(value: string): void {
+  if (!UUID_V4_PATTERN.test(value)) throw new Error('录像会话标识无效')
+}
+
+export function createClientSessionId(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (marker) => {
+    const value = marker === 'x' ? Math.floor(Math.random() * 16) : (Math.floor(Math.random() * 4) + 8)
+    return value.toString(16)
+  })
+}
+
+export function isUsableTempVideoPath(value: unknown): value is string {
+  if (!isNonEmptyString(value) || /\s/.test(value)) return false
+  return /^(?:wxfile|https?|file):\/\//.test(value) || value.startsWith('blob:') || value.startsWith('/')
 }
 
 export function buildShoulderPressSessionUrl(actionId: number): string {
-  return `/pages/shoulder-press/index?actionId=${actionId}`
-}
-
-export function buildShoulderPressCameraUrl(actionId: number): string {
-  return `/pages/shoulder-press/camera?actionId=${actionId}`
+  return `/pages/shoulder-press/index?actionId=${encodeURIComponent(String(actionId))}`
 }
 
 export function buildShoulderPressUploadUrl(): string {
   return '/pages/shoulder-press/upload'
 }
 
-export function saveShoulderPressSession(
-  storage: StorageLike,
-  session: ShoulderPressSession,
-): void {
-  storage.setStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY, session)
+export function normalizeShoulderPressExpectedDurationSeconds(value: number): number {
+  if (!Number.isFinite(value)) return 1
+  return Math.min(600, Math.max(1, Math.round(value)))
 }
 
-export function loadShoulderPressSession(storage: StorageLike): ShoulderPressSession | null {
-  const value = storage.getStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY)
+export function createPendingShoulderPressSession(input: {
+  actionId: number
+  expectedDurationSeconds: number
+  trainingDate: string
+  clientSessionId?: string
+  createdAt?: number
+}): PendingShoulderPressSession {
+  if (!isPositiveInteger(input.actionId)) throw new Error('训练动作无效')
+  if (!isPositiveNumber(input.expectedDurationSeconds)) throw new Error('预计训练时长无效')
+  if (!isTrainingDate(input.trainingDate)) throw new Error('训练日期无效')
+
+  const clientSessionId = input.clientSessionId ?? createClientSessionId()
+  assertValidClientSessionId(clientSessionId)
+  const createdAt = input.createdAt ?? Date.now()
+  if (!isPositiveNumber(createdAt)) throw new Error('录像创建时间无效')
+
+  return {
+    clientSessionId,
+    actionId: input.actionId,
+    trainingDate: input.trainingDate,
+    expectedDurationSeconds: normalizeShoulderPressExpectedDurationSeconds(
+      input.expectedDurationSeconds
+    ),
+    actualDurationMs: 0,
+    segments: [],
+    finalized: false,
+    createdAt
+  }
+}
+
+export function appendPendingSegment(
+  session: PendingShoulderPressSession,
+  input: {
+    savedFilePath: string
+    durationSeconds: number
+    sizeKb: number
+  }
+): PendingShoulderPressSession {
+  if (!isUsableTempVideoPath(input.savedFilePath)) throw new Error('录像文件路径无效')
+  if (!isPositiveNumber(input.durationSeconds)) throw new Error('录像时长无效')
+  if (!isPositiveNumber(input.sizeKb)) throw new Error('录像文件大小无效')
+
+  const durationMs = Math.max(1, Math.round(input.durationSeconds * 1000))
+  const sizeBytes = Math.max(1, Math.round(input.sizeKb * 1024))
+  if (session.actualDurationMs + durationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
+    throw new Error('录像总时长超过限制，请重新录制')
+  }
+  const segment: PendingShoulderPressSegment = {
+    index: session.segments.length,
+    savedFilePath: input.savedFilePath,
+    durationMs,
+    sizeBytes,
+    uploadState: 'pending'
+  }
+
+  return {
+    ...session,
+    actualDurationMs: session.actualDurationMs + durationMs,
+    segments: [...session.segments, segment],
+    lastError: undefined
+  }
+}
+
+export function markServerUploadedSegments(
+  session: PendingShoulderPressSession,
+  uploadedIndexes: number[]
+): PendingShoulderPressSession {
+  const uploaded = new Set(uploadedIndexes.filter((index) => Number.isInteger(index) && index >= 0))
+  return {
+    ...session,
+    segments: session.segments.map((segment) => (
+      uploaded.has(segment.index) ? { ...segment, uploadState: 'uploaded' } : segment
+    ))
+  }
+}
+
+export function isSegmentReadyForLocalDeletion(segment: PendingShoulderPressSegment): boolean {
+  return segment.uploadState === 'uploaded' && isNonEmptyString(segment.sha256)
+}
+
+function normalizeSegment(value: unknown, expectedIndex: number): PendingShoulderPressSegment | null {
   if (!value || typeof value !== 'object') return null
-  const session = value as Partial<ShoulderPressSession>
-  if (
-    typeof session.actionId !== 'number'
-    || typeof session.videoId !== 'number'
-    || typeof session.startedAt !== 'number'
-    || typeof session.durationSeconds !== 'number'
-    || !Array.isArray(session.segments)
-    || !['recording', 'uploading', 'processing'].includes(session.phase || '')
-  ) return null
-  return session as ShoulderPressSession
+  const segment = value as Partial<PendingShoulderPressSegment>
+  if (segment.index !== expectedIndex) return null
+  if (!isUsableTempVideoPath(segment.savedFilePath)) return null
+  if (!isPositiveInteger(segment.durationMs)) return null
+  if (!isPositiveInteger(segment.sizeBytes)) return null
+  if (segment.uploadState !== 'pending' && segment.uploadState !== 'uploading' && segment.uploadState !== 'uploaded') {
+    return null
+  }
+  if (segment.sha256 !== undefined && !isNonEmptyString(segment.sha256)) return null
+
+  return {
+    index: expectedIndex,
+    savedFilePath: segment.savedFilePath,
+    durationMs: segment.durationMs,
+    sizeBytes: segment.sizeBytes,
+    uploadState: segment.uploadState,
+    ...(segment.sha256 ? { sha256: segment.sha256 } : {})
+  }
 }
 
-export function clearShoulderPressSession(storage: StorageLike): void {
-  storage.removeStorageSync?.(PENDING_SHOULDER_PRESS_SESSION_KEY)
+function normalizeSession(value: unknown): PendingShoulderPressSession | null {
+  if (!value || typeof value !== 'object') return null
+  const session = value as Partial<PendingShoulderPressSession>
+  if (!isNonEmptyString(session.clientSessionId) || !UUID_V4_PATTERN.test(session.clientSessionId)) return null
+  if (!isPositiveInteger(session.actionId)) return null
+  if (!isTrainingDate(session.trainingDate)) return null
+  if (!isPositiveNumber(session.expectedDurationSeconds)) return null
+  if (!isNonNegativeInteger(session.actualDurationMs)) return null
+  if (!Array.isArray(session.segments)) return null
+  if (typeof session.finalized !== 'boolean') return null
+  if (!isPositiveNumber(session.createdAt)) return null
+
+  const segments = session.segments.map((segment, index) => normalizeSegment(segment, index))
+  if (segments.some((segment) => segment === null)) return null
+  const normalizedSegments = segments as PendingShoulderPressSegment[]
+  const actualDurationMs = normalizedSegments.reduce((total, segment) => total + segment.durationMs, 0)
+  if (session.actualDurationMs !== actualDurationMs) return null
+  if (session.finalized && normalizedSegments.some((segment) => segment.uploadState !== 'uploaded')) return null
+
+  return {
+    clientSessionId: session.clientSessionId,
+    ...(isPositiveInteger(session.videoId) ? { videoId: session.videoId } : {}),
+    actionId: session.actionId,
+    trainingDate: session.trainingDate,
+    expectedDurationSeconds: normalizeShoulderPressExpectedDurationSeconds(
+      session.expectedDurationSeconds
+    ),
+    actualDurationMs,
+    segments: normalizedSegments,
+    finalized: session.finalized,
+    createdAt: session.createdAt,
+    ...(typeof session.lastError === 'string' ? { lastError: session.lastError } : {})
+  }
+}
+
+export function savePendingShoulderPressSession(
+  storage: StorageLike,
+  payload: PendingShoulderPressSession
+): void {
+  storage.setStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY, payload)
+}
+
+export function loadPendingShoulderPressSession(storage: StorageLike): PendingShoulderPressSession | null {
+  return normalizeSession(storage.getStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY))
+}
+
+export function clearPendingShoulderPressSession(storage: StorageLike): void {
+  storage.removeStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY)
+}
+
+export function buildPendingShoulderPressUpload(input: {
+  actionId: number
+  tempFilePath: string
+  videoInfo: VideoInfo
+  createdAt?: number
+}): PendingShoulderPressUpload {
+  const date = new Date(input.createdAt ?? Date.now())
+  const trainingDate = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-')
+  const session = appendPendingSegment(createPendingShoulderPressSession({
+    actionId: input.actionId,
+    expectedDurationSeconds: Math.max(1, Math.round(input.videoInfo.duration)),
+    trainingDate,
+    createdAt: input.createdAt
+  }), {
+    savedFilePath: input.tempFilePath,
+    durationSeconds: input.videoInfo.duration,
+    sizeKb: input.videoInfo.size
+  })
+  return {
+    ...session,
+    tempFilePath: input.tempFilePath,
+    durationSeconds: Math.max(1, Math.round(input.videoInfo.duration)),
+    sizeBytes: session.segments[0].sizeBytes
+  }
+}
+
+export function savePendingShoulderPressUpload(
+  storage: StorageLike,
+  payload: PendingShoulderPressUpload
+): void {
+  savePendingShoulderPressSession(storage, payload)
+}
+
+export function loadPendingShoulderPressUpload(storage: StorageLike): PendingShoulderPressUpload | null {
+  const session = loadPendingShoulderPressSession(storage)
+  if (!session) return null
+  const firstSegment = session.segments[0]
+  return {
+    ...session,
+    ...(firstSegment ? {
+      tempFilePath: firstSegment.savedFilePath,
+      durationSeconds: Math.max(1, Math.round(firstSegment.durationMs / 1000)),
+      sizeBytes: firstSegment.sizeBytes,
+      hash: firstSegment.sha256
+    } : {})
+  }
+}
+
+export function clearPendingShoulderPressUpload(storage: StorageLike): void {
+  clearPendingShoulderPressSession(storage)
+}
+
+export function hasShoulderPressUploadIntent(pending: PendingShoulderPressUpload): boolean {
+  return isPositiveInteger(pending.videoId)
+}
+
+export function clearShoulderPressUploadIntent(
+  pending: PendingShoulderPressUpload
+): PendingShoulderPressUpload {
+  const { videoId: _videoId, ...rest } = pending
+  return rest
 }

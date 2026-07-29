@@ -1,41 +1,40 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from apps.common.models import UserStampedModel
-
-
-def processing_expiry_default():
-    return timezone.now() + timezone.timedelta(
-        hours=settings.TRAINING_VIDEO_PROCESSING_RETENTION_HOURS
-    )
-
-
-def processing_max_attempts_default():
-    return settings.TRAINING_VIDEO_PROCESSING_MAX_ATTEMPTS
+from apps.common.models import TimeStampedModel, UserStampedModel
 
 
 class TrainingVideo(UserStampedModel):
+    class CleanupStatus(models.TextChoices):
+        NONE = "", "无需清理"
+        PENDING = "pending", "待清理"
+        RUNNING = "running", "清理中"
+        FAILED = "failed", "清理失败"
+
     class Status(models.TextChoices):
         RECORDING = "recording", "录制中"
-        UPLOADING = "uploading", "上传中"
-        QUEUED = "queued", "待处理"
-        VALIDATING_SEGMENTS = "validating_segments", "校验分片"
-        MERGING = "merging", "合并中"
-        VERIFYING_MERGE = "verifying_merge", "校验合并结果"
-        UPLOADING_QINIU = "uploading_qiniu", "上传七牛"
-        VERIFYING_QINIU = "verifying_qiniu", "校验七牛对象"
-        CLEANING = "cleaning", "清理临时文件"
+        UPLOADING_SEGMENTS = "uploading_segments", "分段上传中"
+        QUEUED = "queued", "等待合并"
+        ASSEMBLING = "assembling", "合并中"
+        UPLOADING_QINIU = "uploading_qiniu", "上传七牛中"
         ATTACHED = "attached", "已绑定"
-        PROCESSING_FAILED = "processing_failed", "处理失败"
+        FAILED = "failed", "失败"
         EXPIRED = "expired", "已过期"
 
     project_patient = models.ForeignKey(
-        "studies.ProjectPatient", on_delete=models.CASCADE, related_name="training_video_uploads"
+        "studies.ProjectPatient",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="training_video_uploads",
     )
     prescription = models.ForeignKey("prescriptions.Prescription", on_delete=models.PROTECT)
     prescription_action = models.ForeignKey(
-        "prescriptions.PrescriptionAction", on_delete=models.PROTECT
+        "prescriptions.PrescriptionAction",
+        on_delete=models.PROTECT,
     )
     training_record = models.OneToOneField(
         "training.TrainingRecord",
@@ -44,88 +43,154 @@ class TrainingVideo(UserStampedModel):
         on_delete=models.SET_NULL,
         related_name="video",
     )
+    client_session_id = models.UUIDField("客户端会话 ID", default=uuid.uuid4)
+    training_date = models.DateField("训练日期", default=timezone.localdate)
+    note = models.TextField("备注", blank=True)
+    expected_duration_seconds = models.PositiveIntegerField("计划时长", null=True, blank=True)
+    actual_duration_seconds = models.PositiveIntegerField("实际时长", null=True, blank=True)
+    expected_segment_count = models.PositiveIntegerField("计划分段数", null=True, blank=True)
+    uploaded_segment_count = models.PositiveIntegerField("已上传分段数", default=0)
+    finalized_at = models.DateTimeField("提交完成时间", null=True, blank=True)
     storage_backend = models.CharField("存储后端", max_length=40, default="qiniu_kodo")
-    bucket = models.CharField("空间", max_length=120)
-    object_key = models.CharField("对象 Key", max_length=500, unique=True)
+    bucket = models.CharField("空间", max_length=120, blank=True, default="")
+    object_key = models.CharField("对象 Key", max_length=500, unique=True, null=True, blank=True)
     object_hash = models.CharField("对象 Hash", max_length=120, blank=True)
     original_filename = models.CharField("原始文件名", max_length=255, blank=True)
     content_type = models.CharField("文件类型", max_length=120, default="video/mp4")
     size_bytes = models.PositiveBigIntegerField("文件大小", default=0)
     duration_seconds = models.PositiveIntegerField("视频时长", default=0)
-    training_date = models.DateField("训练日期", null=True, blank=True)
     status = models.CharField(
-        "状态", max_length=32, choices=Status.choices, default=Status.RECORDING
+        "状态",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RECORDING,
     )
-    segment_count = models.PositiveIntegerField("分片总数", default=0)
-    uploaded_segment_count = models.PositiveIntegerField("已上传分片数", default=0)
-    recording_finished_at = models.DateTimeField("录制结束时间", null=True, blank=True)
-    processing_expires_at = models.DateTimeField("处理过期时间", null=True, blank=True)
     uploaded_at = models.DateTimeField("上传完成时间", null=True, blank=True)
     failure_reason = models.TextField("失败原因", blank=True)
-
-
-class TrainingVideoSegment(UserStampedModel):
-    class Status(models.TextChoices):
-        PENDING = "pending", "待写入"
-        UPLOADED = "uploaded", "已上传"
-        FAILED = "failed", "失败"
-
-    training_video = models.ForeignKey(
-        TrainingVideo, on_delete=models.CASCADE, related_name="segments"
+    cleanup_status = models.CharField(
+        "解绑清理状态",
+        max_length=20,
+        choices=CleanupStatus.choices,
+        default=CleanupStatus.NONE,
+        blank=True,
     )
-    sequence_index = models.PositiveIntegerField("分片序号")
-    status = models.CharField(
-        "状态", max_length=20, choices=Status.choices, default=Status.UPLOADED
-    )
-    server_file_path = models.CharField("服务端临时文件", max_length=500)
-    content_type = models.CharField("文件类型", max_length=120, default="video/mp4")
-    size_bytes = models.PositiveBigIntegerField("文件大小")
-    duration_seconds = models.PositiveIntegerField("分片时长")
-    object_hash = models.CharField("文件 SHA-256", max_length=64)
-    upload_attempts = models.PositiveIntegerField("上传尝试次数", default=1)
-    failure_reason = models.TextField("失败原因", blank=True)
-    uploaded_at = models.DateTimeField("上传完成时间", default=timezone.now)
+    cleanup_requested_at = models.DateTimeField("解绑清理请求时间", null=True, blank=True)
+    cleanup_heartbeat_at = models.DateTimeField("解绑清理心跳时间", null=True, blank=True)
+    cleanup_attempt_count = models.PositiveIntegerField("解绑清理尝试次数", default=0)
+    cleanup_error = models.TextField("解绑清理失败原因", blank=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["training_video", "sequence_index"],
-                name="uniq_training_video_segment_sequence",
+                fields=["project_patient", "client_session_id"],
+                name="unique_training_video_client_session_per_patient",
             )
         ]
-        ordering = ["sequence_index", "id"]
 
 
-class VideoProcessingJob(UserStampedModel):
+class TrainingVideoSegment(UserStampedModel):
     class Status(models.TextChoices):
-        QUEUED = "queued", "待处理"
-        VALIDATING_SEGMENTS = "validating_segments", "校验分片"
-        MERGING = "merging", "合并中"
-        VERIFYING_MERGE = "verifying_merge", "校验合并结果"
-        UPLOADING_QINIU = "uploading_qiniu", "上传七牛"
-        VERIFYING_QINIU = "verifying_qiniu", "校验七牛对象"
-        CLEANING = "cleaning", "清理临时文件"
-        SUCCEEDED = "succeeded", "处理成功"
-        FAILED = "failed", "处理失败"
-        EXPIRED = "expired", "已过期"
+        UPLOADING = "uploading", "上传中"
+        UPLOADED = "uploaded", "已上传"
+        DELETED = "deleted", "已删除"
+        FAILED = "failed", "失败"
+
+    training_video = models.ForeignKey(
+        TrainingVideo,
+        on_delete=models.CASCADE,
+        related_name="segments",
+    )
+    index = models.PositiveIntegerField("分段序号")
+    duration_ms = models.PositiveIntegerField("分段时长毫秒")
+    size_bytes = models.PositiveBigIntegerField("分段大小")
+    sha256 = models.CharField("SHA-256", max_length=64, blank=True)
+    relative_path = models.CharField("临时相对路径", max_length=500, blank=True)
+    status = models.CharField(
+        "状态",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.UPLOADING,
+    )
+    uploaded_at = models.DateTimeField("上传完成时间", null=True, blank=True)
+    failure_reason = models.TextField("失败原因", blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["training_video", "index"],
+                name="unique_training_video_segment_index",
+            )
+        ]
+
+
+class VideoAssemblyJob(UserStampedModel):
+    class Status(models.TextChoices):
+        PENDING = "pending", "待处理"
+        RUNNING = "running", "处理中"
+        SUCCEEDED = "succeeded", "成功"
+        FAILED = "failed", "失败"
+
+    class CleanupStatus(models.TextChoices):
+        PENDING = "pending", "待清理"
+        SUCCEEDED = "succeeded", "清理成功"
+        FAILED = "failed", "清理失败"
 
     training_video = models.OneToOneField(
-        TrainingVideo, on_delete=models.CASCADE, related_name="processing_job"
+        TrainingVideo,
+        on_delete=models.CASCADE,
+        related_name="assembly_job",
     )
     status = models.CharField(
-        "状态", max_length=32, choices=Status.choices, default=Status.QUEUED
+        "状态",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
     )
-    progress_percent = models.PositiveSmallIntegerField("处理进度", default=0)
-    attempt_count = models.PositiveIntegerField("处理尝试次数", default=0)
-    max_attempts = models.PositiveIntegerField(
-        "最大处理尝试次数", default=processing_max_attempts_default
+    attempt_count = models.PositiveIntegerField("尝试次数", default=0)
+    output_relative_path = models.CharField("输出相对路径", max_length=500, blank=True)
+    qiniu_object_key = models.CharField("七牛对象 Key", max_length=500, blank=True)
+    qiniu_attempt_object_key = models.CharField(
+        "七牛上传尝试对象 Key",
+        max_length=500,
+        blank=True,
     )
-    next_retry_at = models.DateTimeField("下次重试时间", null=True, blank=True)
-    current_stage = models.CharField("当前阶段", max_length=32, blank=True)
+    qiniu_object_hash = models.CharField("七牛对象 Hash", max_length=120, blank=True)
+    qiniu_upload_deadline_at = models.DateTimeField(
+        "七牛上传截止时间",
+        null=True,
+        blank=True,
+    )
+    cleanup_status = models.CharField(
+        "清理状态",
+        max_length=20,
+        choices=CleanupStatus.choices,
+        default=CleanupStatus.PENDING,
+    )
+    cleanup_attempt_count = models.PositiveIntegerField("清理尝试次数", default=0)
     failure_reason = models.TextField("失败原因", blank=True)
+    cleanup_error = models.TextField("清理失败原因", blank=True)
     started_at = models.DateTimeField("开始时间", null=True, blank=True)
     finished_at = models.DateTimeField("结束时间", null=True, blank=True)
-    expires_at = models.DateTimeField("过期时间", default=processing_expiry_default)
+    heartbeat_at = models.DateTimeField("心跳时间", null=True, blank=True)
+
+
+class QiniuCleanupTombstone(TimeStampedModel):
+    session_id = models.UUIDField("视频会话 UUID", db_index=True)
+    bucket = models.CharField("七牛空间", max_length=120)
+    attempt_key_prefix = models.CharField(
+        "上传尝试 Key 前缀",
+        max_length=500,
+        unique=True,
+    )
+    max_attempt_number = models.PositiveIntegerField("最大上传尝试序号", default=0)
+    canonical_key = models.CharField("最终对象 Key", max_length=500, blank=True)
+    retain_canonical = models.BooleanField("保留最终对象", default=False)
+    next_check_at = models.DateTimeField("下次检查时间", default=timezone.now, db_index=True)
+    backoff_seconds = models.PositiveIntegerField("检查退避秒数", default=300)
+    last_checked_at = models.DateTimeField("最近检查时间", null=True, blank=True)
+    last_seen_at = models.DateTimeField("最近发现对象时间", null=True, blank=True)
+    last_error = models.TextField("最近清理错误", blank=True)
+    archived_at = models.DateTimeField("管理员归档时间", null=True, blank=True, db_index=True)
 
 
 class MotionAnalysisJob(UserStampedModel):
@@ -136,7 +201,9 @@ class MotionAnalysisJob(UserStampedModel):
         FAILED = "failed", "分析失败"
 
     training_video = models.ForeignKey(
-        TrainingVideo, on_delete=models.CASCADE, related_name="analysis_jobs"
+        TrainingVideo,
+        on_delete=models.CASCADE,
+        related_name="analysis_jobs",
     )
     training_record = models.ForeignKey(
         "training.TrainingRecord",
@@ -147,10 +214,14 @@ class MotionAnalysisJob(UserStampedModel):
     )
     project_patient = models.ForeignKey("studies.ProjectPatient", on_delete=models.CASCADE)
     prescription_action = models.ForeignKey(
-        "prescriptions.PrescriptionAction", on_delete=models.PROTECT
+        "prescriptions.PrescriptionAction",
+        on_delete=models.PROTECT,
     )
     status = models.CharField(
-        "状态", max_length=20, choices=Status.choices, default=Status.PENDING
+        "状态",
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
     )
     algorithm_name = models.CharField("算法名称", max_length=80, default="pp-tiny-pose")
     algorithm_version = models.CharField("算法版本", max_length=80, blank=True)
@@ -169,3 +240,12 @@ class MotionAnalysisJob(UserStampedModel):
     )
     started_at = models.DateTimeField("开始时间", null=True, blank=True)
     finished_at = models.DateTimeField("完成时间", null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["training_video"],
+                condition=models.Q(status__in=["pending", "running"]),
+                name="unique_active_motion_analysis_job_per_video",
+            )
+        ]

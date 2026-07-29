@@ -1,103 +1,297 @@
 import Taro from '@tarojs/taro'
 
-import { apiUrl, request } from '../../api/client'
-import { getPatientAppToken } from '../../auth/token'
+import {
+  apiUrl,
+  handlePatientUnauthorized,
+  patientAuthorizationHeader,
+  request,
+  safeApiErrorMessage
+} from '../../api/client'
+import {
+  createClientSessionId,
+  normalizeShoulderPressExpectedDurationSeconds
+} from './session'
 
-export type ShoulderPressVideoSessionStatus = {
+const TRAINING_VIDEO_STATUSES = new Set([
+  'recording',
+  'uploading_segments',
+  'queued',
+  'assembling',
+  'uploading_qiniu',
+  'attached',
+  'failed',
+  'expired'
+] as const)
+
+type TrainingVideoStatus = typeof TRAINING_VIDEO_STATUSES extends Set<infer T> ? T : never
+
+export type VideoSessionStatus = {
   video_id: number
-  status: string
-  uploaded_segment_count: number
-  segment_count: number
-  duration_seconds: number
-  processing: null | {
-    status: string
-    progress_percent: number
+  status: TrainingVideoStatus
+  uploaded_segments?: number[]
+  assembly_job_id?: number
+}
+
+export type UploadedVideoSegment = {
+  index: number
+  sha256: string
+}
+
+type UploadFileSuccess = {
+  statusCode: number
+  data: string
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as Record<string, unknown>
+  } catch {
+    return null
   }
-  training_record_id: number | null
 }
 
-export function createShoulderPressVideoSession(actionId: number): Promise<{
-  video_id: number
-  status: string
-  uploaded_segment_count: number
-}> {
-  return request('/patient-app/training-video-sessions/', {
+function uploadErrorMessage(data: string): string {
+  const parsed = parseJsonObject(data)
+  return safeApiErrorMessage(parsed ?? data)
+}
+
+function parseUploadedSegment(data: string, expectedIndex: number): UploadedVideoSegment {
+  const parsed = parseJsonObject(data)
+  if (!parsed || parsed.index !== expectedIndex || typeof parsed.sha256 !== 'string' || !parsed.sha256.trim()) {
+    throw new Error('视频分段上传响应格式无效')
+  }
+  return { index: expectedIndex, sha256: parsed.sha256 }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0
+}
+
+function isTrainingVideoStatus(value: unknown): value is TrainingVideoStatus {
+  return typeof value === 'string' && TRAINING_VIDEO_STATUSES.has(value as TrainingVideoStatus)
+}
+
+function parseUploadedSegments(value: unknown): number[] {
+  if (!Array.isArray(value)) throw new Error('视频会话响应格式无效')
+  if (!value.every((index) => Number.isInteger(index) && Number(index) >= 0)) {
+    throw new Error('视频会话响应格式无效')
+  }
+  return value as number[]
+}
+
+type ParseVideoSessionStatusOptions = {
+  requireUploadedSegments?: boolean
+  requireAssemblyJobId?: boolean
+  expectedVideoId?: number
+}
+
+function parseVideoSessionStatus(value: unknown, options: ParseVideoSessionStatusOptions = {}): VideoSessionStatus {
+  if (!isObject(value) || !isPositiveInteger(value.video_id) || !isTrainingVideoStatus(value.status)) {
+    throw new Error('视频会话响应格式无效')
+  }
+
+  if (options.expectedVideoId !== undefined && value.video_id !== options.expectedVideoId) {
+    throw new Error('视频会话响应格式无效')
+  }
+
+  const parsed: VideoSessionStatus = {
+    video_id: value.video_id,
+    status: value.status
+  }
+
+  if (options.requireUploadedSegments || value.uploaded_segments !== undefined) {
+    parsed.uploaded_segments = parseUploadedSegments(value.uploaded_segments)
+  }
+
+  if (options.requireAssemblyJobId || value.assembly_job_id !== undefined) {
+    if (isPositiveInteger(value.assembly_job_id)) {
+      parsed.assembly_job_id = value.assembly_job_id
+    } else {
+      throw new Error('视频会话响应格式无效')
+    }
+  }
+
+  return parsed
+}
+
+export async function createVideoSession(input: {
+  actionId: number
+  clientSessionId: string
+  trainingDate: string
+  expectedDurationSeconds: number
+}): Promise<VideoSessionStatus> {
+  const response = await request<unknown>('/patient-app/training-video-sessions/', {
     method: 'POST',
-    data: { prescription_action: actionId },
+    data: {
+      prescription_action: input.actionId,
+      client_session_id: input.clientSessionId,
+      training_date: input.trainingDate,
+      expected_duration_seconds: normalizeShoulderPressExpectedDurationSeconds(
+        input.expectedDurationSeconds
+      )
+    }
   })
+  return parseVideoSessionStatus(response, { requireUploadedSegments: true })
 }
 
-export function uploadShoulderPressSegment(input: {
+export async function uploadVideoSegment(input: {
   videoId: number
-  sequenceIndex: number
-  durationSeconds: number
+  index: number
   filePath: string
-  onProgress?: (progress: {
-    progress: number
-    totalBytesSent: number
-    totalBytesExpectedToSend: number
-  }) => void
-}): Promise<{ sequence_index: number; object_hash: string }> {
+  durationMs: number
+  sizeBytes: number
+  onProgress?: (progress: number) => void
+}): Promise<UploadedVideoSegment> {
   return new Promise((resolve, reject) => {
-    const token = getPatientAppToken()
-    const task = Taro.uploadFile({
-      url: apiUrl(`/patient-app/training-video-sessions/${input.videoId}/segments/`),
-      filePath: input.filePath,
-      name: 'file',
-      formData: {
-        sequence_index: String(input.sequenceIndex),
-        duration_seconds: String(input.durationSeconds),
-      },
-      header: token ? { Authorization: `Bearer ${token}` } : {},
-      success(response) {
-        try {
-          const data = JSON.parse(response.data || '{}') as {
-            detail?: string
-            sequence_index?: number
-            object_hash?: string
-          }
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(data.detail || `视频分片上传失败（${response.statusCode}）`))
+    let settled = false
+    const settleResolve = (value: UploadedVideoSegment) => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    const settleReject = (error: Error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    try {
+      const task = Taro.uploadFile({
+        url: apiUrl(`/patient-app/training-video-sessions/${input.videoId}/segments/${input.index}/`),
+        filePath: input.filePath,
+        name: 'file',
+        header: patientAuthorizationHeader(),
+        formData: {
+          duration_ms: input.durationMs,
+          size_bytes: input.sizeBytes
+        },
+        success(response: UploadFileSuccess) {
+          if (settled) return
+          if (response.statusCode === 401 || response.statusCode === 403) {
+            try {
+              handlePatientUnauthorized()
+            } catch (error) {
+              settleReject(error instanceof Error ? error : new Error('登录已失效'))
+            }
             return
           }
-          if (typeof data.sequence_index !== 'number' || !data.object_hash) {
-            throw new Error('分片上传响应不完整')
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            settleReject(new Error(uploadErrorMessage(response.data)))
+            return
           }
-          resolve({ sequence_index: data.sequence_index, object_hash: data.object_hash })
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error('分片上传响应解析失败'))
+          try {
+            settleResolve(parseUploadedSegment(response.data, input.index))
+          } catch (error) {
+            settleReject(error instanceof Error ? error : new Error('视频分段上传响应格式无效'))
+          }
+        },
+        fail() {
+          settleReject(new Error('视频分段上传失败，请检查网络后重试'))
         }
-      },
-      fail(error) {
-        reject(new Error(error.errMsg || '视频分片上传失败'))
-      },
-    })
-    task.onProgressUpdate?.((event) => input.onProgress?.({
-      progress: event.progress,
-      totalBytesSent: event.totalBytesSent,
-      totalBytesExpectedToSend: event.totalBytesExpectedToSend,
-    }))
+      })
+
+      if (input.onProgress && task && typeof task.onProgressUpdate === 'function') {
+        task.onProgressUpdate((event) => {
+          if (!Number.isFinite(event.progress)) return
+          input.onProgress?.(Math.max(0, Math.min(100, Math.round(event.progress))))
+        })
+      }
+    } catch {
+      settleReject(new Error('视频分段上传失败，请检查网络后重试'))
+    }
   })
 }
 
-export function finishShoulderPressVideoSession(input: {
+export async function finalizeVideoSession(input: {
   videoId: number
   segmentCount: number
-  durationSeconds: number
-  trainingDate: string
-}) {
-  return request(`/patient-app/training-video-sessions/${input.videoId}/finish/`, {
+  actualDurationSeconds: number
+  note: string
+}): Promise<VideoSessionStatus> {
+  const response = await request<unknown>(`/patient-app/training-video-sessions/${input.videoId}/finalize/`, {
     method: 'POST',
     data: {
       segment_count: input.segmentCount,
-      duration_seconds: input.durationSeconds,
-      training_date: input.trainingDate,
-    },
+      actual_duration_seconds: input.actualDurationSeconds,
+      note: input.note
+    }
+  })
+  return parseVideoSessionStatus(response, {
+    requireAssemblyJobId: true,
+    expectedVideoId: input.videoId
   })
 }
 
-export function getShoulderPressVideoSession(
-  videoId: number,
-): Promise<ShoulderPressVideoSessionStatus> {
-  return request(`/patient-app/training-video-sessions/${videoId}/`)
+export async function getVideoSessionStatus(videoId: number): Promise<VideoSessionStatus> {
+  const response = await request<unknown>(`/patient-app/training-video-sessions/${videoId}/status/`)
+  return parseVideoSessionStatus(response, {
+    requireUploadedSegments: true,
+    expectedVideoId: videoId
+  })
+}
+
+export async function createShoulderPressUploadIntent(input: {
+  actionId: number
+  durationSeconds: number
+  clientSessionId?: string
+  trainingDate?: string
+  expectedDurationSeconds?: number
+}): Promise<VideoSessionStatus> {
+  return createVideoSession({
+    actionId: input.actionId,
+    clientSessionId: input.clientSessionId ?? createClientSessionId(),
+    trainingDate: input.trainingDate ?? new Date().toISOString().slice(0, 10),
+    expectedDurationSeconds: input.expectedDurationSeconds ?? input.durationSeconds
+  })
+}
+
+export async function uploadVideoToQiniu(input: Record<string, unknown> & {
+  filePath: string
+  onProgress?: (progress: number) => void
+}): Promise<{ key: string; hash: string }> {
+  if (
+    !Number.isInteger(input.videoId) ||
+    Number(input.videoId) <= 0 ||
+    !Number.isInteger(input.index) ||
+    Number(input.index) < 0 ||
+    !Number.isInteger(input.durationMs) ||
+    Number(input.durationMs) <= 0 ||
+    !Number.isInteger(input.sizeBytes) ||
+    Number(input.sizeBytes) <= 0
+  ) {
+    throw new Error('录像上传信息不完整，请重新开始')
+  }
+
+  const uploaded = await uploadVideoSegment({
+    videoId: Number(input.videoId),
+    index: Number(input.index),
+    filePath: input.filePath,
+    durationMs: Number(input.durationMs),
+    sizeBytes: Number(input.sizeBytes),
+    onProgress: input.onProgress
+  })
+  return { key: String(uploaded.index), hash: uploaded.sha256 }
+}
+
+export async function completeShoulderPressUpload(input: {
+  videoId: number
+  actualDurationMinutes: number
+  note: string
+} & Record<string, unknown>): Promise<VideoSessionStatus> {
+  return finalizeVideoSession({
+    videoId: input.videoId,
+    segmentCount: 1,
+    actualDurationSeconds: input.actualDurationMinutes * 60,
+    note: input.note
+  })
+}
+
+export function isQiniuTokenExpiredError(): boolean {
+  return false
 }

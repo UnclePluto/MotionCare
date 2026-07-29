@@ -1,5 +1,17 @@
 # Shoulder Press Video Analysis Implementation Plan
 
+> 状态：superseded
+> 日期：2026-07-10
+> 范围：肩部推举录像跟练、七牛直传、医生端视频审阅和 PP-TinyPose 分析
+> 关联：`docs/superpowers/specs/2026-07-08-shoulder-press-video-analysis-design.md`
+> 实施基线 commit：e3a87d0
+
+执行记录（2026-07-10, codex）：Task 1 已落地于 commits 946f636、9bad898，任务复审通过。
+执行记录（2026-07-10, codex）：Task 2 已落地于 commits 3203625、c61d85b，任务复审通过（保留 1 项 Minor 供最终审查）。
+执行记录（2026-07-10, codex）：Task 3 已落地于 commits e1c7785、b2c9845、93e96ae、ed6fc41、af5dc6d、7a774ad、30fdc7e，最终复审通过。
+执行记录（2026-07-10, codex）：Task 4 已落地于 commit b19a210，任务审查通过（保留 1 项 Minor 供最终审查）。
+修订（2026-07-11, codex）：七牛直传与单文件录像部分由 `docs/superpowers/plans/2026-07-11-shoulder-press-segmented-server-upload.md` 替代；Task 1-4 的可复用实现保留。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the shoulder-press-only video follow-along flow: miniapp camera recording, Qiniu Kodo direct upload, training record attachment, doctor video review, and manual PP-TinyPose analysis results.
@@ -16,10 +28,15 @@
 - Only `source_key = motion-resistance-shoulder-press` uses the new video flow in this plan.
 - Other `motion` actions keep the existing miniapp `/pages/training/index` form flow.
 - Qiniu AK/SK stay server-side in Django settings and environment variables.
+- Before the first successful `complete`, verify the Kodo object through the server-side Qiniu `BucketManager.stat` API and match hash, size and MIME; never create a completed training record from an untrusted client hash alone.
 - Patient app APIs must derive `ProjectPatient` from the bearer token, not from frontend-supplied patient or project IDs.
 - Doctor APIs must enforce backend permission checks and row-level filtering.
 - Keep the default local CSRF trusted origins in `backend/config/settings.py`.
 - Do not delete existing specs or plans.
+- The analysis worker must run real PP-TinyPose inference through PaddleX `create_model("PP-TinyPose_128x96")`; an empty or placeholder keypoint loader is not acceptable. Keep PaddleX/PaddlePaddle in an optional worker dependency group so the Django web process stays lightweight.
+- Creating an analysis job must enqueue `run_motion_analysis_job` after the database transaction commits. A job must not remain pending solely because no caller invokes the task.
+- The shoulder-press follow-along page must render the prescription action's `video_url` beside the front-camera preview when configured, with the textual instruction only as fallback.
+- After recording stops, enter the upload page with a route-stack reset so the patient cannot navigate back before upload and record creation complete. Only successful `complete` may leave the forced waiting flow; failures stay on the page with retry.
 
 ---
 
@@ -84,7 +101,7 @@ Doctor frontend:
 - Produces: `TrainingVideo`, `MotionAnalysisJob`, `generate_upload_token(bucket: str, key: str, expires_at: int) -> str`, `private_download_url(base_url: str, expires_at: int) -> str`.
 - Consumes: Django settings values `QINIU_ACCESS_KEY`, `QINIU_SECRET_KEY`, `QINIU_BUCKET`, `QINIU_UPLOAD_HOST`, `QINIU_DOWNLOAD_DOMAIN`.
 
-- [ ] **Step 1: Write failing Qiniu signing tests**
+- [x] **Step 1: Write failing Qiniu signing tests**
 
 Create `backend/apps/training/tests/test_qiniu.py`:
 
@@ -125,13 +142,13 @@ def test_private_download_url_adds_deadline_and_token():
     assert url.startswith("https://cdn.example.com/training-videos/a.mp4?e=1783692000&token=ak-test:")
 ```
 
-- [ ] **Step 2: Run Qiniu signing tests and verify failure**
+- [x] **Step 2: Run Qiniu signing tests and verify failure**
 
 Run: `cd backend && pytest apps/training/tests/test_qiniu.py -q`
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'apps.training.qiniu'`.
 
-- [ ] **Step 3: Implement Qiniu helper**
+- [x] **Step 3: Implement Qiniu helper**
 
 Create `backend/apps/training/qiniu.py`:
 
@@ -177,7 +194,7 @@ def private_download_url(base_url: str, *, expires_at: int) -> str:
     return f"{unsigned}&token={quote(token)}"
 ```
 
-- [ ] **Step 4: Add Qiniu settings defaults**
+- [x] **Step 4: Add Qiniu settings defaults**
 
 Modify `backend/config/settings.py` near the existing media settings:
 
@@ -193,7 +210,7 @@ TRAINING_VIDEO_MAX_SIZE_BYTES = int(os.getenv("TRAINING_VIDEO_MAX_SIZE_BYTES", s
 TRAINING_VIDEO_MAX_DURATION_SECONDS = int(os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "600"))
 ```
 
-- [ ] **Step 5: Write failing model migration test**
+- [x] **Step 5: Write failing model migration test**
 
 Append to `backend/apps/training/tests/test_qiniu.py`:
 
@@ -231,13 +248,13 @@ def test_training_video_and_analysis_job_models_are_available(
     assert job.status == MotionAnalysisJob.Status.PENDING
 ```
 
-- [ ] **Step 6: Run model test and verify failure**
+- [x] **Step 6: Run model test and verify failure**
 
 Run: `cd backend && pytest apps/training/tests/test_qiniu.py::test_training_video_and_analysis_job_models_are_available -q`
 
 Expected: FAIL with import error for `TrainingVideo`.
 
-- [ ] **Step 7: Implement models**
+- [x] **Step 7: Implement models**
 
 Create `backend/apps/training/video_models.py`:
 
@@ -334,19 +351,19 @@ Modify `backend/apps/training/models.py` after `TrainingRecord`:
 from .video_models import MotionAnalysisJob, TrainingVideo  # noqa: E402,F401
 ```
 
-- [ ] **Step 8: Generate migration**
+- [x] **Step 8: Generate migration**
 
 Run: `cd backend && python manage.py makemigrations training`
 
 Expected: creates `backend/apps/training/migrations/0002_training_video_analysis.py`.
 
-- [ ] **Step 9: Run backend tests for this task**
+- [x] **Step 9: Run backend tests for this task**
 
 Run: `cd backend && pytest apps/training/tests/test_qiniu.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add backend/config/settings.py backend/apps/training/models.py backend/apps/training/video_models.py backend/apps/training/qiniu.py backend/apps/training/migrations/0002_training_video_analysis.py backend/apps/training/tests/test_qiniu.py
@@ -366,7 +383,7 @@ git commit -m "feat(training): 新增训练视频模型与七牛签名"
 - Consumes: `TrainingVideo`, `generate_upload_token`, `create_training_record`.
 - Produces: `create_upload_intent(project_patient, prescription_action_id, content_type, size_bytes, duration_seconds) -> dict` and `complete_training_video(project_patient, video_id, key, object_hash, training_date, actual_duration_minutes, note) -> tuple[TrainingVideo, bool]`; the boolean is true only when this call created the training record.
 
-- [ ] **Step 1: Write failing patient video API tests**
+- [x] **Step 1: Write failing patient video API tests**
 
 Create `backend/apps/patient_app/tests/test_patient_app_video_api.py`:
 
@@ -501,13 +518,13 @@ def test_patient_app_complete_upload_creates_training_record_once(
     assert video.training_record_id == first.data["training_record"]["id"]
 ```
 
-- [ ] **Step 2: Run patient video tests and verify failure**
+- [x] **Step 2: Run patient video tests and verify failure**
 
 Run: `cd backend && pytest apps/patient_app/tests/test_patient_app_video_api.py -q`
 
 Expected: FAIL with 404 for `/api/patient-app/training-videos/upload-intent/`.
 
-- [ ] **Step 3: Implement serializers**
+- [x] **Step 3: Implement serializers**
 
 Modify `backend/apps/patient_app/serializers.py`:
 
@@ -527,7 +544,7 @@ class PatientAppTrainingVideoCompleteSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
 ```
 
-- [ ] **Step 4: Implement video services**
+- [x] **Step 4: Implement video services**
 
 Create `backend/apps/training/video_services.py`:
 
@@ -665,7 +682,7 @@ def complete_training_video(
     return video, True
 ```
 
-- [ ] **Step 5: Implement patient views and routes**
+- [x] **Step 5: Implement patient views and routes**
 
 Modify imports in `backend/apps/patient_app/views.py`:
 
@@ -739,13 +756,13 @@ path(
 ),
 ```
 
-- [ ] **Step 6: Run patient video API tests**
+- [x] **Step 6: Run patient video API tests**
 
 Run: `cd backend && pytest apps/patient_app/tests/test_patient_app_video_api.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/apps/training/video_services.py backend/apps/patient_app/serializers.py backend/apps/patient_app/views.py backend/apps/patient_app/urls.py backend/apps/patient_app/tests/test_patient_app_video_api.py
@@ -756,19 +773,37 @@ git commit -m "feat(patient-app): 支持肩部推举视频直传绑定"
 
 **Files:**
 - Create: `backend/apps/training/analysis.py`
+- Create: `backend/apps/training/pose_inference.py`
 - Create: `backend/apps/training/tasks.py`
 - Create: `backend/apps/training/video_serializers.py`
 - Create: `backend/apps/training/video_views.py`
 - Modify: `backend/apps/training/urls.py`
 - Modify: `backend/config/__init__.py`
+- Modify: `backend/config/settings.py`
+- Modify: `backend/pyproject.toml`
 - Test: `backend/apps/training/tests/test_motion_analysis.py`
+- Test: `backend/apps/training/tests/test_pose_inference.py`
 - Test: `backend/apps/training/tests/test_training_video_api.py`
 
 **Interfaces:**
 - Consumes: `TrainingVideo`, `MotionAnalysisJob`, `private_download_url`.
-- Produces: `analyze_shoulder_press_keypoints(frames: list[dict]) -> dict`, `run_motion_analysis_job(job_id: int) -> MotionAnalysisJob`.
+- Produces: `analyze_shoulder_press_keypoints(frames: list[dict]) -> dict`, a PaddleX PP-TinyPose video-to-keypoint adapter, and `run_motion_analysis_job(job_id: int) -> MotionAnalysisJob`.
 
-- [ ] **Step 1: Write failing deterministic analysis rule tests**
+Implementation correction approved during pre-flight:
+
+- Add a production adapter that samples video frames with OpenCV, runs PaddleX `create_model("PP-TinyPose_128x96")`, normalizes COCO shoulder/elbow/wrist/hip keypoints, and returns timestamped frames for the deterministic rule layer.
+- Replace the single-frame/left-wrist-only rule sample below with the approved design rule: use shoulder, elbow, wrist and hip confidence; choose the more stable side or bilateral average; debounce states across consecutive frames/time; count only confirmed `down -> up -> down`; mark low-amplitude attempted repetitions as `range_too_small`; retain `tempo_abnormal`, `low_confidence`, incomplete-half-rep rejection and `camera_angle_unverified` quality output.
+- Put `paddlepaddle`, `paddlex[cv]`, and `opencv-python-headless` in a `motion-analysis` optional dependency group. The regular web/test environment must not import these packages until a worker actually runs inference.
+- Download the private Qiniu object to a temporary file inside the Celery worker, always clean it up, and persist a clear failed job state when model dependencies, model loading, download, decode, or inference fails.
+- `create_analysis_job` must enqueue `run_motion_analysis_job.delay(job.id)` with `transaction.on_commit`; tests must prove enqueue occurs after commit and that duplicate pending/running jobs are rejected.
+- Delete the placeholder `load_keypoint_frames_for_video(_video): return []`; it is explicitly forbidden by the approved design.
+
+The deterministic helper code shown in Step 3 is an API sketch only and is superseded
+where it conflicts with the rule correction above. Add tests for debounce noise,
+bilateral/side confidence selection, incomplete half repetitions, too-small range,
+abnormal tempo, and low confidence before implementing the corrected rule.
+
+- [x] **Step 1: Write failing deterministic analysis rule tests**
 
 Create `backend/apps/training/tests/test_motion_analysis.py`:
 
@@ -823,13 +858,13 @@ def test_analyze_shoulder_press_marks_low_confidence_rep_nonstandard():
     assert "low_confidence" in result["rep_details"][0]["flags"]
 ```
 
-- [ ] **Step 2: Run analysis tests and verify failure**
+- [x] **Step 2: Run analysis tests and verify failure**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_analysis.py -q`
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'apps.training.analysis'`.
 
-- [ ] **Step 3: Implement deterministic analysis rule helper**
+- [x] **Step 3: Implement deterministic analysis rule helper**
 
 Create `backend/apps/training/analysis.py`:
 
@@ -905,7 +940,7 @@ def analyze_shoulder_press_keypoints(frames):
     }
 ```
 
-- [ ] **Step 4: Write failing doctor video API tests**
+- [x] **Step 4: Write failing doctor video API tests**
 
 Create `backend/apps/training/tests/test_training_video_api.py`:
 
@@ -1005,13 +1040,13 @@ def test_doctor_cannot_create_duplicate_running_analysis_job(
     assert "分析任务" in str(response.data)
 ```
 
-- [ ] **Step 5: Run doctor video tests and verify failure**
+- [x] **Step 5: Run doctor video tests and verify failure**
 
 Run: `cd backend && pytest apps/training/tests/test_training_video_api.py -q`
 
 Expected: FAIL with 404 for `/api/training/videos/1/download-url/`.
 
-- [ ] **Step 6: Implement serializers**
+- [x] **Step 6: Implement serializers**
 
 Create `backend/apps/training/video_serializers.py`:
 
@@ -1044,7 +1079,7 @@ class MotionAnalysisJobSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 ```
 
-- [ ] **Step 7: Implement doctor video services and views**
+- [x] **Step 7: Implement doctor video services and views**
 
 Append to `backend/apps/training/video_services.py`:
 
@@ -1159,7 +1194,7 @@ path("videos/<int:video_id>/analysis-jobs/", TrainingVideoAnalysisJobView.as_vie
 path("videos/<int:video_id>/analysis-jobs/latest/", TrainingVideoLatestAnalysisJobView.as_view()),
 ```
 
-- [ ] **Step 8: Implement Celery task boundary**
+- [x] **Step 8: Implement the PP-TinyPose adapter and Celery task boundary**
 
 Modify `backend/config/__init__.py`:
 
@@ -1169,55 +1204,13 @@ from .celery import app as celery_app
 __all__ = ("celery_app",)
 ```
 
-Create `backend/apps/training/tasks.py`:
+Implement `backend/apps/training/pose_inference.py` and `backend/apps/training/tasks.py`
+according to the approved correction above. Keep the Paddle imports lazy, make the
+frame sampler and result conversion independently testable with injected/fake model
+and capture objects, and ensure task failure updates the job without deleting its
+training video or training record.
 
-```python
-from celery import shared_task
-from django.utils import timezone
-
-from .analysis import analyze_shoulder_press_keypoints
-from .models import MotionAnalysisJob
-
-
-def load_keypoint_frames_for_video(_video):
-    return []
-
-
-@shared_task
-def run_motion_analysis_job(job_id):
-    job = MotionAnalysisJob.objects.select_related("training_video").get(pk=job_id)
-    job.status = MotionAnalysisJob.Status.RUNNING
-    job.started_at = timezone.now()
-    job.save(update_fields=["status", "started_at", "updated_at"])
-    try:
-        frames = load_keypoint_frames_for_video(job.training_video)
-        result = analyze_shoulder_press_keypoints(frames)
-        job.status = MotionAnalysisJob.Status.SUCCEEDED
-        job.total_count = result["total_count"]
-        job.standard_count = result["standard_count"]
-        job.nonstandard_count = result["nonstandard_count"]
-        job.result_payload = result
-        job.failure_reason = ""
-    except Exception as exc:
-        job.status = MotionAnalysisJob.Status.FAILED
-        job.failure_reason = str(exc)
-    job.finished_at = timezone.now()
-    job.save(
-        update_fields=[
-            "status",
-            "total_count",
-            "standard_count",
-            "nonstandard_count",
-            "result_payload",
-            "failure_reason",
-            "finished_at",
-            "updated_at",
-        ]
-    )
-    return job.id
-```
-
-- [ ] **Step 9: Run doctor video and analysis tests**
+- [x] **Step 9: Run doctor video and analysis tests**
 
 Run:
 
@@ -1228,10 +1221,10 @@ pytest apps/training/tests/test_motion_analysis.py apps/training/tests/test_trai
 
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
-git add backend/config/__init__.py backend/apps/training/analysis.py backend/apps/training/tasks.py backend/apps/training/video_serializers.py backend/apps/training/video_views.py backend/apps/training/video_services.py backend/apps/training/urls.py backend/apps/training/tests/test_motion_analysis.py backend/apps/training/tests/test_training_video_api.py
+git add backend/pyproject.toml backend/config/__init__.py backend/config/settings.py backend/apps/training/analysis.py backend/apps/training/pose_inference.py backend/apps/training/tasks.py backend/apps/training/video_serializers.py backend/apps/training/video_views.py backend/apps/training/video_services.py backend/apps/training/urls.py backend/apps/training/tests/test_motion_analysis.py backend/apps/training/tests/test_pose_inference.py backend/apps/training/tests/test_training_video_api.py
 git commit -m "feat(training): 支持医生端视频查看与分析任务"
 ```
 
@@ -1245,7 +1238,7 @@ git commit -m "feat(training): 支持医生端视频查看与分析任务"
 - Consumes: `TrainingVideo` and `MotionAnalysisJob`.
 - Produces: additional `recent_records` fields: `video_id`, `video_status`, `latest_analysis_status`, `analysis_total_count`, `analysis_standard_count`, `analysis_nonstandard_count`.
 
-- [ ] **Step 1: Add failing tracking API test**
+- [x] **Step 1: Add failing tracking API test**
 
 Append to `backend/apps/training/tests/test_tracking_api.py`:
 
@@ -1303,13 +1296,13 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
     assert recent["analysis_nonstandard_count"] == 2
 ```
 
-- [ ] **Step 2: Run the tracking test and verify failure**
+- [x] **Step 2: Run the tracking test and verify failure**
 
 Run: `cd backend && pytest apps/training/tests/test_tracking_api.py::test_tracking_recent_records_include_video_and_analysis_summary -q`
 
 Expected: FAIL with missing `video_id`.
 
-- [ ] **Step 3: Add tracking serialization fields**
+- [x] **Step 3: Add tracking serialization fields**
 
 Modify `recent_records` in `backend/apps/training/tracking.py`:
 
@@ -1348,13 +1341,13 @@ Add fields to each row:
 "analysis_nonstandard_count": latest_job.nonstandard_count if latest_job else None,
 ```
 
-- [ ] **Step 4: Run tracking tests**
+- [x] **Step 4: Run tracking tests**
 
 Run: `cd backend && pytest apps/training/tests/test_tracking_api.py -q`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/apps/training/tracking.py backend/apps/training/tests/test_tracking_api.py
@@ -1379,6 +1372,13 @@ git commit -m "feat(training): 训练追踪返回视频分析摘要"
 **Interfaces:**
 - Consumes: patient APIs from Task 2.
 - Produces: miniapp route pattern such as `/pages/shoulder-press/index?actionId=42` and upload route `/pages/shoulder-press/upload`.
+
+Implementation correction approved during pre-flight:
+
+- Resolve the current prescription action by `actionId` and render its `video_url` with Taro's `Video` component beside the front-camera preview. Use the action instruction as the fallback when no video URL is configured.
+- Starting the session must start camera recording while the example video remains visible and controllable; do not replace the example video with plain text.
+- After `stopRecord`, persist the pending upload and use `Taro.reLaunch` to reset the route stack to the upload page. The upload page must not expose a leave/back action, must automatically resume from persisted intent/hash state, and may only `reLaunch` to the prescription page after `complete` succeeds.
+- Keep a clear progress state for credential request, Kodo upload, and training-record save. On failure stay on the forced page and show an explicit retry action.
 
 - [ ] **Step 1: Write failing miniapp session tests**
 
@@ -1770,7 +1770,12 @@ Modify button text:
 
 - [ ] **Step 9: Implement shoulder press pages**
 
-Create `miniapp/src/pages/shoulder-press/index.tsx`:
+Create `miniapp/src/pages/shoulder-press/index.tsx` following the approved correction above.
+The page loads the current prescription action, requests the front camera through
+`Camera devicePosition='front'`, displays `Video` when `video_url` exists, and records
+until the patient chooses completion.
+
+The earlier plain-text-only sample below is superseded and must not be implemented.
 
 ```tsx
 import { Button, Camera, Text, View } from '@tarojs/components'
@@ -1807,7 +1812,7 @@ export default function ShoulderPressPage() {
         sizeBytes: result.size || 1,
         createdAt: Date.now(),
       })
-      Taro.redirectTo({ url: buildShoulderPressUploadUrl() })
+      Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
     } catch (err) {
       setError(err instanceof Error ? err.message : '录像保存失败')
       setRecording(false)
@@ -1909,7 +1914,7 @@ export default function ShoulderPressUploadPage() {
         note: '',
       })
       Taro.removeStorageSync('motioncare.pendingShoulderPressUpload')
-      Taro.redirectTo({ url: '/pages/prescription/index' })
+      Taro.reLaunch({ url: '/pages/prescription/index' })
     } catch (err) {
       setError(err instanceof Error ? err.message : '上传失败')
     } finally {

@@ -1,8 +1,24 @@
 import { DualAxes, type DualAxesConfig } from "@ant-design/charts";
 import { ExperimentOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Descriptions, Drawer, Empty, Segmented, Select, Space, Spin, Statistic, Table, Tag } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Button,
+  Card,
+  Descriptions,
+  Drawer,
+  Empty,
+  Segmented,
+  Select,
+  Space,
+  Spin,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
@@ -11,7 +27,7 @@ import type {
   TrackingDetail,
   TrackingGameSummaryRow,
   TrackingMovingAveragePoint,
-  MotionAnalysisJob,
+  TrackingPendingVideo,
   TrackingPrescriptionCompletionRow,
   TrackingRecentRecord,
   TrackingWeeklyTrendPoint,
@@ -24,10 +40,48 @@ type ChartTrendPoint = {
   moving_average: number;
 };
 
+type MotionAnalysisJobStatus = "pending" | "running" | "succeeded" | "failed";
+
+type MotionAnalysisJob = {
+  id: number;
+  training_video: number;
+  training_record: number | null;
+  status: MotionAnalysisJobStatus;
+  algorithm_name: string;
+  algorithm_version: string;
+  rule_version: string;
+  total_count: number | null;
+  standard_count: number | null;
+  nonstandard_count: number | null;
+  result_payload: Record<string, unknown>;
+  failure_reason: string;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+};
+
 const TRAINING_STATUS_LABEL: Record<string, string> = {
   completed: "已完成",
   partial: "部分完成",
   missed: "未完成",
+};
+
+const PENDING_VIDEO_PROCESSING_STATUSES = new Set(["queued", "assembling", "uploading_qiniu"]);
+const SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press";
+
+const VIDEO_STATUS_LABEL: Record<string, string> = {
+  attached: "已上传",
+  queued: "视频处理中",
+  assembling: "视频处理中",
+  uploading_qiniu: "视频处理中",
+  failed: "处理失败",
+};
+
+const ANALYSIS_STATUS_LABEL: Record<MotionAnalysisJobStatus, string> = {
+  pending: "待分析",
+  running: "分析中",
+  succeeded: "分析完成",
+  failed: "分析失败",
 };
 
 const RANGE_LABEL: Record<TrainingTrackingRange, string> = {
@@ -41,22 +95,20 @@ const UPLOAD_MODE_LABEL: Record<string, string> = {
   retry: "补传",
 };
 
-const ANALYSIS_STATUS_LABEL: Record<string, string> = {
-  pending: "待分析",
-  running: "分析中",
-  succeeded: "分析完成",
-  failed: "分析失败",
-};
-
-const ANALYSIS_STATUS_COLOR: Record<string, string> = {
-  pending: "default",
-  running: "processing",
-  succeeded: "success",
-  failed: "error",
-};
-
 function isGameRecord(record: TrackingRecentRecord) {
   return record.internal_type === "game";
+}
+
+function isShoulderPressRecord(record: TrackingRecentRecord) {
+  return record.action_source_key === SHOULDER_PRESS_SOURCE_KEY;
+}
+
+function canUseVideoActions(record: TrackingRecentRecord) {
+  return record.video_id != null && record.video_status === "attached" && isShoulderPressRecord(record);
+}
+
+function isActiveAnalysisStatus(status: MotionAnalysisJobStatus | null | undefined) {
+  return status === "pending" || status === "running";
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -73,15 +125,21 @@ function formatTrendDateLabel(value: string) {
   return `${match[1]}-${match[2]}`;
 }
 
-function errorMessage(error: unknown) {
+function errorMessage(error: unknown, fallback = "加载训练追踪数据失败") {
   if (error && typeof error === "object" && "response" in error) {
     const data = (error as { response?: { data?: unknown } }).response?.data;
     if (data && typeof data === "object" && "detail" in data) {
       const detail = (data as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) return detail;
+      if (typeof detail === "string" && detail.trim() && !containsSensitiveErrorText(detail)) return detail;
     }
   }
-  return "加载训练追踪数据失败";
+  return fallback;
+}
+
+function containsSensitiveErrorText(value: string) {
+  return /https?:\/\//i.test(value) ||
+    /signature|token|secret|credential|authorization|raw response|access[_-]?key/i.test(value) ||
+    /\b(?:AK|SK)\b\s*[:=]/.test(value);
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -92,6 +150,28 @@ function formatPercent(value: number | null | undefined) {
 function formatNumber(value: number | null | undefined) {
   if (value == null || Number.isNaN(value)) return "—";
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function renderPendingVideoStatus(status: TrackingPendingVideo["status"]) {
+  if (PENDING_VIDEO_PROCESSING_STATUSES.has(status)) {
+    return <Tag color="processing">视频处理中</Tag>;
+  }
+  return <Tag color={status === "failed" ? "red" : undefined}>{VIDEO_STATUS_LABEL[status] ?? status}</Tag>;
+}
+
+function renderPendingFailureReason(value: string, record: TrackingPendingVideo) {
+  if (record.status !== "failed") return "—";
+  const summary = value || "处理失败";
+  return (
+    <Typography.Text
+      aria-label={summary}
+      ellipsis={{ tooltip: summary }}
+      style={{ display: "inline-block", maxWidth: 280 }}
+      title={summary}
+    >
+      {summary}
+    </Typography.Text>
+  );
 }
 
 function buildDailyTrendData(
@@ -173,21 +253,24 @@ function makeCompletionChartConfig(rows: TrackingPrescriptionCompletionRow[]): D
 
 export function TrainingTrackingDetailPage() {
   const { patientId } = useParams<{ patientId: string }>();
+  const queryClient = useQueryClient();
   const numericPatientId = Number(patientId);
   const isValidPatientId = Number.isSafeInteger(numericPatientId) && numericPatientId > 0;
   const [range, setRange] = useState<TrainingTrackingRange>("30d");
-  const [videoRecord, setVideoRecord] = useState<TrackingRecentRecord | null>(null);
-  const [videoUrl, setVideoUrl] = useState("");
-  const [videoLoading, setVideoLoading] = useState(false);
-  const [videoError, setVideoError] = useState("");
-  const [analysisError, setAnalysisError] = useState("");
-  const queryClient = useQueryClient();
   const [selectedProjectPatient, setSelectedProjectPatient] = useState<{
     patientId: number;
     projectPatientId: number;
   } | null>(null);
+  const [videoDrawerRecord, setVideoDrawerRecord] = useState<TrackingRecentRecord | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const selectedProjectPatientId =
     selectedProjectPatient?.patientId === numericPatientId ? selectedProjectPatient.projectPatientId : undefined;
+  const drawerOpen = videoDrawerRecord !== null;
+  const selectedVideoId = videoDrawerRecord?.video_id ?? null;
+  const selectedVideoSupportsAnalysis = videoDrawerRecord ? isShoulderPressRecord(videoDrawerRecord) : false;
 
   useEffect(() => {
     setSelectedProjectPatient(null);
@@ -199,8 +282,13 @@ export function TrainingTrackingDetailPage() {
     return params;
   }, [range, selectedProjectPatientId]);
 
+  const detailQueryKey = useMemo(
+    () => ["training-tracking", "patients", numericPatientId, queryParams] as const,
+    [numericPatientId, queryParams],
+  );
+
   const { data, isLoading, isFetching, isError, error } = useQuery({
-    queryKey: ["training-tracking", "patients", numericPatientId, queryParams],
+    queryKey: detailQueryKey,
     queryFn: async () => {
       const response = await apiClient.get<TrackingDetail>(`/training/tracking/patients/${numericPatientId}/`, {
         params: queryParams,
@@ -212,48 +300,82 @@ export function TrainingTrackingDetailPage() {
   });
 
   const latestAnalysisQuery = useQuery({
-    queryKey: ["training-video-analysis", videoRecord?.video_id],
+    queryKey: ["training-video-analysis-latest", selectedVideoId],
     queryFn: async () => {
       const response = await apiClient.get<MotionAnalysisJob | null>(
-        `/training/videos/${videoRecord!.video_id}/analysis-jobs/latest/`,
+        `/training/videos/${selectedVideoId}/analysis-jobs/latest/`,
       );
       return response.data;
     },
-    enabled: Boolean(videoRecord?.video_id),
-    refetchInterval: (query) =>
-      query.state.data?.status === "pending" || query.state.data?.status === "running" ? 2000 : false,
+    enabled: drawerOpen && selectedVideoId != null && selectedVideoSupportsAnalysis,
+    refetchInterval: (query) => (isActiveAnalysisStatus(query.state.data?.status) ? 2000 : false),
   });
 
-  const analysisMutation = useMutation({
+  const createAnalysisMutation = useMutation({
     mutationFn: async (videoId: number) => {
       const response = await apiClient.post<MotionAnalysisJob>(`/training/videos/${videoId}/analysis-jobs/`);
       return response.data;
     },
-    onMutate: () => setAnalysisError(""),
-    onError: (reason) => setAnalysisError(errorMessage(reason).replace("加载训练追踪数据失败", "动作分析请求失败")),
-    onSuccess: async () => {
+    onSuccess: async (job, videoId) => {
+      queryClient.setQueryData(["training-video-analysis-latest", videoId], job);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["training-video-analysis"] }),
         queryClient.invalidateQueries({ queryKey: ["training-tracking", "patients", numericPatientId] }),
+        queryClient.invalidateQueries({ queryKey: ["training-video-analysis-latest", videoId] }),
       ]);
     },
   });
 
-  async function openVideo(record: TrackingRecentRecord) {
-    if (!record.video_id) return;
-    setVideoRecord(record);
-    setVideoUrl("");
-    setVideoError("");
-    setVideoLoading(true);
-    try {
-      const response = await apiClient.get<{ url: string }>(`/training/videos/${record.video_id}/download-url/`);
-      setVideoUrl(response.data.url);
-    } catch (reason) {
-      setVideoError(errorMessage(reason).replace("加载训练追踪数据失败", "视频地址获取失败"));
-    } finally {
-      setVideoLoading(false);
-    }
-  }
+  const stopAndUnloadVideo = () => {
+    const node = videoRef.current;
+    if (!node) return;
+    node.pause();
+    node.removeAttribute("src");
+    node.load();
+  };
+
+  const closeVideoDrawer = () => {
+    stopAndUnloadVideo();
+    setVideoDrawerRecord(null);
+    setDownloadUrl(null);
+    setDownloadLoading(false);
+    setDownloadError(null);
+    createAnalysisMutation.reset();
+  };
+
+  const openVideoDrawer = (record: TrackingRecentRecord) => {
+    setVideoDrawerRecord(record);
+    setDownloadUrl(null);
+    setDownloadError(null);
+    createAnalysisMutation.reset();
+  };
+
+  useEffect(() => {
+    if (!drawerOpen || selectedVideoId == null) return undefined;
+
+    let active = true;
+    setDownloadUrl(null);
+    setDownloadError(null);
+    setDownloadLoading(true);
+
+    apiClient
+      .get<{ url: string }>(`/training/videos/${selectedVideoId}/download-url/`)
+      .then((response) => {
+        if (active) setDownloadUrl(response.data.url);
+      })
+      .catch(() => {
+        if (active) setDownloadError("获取视频地址失败");
+      })
+      .finally(() => {
+        if (active) setDownloadLoading(false);
+      });
+
+    return () => {
+      active = false;
+      setDownloadUrl(null);
+      setDownloadLoading(false);
+      setDownloadError(null);
+    };
+  }, [drawerOpen, selectedVideoId]);
 
   if (!isValidPatientId) {
     return <Alert type="error" message="无效的患者 ID" />;
@@ -298,6 +420,16 @@ export function TrainingTrackingDetailPage() {
       ? buildWeeklyTrendData(data.trend.weekly)
       : buildDailyTrendData(data.trend.daily, data.trend.moving_average);
   const trendChartKey = `${range}:${activeTrendData.map((point) => point.label).join("|")}`;
+  const latestAnalysisJob = latestAnalysisQuery.data;
+  const analysisStatus = latestAnalysisJob?.status ?? videoDrawerRecord?.latest_analysis_status ?? null;
+  const analysisTotalCount = latestAnalysisJob?.total_count ?? videoDrawerRecord?.analysis_total_count ?? null;
+  const analysisStandardCount =
+    latestAnalysisJob?.standard_count ?? videoDrawerRecord?.analysis_standard_count ?? null;
+  const analysisNonstandardCount =
+    latestAnalysisJob?.nonstandard_count ?? videoDrawerRecord?.analysis_nonstandard_count ?? null;
+  const analysisFailureReason = latestAnalysisJob?.failure_reason || "";
+  const analysisInProgress = isActiveAnalysisStatus(analysisStatus) || createAnalysisMutation.isPending;
+  const analysisActionLabel = analysisInProgress ? "分析处理中" : analysisStatus ? "重新分析" : "开始动作分析";
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -430,13 +562,41 @@ export function TrainingTrackingDetailPage() {
         </Space>
       </Card>
 
+      <Card title="待处理视频">
+        <Table<TrackingPendingVideo>
+          rowKey="id"
+          dataSource={data.pending_training_videos}
+          pagination={false}
+          locale={{ emptyText: "暂无待处理视频" }}
+          columns={[
+            { title: "训练日期", dataIndex: "training_date" },
+            { title: "动作", dataIndex: "action_name" },
+            {
+              title: "状态",
+              dataIndex: "status",
+              render: (value: TrackingPendingVideo["status"]) => renderPendingVideoStatus(value),
+            },
+            {
+              title: "失败摘要",
+              dataIndex: "failure_reason",
+              width: 320,
+              ellipsis: true,
+              render: (value: string, record) => renderPendingFailureReason(value, record),
+            },
+            {
+              title: "创建时间",
+              dataIndex: "created_at",
+              render: (value: string) => formatDateTime(value),
+            },
+          ]}
+        />
+      </Card>
+
       <Card title="最近训练记录">
-        {analysisError ? <Alert type="error" showIcon message={analysisError} style={{ marginBottom: 16 }} /> : null}
         <Table<TrackingRecentRecord>
           rowKey="id"
           dataSource={data.recent_records}
           pagination={{ pageSize: 10, showSizeChanger: false }}
-          scroll={{ x: 1900 }}
           columns={[
             { title: "训练日期", dataIndex: "training_date" },
             { title: "动作", dataIndex: "action_name" },
@@ -504,45 +664,28 @@ export function TrainingTrackingDetailPage() {
               render: (value: string | null, record) => (isGameRecord(record) ? (value || "—") : "—"),
             },
             {
-              title: "录像与分析",
-              key: "video-analysis",
-              width: 240,
-              render: (_, record) =>
-                record.video_id ? (
-                  <Space direction="vertical" size={6}>
-                    <Space wrap size={6}>
+              title: "视频",
+              render: (_: unknown, record) =>
+                canUseVideoActions(record) ? (
+                  <Space size={4}>
+                    <Tooltip title="播放视频">
                       <Button
-                        size="small"
+                        aria-label="播放训练视频"
                         icon={<PlayCircleOutlined />}
-                        onClick={() => void openVideo(record)}
-                      >
-                        查看视频
-                      </Button>
-                      <Button
                         size="small"
+                        type="text"
+                        onClick={() => openVideoDrawer(record)}
+                      />
+                    </Tooltip>
+                    <Tooltip title="动作分析">
+                      <Button
+                        aria-label="动作分析"
                         icon={<ExperimentOutlined />}
-                        loading={analysisMutation.isPending && analysisMutation.variables === record.video_id}
-                        disabled={["pending", "running"].includes(record.latest_analysis_status ?? "")}
-                        onClick={() => analysisMutation.mutate(record.video_id!)}
-                      >
-                        动作分析
-                      </Button>
-                    </Space>
-                    {record.latest_analysis_status ? (
-                      <Space wrap size={4}>
-                        <Tag color={ANALYSIS_STATUS_COLOR[record.latest_analysis_status]}>
-                          {ANALYSIS_STATUS_LABEL[record.latest_analysis_status] ?? record.latest_analysis_status}
-                        </Tag>
-                        {record.latest_analysis_status === "succeeded" ? (
-                          <span>
-                            总 {record.analysis_total_count ?? 0} / 标准 {record.analysis_standard_count ?? 0} /
-                            不标准 {record.analysis_nonstandard_count ?? 0}
-                          </span>
-                        ) : null}
-                      </Space>
-                    ) : (
-                      <span>尚未分析</span>
-                    )}
+                        size="small"
+                        type="text"
+                        onClick={() => openVideoDrawer(record)}
+                      />
+                    </Tooltip>
                   </Space>
                 ) : (
                   "—"
@@ -558,80 +701,113 @@ export function TrainingTrackingDetailPage() {
       </Card>
 
       <Drawer
-        title={videoRecord ? `${videoRecord.action_name}训练录像` : "训练录像"}
-        width={680}
-        open={Boolean(videoRecord)}
-        onClose={() => {
-          setVideoRecord(null);
-          setVideoUrl("");
-          setVideoError("");
-        }}
+        destroyOnClose
+        title="训练视频"
+        open={drawerOpen}
+        width={720}
+        onClose={closeVideoDrawer}
       >
-        {videoLoading ? <Spin /> : null}
-        {videoError ? <Alert type="error" showIcon message={videoError} /> : null}
-        {videoUrl ? (
-          <video controls playsInline src={videoUrl} style={{ display: "block", width: "100%", background: "#000" }} />
-        ) : null}
-        {videoRecord ? (
-          <Descriptions
-            bordered
-            size="small"
-            column={1}
-            style={{ marginTop: 16 }}
-            items={[
-              { key: "date", label: "训练日期", children: videoRecord.training_date },
-              { key: "action", label: "动作", children: videoRecord.action_name },
-              { key: "version", label: "处方版本", children: `v${videoRecord.prescription_version}` },
-            ]}
-          />
-        ) : null}
-        <Card
-          size="small"
-          title="动作分析"
-          style={{ marginTop: 16 }}
-          extra={
-            videoRecord?.video_id ? (
-              <Button
-                icon={<ExperimentOutlined />}
-                loading={analysisMutation.isPending}
-                disabled={["pending", "running"].includes(latestAnalysisQuery.data?.status ?? "")}
-                onClick={() => analysisMutation.mutate(videoRecord.video_id!)}
-              >
-                {latestAnalysisQuery.data?.status === "failed" ? "重新分析" : "动作分析"}
-              </Button>
-            ) : null
-          }
-        >
-          {analysisMutation.isError ? <Alert type="error" showIcon message={errorMessage(analysisMutation.error)} /> : null}
-          {latestAnalysisQuery.isLoading ? <Spin size="small" /> : null}
-          {latestAnalysisQuery.data ? (
+        {videoDrawerRecord ? (
+          <Space direction="vertical" size={16} style={{ width: "100%" }}>
             <Descriptions
+              bordered
               size="small"
               column={1}
               items={[
+                { key: "date", label: "训练日期", children: videoDrawerRecord.training_date },
+                { key: "action", label: "动作", children: videoDrawerRecord.action_name },
                 {
-                  key: "status",
-                  label: "状态",
+                  key: "videoStatus",
+                  label: "视频状态",
                   children: (
-                    <Tag color={ANALYSIS_STATUS_COLOR[latestAnalysisQuery.data.status]}>
-                      {ANALYSIS_STATUS_LABEL[latestAnalysisQuery.data.status]}
-                    </Tag>
+                    <Tag color="green">{VIDEO_STATUS_LABEL[videoDrawerRecord.video_status ?? ""] ?? "已上传"}</Tag>
                   ),
-                },
-                { key: "total", label: "总次数", children: latestAnalysisQuery.data.total_count ?? "—" },
-                { key: "standard", label: "标准次数", children: latestAnalysisQuery.data.standard_count ?? "—" },
-                { key: "nonstandard", label: "不标准次数", children: latestAnalysisQuery.data.nonstandard_count ?? "—" },
-                {
-                  key: "failure",
-                  label: "失败原因",
-                  children: latestAnalysisQuery.data.failure_reason || "—",
                 },
               ]}
             />
-          ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未分析" />
-          )}
-        </Card>
+
+            <div style={{ width: "100%", minHeight: 360 }}>
+              {downloadLoading ? (
+                <Spin />
+              ) : downloadError ? (
+                <Alert type="error" showIcon message={downloadError} />
+              ) : downloadUrl ? (
+                <video
+                  ref={videoRef}
+                  controls
+                  preload="metadata"
+                  src={downloadUrl}
+                  style={{
+                    width: "100%",
+                    maxWidth: "100%",
+                    height: 360,
+                    background: "#000",
+                    borderRadius: 4,
+                  }}
+                />
+              ) : null}
+            </div>
+
+            {selectedVideoSupportsAnalysis ? (
+              <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                <Space wrap align="center">
+                  <span>动作分析</span>
+                  {analysisStatus ? <Tag>{ANALYSIS_STATUS_LABEL[analysisStatus]}</Tag> : <Tag>暂无结果</Tag>}
+                  <Button
+                    type="primary"
+                    size="small"
+                    loading={createAnalysisMutation.isPending}
+                    disabled={analysisInProgress || selectedVideoId == null}
+                    onClick={() => {
+                      if (selectedVideoId != null) createAnalysisMutation.mutate(selectedVideoId);
+                    }}
+                  >
+                    {analysisActionLabel}
+                  </Button>
+                </Space>
+
+                {latestAnalysisQuery.isFetching && analysisStatus == null ? <Spin size="small" /> : null}
+
+                {latestAnalysisQuery.isError ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={errorMessage(latestAnalysisQuery.error, "加载动作分析结果失败")}
+                    action={
+                      <Button aria-label="重试" size="small" onClick={() => latestAnalysisQuery.refetch()}>
+                        重试
+                      </Button>
+                    }
+                  />
+                ) : isActiveAnalysisStatus(analysisStatus) ? (
+                  <Alert type="info" showIcon message="动作分析处理中" />
+                ) : analysisStatus === "succeeded" ? (
+                  <Space wrap>
+                    <Tag color="blue">总数 {formatNumber(analysisTotalCount)}</Tag>
+                    <Tag color="green">标准 {formatNumber(analysisStandardCount)}</Tag>
+                    <Tag color="orange">不标准 {formatNumber(analysisNonstandardCount)}</Tag>
+                  </Space>
+                ) : analysisStatus === "failed" ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={analysisFailureReason || "动作分析失败，请稍后重试"}
+                  />
+                ) : (
+                  <span>暂无动作分析结果</span>
+                )}
+
+                {createAnalysisMutation.isError ? (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={errorMessage(createAnalysisMutation.error, "动作分析请求失败")}
+                  />
+                ) : null}
+              </Space>
+            ) : null}
+          </Space>
+        ) : null}
       </Drawer>
     </Space>
   );
