@@ -20,6 +20,12 @@ vi.mock("@ant-design/charts", () => ({
   ),
 }));
 
+vi.mock("../wearables/WearableHealthTab", () => ({
+  WearableHealthTab: ({ patientId, projectPatientId }: { patientId: number; projectPatientId: number }) => (
+    <div>穿戴健康面板：{patientId}/{projectPatientId}</div>
+  ),
+}));
+
 function renderAt(path: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -73,6 +79,7 @@ const trackingDetail = {
       group: 10,
       group_name: "试验组",
       enrolled_at: "2026-05-01T09:00:00+08:00",
+      project_completed_at: "2026-06-01T09:00:00+08:00",
     },
     {
       id: 9002,
@@ -82,6 +89,7 @@ const trackingDetail = {
       group: 20,
       group_name: "对照组",
       enrolled_at: "2026-05-02T09:00:00+08:00",
+      project_completed_at: null,
     },
   ],
   selected_project_patient: {
@@ -92,6 +100,7 @@ const trackingDetail = {
     group: 10,
     group_name: "试验组",
     enrolled_at: "2026-05-01T09:00:00+08:00",
+    project_completed_at: "2026-06-01T09:00:00+08:00",
   },
   current_prescription: {
     id: 501,
@@ -339,6 +348,10 @@ describe("TrainingTrackingDetailPage", () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "训练跟踪" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "穿戴健康" })).toBeInTheDocument();
+    expect(screen.queryByText("设备在线")).not.toBeInTheDocument();
+    expect(screen.getByText(/研究周期：2026-05-01 至 2026-06-01/)).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "切换项目" })).toBeInTheDocument();
     expect(screen.getAllByText("研究项目 A").length).toBeGreaterThan(0);
     expect(screen.getByText("试验组")).toBeInTheDocument();
@@ -369,6 +382,21 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.queryByText("到时完成")).not.toBeInTheDocument();
     expect(screen.queryByText("88 次")).not.toBeInTheDocument();
     expect(screen.queryByText("不应展示")).not.toBeInTheDocument();
+  });
+
+  it("可在训练跟踪与穿戴健康页签间切换并保留训练功能", async () => {
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("处方完成情况");
+
+    fireEvent.click(screen.getByRole("tab", { name: "穿戴健康" }));
+    expect(await screen.findByText("穿戴健康面板：201/9001")).toBeInTheDocument();
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("穿戴健康面板：201/9001");
+
+    fireEvent.click(screen.getByRole("tab", { name: "训练跟踪" }));
+    expect(await screen.findByRole("tabpanel")).toHaveTextContent("处方完成情况");
+    expect(screen.getByRole("button", { name: "播放训练视频" })).toBeInTheDocument();
   });
 
   it("展示 attached 肩推视频操作，待处理视频只展示状态和安全失败摘要", async () => {

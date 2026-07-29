@@ -10,8 +10,8 @@ import {
   subscribePendingGameUploadRetryLoop,
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
-import { actionEntryUrl } from '../prescription/actionRouting'
 import { reLaunchPendingShoulderPressUploadIfNeeded } from '../shoulder-press/pageState'
+import { HOME_ACTIONS, type HomeActionContext } from './homeActions'
 
 function pendingGameUploadBannerText(): string {
   const pending = loadPendingGameUpload(Taro)
@@ -93,18 +93,20 @@ export default function HomePage() {
     (sum, action) => sum + action.weekly_target_count,
     0
   )
-
-  function continueFirstAction() {
-    if (!firstAction) return
-    Taro.navigateTo({ url: actionEntryUrl(firstAction) })
-  }
+  const actionContext: HomeActionContext | null = firstAction
+    ? {
+        actionId: firstAction.id,
+        internalType: firstAction.internal_type,
+        sourceKey: firstAction.source_key,
+      }
+    : null
 
   return (
     <View className='page home-page'>
       <View className='page-hero home-hero'>
         <Text className='eyebrow'>MotionCare</Text>
         <Text className='title'>今日康复</Text>
-        <Text className='muted'>按处方完成训练，记录每天的身体状态。</Text>
+        <Text className='muted'>按处方完成训练，查看本周进度与历史记录。</Text>
       </View>
       {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
       {error ? <Text className='error'>{error}</Text> : null}
@@ -122,32 +124,20 @@ export default function HomePage() {
                 {currentPrescription ? `${completed}/${target} 次` : '暂无处方'}
               </Text>
             </View>
-            <View className='stat-card'>
-              <Text className='label'>健康数据</Text>
-              <Text className='value'>{data.has_daily_health_today ? '已填写' : '待填写'}</Text>
-            </View>
           </View>
           <View className='action-stack'>
-            <Button
-              className='primary-button'
-              onClick={() => Taro.navigateTo({ url: '/pages/prescription/index' })}
-            >
-              查看处方
-            </Button>
-            <Button
-              className='secondary-button'
-              onClick={() => Taro.navigateTo({ url: '/pages/daily-health/index' })}
-            >
-              填写健康数据
-            </Button>
-            {firstAction ? (
-              <Button
-                className='primary-button full-button'
-                onClick={continueFirstAction}
-              >
-                {firstAction.internal_type === 'game' ? '前往游戏训练' : '继续训练'}
-              </Button>
-            ) : null}
+            {HOME_ACTIONS.map((action) => {
+              if (action.requiresAction && !actionContext) return null
+              return (
+                <Button
+                  key={action.key}
+                  className={action.className}
+                  onClick={() => Taro.navigateTo({ url: action.url(actionContext) })}
+                >
+                  {action.label(actionContext)}
+                </Button>
+              )
+            })}
             {!currentPrescription ? (
               <View className='empty-state full-button'>
                 <Text className='value'>暂无生效处方</Text>

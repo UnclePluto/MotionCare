@@ -6,6 +6,8 @@
 > 关联：`docs/superpowers/specs/2026-05-12-frontend-only-randomization-confirmed-binding-design.md`、`docs/superpowers/specs/2026-05-13-project-grouping-board-ratio-draft-drag-design.md`
 > 实施基线 commit：66089ac
 
+> 后续覆盖说明（2026-07-24）：为保证穿戴研究数据按项目研究期裁剪，项目完结在保留 `archived` 状态语义的基础上新增 `StudyProject.completed_at`。该时间仅由完结动作首次写入，项目窗口为 `[ProjectPatient.enrolled_at, completed_at)`；其余完结设计保持不变。
+
 > 实施记录（2026-05-13, Codex）：已按计划落地项目详情动作区与项目完结状态门控；未提交（用户未要求 commit）；验证通过：`cd backend && pytest`、`cd frontend && npm run test`、`cd frontend && npm run lint`、`cd frontend && npm run build`。
 
 ## 背景

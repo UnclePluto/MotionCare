@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 
+from celery.schedules import crontab
 import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -38,6 +39,7 @@ INSTALLED_APPS = [
     "apps.visits",
     "apps.prescriptions",
     "apps.training",
+    "apps.wearables",
     "apps.health",
     "apps.patient_app",
     "apps.crf",
@@ -159,6 +161,8 @@ REST_FRAMEWORK = {
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_TIMEZONE = "Asia/Shanghai"
+CELERY_ENABLE_UTC = True
 CELERY_TASK_ROUTES = {
     "apps.training.video_tasks.run_video_assembly_job": {"queue": "video-assembly"},
 }
@@ -196,7 +200,16 @@ CELERY_BEAT_SCHEDULE = {
         "task": "apps.training.video_tasks.cleanup_qiniu_tombstones",
         "schedule": 300,
     },
+    "schedule-daily-wearable-sync": {
+        "task": "apps.wearables.tasks.schedule_daily_wearable_sync",
+        "schedule": crontab(hour=3, minute=0),
+    },
 }
+MIWITRACKER_BASE_URL = os.getenv(
+    "MIWITRACKER_BASE_URL", "https://openapi.miwitracker.com"
+)
+MIWITRACKER_APP_ID = os.getenv("MIWITRACKER_APP_ID", "")
+MIWITRACKER_KEY = os.getenv("MIWITRACKER_KEY", "")
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "CRF_TEMPLATE_PATH",
     "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",

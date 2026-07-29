@@ -53,6 +53,11 @@ def serialize_project_patient(project_patient: ProjectPatient) -> dict:
         "group": project_patient.group_id,
         "group_name": project_patient.group.name if project_patient.group_id else None,
         "enrolled_at": project_patient.enrolled_at.isoformat(),
+        "project_completed_at": (
+            project_patient.project.completed_at.isoformat()
+            if project_patient.project.completed_at
+            else None
+        ),
     }
 
 
@@ -114,6 +119,8 @@ def _raw_int(form_data, key):
 
 
 def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[dict]:
+    from apps.wearables.services.queries import tracking_wearable_summaries
+
     today = today or timezone.localdate()
     last_30_start = today - timezone.timedelta(days=29)
     qs = accessible_project_patients(user)
@@ -136,6 +143,10 @@ def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[di
         )
         .order_by("patient__name", "patient_id")
     )
+    rows = list(rows)
+    wearable_summaries = tracking_wearable_summaries(
+        [row["patient_id"] for row in rows], today=today
+    )
     return [
         {
             "patient": {
@@ -148,6 +159,7 @@ def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[di
                 row["last_training_at"].isoformat() if row["last_training_at"] else None
             ),
             "last_30_days_completed_count": row["last_30_days_completed_count"],
+            "wearable": wearable_summaries[row["patient_id"]],
         }
         for row in rows
     ]

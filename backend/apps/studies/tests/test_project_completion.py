@@ -1,4 +1,6 @@
 import pytest
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.test import APIClient
 
 from apps.patients.models import Patient
@@ -30,6 +32,97 @@ def test_complete_project_sets_archived_and_is_idempotent(doctor, project):
     second = client.post(f"/api/studies/projects/{project.id}/complete/")
     assert second.status_code == 200, second.data
     assert second.data["status"] == StudyProject.Status.ARCHIVED
+
+
+@pytest.mark.django_db
+def test_complete_project_records_completed_at_once_and_returns_it_read_only(doctor, project):
+    client = _client(doctor)
+    before = timezone.now()
+
+    first = client.post(f"/api/studies/projects/{project.id}/complete/")
+
+    assert first.status_code == 200, first.data
+    assert first.data["completed_at"] is not None
+    project.refresh_from_db()
+    assert project.completed_at >= before
+    completed_at = project.completed_at
+
+    second = client.post(f"/api/studies/projects/{project.id}/complete/")
+    project.refresh_from_db()
+    assert second.status_code == 200, second.data
+    assert project.completed_at == completed_at
+    assert parse_datetime(second.data["completed_at"]) == completed_at
+
+
+@pytest.mark.django_db
+def test_project_update_cannot_restore_archived_status_or_set_completed_at(doctor, project):
+    client = _client(doctor)
+    client.post(f"/api/studies/projects/{project.id}/complete/")
+    project.refresh_from_db()
+    completed_at = project.completed_at
+
+    restore = client.patch(
+        f"/api/studies/projects/{project.id}/",
+        {"status": StudyProject.Status.ACTIVE},
+        format="json",
+    )
+    forge = client.patch(
+        f"/api/studies/projects/{project.id}/",
+        {"completed_at": "2026-07-01T00:00:00Z"},
+        format="json",
+    )
+
+    assert restore.status_code == 400
+    assert forge.status_code == 400
+    project.refresh_from_db()
+    assert project.status == StudyProject.Status.ARCHIVED
+    assert project.completed_at == completed_at
+
+
+@pytest.mark.django_db
+def test_general_project_writes_must_use_complete_action_for_archiving_and_keep_archived_read_only(
+    doctor, project
+):
+    client = _client(doctor)
+
+    create_archived = client.post(
+        "/api/studies/projects/", {"name": "伪造完结", "status": "archived"}, format="json"
+    )
+    patch_archived = client.patch(
+        f"/api/studies/projects/{project.id}/", {"status": "archived"}, format="json"
+    )
+    activate = client.patch(
+        f"/api/studies/projects/{project.id}/", {"status": "active"}, format="json"
+    )
+    client.post(f"/api/studies/projects/{project.id}/complete/")
+    archived_name_change = client.patch(
+        f"/api/studies/projects/{project.id}/", {"name": "不应保存"}, format="json"
+    )
+    archived_put = client.put(
+        f"/api/studies/projects/{project.id}/",
+        {"name": "不应保存", "status": "archived", "description": ""},
+        format="json",
+    )
+
+    assert create_archived.status_code == 400
+    assert patch_archived.status_code == 400
+    assert activate.status_code == 200
+    assert archived_name_change.status_code == 400
+    assert archived_put.status_code == 400
+
+
+@pytest.mark.django_db
+def test_archived_empty_project_cannot_be_deleted_but_active_empty_project_can(doctor, project):
+    client = _client(doctor)
+    client.post(f"/api/studies/projects/{project.id}/complete/")
+
+    archived_delete = client.delete(f"/api/studies/projects/{project.id}/")
+    active = StudyProject.objects.create(name="空进行中项目", created_by=doctor)
+    active_delete = client.delete(f"/api/studies/projects/{active.id}/")
+
+    assert archived_delete.status_code == 400
+    assert StudyProject.objects.filter(pk=project.id).exists()
+    assert active_delete.status_code == 204
 
 
 @pytest.mark.django_db

@@ -6,8 +6,7 @@ export default defineAppConfig({
     'pages/training/index',
     'pages/shoulder-press/index',
     'pages/shoulder-press/upload',
-    'pages/action-history/index',
-    'pages/daily-health/index'
+    'pages/action-history/index'
   ],
   subPackages: [
     {

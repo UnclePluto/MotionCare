@@ -42,6 +42,12 @@ describe("TrainingTrackingPage", () => {
               project_count: 2,
               last_training_at: "2026-05-14",
               last_30_days_completed_count: 12,
+              wearable: {
+                is_bound: true,
+                device_short_code: "0826",
+                last_sync_at: "2026-05-14T10:30:00+08:00",
+                last_30_days_data_completeness: 82.5,
+              },
             },
           ],
         });
@@ -52,10 +58,10 @@ describe("TrainingTrackingPage", () => {
 
   afterEach(() => cleanup());
 
-  it("搜索全局患者并链接到训练追踪详情页", async () => {
+  it("搜索患者并展示训练与健康摘要及详情入口", async () => {
     renderPage();
 
-    expect(await screen.findByText("患者训练追踪")).toBeInTheDocument();
+    expect(await screen.findByText("患者训练与健康")).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText("患者姓名或手机号"), { target: { value: "训练" } });
     fireEvent.click(screen.getByRole("button", { name: "查询" }));
 
@@ -68,7 +74,10 @@ describe("TrainingTrackingPage", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("2026-05-14")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "查看追踪" })).toHaveAttribute(
+    expect(screen.getByText("0826")).toBeInTheDocument();
+    expect(screen.getByText("2026-05-14 10:30")).toBeInTheDocument();
+    expect(screen.getByText("82.5%")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看训练与健康" })).toHaveAttribute(
       "href",
       "/training-tracking/patients/201",
     );

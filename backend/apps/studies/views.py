@@ -50,6 +50,8 @@ class StudyProjectViewSet(ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         project = self.get_object()
+        if project.status == StudyProject.Status.ARCHIVED:
+            raise ValidationError({"detail": "项目已完结，只允许只读查看。"})
         if ProjectPatient.objects.filter(project=project).exists():
             raise ValidationError({"detail": "项目中仍有患者，无法删除。"})
         return super().destroy(request, *args, **kwargs)
@@ -59,9 +61,15 @@ class StudyProjectViewSet(ModelViewSet):
     def complete(self, request, pk=None):
         project = self.get_object()
         project = StudyProject.objects.select_for_update(of=("self",)).get(pk=project.pk)
+        update_fields = []
         if project.status != StudyProject.Status.ARCHIVED:
             project.status = StudyProject.Status.ARCHIVED
-            project.save(update_fields=["status", "updated_at"])
+            update_fields.append("status")
+        if project.completed_at is None:
+            project.completed_at = timezone.now()
+            update_fields.append("completed_at")
+        if update_fields:
+            project.save(update_fields=[*update_fields, "updated_at"])
         return Response(StudyProjectSerializer(project).data)
 
     @action(detail=True, methods=["post"], url_path="confirm-grouping")

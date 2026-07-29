@@ -324,6 +324,7 @@ function renderPage<T>(Component: (props?: T) => ReactElement, props?: T) {
 }
 
 function childrenOf(node: unknown): unknown[] {
+  if (Array.isArray(node)) return node
   if (!node || typeof node !== 'object') return []
   const children = (node as ReactElement).props?.children
   if (children === undefined || children === null) return []
@@ -344,7 +345,7 @@ function findAll(node: unknown, predicate: (element: ReactElement) => boolean): 
 
 function findButtonByText(node: unknown, text: string): ReactElement {
   const button = findAll(node, (element) => element.type === 'Button' && textContent(element).includes(text))[0]
-  if (!button) throw new Error(`Button not found: ${text}`)
+  if (!button) throw new Error(`Button not found: ${text}; rendered: ${textContent(node)}`)
   return button
 }
 
@@ -1062,7 +1063,6 @@ describe('shoulder press pages', () => {
     requestMock.mockResolvedValueOnce({
       patient: { name: '王阿姨' },
       project: { name: '康复研究' },
-      has_daily_health_today: false,
       current_prescription: PRESCRIPTION
     })
 

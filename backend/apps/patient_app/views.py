@@ -10,7 +10,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
-from apps.health.models import DailyHealthRecord
 from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
@@ -29,7 +28,6 @@ from apps.training.views import validation_detail
 from .authentication import PatientAppTokenAuthentication
 from .serializers import (
     PatientAppBindSerializer,
-    PatientAppDailyHealthSerializer,
     PatientAppTrainingRecordCreateSerializer,
     PatientAppTrainingVideoFinalizeSerializer,
     PatientAppTrainingVideoSegmentSerializer,
@@ -192,16 +190,11 @@ class PatientAppHomeView(PatientAppBaseView):
     def get(self, request):
         project_patient = self.project_patient()
         today = timezone.localdate()
-        has_daily_health = DailyHealthRecord.objects.filter(
-            patient=project_patient.patient,
-            record_date=today,
-        ).exists()
         prescription = serialize_prescription(project_patient)
         return Response(
             {
                 **serialize_me(project_patient),
                 "today": today.isoformat(),
-                "has_daily_health_today": has_daily_health,
                 "current_prescription": prescription,
             }
         )
@@ -384,29 +377,3 @@ class PatientAppActionHistoryView(PatientAppBaseView):
                 "records": [serialize_training_record(record) for record in records[:30]],
             }
         )
-
-
-class PatientAppDailyHealthTodayView(PatientAppBaseView):
-    def get(self, request):
-        project_patient = self.project_patient()
-        record = DailyHealthRecord.objects.filter(
-            patient=project_patient.patient,
-            record_date=timezone.localdate(),
-        ).first()
-        return Response(PatientAppDailyHealthSerializer(record).data if record else None)
-
-    def put(self, request):
-        if not isinstance(request.data, Mapping):
-            return Response(
-                {"detail": "请求体格式错误"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        project_patient = self.project_patient()
-        record, _ = DailyHealthRecord.objects.get_or_create(
-            patient=project_patient.patient,
-            record_date=timezone.localdate(),
-        )
-        serializer = PatientAppDailyHealthSerializer(record, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data)

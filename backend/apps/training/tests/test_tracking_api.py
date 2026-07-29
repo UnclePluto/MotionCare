@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from datetime import UTC, datetime
 
 import pytest
 from django.db import connection
@@ -12,6 +13,42 @@ from apps.patients.models import Patient
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
+from apps.training.tracking import list_patient_tracking_summaries, serialize_project_patient
+from apps.wearables.models import (
+    WearableBinding,
+    WearableDailySummary,
+    WearableDevice,
+    WearableSyncRun,
+)
+
+
+def _sql_datetime_param_matches(value, expected):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return False
+    if not isinstance(value, datetime):
+        return False
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    if expected.tzinfo is None:
+        expected = expected.replace(tzinfo=UTC)
+    return value.astimezone(UTC) == expected.astimezone(UTC)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-01 00:00:00",
+        datetime(2026, 7, 1, tzinfo=UTC),
+    ],
+)
+def test_sql_datetime_param_matcher_accepts_sqlite_and_psycopg_shapes(value):
+    assert _sql_datetime_param_matches(
+        value,
+        datetime(2026, 7, 1, tzinfo=UTC),
+    )
 
 
 def _client(user):
@@ -52,6 +89,17 @@ def _project_patient(doctor, patient, project_name="研究项目", group_name="�
     project = StudyProject.objects.create(name=project_name, created_by=doctor)
     group = StudyGroup.objects.create(project=project, name=group_name, target_ratio=1)
     return ProjectPatient.objects.create(project=project, patient=patient, group=group)
+
+
+@pytest.mark.django_db
+def test_tracking_project_patient_includes_authoritative_project_completed_at(doctor):
+    patient = _patient(doctor)
+    project_patient = _project_patient(doctor, patient)
+    completed_at = datetime(2026, 7, 23, 4, tzinfo=UTC)
+    project_patient.project.completed_at = completed_at
+    project_patient.project.save(update_fields=["completed_at"])
+
+    assert serialize_project_patient(project_patient)["project_completed_at"] == completed_at.isoformat()
 
 
 def _active_prescription(project_patient, doctor, version=1):
@@ -285,6 +333,311 @@ def test_patient_search_returns_accessible_patient_summaries(
 
 
 @pytest.mark.django_db
+def test_tracking_summary_includes_global_wearable_binding_and_completed_day_completeness(
+    doctor, project_patient
+):
+    device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="tracking-device", identifier_type="device_id", model="TEST", short_code="1288"
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=device,
+        bound_at=datetime(2026, 6, 24, 16, tzinfo=UTC),  # 上海 6 月 25 日零点
+        bound_by=doctor,
+    )
+    WearableDailySummary.objects.create(
+        patient=project_patient.patient,
+        record_date=timezone.datetime(2026, 7, 23).date(),
+        heart_rate_count=1,
+    )
+
+    rows = list_patient_tracking_summaries(doctor, today=timezone.datetime(2026, 7, 24).date())
+    row = next(item for item in rows if item["patient"]["id"] == project_patient.patient_id)
+
+    assert row["wearable"] == {
+        "is_bound": True,
+        "device_short_code": "1288",
+        "last_sync_at": None,
+        "last_30_days_data_completeness": 3.45,
+    }
+
+
+@pytest.mark.django_db
+def test_tracking_completeness_uses_only_full_bound_days_and_never_duplicates_multi_project_patient(
+    doctor, project_patient
+):
+    today = timezone.datetime(2026, 7, 24).date()
+    patient = project_patient.patient
+    second_project = StudyProject.objects.create(name="第二研究", created_by=doctor)
+    second_group = StudyGroup.objects.create(project=second_project, name="对照组", target_ratio=1)
+    ProjectPatient.objects.create(project=second_project, patient=patient, group=second_group)
+    full_device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="complete-device", identifier_type="device_id", model="TEST", short_code="1289"
+    )
+    WearableBinding.objects.create(
+        patient=patient, device=full_device, bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC), bound_by=doctor
+    )
+    WearableDailySummary.objects.create(patient=patient, record_date=timezone.datetime(2026, 7, 23).date(), steps=100, steps_attribution_status="attributed")
+
+    no_data_patient = _patient(doctor, name="无数据", phone="13900008881")
+    no_data_pp = _project_patient(doctor, no_data_patient, project_name="无数据项目")
+    no_data_device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="no-data-device", identifier_type="device_id", model="TEST", short_code="1290"
+    )
+    WearableBinding.objects.create(patient=no_data_patient, device=no_data_device, bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC), bound_by=doctor)
+
+    half_day_patient = _patient(doctor, name="半日", phone="13900008882")
+    half_day_pp = _project_patient(doctor, half_day_patient, project_name="半日项目")
+    half_day_device = WearableDevice.objects.create(
+        provider="miwitracker", external_device_id="half-day-device", identifier_type="device_id", model="TEST", short_code="1291"
+    )
+    WearableBinding.objects.create(patient=half_day_patient, device=half_day_device, bound_at=datetime(2026, 7, 23, 4, tzinfo=UTC), bound_by=doctor)
+
+    rows = list_patient_tracking_summaries(doctor, today=today)
+    by_patient = {item["patient"]["id"]: item for item in rows}
+
+    assert len([item for item in rows if item["patient"]["id"] == patient.id]) == 1
+    assert by_patient[patient.id]["wearable"]["last_30_days_data_completeness"] == 3.33
+    assert by_patient[no_data_pp.patient_id]["wearable"]["last_30_days_data_completeness"] == 0.0
+    assert by_patient[half_day_pp.patient_id]["wearable"]["last_30_days_data_completeness"] is None
+
+
+@pytest.mark.django_db
+def test_tracking_summary_isolates_last_sync_when_device_switches_from_patient_a_to_b(
+    doctor, project_patient
+):
+    today = datetime(2026, 7, 24).date()
+    switch_at = datetime(2026, 7, 20, tzinfo=UTC)
+    patient_b = _patient(
+        doctor,
+        name="换绑患者乙",
+        phone="13900008883",
+    )
+    project_patient_b = _project_patient(
+        doctor,
+        patient_b,
+        project_name="换绑患者乙研究",
+    )
+    shared_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="tracking-shared-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1292",
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=shared_device,
+        bound_at=datetime(2026, 6, 20, tzinfo=UTC),
+        unbound_at=switch_at,
+        bound_by=doctor,
+        unbound_by=doctor,
+    )
+    old_run = WearableSyncRun.objects.create(
+        device=shared_device,
+        metric_type="heart_rate",
+        status=WearableSyncRun.Status.SUCCEEDED,
+    )
+    WearableSyncRun.objects.filter(pk=old_run.pk).update(
+        created_at=datetime(2026, 7, 19, 23, tzinfo=UTC)
+    )
+    WearableBinding.objects.create(
+        patient=patient_b,
+        device=shared_device,
+        bound_at=switch_at,
+        bound_by=doctor,
+    )
+
+    before_new_run = list_patient_tracking_summaries(doctor, today=today)
+    before_by_patient = {row["patient"]["id"]: row["wearable"] for row in before_new_run}
+
+    new_run_at = datetime(2026, 7, 20, 1, tzinfo=UTC)
+    new_run = WearableSyncRun.objects.create(
+        device=shared_device,
+        metric_type="heart_rate",
+        status=WearableSyncRun.Status.SUCCEEDED,
+    )
+    WearableSyncRun.objects.filter(pk=new_run.pk).update(created_at=new_run_at)
+    after_new_run = list_patient_tracking_summaries(doctor, today=today)
+    after_by_patient = {row["patient"]["id"]: row["wearable"] for row in after_new_run}
+
+    assert before_by_patient[project_patient.patient_id]["is_bound"] is False
+    assert before_by_patient[project_patient_b.patient_id]["device_short_code"] == "1292"
+    assert before_by_patient[project_patient_b.patient_id]["last_sync_at"] is None
+    assert after_by_patient[project_patient_b.patient_id]["last_sync_at"] == new_run_at.astimezone(
+        timezone.get_fixed_timezone(480)
+    ).isoformat()
+
+
+@pytest.mark.django_db
+def test_tracking_list_query_count_is_constant_and_excludes_hidden_patient(
+    doctor, project_patient
+):
+    today = datetime(2026, 7, 24).date()
+    first_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="query-count-device-0",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1300",
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=first_device,
+        bound_at=datetime(2026, 6, 20, tzinfo=UTC),
+        bound_by=doctor,
+    )
+
+    with CaptureQueriesContext(connection) as one_patient_queries:
+        one_patient_rows = list_patient_tracking_summaries(doctor, today=today)
+
+    visible_patient_ids = {project_patient.patient_id}
+    for index in range(1, 6):
+        patient = _patient(
+            doctor,
+            name=f"可见患者{index}",
+            phone=f"13900009{index:03d}",
+        )
+        _project_patient(doctor, patient, project_name=f"可见研究{index}")
+        device = WearableDevice.objects.create(
+            provider="miwitracker",
+            external_device_id=f"query-count-device-{index}",
+            identifier_type="device_id",
+            model="TEST",
+            short_code=f"{1300 + index:04d}",
+        )
+        WearableBinding.objects.create(
+            patient=patient,
+            device=device,
+            bound_at=datetime(2026, 6, 20, tzinfo=UTC),
+            bound_by=doctor,
+        )
+        visible_patient_ids.add(patient.id)
+
+    second_project = StudyProject.objects.create(name="同患者第二研究", created_by=doctor)
+    second_group = StudyGroup.objects.create(
+        project=second_project,
+        name="同患者第二组",
+        target_ratio=1,
+    )
+    ProjectPatient.objects.create(
+        project=second_project,
+        patient=project_patient.patient,
+        group=second_group,
+    )
+
+    other_doctor = _doctor(phone="13800009999", name="不可见医生")
+    hidden_patient = _patient(
+        other_doctor,
+        name="不可见患者",
+        phone="13900009999",
+    )
+    _project_patient(other_doctor, hidden_patient, project_name="不可见研究")
+    hidden_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="query-count-hidden-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1399",
+    )
+    WearableBinding.objects.create(
+        patient=hidden_patient,
+        device=hidden_device,
+        bound_at=datetime(2026, 6, 20, tzinfo=UTC),
+        bound_by=other_doctor,
+    )
+
+    with CaptureQueriesContext(connection) as many_patient_queries:
+        many_patient_rows = list_patient_tracking_summaries(doctor, today=today)
+
+    assert [row["patient"]["id"] for row in one_patient_rows] == [project_patient.patient_id]
+    returned_ids = [row["patient"]["id"] for row in many_patient_rows]
+    assert set(returned_ids) == visible_patient_ids
+    assert len(returned_ids) == len(visible_patient_ids)
+    assert hidden_patient.id not in returned_ids
+    assert len(one_patient_queries) == len(many_patient_queries)
+    assert len(many_patient_queries) <= 5
+
+
+@pytest.mark.django_db
+def test_tracking_batch_queries_limit_binding_history_runs_and_summaries_to_needed_windows(
+    doctor, project_patient
+):
+    today = datetime(2026, 7, 24).date()
+    stale_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="query-shape-stale-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1400",
+    )
+    active_device = WearableDevice.objects.create(
+        provider="miwitracker",
+        external_device_id="query-shape-active-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1401",
+    )
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=stale_device,
+        bound_at=datetime(2025, 1, 1, tzinfo=UTC),
+        unbound_at=datetime(2025, 2, 1, tzinfo=UTC),
+        bound_by=doctor,
+        unbound_by=doctor,
+    )
+    active_bound_at = datetime(2026, 7, 1, tzinfo=UTC)
+    WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=active_device,
+        bound_at=active_bound_at,
+        bound_by=doctor,
+    )
+
+    executed = []
+
+    def capture_queries(execute, sql, params, many, context):
+        executed.append((sql, params))
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(capture_queries):
+        list_patient_tracking_summaries(doctor, today=today)
+
+    binding_queries = [
+        (sql, params)
+        for sql, params in executed
+        if "wearables_wearablebinding" in sql.lower()
+    ]
+    run_queries = [
+        (sql, params) for sql, params in executed if "wearables_wearablesyncrun" in sql.lower()
+    ]
+    summary_queries = [
+        (sql, params)
+        for sql, params in executed
+        if "wearables_wearabledailysummary" in sql.lower()
+    ]
+
+    assert len(binding_queries) == 2
+    assert any('"unbound_at" IS NULL' in sql for sql, _ in binding_queries)
+    assert any(
+        '"bound_at" <' in sql and '"unbound_at" >' in sql
+        for sql, _ in binding_queries
+    )
+    assert len(run_queries) == 1
+    run_sql, run_params = run_queries[0]
+    assert '"created_at" >=' in run_sql
+    assert active_device.id in run_params
+    assert stale_device.id not in run_params
+    assert any(
+        _sql_datetime_param_matches(param, active_bound_at)
+        for param in run_params
+    )
+    assert len(summary_queries) == 1
+    assert '"record_date" >=' in summary_queries[0][0]
+    assert '"record_date" <=' in summary_queries[0][0]
+
+
+@pytest.mark.django_db
 def test_tracking_detail_returns_default_project_current_prescription_trends_and_game_summary(
     doctor,
     project_patient,
@@ -421,6 +774,7 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
             "group": project_patient.group_id,
             "group_name": project_patient.group.name,
             "enrolled_at": project_patient.enrolled_at.isoformat(),
+            "project_completed_at": None,
         }
     ]
     assert response.data["current_prescription"] == {

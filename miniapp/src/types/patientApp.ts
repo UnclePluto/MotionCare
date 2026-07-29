@@ -47,18 +47,5 @@ export type CurrentPrescription = null | {
 
 export type HomeData = BoundIdentity & {
   today: string
-  has_daily_health_today: boolean
   current_prescription: CurrentPrescription
-}
-
-export type DailyHealth = {
-  id: number
-  record_date: string
-  steps: number | null
-  exercise_minutes: number | null
-  average_heart_rate: number | null
-  max_heart_rate: number | null
-  min_heart_rate: number | null
-  sleep_hours: string | null
-  note: string
 }

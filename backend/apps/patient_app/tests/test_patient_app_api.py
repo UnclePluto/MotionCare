@@ -2,7 +2,6 @@ import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.health.models import DailyHealthRecord
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.training.models import TrainingRecord
@@ -415,15 +414,23 @@ def test_action_history_only_returns_current_action_records(
 
 
 @pytest.mark.django_db
-def test_daily_health_today_upserts_patient_record(project_patient, doctor):
+def test_daily_health_today_endpoint_is_removed(project_patient, doctor):
     client = _auth_client(project_patient, doctor)
 
-    first = client.put("/api/patient-app/daily-health/today/", {"steps": 1000}, format="json")
-    second = client.put("/api/patient-app/daily-health/today/", {"steps": 2000}, format="json")
+    response = client.put(
+        "/api/patient-app/daily-health/today/",
+        {"steps": 1000},
+        format="json",
+    )
 
-    assert first.status_code == 200, first.data
-    assert second.status_code == 200, second.data
-    assert DailyHealthRecord.objects.filter(patient=project_patient.patient).count() == 1
-    record = DailyHealthRecord.objects.get(patient=project_patient.patient)
-    assert record.record_date == timezone.localdate()
-    assert record.steps == 2000
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_patient_app_home_does_not_expose_manual_health_flag(project_patient, doctor):
+    client = _auth_client(project_patient, doctor)
+
+    response = client.get("/api/patient-app/home/")
+
+    assert response.status_code == 200, response.data
+    assert "has_daily_health_today" not in response.data

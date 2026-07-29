@@ -81,6 +81,7 @@ describe("App", () => {
       if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
       if (url === "/prescriptions/") return Promise.resolve({ data: [] });
       if (url === "/prescriptions/actions/") return Promise.resolve({ data: [] });
+      if (url === "/wearables/devices/") return Promise.resolve({ data: [] });
       if (url === "/studies/groups/" && params?.project === 1) {
         return Promise.resolve({
           data: [
@@ -317,6 +318,24 @@ describe("App", () => {
       expect(screen.getAllByText("医生管理").length).toBeGreaterThan(0);
       expect(screen.getAllByText("CRF 报告").length).toBeGreaterThan(0);
     });
+  });
+
+  it("redirects the removed manual health route without rendering its form", async () => {
+    window.history.pushState({}, "", "/health");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/patients");
+    });
+    expect(screen.queryByText("保存健康数据")).not.toBeInTheDocument();
   });
 
   it("does not mount business routes while default password must be changed", async () => {
@@ -571,6 +590,23 @@ describe("App", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText("患者训练追踪")).toBeInTheDocument();
+    expect(await screen.findByText("患者训练与健康")).toBeInTheDocument();
+    expect(screen.getByText("训练与健康")).toBeInTheDocument();
+  });
+
+  it("opens wearable device inventory route", async () => {
+    window.history.pushState({}, "", "/wearable-devices");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    );
+
+    expect((await screen.findAllByText("设备台账")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole("button", { name: "新增设备" })).toBeInTheDocument();
   });
 });

@@ -1,0 +1,242 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
+import { isAxiosError } from "axios";
+import dayjs from "dayjs";
+import { useMemo, useRef, useState } from "react";
+
+import { apiClient } from "../../api/client";
+import type { WearableDevice, WearableStatus } from "./types";
+
+type DeviceFormValues = Pick<WearableDevice, "provider" | "external_device_id" | "identifier_type" | "model">;
+type DeviceFilter = "all" | "bound" | "unbound" | "disabled";
+type StatusRequest = {
+  deviceId: number;
+  shortCode: string;
+  generation: number;
+};
+type StatusFeedback = StatusRequest & {
+  result: WearableStatus | null;
+  error: unknown | null;
+};
+
+function formatTime(value: string | null | undefined) {
+  return value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—";
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (isAxiosError(error) && typeof error.response?.data === "object" && error.response.data) {
+    const detail = (error.response.data as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+  }
+  return fallback;
+}
+
+export function DeviceInventoryPage() {
+  const queryClient = useQueryClient();
+  const [form] = Form.useForm<DeviceFormValues>();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<DeviceFilter>("all");
+  const statusRequestGeneration = useRef(0);
+  const [statusFeedback, setStatusFeedback] = useState<StatusFeedback | null>(null);
+
+  const devicesQuery = useQuery({
+    queryKey: ["wearable-devices"],
+    queryFn: async () => (await apiClient.get<WearableDevice[]>("/wearables/devices/")).data,
+  });
+
+  const createDevice = useMutation({
+    mutationFn: async (values: DeviceFormValues) =>
+      (
+        await apiClient.post<WearableDevice>("/wearables/devices/", {
+          provider: values.provider.trim(),
+          external_device_id: values.external_device_id.trim(),
+          identifier_type: values.identifier_type.trim(),
+          model: values.model.trim(),
+        })
+      ).data,
+    onSuccess: (device) => {
+      queryClient.setQueryData<WearableDevice[]>(["wearable-devices"], (current = []) => [device, ...current]);
+      form.resetFields();
+      setCreateOpen(false);
+    },
+  });
+
+  const statusCheck = useMutation({
+    mutationFn: async ({ deviceId }: StatusRequest) =>
+      (await apiClient.post<WearableStatus>(`/wearables/devices/${deviceId}/check-status/`)).data,
+    onSuccess: (result, variables) => {
+      if (
+        statusRequestGeneration.current === variables.generation &&
+        result.device_id === variables.deviceId
+      ) {
+        setStatusFeedback({ ...variables, result, error: null });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["wearable-devices"] });
+    },
+    onError: (error, variables) => {
+      if (statusRequestGeneration.current !== variables.generation) return;
+      setStatusFeedback({ ...variables, result: null, error });
+    },
+  });
+
+  const runStatusCheck = (device: WearableDevice) => {
+    const generation = statusRequestGeneration.current + 1;
+    statusRequestGeneration.current = generation;
+    setStatusFeedback(null);
+    statusCheck.mutate({
+      deviceId: device.id,
+      shortCode: device.short_code,
+      generation,
+    });
+  };
+
+  const dataSource = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    return (devicesQuery.data ?? []).filter((device) => {
+      const matchesSearch =
+        !normalizedSearch ||
+        device.short_code.includes(normalizedSearch) ||
+        device.external_device_id.toLowerCase().includes(normalizedSearch);
+      if (!matchesSearch) return false;
+      if (filter === "bound") return device.enabled && device.is_bound;
+      if (filter === "unbound") return device.enabled && !device.is_bound;
+      if (filter === "disabled") return !device.enabled;
+      return true;
+    });
+  }, [devicesQuery.data, filter, search]);
+
+  const statusResult = statusFeedback?.result ?? null;
+  const statusError = statusFeedback?.error ?? null;
+
+  return (
+    <Card
+      title="设备台账"
+      extra={
+        <Button type="primary" onClick={() => setCreateOpen(true)}>
+          新增设备
+        </Button>
+      }
+    >
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Input
+          allowClear
+          aria-label="搜索固定简码或厂商标识"
+          placeholder="搜索固定简码或厂商标识"
+          style={{ width: 260 }}
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <Select<DeviceFilter>
+          aria-label="设备绑定状态"
+          value={filter}
+          style={{ width: 150 }}
+          onChange={setFilter}
+          options={[
+            { value: "all", label: "全部设备" },
+            { value: "bound", label: "已绑定" },
+            { value: "unbound", label: "未绑定" },
+            { value: "disabled", label: "停用" },
+          ]}
+        />
+      </Space>
+
+      {statusResult ? (
+        <Alert
+          type={statusResult.online ? "success" : "warning"}
+          showIcon
+          message={`设备 ${statusFeedback?.shortCode} ${statusResult.online ? "通信正常" : "通信异常"}`}
+          description={`最近通信：${formatTime(statusResult.last_communication_at)}；电量：${statusResult.battery_level ?? "—"}%`}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+      {statusError ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={`设备 ${statusFeedback?.shortCode} 通信测试失败`}
+          description={errorMessage(statusError, "设备通信测试失败")}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+
+      {devicesQuery.isError ? (
+        <Alert type="error" showIcon message={errorMessage(devicesQuery.error, "设备台账加载失败")} />
+      ) : (
+        <Table<WearableDevice>
+          rowKey="id"
+          loading={devicesQuery.isLoading}
+          dataSource={dataSource}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          scroll={{ x: 920 }}
+          locale={{ emptyText: "暂无设备，请先录入设备。" }}
+          columns={[
+            { title: "固定简码", dataIndex: "short_code", width: 110, render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
+            { title: "型号", dataIndex: "model", width: 150, render: (value: string) => value || "—" },
+            {
+              title: "当前患者",
+              dataIndex: "current_patient_name",
+              width: 150,
+              render: (value: string | null | undefined, device) =>
+                !device.enabled ? (
+                  <Tag>已停用</Tag>
+                ) : value ? (
+                  value
+                ) : device.is_bound ? (
+                  "已绑定（无访问权限）"
+                ) : (
+                  "未绑定"
+                ),
+            },
+            { title: "最近通信", dataIndex: "last_communication_at", width: 170, render: formatTime },
+            { title: "最近同步", dataIndex: "last_sync_at", width: 170, render: formatTime },
+            {
+              title: "操作",
+              key: "actions",
+              width: 120,
+              render: (_: unknown, device) => (
+                <Button
+                  type="link"
+                  style={{ paddingInline: 0 }}
+                  disabled={!device.enabled}
+                  loading={
+                    statusCheck.isPending &&
+                    statusCheck.variables?.deviceId === device.id &&
+                    statusCheck.variables.generation === statusRequestGeneration.current
+                  }
+                  onClick={() => runStatusCheck(device)}
+                >
+                  通信测试
+                </Button>
+              ),
+            },
+          ]}
+        />
+      )}
+
+      <Modal title="新增设备" open={createOpen} footer={null} destroyOnHidden onCancel={() => setCreateOpen(false)}>
+        <Form form={form} layout="vertical" onFinish={(values) => createDevice.mutate(values)}>
+          <Form.Item label="厂商" name="provider" rules={[{ required: true, message: "请输入厂商" }]}>
+            <Input placeholder="例如 miwitracker" />
+          </Form.Item>
+          <Form.Item label="厂商设备标识" name="external_device_id" rules={[{ required: true, message: "请输入厂商设备标识" }]}>
+            <Input placeholder="设备在厂商平台中的标识" />
+          </Form.Item>
+          <Form.Item label="标识类型" name="identifier_type" rules={[{ required: true, message: "请输入标识类型" }]}>
+            <Input placeholder="例如 device_id、sn 或 imei" />
+          </Form.Item>
+          <Form.Item label="设备型号" name="model" rules={[{ required: true, message: "请输入设备型号" }]}>
+            <Input placeholder="设备型号" />
+          </Form.Item>
+          {createDevice.isError ? <Alert type="error" showIcon message={errorMessage(createDevice.error, "设备录入失败")} style={{ marginBottom: 16 }} /> : null}
+          <Space>
+            <Button type="primary" htmlType="submit" loading={createDevice.isPending}>
+              录入设备
+            </Button>
+            <Button onClick={() => setCreateOpen(false)}>取消</Button>
+          </Space>
+        </Form>
+      </Modal>
+    </Card>
+  );
+}

@@ -22,7 +22,7 @@ function errorMessage(error: unknown) {
       if (typeof detail === "string" && detail.trim()) return detail;
     }
   }
-  return "加载训练追踪数据失败";
+  return "加载训练与健康数据失败";
 }
 
 export function TrainingTrackingPage() {
@@ -40,7 +40,7 @@ export function TrainingTrackingPage() {
   });
 
   return (
-    <Card title="患者训练追踪">
+    <Card title="患者训练与健康">
       <Space wrap style={{ marginBottom: 16 }} align="center">
         <Input
           allowClear
@@ -79,9 +79,24 @@ export function TrainingTrackingPage() {
           },
           { title: "近 30 天完成次数", dataIndex: "last_30_days_completed_count" },
           {
+            title: "设备绑定",
+            render: (_: unknown, row) => row.wearable?.device_short_code ?? "未绑定",
+          },
+          {
+            title: "最近健康同步",
+            render: (_: unknown, row) => formatDateTime(row.wearable?.last_sync_at),
+          },
+          {
+            title: "近 30 天数据完整率",
+            render: (_: unknown, row) => {
+              const value = row.wearable?.last_30_days_data_completeness;
+              return value == null ? "—" : `${value}%`;
+            },
+          },
+          {
             title: "操作",
             render: (_: unknown, row) => (
-              <Link to={`/training-tracking/patients/${row.patient.id}`}>查看追踪</Link>
+              <Link to={`/training-tracking/patients/${row.patient.id}`}>查看训练与健康</Link>
             ),
           },
         ]}

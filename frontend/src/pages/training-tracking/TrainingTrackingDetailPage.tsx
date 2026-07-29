@@ -14,6 +14,7 @@ import {
   Spin,
   Statistic,
   Table,
+  Tabs,
   Tag,
   Tooltip,
   Typography,
@@ -22,6 +23,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
+import { formatShanghaiDate } from "../../utils/shanghaiTime";
+import { WearableHealthTab } from "../wearables/WearableHealthTab";
 import type {
   TrackingDailyTrendPoint,
   TrackingDetail,
@@ -257,6 +260,7 @@ export function TrainingTrackingDetailPage() {
   const numericPatientId = Number(patientId);
   const isValidPatientId = Number.isSafeInteger(numericPatientId) && numericPatientId > 0;
   const [range, setRange] = useState<TrainingTrackingRange>("30d");
+  const [activeTab, setActiveTab] = useState<"training" | "wearable">("training");
   const [selectedProjectPatient, setSelectedProjectPatient] = useState<{
     patientId: number;
     projectPatientId: number;
@@ -274,6 +278,11 @@ export function TrainingTrackingDetailPage() {
 
   useEffect(() => {
     setSelectedProjectPatient(null);
+    setActiveTab("training");
+    setVideoDrawerRecord(null);
+    setDownloadUrl(null);
+    setDownloadLoading(false);
+    setDownloadError(null);
   }, [numericPatientId]);
 
   const queryParams = useMemo(() => {
@@ -296,7 +305,8 @@ export function TrainingTrackingDetailPage() {
       return response.data;
     },
     enabled: isValidPatientId,
-    placeholderData: (previousData) => previousData,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === numericPatientId ? previousData : undefined,
   });
 
   const latestAnalysisQuery = useQuery({
@@ -413,8 +423,11 @@ export function TrainingTrackingDetailPage() {
     );
   }
 
-  const currentProject = data.selected_project_patient;
-  const currentProjectPatientId = selectedProjectPatientId ?? currentProject.id;
+  const currentProjectPatientId = selectedProjectPatientId ?? data.selected_project_patient.id;
+  const currentProject =
+    data.project_patients.find((projectPatient) => projectPatient.id === currentProjectPatientId) ??
+    data.selected_project_patient;
+  const currentProjectDataReady = data.selected_project_patient.id === currentProjectPatientId;
   const activeTrendData =
     range === "weekly"
       ? buildWeeklyTrendData(data.trend.weekly)
@@ -451,7 +464,7 @@ export function TrainingTrackingDetailPage() {
           </Space>
 
           <Descriptions
-            title="患者训练追踪"
+            title="患者训练与健康"
             bordered
             size="small"
             column={{ xs: 1, sm: 2, lg: 3 }}
@@ -462,6 +475,15 @@ export function TrainingTrackingDetailPage() {
               { key: "projectId", label: "项目 ID", children: currentProject.project },
               { key: "group", label: "分组", children: currentProject.group_name ?? "—" },
               {
+                key: "period",
+                label: "研究周期",
+                children: `研究周期：${formatShanghaiDate(currentProject.enrolled_at)} 至 ${
+                  currentProject.project_completed_at
+                    ? formatShanghaiDate(currentProject.project_completed_at)
+                    : "进行中"
+                }`,
+              },
+              {
                 key: "prescription",
                 label: "当前处方版本",
                 children: data.current_prescription ? `当前处方 v${data.current_prescription.version}` : "暂无当前处方",
@@ -471,6 +493,15 @@ export function TrainingTrackingDetailPage() {
         </Space>
       </Card>
 
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as "training" | "wearable")}
+        items={[
+          {
+            key: "training",
+            label: "训练跟踪",
+            children: (
+              <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Card title="处方完成情况">
         {data.prescription_completion.length === 0 ? (
           <Empty description="暂无处方完成数据" />
@@ -809,6 +840,22 @@ export function TrainingTrackingDetailPage() {
           </Space>
         ) : null}
       </Drawer>
+              </Space>
+            ),
+          },
+          {
+            key: "wearable",
+            label: "穿戴健康",
+            children: currentProjectDataReady ? (
+              <WearableHealthTab patientId={numericPatientId} projectPatientId={currentProjectPatientId} />
+            ) : (
+              <Card>
+                <Spin />
+              </Card>
+            ),
+          },
+        ]}
+      />
     </Space>
   );
 }
