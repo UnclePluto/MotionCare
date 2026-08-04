@@ -122,6 +122,66 @@ def test_measurement_buckets_use_shanghai_boundaries_and_hide_raw_payload(
 
 
 @pytest.mark.django_db
+def test_daily_summaries_fill_every_eligible_day_in_selected_range(
+    doctor, project_patient, patient
+):
+    ProjectPatient.objects.filter(pk=project_patient.pk).update(
+        enrolled_at=datetime(2026, 7, 1, tzinfo=UTC)
+    )
+    WearableDailySummary.objects.create(
+        patient=patient,
+        record_date=date(2026, 7, 29),
+        heart_rate_avg=Decimal("72"),
+        heart_rate_count=3,
+        steps=5000,
+    )
+
+    response = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/daily-summaries/",
+        {
+            "project_patient": project_patient.id,
+            "start": "2026-07-28",
+            "end": "2026-07-30",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["record_date"] for item in response.data["items"]] == [
+        "2026-07-28",
+        "2026-07-29",
+        "2026-07-30",
+    ]
+    assert response.data["items"][0]["heart_rate_avg"] is None
+    assert response.data["items"][0]["heart_rate_count"] == 0
+    assert response.data["items"][0]["steps"] is None
+    assert response.data["items"][1]["heart_rate_avg"] == 72.0
+    assert response.data["items"][2]["blood_oxygen_count"] == 0
+
+
+@pytest.mark.django_db
+def test_daily_summaries_return_each_requested_date_once(
+    doctor, project_patient, patient
+):
+    ProjectPatient.objects.filter(pk=project_patient.pk).update(
+        enrolled_at=datetime(2026, 7, 1, tzinfo=UTC)
+    )
+
+    response = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/daily-summaries/",
+        {"start": "2026-07-28", "end": "2026-08-01"},
+    )
+
+    assert response.status_code == 200
+    assert [item["record_date"] for item in response.data["items"]] == [
+        "2026-07-28",
+        "2026-07-29",
+        "2026-07-30",
+        "2026-07-31",
+        "2026-08-01",
+    ]
+
+
+@pytest.mark.django_db
 def test_project_window_clips_raw_points_and_excludes_partial_summary_days(
     doctor, project_patient, patient, wearable_device
 ):
@@ -234,6 +294,36 @@ def test_sync_status_does_not_expose_previous_patients_sync_runs_after_device_re
     assert before_new_run.data["metrics"][0]["status"] is None
     assert after_new_run.data["metrics"][0]["status"] == "failed"
     assert after_new_run.data["metrics"][0]["last_success_at"] is None
+
+
+@pytest.mark.django_db
+def test_sync_status_returns_current_binding_bound_at(
+    doctor, project_patient, wearable_device
+):
+    binding = WearableBinding.objects.create(
+        patient=project_patient.patient,
+        device=wearable_device,
+        bound_at=datetime(2026, 7, 24, 10, 30, tzinfo=UTC),
+        bound_by=doctor,
+    )
+
+    response = _client(doctor).get(
+        f"/api/wearables/patients/{project_patient.patient_id}/sync-status/"
+    )
+
+    assert response.status_code == 200
+    assert response.data["binding_id"] == binding.id
+    assert response.data["bound_at"] == "2026-07-24T18:30:00+08:00"
+
+
+@pytest.mark.django_db
+def test_sync_status_returns_null_bound_at_without_current_binding(doctor, project_patient):
+    response = _client(doctor).get(
+        f"/api/wearables/patients/{project_patient.patient_id}/sync-status/"
+    )
+
+    assert response.status_code == 200
+    assert response.data["bound_at"] is None
 
 
 @pytest.mark.django_db

@@ -175,6 +175,10 @@ def daily_summaries(*, user, patient_id, project_patient_id, start, end):
     summaries = WearableDailySummary.objects.filter(
         patient_id=patient_id, record_date__in=days
     ).order_by("record_date")
+    summaries_by_date = {
+        summary.record_date: summary
+        for summary in summaries
+    }
     fields = (
         "heart_rate_avg",
         "heart_rate_min",
@@ -194,23 +198,25 @@ def daily_summaries(*, user, patient_id, project_patient_id, start, end):
         "blood_oxygen_sync_status",
         "steps_sync_status",
     )
+    items = []
+    for record_date in days:
+        summary = summaries_by_date.get(record_date)
+        item = {"record_date": record_date.isoformat()}
+        for field in fields:
+            if summary is None:
+                item[field] = 0 if field.endswith("_count") else None
+                continue
+            field_value = getattr(summary, field)
+            item[field] = (
+                float(field_value)
+                if field.endswith("_avg") and field_value is not None
+                else field_value
+            )
+        items.append(item)
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
-        "items": [
-            {
-                "record_date": summary.record_date.isoformat(),
-                **{
-                    field: (
-                        float(getattr(summary, field))
-                        if field.endswith("_avg") and getattr(summary, field) is not None
-                        else getattr(summary, field)
-                    )
-                    for field in fields
-                },
-            }
-            for summary in summaries
-        ],
+        "items": items,
     }
 
 
@@ -225,6 +231,7 @@ def sync_status(*, user, patient_id):
         return {
             "is_bound": False,
             "binding_id": None,
+            "bound_at": None,
             "device_id": None,
             "model": None,
             "device_short_code": None,
@@ -258,6 +265,7 @@ def sync_status(*, user, patient_id):
     return {
         "is_bound": True,
         "binding_id": binding.id,
+        "bound_at": _serialize_datetime(binding.bound_at),
         "device_id": binding.device_id,
         "model": binding.device.model,
         "device_short_code": binding.device.short_code,

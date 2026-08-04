@@ -1,0 +1,50 @@
+.training-health-tabs > .ant-tabs-nav {
+  width: min(100%, 480px);
+  margin-bottom: 16px;
+}
+
+.training-health-tabs > .ant-tabs-nav::before {
+  display: none;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-nav-wrap {
+  border: 1px solid #d6e4ff;
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-nav-list {
+  width: 100%;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-tab {
+  width: 50%;
+  justify-content: center;
+  margin: 0;
+  padding: 12px 18px;
+  background: #fff;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab {
+  border-left: 1px solid #d6e4ff;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-tab:hover {
+  background: #f0f7ff;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-tab-active {
+  background: #e6f4ff;
+  font-weight: 700;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-tab-btn:focus-visible {
+  outline: 2px solid #1677ff;
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+.training-health-tabs > .ant-tabs-nav .ant-tabs-ink-bar {
+  display: none;
+}

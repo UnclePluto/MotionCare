@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 import httpx
 from django.conf import settings
@@ -17,6 +18,8 @@ from .base import (
     ProviderError,
     ProviderMeasurement,
 )
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def build_token_password(key: str, app_id: str, timestamp: int) -> str:
@@ -148,8 +151,15 @@ class MiwitrackerClient:
             model=result.get("Model"),
             status=str(result["Status"]) if result.get("Status") is not None else None,
             battery_level=self._optional_int(result.get("Battery")),
-            last_communication_at=self._parse_optional_datetime(
-                result.get("SignalTime") or result.get("GpsTime")
+            last_communication_at=(
+                self._parse_optional_datetime(
+                    result.get("SignalTime"),
+                    default_timezone=SHANGHAI_TZ,
+                )
+                or self._parse_optional_datetime(
+                    result.get("GpsTime"),
+                    default_timezone=timezone.utc,
+                )
             ),
             raw_payload=safe_payload,
         )
@@ -332,15 +342,27 @@ class MiwitrackerClient:
         return value.strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
-    def _parse_datetime(value: str) -> datetime:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    def _parse_datetime(
+        value: str,
+        *,
+        default_timezone: timezone | ZoneInfo = timezone.utc,
+    ) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = datetime.strptime(value, "%Y/%m/%d %H:%M:%S")
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=default_timezone)
         return parsed.astimezone(timezone.utc)
 
     @classmethod
-    def _parse_optional_datetime(cls, value: Any) -> datetime | None:
-        return cls._parse_datetime(str(value)) if value else None
+    def _parse_optional_datetime(
+        cls,
+        value: Any,
+        *,
+        default_timezone: timezone | ZoneInfo = timezone.utc,
+    ) -> datetime | None:
+        return cls._parse_datetime(str(value), default_timezone=default_timezone) if value else None
 
     @staticmethod
     def _measurement_int(value: Any) -> int:
