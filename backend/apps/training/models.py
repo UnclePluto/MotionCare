@@ -27,6 +27,7 @@ class TrainingRecord(UserStampedModel):
 
 
 from .video_models import (  # noqa: E402,F401
+    LegacyTrainingVideoSegmentArchive,
     MotionAnalysisJob,
     QiniuCleanupTombstone,
     TrainingVideo,

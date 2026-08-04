@@ -45,8 +45,10 @@ def repair_unbound_qiniu_canonical_keys(apps, schema_editor):
 
         if video.object_key:
             canonical_key = video.object_key
-        elif previous_key and not previous_key.startswith(prefix) and not _is_fabricated_canonical_key(
+        elif (
             previous_key
+            and not previous_key.startswith(prefix)
+            and not _is_fabricated_canonical_key(previous_key)
         ):
             canonical_key = previous_key
         else:
@@ -101,7 +103,7 @@ def repair_unbound_qiniu_canonical_keys(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("training", "0009_repair_qiniu_canonical_keys"),
+        ("training", "0011_repair_qiniu_canonical_keys"),
     ]
 
     operations = [

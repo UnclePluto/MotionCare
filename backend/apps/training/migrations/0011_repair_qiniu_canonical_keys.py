@@ -66,7 +66,7 @@ def repair_qiniu_canonical_keys(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("training", "0008_qiniucleanuptombstone_and_more"),
+        ("training", "0010_seed_qiniu_cleanup_tombstones"),
     ]
 
     operations = [
