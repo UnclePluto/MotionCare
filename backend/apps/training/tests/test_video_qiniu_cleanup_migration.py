@@ -14,8 +14,8 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     active_prescription,
     prescription_action,
 ):
-    migrate_from = [("training", "0007_videoassemblyjob_qiniu_upload_deadline_at")]
-    migrate_to = [("training", "0010_repair_unbound_qiniu_canonical_keys")]
+    migrate_from = [("training", "0009_current_training_pipeline")]
+    migrate_to = [("training", "0012_repair_unbound_qiniu_canonical_keys")]
     executor = MigrationExecutor(connection)
     executor.migrate(migrate_from)
     old_apps = executor.loader.project_state(migrate_from).apps
@@ -208,7 +208,7 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
         )
     )
     migration = importlib.import_module(
-        "apps.training.migrations.0010_repair_unbound_qiniu_canonical_keys"
+        "apps.training.migrations.0012_repair_unbound_qiniu_canonical_keys"
     )
     migration.repair_unbound_qiniu_canonical_keys(new_apps, None)
     assert list(

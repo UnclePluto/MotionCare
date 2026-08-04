@@ -7,6 +7,33 @@ from django.utils import timezone
 from apps.common.models import TimeStampedModel, UserStampedModel
 
 
+def processing_expiry_default():
+    """Compatibility callable retained for the already-deployed 0003 migration."""
+    retention_hours = getattr(settings, "TRAINING_VIDEO_PROCESSING_RETENTION_HOURS", 48)
+    return timezone.now() + timezone.timedelta(hours=retention_hours)
+
+
+def processing_max_attempts_default():
+    """Compatibility callable retained for the already-deployed 0003 migration."""
+    return getattr(settings, "TRAINING_VIDEO_PROCESSING_MAX_ATTEMPTS", 96)
+
+
+class LegacyTrainingVideoSegmentArchive(models.Model):
+    source_segment_id = models.PositiveBigIntegerField("旧分片 ID", unique=True)
+    source_training_video_id = models.PositiveBigIntegerField(
+        "旧视频 ID",
+        db_index=True,
+    )
+    sequence_index = models.PositiveIntegerField("旧分片序号")
+    server_file_path = models.CharField("旧服务端临时文件", max_length=500)
+    size_bytes = models.PositiveBigIntegerField("旧分片大小")
+    object_hash = models.CharField("旧文件 SHA-256", max_length=64)
+    status = models.CharField("旧分片状态", max_length=20)
+    uploaded_at = models.DateTimeField("旧上传完成时间", null=True, blank=True)
+    failure_reason = models.TextField("旧失败原因", blank=True)
+    archived_at = models.DateTimeField("归档时间", default=timezone.now)
+
+
 class TrainingVideo(UserStampedModel):
     class CleanupStatus(models.TextChoices):
         NONE = "", "无需清理"
