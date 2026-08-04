@@ -44,6 +44,10 @@ export function shanghaiToday(): Dayjs {
   return inShanghai().startOf("day");
 }
 
+export function shanghaiDateStart(value: string): Dayjs {
+  return dayjs.tz(value, SHANGHAI_TIME_ZONE).startOf("day");
+}
+
 function shanghaiCalendarDay(value: Dayjs): Dayjs {
   return dayjs.tz(value.format("YYYY-MM-DD"), SHANGHAI_TIME_ZONE).startOf("day");
 }

@@ -1,5 +1,5 @@
 import { DualAxes, type DualAxesConfig } from "@ant-design/charts";
-import { ExperimentOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { ExperimentOutlined, HeartOutlined, LineChartOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -36,6 +36,7 @@ import type {
   TrackingWeeklyTrendPoint,
   TrainingTrackingRange,
 } from "./types";
+import "./TrainingTrackingDetailPage.css";
 
 type ChartTrendPoint = {
   label: string;
@@ -494,12 +495,18 @@ export function TrainingTrackingDetailPage() {
       </Card>
 
       <Tabs
+        rootClassName="training-health-tabs"
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as "training" | "wearable")}
         items={[
           {
             key: "training",
-            label: "训练跟踪",
+            label: (
+              <Space size={8}>
+                <LineChartOutlined aria-hidden="true" />
+                训练跟踪
+              </Space>
+            ),
             children: (
               <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <Card title="处方完成情况">
@@ -845,7 +852,12 @@ export function TrainingTrackingDetailPage() {
           },
           {
             key: "wearable",
-            label: "穿戴健康",
+            label: (
+              <Space size={8}>
+                <HeartOutlined aria-hidden="true" />
+                穿戴健康
+              </Space>
+            ),
             children: currentProjectDataReady ? (
               <WearableHealthTab patientId={numericPatientId} projectPatientId={currentProjectPatientId} />
             ) : (

@@ -130,6 +130,50 @@ def test_daily_steps_parser_uses_documented_item_fields(client_factory):
 
 
 @pytest.mark.parametrize(
+    ("time_field", "time_value", "expected_utc"),
+    [
+        (
+            "SignalTime",
+            "2026/8/3 14:52:38",
+            datetime(2026, 8, 3, 6, 52, 38, tzinfo=timezone.utc),
+        ),
+        (
+            "GpsTime",
+            "2026/8/3 06:22:22",
+            datetime(2026, 8, 3, 6, 22, 22, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_device_status_parses_documented_time_format_with_field_timezone(
+    client_factory,
+    time_field,
+    time_value,
+    expected_utc,
+):
+    def handler(request):
+        if request.url.path == MiwitrackerClient.TOKEN_PATH:
+            return response(request, {"Code": 0, "Result": {"AccessToken": "token-1"}})
+        return response(
+            request,
+            {
+                "Code": 0,
+                "Message": "Success",
+                "Result": {
+                    "Imei": "8675309",
+                    "Model": "H12_YB",
+                    "Status": 1,
+                    "Battery": 61,
+                    time_field: time_value,
+                },
+            },
+        )
+
+    status = client_factory(handler).get_device_status("8675309")
+
+    assert status.last_communication_at == expected_utc
+
+
+@pytest.mark.parametrize(
     ("parser_name", "items"),
     [
         ("parse_heart_rates", []),

@@ -1,10 +1,21 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  defaultScheduler,
+  notifyManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import dayjs, { type Dayjs } from "dayjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  shanghaiDateStart,
+  shanghaiToday,
+} from "../../utils/shanghaiTime";
 import { WearableHealthTab } from "./WearableHealthTab";
 
 const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
+const FIXED_SYSTEM_TIME = new Date("2026-08-03T04:00:00Z");
 
 vi.mock("../../api/client", () => ({
   apiClient: {
@@ -22,15 +33,35 @@ vi.mock("@ant-design/charts", () => ({
   ),
 }));
 
+vi.mock("antd", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("antd")>();
+  type RangePickerProps = {
+    "aria-label"?: string;
+    onChange?: (value: [Dayjs, Dayjs] | null) => void;
+  };
+  const RangePicker = ({ "aria-label": ariaLabel, onChange }: RangePickerProps) => (
+    <button
+      aria-label={ariaLabel}
+      type="button"
+      onClick={() => onChange?.([dayjs("2026-06-01"), dayjs("2026-07-15")])}
+    >
+      选择健康日期范围
+    </button>
+  );
+  return {
+    ...actual,
+    DatePicker: {
+      ...actual.DatePicker,
+      RangePicker,
+    },
+  };
+});
+
 const capabilities = {
   ring: false,
   measure_heart_rate: true,
   measure_blood_pressure: true,
   measure_blood_oxygen: true,
-  configure_heart_rate_interval: false,
-  configure_blood_pressure_interval: false,
-  configure_blood_oxygen_interval: false,
-  configure_step_switch: false,
 };
 
 function boundSyncStatus(
@@ -39,6 +70,7 @@ function boundSyncStatus(
   return {
     is_bound: true,
     binding_id: 17,
+    bound_at: "2026-07-24T18:30:00+08:00",
     device_id: 7,
     model: "M1",
     device_short_code: "0826",
@@ -56,6 +88,7 @@ function unboundSyncStatus() {
   return {
     is_bound: false,
     binding_id: null,
+    bound_at: null,
     device_id: null,
     model: null,
     device_short_code: null,
@@ -73,14 +106,6 @@ function unboundSyncStatus() {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function renderTab() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const result = render(
@@ -91,8 +116,25 @@ function renderTab() {
   return { ...result, queryClient };
 }
 
+function dailySummaryResponse(start: string, end: string) {
+  const items = [];
+  for (
+    let cursor = shanghaiDateStart(end);
+    !cursor.isBefore(shanghaiDateStart(start));
+    cursor = cursor.subtract(1, "day")
+  ) {
+    items.push({
+      record_date: cursor.format("YYYY-MM-DD"),
+      steps: 0,
+    });
+  }
+  return Promise.resolve({ data: { start, end, items } });
+}
+
 describe("WearableHealthTab", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(FIXED_SYSTEM_TIME);
     mockGet.mockReset();
     mockPost.mockReset();
     mockGet.mockImplementation((url: string) => {
@@ -101,6 +143,7 @@ describe("WearableHealthTab", () => {
           data: {
             is_bound: true,
             binding_id: 17,
+            bound_at: "2026-07-24T18:30:00+08:00",
             device_id: 7,
             model: "M1",
             device_short_code: "0826",
@@ -134,142 +177,953 @@ describe("WearableHealthTab", () => {
     mockPost.mockResolvedValue({ data: { status: "queued" } });
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    notifyManager.setScheduler(defaultScheduler);
+    vi.useRealTimers();
+  });
 
-  it("加载绑定摘要、健康筛选、趋势和日汇总，且不自动发起通信测试", async () => {
+  it("固定页面日期基准为上海 2026-08-03", () => {
+    expect(shanghaiToday().format("YYYY-MM-DD")).toBe("2026-08-03");
+    expect(Date.now()).toBe(FIXED_SYSTEM_TIME.getTime());
+  });
+
+  it("加载快捷日期筛选、四项趋势并并行请求三项原始测量，且不自动发起通信测试", async () => {
+    const today = shanghaiToday();
+    const defaultStart = today.subtract(29, "day").format("YYYY-MM-DD");
+    const defaultEnd = today.format("YYYY-MM-DD");
     renderTab();
 
     expect(await screen.findByText("设备 0826")).toBeInTheDocument();
-    expect(screen.getByTitle("心率")).toBeInTheDocument();
-    expect(screen.getByTitle("原始")).toBeInTheDocument();
+    expect(screen.getByText("近 7 天")).toBeInTheDocument();
+    expect(screen.getByText("近 30 天")).toBeInTheDocument();
+    expect(screen.getByText("自定义")).toBeInTheDocument();
+    expect(screen.queryByLabelText("健康指标")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("图表间隔")).not.toBeInTheDocument();
     expect(screen.getByText("日汇总")).toBeInTheDocument();
     expect(mockPost).not.toHaveBeenCalled();
-    await waitFor(() => expect(mockGet).toHaveBeenCalledWith(
-      "/wearables/patients/201/measurements/",
-      expect.objectContaining({ params: expect.objectContaining({ project_patient: 9001, metric_type: "heart_rate", bucket: "raw" }) }),
-    ));
+    await waitFor(() => {
+      for (const metricType of [
+        "heart_rate",
+        "blood_pressure",
+        "blood_oxygen",
+      ]) {
+        expect(mockGet).toHaveBeenCalledWith(
+          "/wearables/patients/201/measurements/",
+          expect.objectContaining({
+            params: expect.objectContaining({
+              project_patient: 9001,
+              metric_type: metricType,
+              bucket: "raw",
+              start: defaultStart,
+              end: defaultEnd,
+            }),
+            signal: expect.any(AbortSignal),
+          }),
+        );
+      }
+    });
+    expect(screen.getByText("心率趋势")).toBeInTheDocument();
+    expect(screen.getByText("血压趋势")).toBeInTheDocument();
+    expect(screen.getByText("血氧趋势")).toBeInTheDocument();
+    expect(screen.getByText("步数趋势")).toBeInTheDocument();
   });
 
-  it("步数只展示日总量并隐藏日内间隔与主动测量", async () => {
+  it("趋势卡片不展示主动测量与能力提示但保留顶部设备操作", async () => {
     mockGet.mockImplementation((url: string) => {
       if (url.includes("sync-status")) {
         return Promise.resolve({
-          data: {
-            is_bound: true,
-            binding_id: 17,
-            device_id: 7,
-            model: "M1",
-            device_short_code: "0826",
-            last_device_status: "online",
-            last_battery_level: 82,
-            last_communication_at: "2026-07-24T02:00:00Z",
-            capabilities,
-            last_sync_at: null,
-            metrics: [],
-          },
+          data: boundSyncStatus({
+            capabilities: {
+              ...boundSyncStatus().capabilities,
+              measure_heart_rate: true,
+              measure_blood_pressure: true,
+              measure_blood_oxygen: true,
+            },
+          }),
         });
       }
-      if (url.includes("measurements")) {
-        return Promise.resolve({
-          data: {
-            metric_type: "heart_rate",
-            bucket: "raw",
-            start: "2026-06-25",
-            end: "2026-07-24",
-            total: 0,
-            page: 1,
-            page_size: 500,
-            next_page: null,
-            items: [],
-          },
-        });
-      }
-      if (url.includes("daily-summaries")) {
-        return Promise.resolve({
-          data: {
-            items: [
-              {
-                record_date: "2026-07-22",
-                steps: 5000,
-                steps_attribution_status: "attributed",
-                steps_sync_status: "succeeded",
-              },
-              {
-                record_date: "2026-07-23",
-                steps: 6000,
-                steps_attribution_status: "ambiguous",
-                steps_sync_status: "failed",
-              },
-            ],
-          },
-        });
+      if (url.includes("measurements") || url.includes("daily-summaries")) {
+        return Promise.resolve({ data: { items: [] } });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
-    renderTab();
-    await screen.findByText("设备 0826");
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "健康指标" }));
-    fireEvent.click(await screen.findByTitle("步数"));
 
-    expect(screen.queryByLabelText("图表间隔")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "主动测量" })).not.toBeInTheDocument();
-    expect(await screen.findByText("5000")).toBeInTheDocument();
-    expect(await screen.findByText("6000")).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "归属状态" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "同步状态" })).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "心率均值" })).not.toBeInTheDocument();
-    const chartConfigs = screen
-      .getAllByTestId("wearable-chart")
-      .map((node) => JSON.parse(node.textContent ?? "{}"));
-    expect(
-      chartConfigs.some(
-        (config) =>
-          JSON.stringify(config.data) ===
-          JSON.stringify([
-            { label: "07-22", value: 5000 },
-            { label: "07-23", value: 6000 },
-          ]),
-      ),
-    ).toBe(true);
+    renderTab();
+
+    expect(await screen.findByText("心率趋势")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测量心率" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测量血压" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "测量血氧" })).not.toBeInTheDocument();
+    expect(screen.queryByText("该型号能力尚未验证")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /通信测试/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /主动同步/ })).toBeInTheDocument();
   });
 
-  it("未绑定时显示绑定引导且不显示主动测量", async () => {
+  it("点击近 7 天后按上海今天和之前六天重查三项测量与日汇总", async () => {
+    const today = shanghaiToday();
+    const start = today.subtract(6, "day").format("YYYY-MM-DD");
+    const end = today.format("YYYY-MM-DD");
+    renderTab();
+    await screen.findByText("设备 0826");
+
+    fireEvent.click(screen.getByText("近 7 天"));
+
+    await waitFor(() => {
+      for (const metricType of [
+        "heart_rate",
+        "blood_pressure",
+        "blood_oxygen",
+      ]) {
+        expect(mockGet).toHaveBeenCalledWith(
+          "/wearables/patients/201/measurements/",
+          expect.objectContaining({
+            params: expect.objectContaining({
+              metric_type: metricType,
+              start,
+              end,
+              bucket: "raw",
+            }),
+          }),
+        );
+      }
+      expect(mockGet).toHaveBeenCalledWith(
+        "/wearables/patients/201/daily-summaries/",
+        expect.objectContaining({
+          params: expect.objectContaining({
+            project_patient: 9001,
+            start,
+            end,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("趋势日期切换不重新查询或重置日汇总历史", async () => {
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          return dailySummaryResponse(
+            String(config?.params?.start),
+            String(config?.params?.end),
+          );
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    renderTab();
+
+    await screen.findByRole("button", { name: "获取更多" });
+    const historyCallsBefore = mockGet.mock.calls.filter(
+      ([url, config]) =>
+        String(url).includes("daily-summaries") &&
+        !(config as { params?: Record<string, unknown> }).params
+          ?.project_patient,
+    ).length;
+
+    fireEvent.click(screen.getByText("近 7 天"));
+
+    await waitFor(() => {
+      const trendCalls = mockGet.mock.calls.filter(
+        ([url, config]) =>
+          String(url).includes("daily-summaries") &&
+          (config as { params?: Record<string, unknown> }).params
+            ?.project_patient === 9001,
+      );
+      expect(trendCalls.at(-1)?.[1]).toMatchObject({
+        params: {
+          project_patient: 9001,
+          start: "2026-07-28",
+          end: "2026-08-03",
+        },
+      });
+    });
+
+    const historyCallsAfter = mockGet.mock.calls.filter(
+      ([url, config]) =>
+        String(url).includes("daily-summaries") &&
+        !(config as { params?: Record<string, unknown> }).params
+          ?.project_patient,
+    ).length;
+    expect(historyCallsAfter).toBe(historyCallsBefore);
+  });
+
+  it("日汇总每次追加更早五天并在绑定日期停止", async () => {
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          const start = String(config?.params?.start);
+          const end = String(config?.params?.end);
+          return dailySummaryResponse(start, end);
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+
+    renderTab();
+
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+    expect(screen.getByText("2026-07-30")).toBeInTheDocument();
+    expect(screen.queryByText("2026-07-29")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-29")).toBeInTheDocument();
+    expect(screen.getByText("2026-07-25")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-24")).toBeInTheDocument();
+    expect(screen.getByText("没有更多数据了")).toBeInTheDocument();
+
+    const dates = screen
+      .getAllByRole("row")
+      .map((row) => row.firstElementChild?.textContent)
+      .filter((date): date is string => /^\d{4}-\d{2}-\d{2}$/.test(date ?? ""));
+    expect(dates).toEqual([
+      "2026-08-03",
+      "2026-08-02",
+      "2026-08-01",
+      "2026-07-31",
+      "2026-07-30",
+      "2026-07-29",
+      "2026-07-28",
+      "2026-07-27",
+      "2026-07-26",
+      "2026-07-25",
+      "2026-07-24",
+    ]);
+  });
+
+  it("日汇总初始失败时提供重新加载入口", async () => {
+    let failed = false;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          if (config?.params?.project_patient) {
+            return dailySummaryResponse(
+              String(config.params.start),
+              String(config.params.end),
+            );
+          }
+          if (!failed) {
+            failed = true;
+            return Promise.reject(new Error("history unavailable"));
+          }
+          return dailySummaryResponse(
+            String(config?.params?.start),
+            String(config?.params?.end),
+          );
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+
+    renderTab();
+
+    expect(await screen.findByText("加载日汇总失败")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+  });
+
+  it("加载更多失败时保留首批数据并允许重试", async () => {
+    let secondPageAttempts = 0;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          const start = String(config?.params?.start);
+          const end = String(config?.params?.end);
+          if (!config?.params?.project_patient && start === "2026-07-25") {
+            secondPageAttempts += 1;
+            if (secondPageAttempts === 1) {
+              return Promise.reject(new Error("next page unavailable"));
+            }
+          }
+          return dailySummaryResponse(start, end);
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+
+    renderTab();
+
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+
+    const retry = await screen.findByRole("button", {
+      name: "获取更多失败，点击重试",
+    });
+    expect(screen.getByText("2026-08-03")).toBeInTheDocument();
+
+    fireEvent.click(retry);
+    expect(await screen.findByText("2026-07-29")).toBeInTheDocument();
+  });
+
+  it("加载下一批期间保留首批数据并展示正在获取", async () => {
+    let resolveNextPage!: (value: {
+      data: {
+        start: string;
+        end: string;
+        items: Array<{ record_date: string; steps: number }>;
+      };
+    }) => void;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          const start = String(config?.params?.start);
+          const end = String(config?.params?.end);
+          if (config?.params?.project_patient || start === "2026-07-30") {
+            return dailySummaryResponse(start, end);
+          }
+          return new Promise((resolve) => {
+            resolveNextPage = resolve;
+          });
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    renderTab();
+
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+
+    expect(
+      await screen.findByRole("button", { name: "正在获取…" }),
+    ).toBeDisabled();
+    expect(screen.getByText("2026-08-03")).toBeInTheDocument();
+
+    resolveNextPage({
+      data: {
+        start: "2026-07-25",
+        end: "2026-07-29",
+        items: [{ record_date: "2026-07-29", steps: 0 }],
+      },
+    });
+    expect(await screen.findByText("2026-07-29")).toBeInTheDocument();
+  });
+
+  it("主动同步刷新已加载分页但不收回历史行", async () => {
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          return dailySummaryResponse(
+            String(config?.params?.start),
+            String(config?.params?.end),
+          );
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    renderTab();
+
+    await screen.findByText("2026-08-03");
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-25")).toBeInTheDocument();
+    const historyWindowCallCount = (start: string) =>
+      mockGet.mock.calls.filter(
+        ([url, config]) =>
+          String(url).includes("daily-summaries") &&
+          !(config as { params?: Record<string, unknown> }).params
+            ?.project_patient &&
+          (config as { params?: Record<string, unknown> }).params?.start ===
+            start,
+      ).length;
+    const historyCallsBeforeSync = {
+      first: historyWindowCallCount("2026-07-30"),
+      second: historyWindowCallCount("2026-07-25"),
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: /主动同步/ }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        "/wearables/patients/201/sync/",
+        {},
+      );
+    });
+    await waitFor(() => {
+      expect(historyWindowCallCount("2026-07-30")).toBeGreaterThan(
+        historyCallsBeforeSync.first,
+      );
+      expect(historyWindowCallCount("2026-07-25")).toBeGreaterThan(
+        historyCallsBeforeSync.second,
+      );
+    });
+    expect(screen.getByText("2026-07-25")).toBeInTheDocument();
+  });
+
+  it("主动同步进行中切换趋势日期仍保持锁定并在成功后刷新当前趋势与全部历史页", async () => {
+    let resolveSync!: (value: { data: { status: "queued" } }) => void;
+    mockPost.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSync = resolve;
+        }),
+    );
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          return dailySummaryResponse(
+            String(config?.params?.start),
+            String(config?.params?.end),
+          );
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    renderTab();
+
+    await screen.findByText("2026-08-03");
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-25")).toBeInTheDocument();
+
+    const callCount = (
+      kind: "measurement" | "daily-trend" | "daily-history",
+      start?: string,
+    ) =>
+      mockGet.mock.calls.filter(([url, config]) => {
+        const params = (
+          config as { params?: Record<string, unknown> } | undefined
+        )?.params;
+        if (kind === "measurement") {
+          return (
+            String(url).includes("measurements") &&
+            params?.metric_type === "heart_rate"
+          );
+        }
+        if (kind === "daily-trend") {
+          return (
+            String(url).includes("daily-summaries") &&
+            params?.project_patient === 9001
+          );
+        }
+        return (
+          String(url).includes("daily-summaries") &&
+          !params?.project_patient &&
+          params?.start === start
+        );
+      }).length;
+
+    fireEvent.click(screen.getByRole("button", { name: /主动同步/ }));
+    expect(screen.getByRole("button", { name: /主动同步/ })).toBeDisabled();
+
+    fireEvent.click(screen.getByText("近 7 天"));
+    await waitFor(() => {
+      const dailyTrendCalls = mockGet.mock.calls.filter(
+        ([url, config]) =>
+          String(url).includes("daily-summaries") &&
+          (config as { params?: Record<string, unknown> }).params
+            ?.project_patient === 9001,
+      );
+      expect(dailyTrendCalls.at(-1)?.[1]).toMatchObject({
+        params: {
+          start: "2026-07-28",
+          end: "2026-08-03",
+        },
+      });
+    });
+    expect(screen.getByRole("button", { name: /主动同步/ })).toBeDisabled();
+
+    const callsBeforeCompletion = {
+      measurement: callCount("measurement"),
+      dailyTrend: callCount("daily-trend"),
+      firstHistory: callCount("daily-history", "2026-07-30"),
+      secondHistory: callCount("daily-history", "2026-07-25"),
+    };
+
+    resolveSync({ data: { status: "queued" } });
+
+    expect(
+      await screen.findByText("健康数据同步已排队，尚未确认新数据到达。"),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(callCount("measurement")).toBeGreaterThan(
+        callsBeforeCompletion.measurement,
+      );
+      expect(callCount("daily-trend")).toBeGreaterThan(
+        callsBeforeCompletion.dailyTrend,
+      );
+      expect(callCount("daily-history", "2026-07-30")).toBeGreaterThan(
+        callsBeforeCompletion.firstHistory,
+      );
+      expect(callCount("daily-history", "2026-07-25")).toBeGreaterThan(
+        callsBeforeCompletion.secondHistory,
+      );
+    });
+    expect(screen.getByText("2026-07-25")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /主动同步/ })).toBeEnabled();
+  });
+
+  it("离开设备绑定后清除其历史分页，返回时只重新加载最近五天", async () => {
+    let bindingGeneration = 17;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          const start = String(config?.params?.start);
+          const end = String(config?.params?.end);
+          if (config?.params?.project_patient) {
+            return dailySummaryResponse(start, end);
+          }
+          return dailySummaryResponse(start, end).then(({ data }) => ({
+            data: {
+              ...data,
+              items: data.items.map((item) => ({
+                ...item,
+                steps: bindingGeneration,
+              })),
+            },
+          }));
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    const { queryClient } = renderTab();
+
+    await screen.findByText("2026-08-03");
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-25")).toBeInTheDocument();
+
+    bindingGeneration = 19;
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus({
+          binding_id: 19,
+          device_id: 9,
+          device_short_code: "9009",
+        }),
+      );
+    });
+    expect(await screen.findByText("设备 9009")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText("2026-07-25")).not.toBeInTheDocument(),
+    );
+
+    const historyCallsBeforeReturn = mockGet.mock.calls.length;
+    bindingGeneration = 17;
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus(),
+      );
+    });
+
+    expect(await screen.findByText("设备 0826")).toBeInTheDocument();
+    await waitFor(() => {
+      const returnHistoryCalls = mockGet.mock.calls
+        .slice(historyCallsBeforeReturn)
+        .filter(
+          ([url, config]) =>
+            String(url).includes("daily-summaries") &&
+            !(config as { params?: Record<string, unknown> }).params
+              ?.project_patient,
+        );
+      expect(returnHistoryCalls).toHaveLength(1);
+      expect(returnHistoryCalls[0]?.[1]).toMatchObject({
+        params: {
+          start: "2026-07-30",
+          end: "2026-08-03",
+        },
+      });
+    });
+    expect(screen.queryByText("2026-07-25")).not.toBeInTheDocument();
+    const dates = screen
+      .getAllByRole("row")
+      .map((row) => row.firstElementChild?.textContent)
+      .filter((date): date is string => /^\d{4}-\d{2}-\d{2}$/.test(date ?? ""));
+    expect(dates).toEqual([
+      "2026-08-03",
+      "2026-08-02",
+      "2026-08-01",
+      "2026-07-31",
+      "2026-07-30",
+    ]);
+  });
+
+  it("离开绑定会中止旧分页请求，旧响应迟到时返回绑定仍只加载最近五天", async () => {
+    let bindingGeneration = 17;
+    let oldPageSignal: AbortSignal | undefined;
+    let resolveOldPage!: (value: {
+      data: {
+        start: string;
+        end: string;
+        items: Array<{ record_date: string; steps: number }>;
+      };
+    }) => void;
+    mockGet.mockImplementation(
+      (
+        url: string,
+        config?: {
+          params?: Record<string, unknown>;
+          signal?: AbortSignal;
+        },
+      ) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          const start = String(config?.params?.start);
+          const end = String(config?.params?.end);
+          if (config?.params?.project_patient) {
+            return dailySummaryResponse(start, end);
+          }
+          if (bindingGeneration === 17 && start === "2026-07-24") {
+            oldPageSignal = config?.signal;
+            return new Promise((resolve) => {
+              resolveOldPage = resolve;
+            });
+          }
+          return dailySummaryResponse(start, end).then(({ data }) => ({
+            data: {
+              ...data,
+              items: data.items.map((item) => ({
+                ...item,
+                steps: bindingGeneration,
+              })),
+            },
+          }));
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    const { queryClient } = renderTab();
+
+    await screen.findByText("2026-08-03");
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-25")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(
+      await screen.findByRole("button", { name: "正在获取…" }),
+    ).toBeDisabled();
+
+    bindingGeneration = 19;
+    await act(async () => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus({
+          binding_id: 19,
+          device_id: 9,
+          device_short_code: "9009",
+        }),
+      );
+    });
+    expect(await screen.findByText("设备 9009")).toBeInTheDocument();
+    await waitFor(() => expect(oldPageSignal?.aborted).toBe(true));
+
+    const historyCallsBeforeReturn = mockGet.mock.calls.length;
+    bindingGeneration = 17;
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus(),
+      );
+    });
+
+    expect(await screen.findByText("设备 0826")).toBeInTheDocument();
+    await waitFor(() => {
+      const returnHistoryCalls = mockGet.mock.calls
+        .slice(historyCallsBeforeReturn)
+        .filter(
+          ([url, config]) =>
+            String(url).includes("daily-summaries") &&
+            !(config as { params?: Record<string, unknown> }).params
+              ?.project_patient,
+        );
+      expect(returnHistoryCalls).toHaveLength(1);
+      expect(returnHistoryCalls[0]?.[1]).toMatchObject({
+        params: {
+          start: "2026-07-30",
+          end: "2026-08-03",
+        },
+      });
+    });
+    expect(screen.queryByText("2026-07-25")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveOldPage({
+        data: {
+          start: "2026-07-24",
+          end: "2026-07-24",
+          items: [{ record_date: "2026-07-24", steps: 17 }],
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("2026-07-24")).not.toBeInTheDocument();
+    expect(screen.queryByText("2026-07-25")).not.toBeInTheDocument();
+  });
+
+  it("同一事件循环内切换绑定会立即删除旧历史 query，返回时不复用旧分页", async () => {
+    let bindingGeneration = 17;
+    let resolveOldPage!: (value: {
+      data: {
+        start: string;
+        end: string;
+        items: Array<{ record_date: string; steps: number }>;
+      };
+    }) => void;
+    mockGet.mockImplementation(
+      (
+        url: string,
+        config?: {
+          params?: Record<string, unknown>;
+          signal?: AbortSignal;
+        },
+      ) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          const start = String(config?.params?.start);
+          const end = String(config?.params?.end);
+          if (config?.params?.project_patient) {
+            return dailySummaryResponse(start, end);
+          }
+          if (bindingGeneration === 17 && start === "2026-07-24") {
+            return new Promise((resolve) => {
+              resolveOldPage = resolve;
+            });
+          }
+          return dailySummaryResponse(start, end).then(({ data }) => ({
+            data: {
+              ...data,
+              items: data.items.map((item) => ({
+                ...item,
+                steps: bindingGeneration,
+              })),
+            },
+          }));
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    const { queryClient } = renderTab();
+    const bindingAHistoryKey = [
+      "wearable-daily-history",
+      201,
+      9001,
+      17,
+      "2026-07-24T18:30:00+08:00",
+      "2026-08-03",
+    ] as const;
+
+    await screen.findByText("2026-08-03");
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(await screen.findByText("2026-07-25")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "获取更多" }));
+    expect(
+      await screen.findByRole("button", { name: "正在获取…" }),
+    ).toBeDisabled();
+
+    notifyManager.setScheduler((callback) => callback());
+    bindingGeneration = 19;
+    act(() => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus({
+          binding_id: 19,
+          device_id: 9,
+          device_short_code: "9009",
+        }),
+      );
+    });
+
+    expect(screen.getByText("设备 9009")).toBeInTheDocument();
+    expect(queryClient.getQueryData(bindingAHistoryKey)).toBeUndefined();
+
+    bindingGeneration = 17;
+    await act(async () => {
+      queryClient.setQueryData(
+        ["wearable-sync-status", 201],
+        boundSyncStatus(),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("设备 0826")).toBeInTheDocument();
+    expect(screen.queryByText("2026-07-25")).not.toBeInTheDocument();
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+    expect(
+      queryClient.getQueryData<{ pages: unknown[] }>(bindingAHistoryKey)
+        ?.pages,
+    ).toHaveLength(1);
+
+    await act(async () => {
+      resolveOldPage({
+        data: {
+          start: "2026-07-24",
+          end: "2026-07-24",
+          items: [{ record_date: "2026-07-24", steps: 17 }],
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText("2026-07-24")).not.toBeInTheDocument();
+    expect(
+      queryClient.getQueryData<{ pages: unknown[] }>(bindingAHistoryKey)
+        ?.pages,
+    ).toHaveLength(1);
+  });
+
+  it("切换患者后不会展示旧患者迟到的日汇总响应", async () => {
+    let resolveOldHistory!: (value: {
+      data: {
+        items: Array<{ record_date: string; steps: number }>;
+      };
+    }) => void;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          const isNextPatient = url.includes("/patients/202/");
+          return Promise.resolve({
+            data: boundSyncStatus({
+              binding_id: isNextPatient ? 27 : 17,
+              device_id: isNextPatient ? 8 : 7,
+              device_short_code: isNextPatient ? "0202" : "0826",
+            }),
+          });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          if (config?.params?.project_patient) {
+            return Promise.resolve({ data: { items: [] } });
+          }
+          if (url.includes("/patients/201/")) {
+            return new Promise((resolve) => {
+              resolveOldHistory = resolve;
+            });
+          }
+          return Promise.resolve({
+            data: {
+              items: [{ record_date: "2026-08-03", steps: 202 }],
+            },
+          });
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <WearableHealthTab patientId={201} projectPatientId={9001} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("设备 0826");
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <WearableHealthTab patientId={202} projectPatientId={9002} />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("设备 0202")).toBeInTheDocument();
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+
+    resolveOldHistory({
+      data: {
+        items: [{ record_date: "2026-07-30", steps: 201 }],
+      },
+    });
+    await act(async () => undefined);
+
+    expect(screen.queryByText("2026-07-30")).not.toBeInTheDocument();
+    expect(screen.getByText("2026-08-03")).toBeInTheDocument();
+  });
+
+  it("选择自定义日期后将范围限制为 31 天并按实际范围重查", async () => {
+    renderTab();
+    await screen.findByText("设备 0826");
+
+    expect(screen.queryByLabelText("健康日期范围")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("自定义"));
+    fireEvent.click(screen.getByRole("button", { name: "健康日期范围" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/wearables/patients/201/measurements/",
+        expect.objectContaining({
+          params: expect.objectContaining({
+            metric_type: "heart_rate",
+            start: "2026-06-15",
+            end: "2026-07-15",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("未绑定时显示绑定引导且不显示趋势测量按钮", async () => {
     mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) return Promise.resolve({ data: { is_bound: false, metrics: [] } });
+      if (url.includes("sync-status")) {
+        return Promise.resolve({
+          data: { is_bound: false, bound_at: null, metrics: [] },
+        });
+      }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
     renderTab();
 
     expect(await screen.findByText("请先在患者接入中绑定穿戴设备。")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "主动测量" })).not.toBeInTheDocument();
-  });
-
-  it("未验证型号会禁用主动测量并说明原因", async () => {
-    mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) {
-        return Promise.resolve({
-          data: {
-            is_bound: true,
-            binding_id: 17,
-            device_id: 7,
-            model: "UNKNOWN",
-            device_short_code: "0826",
-            last_device_status: null,
-            last_battery_level: null,
-            last_communication_at: null,
-            capabilities: { ...capabilities, measure_heart_rate: false },
-            last_sync_at: null,
-            metrics: [],
-          },
-        });
-      }
-      if (url.includes("measurements") || url.includes("daily-summaries")) return Promise.resolve({ data: { items: [] } });
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    renderTab();
-
-    expect((await screen.findAllByText("该型号能力尚未验证")).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "主动测量" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "测量心率" })).not.toBeInTheDocument();
   });
 
   it("raw 趋势跟随 next_page 拉齐所有页并保留同刻合法点", async () => {
@@ -280,6 +1134,7 @@ describe("WearableHealthTab", () => {
             data: {
               is_bound: true,
               binding_id: 17,
+              bound_at: "2026-07-24T18:30:00+08:00",
               device_id: 7,
               model: "M1",
               device_short_code: "0826",
@@ -339,104 +1194,21 @@ describe("WearableHealthTab", () => {
 
     await waitFor(() => {
       expect(
-        mockGet.mock.calls.filter(([url]) =>
-          String(url).includes("measurements"),
+        mockGet.mock.calls.filter(([url, config]) =>
+          String(url).includes("measurements") &&
+          (config as { params?: Record<string, unknown> }).params?.metric_type ===
+            "heart_rate",
         ),
       ).toHaveLength(2);
     });
     const chartConfig = JSON.parse(
-      (await screen.findByTestId("wearable-chart")).textContent ?? "{}",
+      screen.getAllByTestId("wearable-chart")[0].textContent ?? "{}",
     );
     expect(chartConfig.data).toEqual([
-      { label: "07-25 00:30", value: 70 },
-      { label: "07-25 00:30", value: 71 },
-      { label: "07-25 00:31", value: 72 },
+      { label: "07-25 00:30", timestamp: 1784910600000, value: 70 },
+      { label: "07-25 00:30", timestamp: 1784910600000, value: 71 },
+      { label: "07-25 00:31", timestamp: 1784910660000, value: 72 },
     ]);
-  });
-
-  it("聚合趋势只请求单页且不携带 raw 分页参数", async () => {
-    renderTab();
-    await screen.findByText("设备 0826");
-
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "图表间隔" }));
-    fireEvent.click(await screen.findByTitle("15 分钟"));
-
-    await waitFor(() => {
-      const bucketCalls = mockGet.mock.calls.filter(([, config]) => {
-        const params = (config as { params?: Record<string, unknown> } | undefined)
-          ?.params;
-        return params?.bucket === "15m";
-      });
-      expect(bucketCalls).toHaveLength(1);
-      const params = (
-        bucketCalls[0][1] as { params?: Record<string, unknown> }
-      ).params;
-      expect(params).not.toHaveProperty("page");
-      expect(params).not.toHaveProperty("page_size");
-    });
-  });
-
-  it("切换指标时取消旧指标的分页请求", async () => {
-    let heartRateSignal: AbortSignal | undefined;
-    mockGet.mockImplementation(
-      (
-        url: string,
-        config?: { params?: Record<string, unknown>; signal?: AbortSignal },
-      ) => {
-        if (url.includes("sync-status")) {
-          return Promise.resolve({
-            data: {
-              is_bound: true,
-              binding_id: 17,
-              device_id: 7,
-              model: "M1",
-              device_short_code: "0826",
-              last_device_status: "online",
-              last_battery_level: 82,
-              last_communication_at: "2026-07-24T02:00:00Z",
-              capabilities,
-              last_sync_at: null,
-              metrics: [],
-            },
-          });
-        }
-        if (url.includes("daily-summaries")) {
-          return Promise.resolve({ data: { items: [] } });
-        }
-        if (
-          url.includes("measurements") &&
-          config?.params?.metric_type === "heart_rate"
-        ) {
-          heartRateSignal = config.signal;
-          return new Promise(() => undefined);
-        }
-        if (url.includes("measurements")) {
-          return Promise.resolve({
-            data: {
-              metric_type: "blood_oxygen",
-              bucket: "raw",
-              start: "2026-06-25",
-              end: "2026-07-24",
-              total: 0,
-              page: 1,
-              page_size: 500,
-              next_page: null,
-              items: [],
-            },
-          });
-        }
-        return Promise.reject(new Error(`unmocked GET ${url}`));
-      },
-    );
-
-    renderTab();
-    await screen.findByText("设备 0826");
-    await waitFor(() => expect(heartRateSignal).toBeDefined());
-
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "健康指标" }));
-    fireEvent.click(await screen.findByTitle("血氧"));
-
-    await waitFor(() => expect(heartRateSignal?.aborted).toBe(true));
   });
 
   it("分别展示趋势和日汇总的加载态", async () => {
@@ -446,6 +1218,7 @@ describe("WearableHealthTab", () => {
           data: {
             is_bound: true,
             binding_id: 17,
+            bound_at: "2026-07-24T18:30:00+08:00",
             device_id: 7,
             model: "M1",
             device_short_code: "0826",
@@ -467,7 +1240,10 @@ describe("WearableHealthTab", () => {
     renderTab();
 
     await screen.findByText("设备 0826");
-    expect(screen.getByText("正在加载健康趋势")).toBeInTheDocument();
+    expect(screen.getByText("正在加载心率趋势")).toBeInTheDocument();
+    expect(screen.getByText("正在加载血压趋势")).toBeInTheDocument();
+    expect(screen.getByText("正在加载血氧趋势")).toBeInTheDocument();
+    expect(screen.getByText("正在加载步数趋势")).toBeInTheDocument();
     expect(screen.getByText("正在加载日汇总")).toBeInTheDocument();
     expect(screen.queryByText("所选日期暂无趋势数据")).not.toBeInTheDocument();
   });
@@ -479,6 +1255,7 @@ describe("WearableHealthTab", () => {
           data: {
             is_bound: true,
             binding_id: 17,
+            bound_at: "2026-07-24T18:30:00+08:00",
             device_id: 7,
             model: "M1",
             device_short_code: "0826",
@@ -507,19 +1284,77 @@ describe("WearableHealthTab", () => {
     renderTab();
 
     expect(
-      await screen.findByText("趋势查询最多 31 个自然日。"),
-    ).toBeInTheDocument();
-    expect(await screen.findByText("日汇总服务暂不可用。")).toBeInTheDocument();
+      await screen.findAllByText("趋势查询最多 31 个自然日。"),
+    ).toHaveLength(3);
+    expect(await screen.findAllByText("日汇总服务暂不可用。")).toHaveLength(2);
     expect(screen.queryByText("暂无日汇总数据")).not.toBeInTheDocument();
   });
 
-  it("日汇总成功时只展示当前指标相关字段和数据完整性", async () => {
+  it("单项趋势独立错误只显示一次，其他卡片仍显示各自数据", async () => {
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("daily-summaries")) {
+          return Promise.resolve({
+            data: { items: [{ record_date: "2026-07-24", steps: 7000 }] },
+          });
+        }
+        if (config?.params?.metric_type === "heart_rate") {
+          return Promise.reject({
+            response: { data: { detail: "心率服务暂不可用。" } },
+          });
+        }
+        const metricType = config?.params?.metric_type;
+        return Promise.resolve({
+          data: {
+            metric_type: metricType,
+            bucket: "raw",
+            start: "2026-06-25",
+            end: "2026-07-24",
+            total: 0,
+            page: 1,
+            page_size: 500,
+            next_page: null,
+            items:
+              metricType === "blood_pressure"
+                ? [
+                    {
+                      measured_at: "2026-07-24T08:00:00Z",
+                      systolic: 121,
+                      diastolic: 81,
+                    },
+                  ]
+                : [
+                    {
+                      measured_at: "2026-07-24T08:00:00Z",
+                      blood_oxygen: 97,
+                    },
+                  ],
+          },
+        });
+      },
+    );
+    renderTab();
+
+    expect(await screen.findAllByText("心率服务暂不可用。")).toHaveLength(1);
+    const chartConfigs = screen
+      .getAllByTestId("wearable-chart")
+      .map((node) => JSON.parse(node.textContent ?? "{}"));
+    expect(chartConfigs.some((config) => config.data?.some((point: { value: number }) => point.value === 121))).toBe(true);
+    expect(chartConfigs.some((config) => config.data?.some((point: { value: number }) => point.value === 97))).toBe(true);
+    expect(chartConfigs.some((config) => config.data?.some((point: { value: number }) => point.value === 7000))).toBe(true);
+  });
+
+  it("日汇总成功时统一展示全部指标列且不展示状态列", async () => {
     mockGet.mockImplementation((url: string) => {
       if (url.includes("sync-status")) {
         return Promise.resolve({
           data: {
             is_bound: true,
             binding_id: 17,
+            bound_at: "2026-07-24T18:30:00+08:00",
             device_id: 7,
             model: "M1",
             device_short_code: "0826",
@@ -554,15 +1389,18 @@ describe("WearableHealthTab", () => {
           data: {
             items: [
               {
-                record_date: "2026-07-25",
+                record_date: "2026-07-23",
                 heart_rate_avg: 72,
-                heart_rate_min: 60,
+                heart_rate_min: null,
                 heart_rate_max: 88,
                 heart_rate_count: 12,
-                heart_rate_sync_status: "succeeded",
                 systolic_avg: 120,
-                diastolic_avg: 80,
+                diastolic_avg: 78,
+                blood_pressure_count: 4,
                 blood_oxygen_avg: 98,
+                blood_oxygen_min: 96,
+                blood_oxygen_max: 99,
+                blood_oxygen_count: 8,
                 steps: 6000,
               },
             ],
@@ -574,17 +1412,20 @@ describe("WearableHealthTab", () => {
 
     renderTab();
 
-    expect(
-      await screen.findByRole("columnheader", { name: "心率均值" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "最低心率" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "最高心率" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "测量次数" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "同步状态" })).toBeInTheDocument();
-    expect(screen.getByText("同步成功")).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "血压均值" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "血氧均值" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: "步数" })).not.toBeInTheDocument();
+    await screen.findByRole("columnheader", { name: "心率均值" });
+    const headers = screen
+      .getAllByRole("columnheader")
+      .map((header) => header.textContent);
+    expect(headers).toEqual([
+      "日期",
+      "心率均值",
+      "收缩压均值",
+      "舒张压均值",
+      "血氧均值",
+      "步数",
+    ]);
+    expect(screen.queryByRole("columnheader", { name: "同步状态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "归属状态" })).not.toBeInTheDocument();
   });
 
   it("趋势和日汇总无数据时分别显示明确空态", async () => {
@@ -594,6 +1435,7 @@ describe("WearableHealthTab", () => {
           data: {
             is_bound: true,
             binding_id: 17,
+            bound_at: "2026-07-24T18:30:00+08:00",
             device_id: 7,
             model: "M1",
             device_short_code: "0826",
@@ -628,7 +1470,8 @@ describe("WearableHealthTab", () => {
     });
     renderTab();
 
-    expect(await screen.findByText("所选日期暂无趋势数据")).toBeInTheDocument();
+    expect(await screen.findAllByText("所选日期暂无趋势数据")).toHaveLength(3);
+    expect(screen.getByText("所选日期暂无步数趋势数据")).toBeInTheDocument();
     expect(await screen.findByText("暂无日汇总数据")).toBeInTheDocument();
   });
 
@@ -653,45 +1496,38 @@ describe("WearableHealthTab", () => {
     expect(screen.getByText(/最近通信：2026-07-25 00:30/)).toBeInTheDocument();
   });
 
-  it.each([
-    ["offline", "设备离线"],
-    ["timeout", "主动测量超时"],
-    ["failed", "主动测量失败"],
-  ])("主动测量 %s 不显示成功反馈", async (status, expected) => {
-    mockPost.mockResolvedValueOnce({
-      data: {
-        id: 91,
-        command_type: "measure_heart_rate",
-        status,
-        provider_code: "1802",
-        completed_at: "2026-07-24T16:30:00Z",
-      },
-    });
-    renderTab();
-    await screen.findByText("设备 0826");
-
-    fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
-
-    expect(await screen.findByText(expected)).toBeInTheDocument();
-    expect(screen.queryByText("主动测量请求已提交。")).not.toBeInTheDocument();
-  });
-
   it("主动同步排队后刷新摘要、趋势和日汇总但不宣称数据已到", async () => {
     renderTab();
     await screen.findByText("设备 0826");
+    const measurementCallCount = (metricType: string) =>
+      mockGet.mock.calls.filter(
+        ([url, config]) =>
+          String(url).includes("measurements") &&
+          (config as { params?: Record<string, unknown> }).params
+            ?.metric_type === metricType,
+      ).length;
     const callsBefore = {
       status: mockGet.mock.calls.filter(([url]) =>
         String(url).includes("sync-status"),
       ).length,
-      measurements: mockGet.mock.calls.filter(([url]) =>
-        String(url).includes("measurements"),
-      ).length,
+      measurements: {
+        heart_rate: measurementCallCount("heart_rate"),
+        blood_pressure: measurementCallCount("blood_pressure"),
+        blood_oxygen: measurementCallCount("blood_oxygen"),
+      },
       daily: mockGet.mock.calls.filter(([url]) =>
         String(url).includes("daily-summaries"),
       ).length,
     };
 
     fireEvent.click(screen.getByRole("button", { name: /主动同步/ }));
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith(
+        "/wearables/patients/201/sync/",
+        {},
+      ),
+    );
 
     expect(
       await screen.findByText("健康数据同步已排队，尚未确认新数据到达。"),
@@ -702,11 +1538,15 @@ describe("WearableHealthTab", () => {
           String(url).includes("sync-status"),
         ).length,
       ).toBeGreaterThan(callsBefore.status);
-      expect(
-        mockGet.mock.calls.filter(([url]) =>
-          String(url).includes("measurements"),
-        ).length,
-      ).toBeGreaterThan(callsBefore.measurements);
+      for (const metricType of [
+        "heart_rate",
+        "blood_pressure",
+        "blood_oxygen",
+      ] as const) {
+        expect(measurementCallCount(metricType)).toBeGreaterThan(
+          callsBefore.measurements[metricType],
+        );
+      }
       expect(
         mockGet.mock.calls.filter(([url]) =>
           String(url).includes("daily-summaries"),
@@ -715,163 +1555,18 @@ describe("WearableHealthTab", () => {
     });
   });
 
-  it("按 capability 提供四项设备配置并发送严格 payload", async () => {
-    mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) {
-        return Promise.resolve({
-          data: {
-            is_bound: true,
-            binding_id: 17,
-            device_id: 7,
-            model: "M1",
-            device_short_code: "0826",
-            last_device_status: "online",
-            last_battery_level: 82,
-            last_communication_at: "2026-07-24T02:00:00Z",
-            capabilities: {
-              ...capabilities,
-              configure_heart_rate_interval: true,
-              configure_blood_pressure_interval: true,
-              configure_blood_oxygen_interval: true,
-              configure_step_switch: true,
-            },
-            last_sync_at: null,
-            metrics: [],
-          },
-        });
-      }
-      if (url.includes("measurements")) {
-        return Promise.resolve({
-          data: {
-            metric_type: "heart_rate",
-            bucket: "raw",
-            start: "2026-06-25",
-            end: "2026-07-24",
-            total: 0,
-            page: 1,
-            page_size: 500,
-            next_page: null,
-            items: [],
-          },
-        });
-      }
-      if (url.includes("daily-summaries")) {
-        return Promise.resolve({ data: { items: [] } });
-      }
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    mockPost.mockResolvedValue({
-      data: {
-        id: 92,
-        command_type: "configure",
-        status: "succeeded",
-        provider_code: "0",
-        completed_at: "2026-07-24T16:30:00Z",
-      },
-    });
+  it("不再展示设备配置草案或配置控件", async () => {
     renderTab();
+    await screen.findByText("设备 0826");
 
-    expect(await screen.findByText("设备配置")).toBeInTheDocument();
-    expect(
-      screen.getByText("以下为待下发值，不代表已读取设备当前配置。"),
-    ).toBeInTheDocument();
-    fireEvent.change(
-      screen.getByRole("spinbutton", { name: "心率间隔（分钟）" }),
-      { target: { value: "15" } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "应用心率间隔" }));
-    await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith(
-        "/wearables/patients/201/configure/",
-        { setting: "heart_rate_interval", interval_minutes: 15 },
-      ),
-    );
-
-    fireEvent.mouseDown(
-      screen.getByRole("combobox", { name: "步数开关待下发值" }),
-    );
-    fireEvent.click(await screen.findByTitle("关闭"));
-    fireEvent.click(screen.getByRole("button", { name: "应用步数开关" }));
-    await waitFor(() =>
-      expect(mockPost).toHaveBeenCalledWith(
-        "/wearables/patients/201/configure/",
-        { setting: "step_switch", enabled: false },
-      ),
-    );
+    expect(screen.queryByText("设备配置")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("心率间隔（分钟）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("血压间隔（分钟）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("血氧间隔（分钟）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("步数开关待下发值")).not.toBeInTheDocument();
   });
 
-  it("设备配置失败状态展示失败且不显示成功反馈", async () => {
-    mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) {
-        return Promise.resolve({
-          data: {
-            is_bound: true,
-            binding_id: 17,
-            device_id: 7,
-            model: "M1",
-            device_short_code: "0826",
-            last_device_status: "online",
-            last_battery_level: 82,
-            last_communication_at: "2026-07-24T02:00:00Z",
-            capabilities: {
-              ...capabilities,
-              configure_heart_rate_interval: true,
-            },
-            last_sync_at: null,
-            metrics: [],
-          },
-        });
-      }
-      if (url.includes("measurements")) {
-        return Promise.resolve({
-          data: {
-            metric_type: "heart_rate",
-            bucket: "raw",
-            start: "2026-06-25",
-            end: "2026-07-24",
-            total: 0,
-            page: 1,
-            page_size: 500,
-            next_page: null,
-            items: [],
-          },
-        });
-      }
-      if (url.includes("daily-summaries")) {
-        return Promise.resolve({ data: { items: [] } });
-      }
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    mockPost.mockResolvedValueOnce({
-      data: {
-        id: 93,
-        command_type: "configure",
-        status: "failed",
-        provider_code: "1802",
-        completed_at: "2026-07-24T16:30:00Z",
-      },
-    });
-    renderTab();
-    await screen.findByText("设备配置");
-
-    fireEvent.click(screen.getByRole("button", { name: "应用心率间隔" }));
-
-    expect(await screen.findByText("心率间隔配置失败")).toBeInTheDocument();
-    expect(screen.queryByText("心率间隔配置已完成。")).not.toBeInTheDocument();
-  });
-
-  it("未验证配置 capability 时逐项禁用并显示原因", async () => {
-    renderTab();
-
-    await screen.findByText("设备配置");
-    expect(screen.getByRole("button", { name: "应用心率间隔" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "应用血压间隔" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "应用血氧间隔" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "应用步数开关" })).toBeDisabled();
-    expect(screen.getAllByText("该型号能力尚未验证")).toHaveLength(4);
-  });
-
-  it("任一设备操作进行中会互斥禁用其他操作", async () => {
+  it("通信测试进行中会禁用主动同步", async () => {
     mockPost.mockImplementation(
       () => new Promise(() => undefined),
     );
@@ -880,308 +1575,7 @@ describe("WearableHealthTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /通信测试/ }));
 
-    expect(screen.getByRole("button", { name: "主动测量" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /主动同步/ })).toBeDisabled();
-  });
-
-  it("初始趋势尚未成功时禁用主动测量，稳定基线就绪后才开放", async () => {
-    const measurements = deferred<{
-      data: {
-        metric_type: "heart_rate";
-        bucket: "raw";
-        start: string;
-        end: string;
-        total: number;
-        page: number;
-        page_size: number;
-        next_page: null;
-        items: Array<Record<string, string | number>>;
-      };
-    }>();
-    mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) {
-        return Promise.resolve({ data: boundSyncStatus() });
-      }
-      if (url.includes("measurements")) return measurements.promise;
-      if (url.includes("daily-summaries")) {
-        return Promise.resolve({ data: { items: [] } });
-      }
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    renderTab();
-
-    await screen.findByText("设备 0826");
-    expect(screen.getByRole("button", { name: "主动测量" })).toBeDisabled();
-
-    measurements.resolve({
-      data: {
-        metric_type: "heart_rate",
-        bucket: "raw",
-        start: "2026-06-25",
-        end: "2026-07-24",
-        total: 1,
-        page: 1,
-        page_size: 500,
-        next_page: null,
-        items: [
-          { measured_at: "2026-07-24T16:20:00Z", heart_rate: 68 },
-        ],
-      },
-    });
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "主动测量" })).toBeEnabled(),
-    );
-  });
-
-  it("主动测量在后端首个十秒计划点后发现新点", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let measurementCalls = 0;
-    mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) {
-        return Promise.resolve({
-          data: {
-            is_bound: true,
-            binding_id: 17,
-            device_id: 7,
-            model: "M1",
-            device_short_code: "0826",
-            last_device_status: "online",
-            last_battery_level: 82,
-            last_communication_at: "2026-07-24T02:00:00Z",
-            capabilities,
-            last_sync_at: null,
-            metrics: [],
-          },
-        });
-      }
-      if (url.includes("measurements")) {
-        measurementCalls += 1;
-        const items =
-          measurementCalls >= 2
-            ? [{ measured_at: "2026-07-24T16:31:00Z", heart_rate: 72 }]
-            : [];
-        return Promise.resolve({
-          data: {
-            metric_type: "heart_rate",
-            bucket: "raw",
-            start: "2026-06-25",
-            end: "2026-07-24",
-            total: items.length,
-            page: 1,
-            page_size: 500,
-            next_page: null,
-            items,
-          },
-        });
-      }
-      if (url.includes("daily-summaries")) {
-        return Promise.resolve({ data: { items: [] } });
-      }
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    mockPost.mockResolvedValue({
-      data: {
-        id: 93,
-        command_type: "measure_heart_rate",
-        status: "queued",
-        provider_code: "1803",
-        completed_at: null,
-      },
-    });
-    try {
-      renderTab();
-      await screen.findByText("设备 0826");
-      await waitFor(() => expect(measurementCalls).toBe(1));
-
-      fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(9_000);
-      });
-      expect(measurementCalls).toBe(1);
-      expect(
-        screen.queryByText("已获取新的心率测量点。"),
-      ).not.toBeInTheDocument();
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1_000);
-      });
-
-      expect(
-        await screen.findByText("已获取新的心率测量点。"),
-      ).toBeInTheDocument();
-      expect(measurementCalls).toBe(2);
-      await waitFor(() =>
-        expect(
-          screen.getByRole("button", { name: /主动测量/ }),
-        ).toBeEnabled(),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("主动测量轮询到六十秒后停止并明确未发现新点", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let measurementCalls = 0;
-    mockGet.mockImplementation((url: string) => {
-      if (url.includes("sync-status")) {
-        return Promise.resolve({
-          data: {
-            is_bound: true,
-            binding_id: 17,
-            device_id: 7,
-            model: "M1",
-            device_short_code: "0826",
-            last_device_status: "online",
-            last_battery_level: 82,
-            last_communication_at: "2026-07-24T02:00:00Z",
-            capabilities,
-            last_sync_at: null,
-            metrics: [],
-          },
-        });
-      }
-      if (url.includes("measurements")) {
-        measurementCalls += 1;
-        return Promise.resolve({
-          data: {
-            metric_type: "heart_rate",
-            bucket: "raw",
-            start: "2026-06-25",
-            end: "2026-07-24",
-            total: 0,
-            page: 1,
-            page_size: 500,
-            next_page: null,
-            items: [],
-          },
-        });
-      }
-      if (url.includes("daily-summaries")) {
-        return Promise.resolve({ data: { items: [] } });
-      }
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    mockPost.mockResolvedValue({
-      data: {
-        id: 94,
-        command_type: "measure_heart_rate",
-        status: "queued",
-        provider_code: "1803",
-        completed_at: null,
-      },
-    });
-    try {
-      renderTab();
-      await screen.findByText("设备 0826");
-      await waitFor(() => expect(measurementCalls).toBe(1));
-      fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(59_000);
-      });
-      expect(measurementCalls).toBe(6);
-      expect(
-        screen.queryByText("等待窗口内尚未发现新测量点，请稍后查看。"),
-      ).not.toBeInTheDocument();
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1_000);
-      });
-      expect(
-        await screen.findByText("等待窗口内尚未发现新测量点，请稍后查看。"),
-      ).toBeInTheDocument();
-      expect(measurementCalls).toBe(7);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
-      });
-      expect(measurementCalls).toBe(7);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("主动测量轮询中切换 bucket 会终止旧视图反馈并开放新视图操作", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let rawCalls = 0;
-    mockGet.mockImplementation(
-      (url: string, config?: { params?: Record<string, unknown> }) => {
-        if (url.includes("sync-status")) {
-          return Promise.resolve({ data: boundSyncStatus() });
-        }
-        if (url.includes("daily-summaries")) {
-          return Promise.resolve({ data: { items: [] } });
-        }
-        if (url.includes("measurements")) {
-          const bucket = config?.params?.bucket;
-          if (bucket === "raw") rawCalls += 1;
-          const items =
-            bucket === "raw" && rawCalls >= 2
-              ? [{ measured_at: "2026-07-24T16:31:00Z", heart_rate: 72 }]
-              : [];
-          return Promise.resolve({
-            data:
-              bucket === "raw"
-                ? {
-                    metric_type: "heart_rate",
-                    bucket: "raw",
-                    start: "2026-06-25",
-                    end: "2026-07-24",
-                    total: items.length,
-                    page: 1,
-                    page_size: 500,
-                    next_page: null,
-                    items,
-                  }
-                : {
-                    metric_type: "heart_rate",
-                    bucket: "15m",
-                    start: "2026-06-25",
-                    end: "2026-07-24",
-                    items,
-                  },
-          });
-        }
-        return Promise.reject(new Error(`unmocked GET ${url}`));
-      },
-    );
-    mockPost.mockResolvedValue({
-      data: {
-        id: 95,
-        command_type: "measure_heart_rate",
-        status: "queued",
-        provider_code: "0",
-        completed_at: null,
-      },
-    });
-    try {
-      renderTab();
-      await screen.findByText("设备 0826");
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: "主动测量" })).toBeEnabled(),
-      );
-      fireEvent.click(screen.getByRole("button", { name: "主动测量" }));
-
-      fireEvent.mouseDown(screen.getByRole("combobox", { name: "图表间隔" }));
-      fireEvent.click(await screen.findByTitle("15 分钟"));
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: /主动测量/ })).toBeEnabled(),
-      );
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(70_000);
-      });
-      expect(rawCalls).toBe(1);
-      expect(
-        screen.queryByText("已获取新的心率测量点。"),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.queryByText("等待窗口内尚未发现新测量点，请稍后查看。"),
-      ).not.toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("操作中解绑后重绑会清理旧锁并允许新设备操作", async () => {
@@ -1212,25 +1606,60 @@ describe("WearableHealthTab", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /通信测试/ })).toBeEnabled(),
     );
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "主动测量" })).toBeEnabled(),
-    );
+    await waitFor(() => {
+      const historyCalls = mockGet.mock.calls.filter(
+        ([url, config]) =>
+          String(url).includes("daily-summaries") &&
+          !(config as { params?: Record<string, unknown> }).params
+            ?.project_patient,
+      );
+      expect(historyCalls.at(-1)?.[1]).toMatchObject({
+        params: {
+          start: "2026-07-30",
+          end: "2026-08-03",
+        },
+      });
+    });
   });
 
-  it("同患者直接换绑会重置配置草案并释放进行中的操作", async () => {
+  it("同患者直接换绑会释放进行中的操作并隔离旧设备日汇总", async () => {
+    let bindingGeneration = 17;
+    mockGet.mockImplementation(
+      (url: string, config?: { params?: Record<string, unknown> }) => {
+        if (url.includes("sync-status")) {
+          return Promise.resolve({ data: boundSyncStatus() });
+        }
+        if (url.includes("measurements")) {
+          return Promise.resolve({ data: { items: [] } });
+        }
+        if (url.includes("daily-summaries")) {
+          if (config?.params?.project_patient) {
+            return Promise.resolve({ data: { items: [] } });
+          }
+          return Promise.resolve({
+            data: {
+              items: [
+                {
+                  record_date:
+                    bindingGeneration === 17
+                      ? "2026-07-30"
+                      : "2026-08-03",
+                  steps: bindingGeneration,
+                },
+              ],
+            },
+          });
+        }
+        return Promise.reject(new Error(`unmocked GET ${url}`));
+      },
+    );
     mockPost.mockImplementation(() => new Promise(() => undefined));
     const { queryClient } = renderTab();
     await screen.findByText("设备 0826");
-    fireEvent.change(
-      screen.getByRole("spinbutton", { name: "心率间隔（分钟）" }),
-      { target: { value: "15" } },
-    );
-    fireEvent.mouseDown(
-      screen.getByRole("combobox", { name: "步数开关待下发值" }),
-    );
-    fireEvent.click(await screen.findByTitle("关闭"));
+    expect(await screen.findByText("2026-07-30")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /通信测试/ }));
 
+    bindingGeneration = 19;
     act(() => {
       queryClient.setQueryData(
         ["wearable-sync-status", 201],
@@ -1244,16 +1673,8 @@ describe("WearableHealthTab", () => {
     });
 
     expect(await screen.findByText("设备 9009")).toBeInTheDocument();
-    expect(
-      screen.getByRole("spinbutton", { name: "心率间隔（分钟）" }),
-    ).toHaveValue("60");
-    expect(
-      screen
-        .getAllByTitle("开启")
-        .some((element) =>
-          element.classList.contains("ant-select-selection-item"),
-        ),
-    ).toBe(true);
+    expect(await screen.findByText("2026-08-03")).toBeInTheDocument();
+    expect(screen.queryByText("2026-07-30")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /通信测试/ })).toBeEnabled(),
     );
@@ -1322,6 +1743,7 @@ describe("WearableHealthTab", () => {
       queryClient.setQueryData(["wearable-sync-status", 201], {
         is_bound: true,
         binding_id: 18,
+        bound_at: "2026-07-24T18:30:00+08:00",
         device_id: 7,
         model: "M1",
         device_short_code: "0826",
@@ -1347,5 +1769,19 @@ describe("WearableHealthTab", () => {
     await act(async () => undefined);
     expect(screen.queryByText("通信测试完成，设备当前离线。")).not.toBeInTheDocument();
     expect(screen.getByText("设备在线")).toBeInTheDocument();
+    await waitFor(() => {
+      const historyCalls = mockGet.mock.calls.filter(
+        ([url, config]) =>
+          String(url).includes("daily-summaries") &&
+          !(config as { params?: Record<string, unknown> }).params
+            ?.project_patient,
+      );
+      expect(historyCalls.at(-1)?.[1]).toMatchObject({
+        params: {
+          start: "2026-07-30",
+          end: "2026-08-03",
+        },
+      });
+    });
   });
 });

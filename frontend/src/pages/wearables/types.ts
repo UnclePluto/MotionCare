@@ -53,6 +53,7 @@ export type WearableCommandCapabilities = {
 export type PatientWearableSyncStatus = {
   is_bound: boolean;
   binding_id: number | null;
+  bound_at: string | null;
   device_id: number | null;
   model: string | null;
   device_short_code: string | null;
@@ -113,7 +114,11 @@ export type WearableDailySummary = {
   steps_sync_status?: string;
 };
 
-export type WearableDailySummaryResponse = { items: WearableDailySummary[] };
+export type WearableDailySummaryResponse = {
+  start?: string;
+  end?: string;
+  items: WearableDailySummary[];
+};
 
 export type WearableCommandStatus =
   | "succeeded"

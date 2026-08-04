@@ -388,13 +388,22 @@ describe("TrainingTrackingDetailPage", () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    const trainingTab = screen.getByRole("tab", { name: "训练跟踪" });
+    const wearableTab = screen.getByRole("tab", { name: "穿戴健康" });
+
+    expect(trainingTab.closest(".training-health-tabs")).not.toBeNull();
+    expect(trainingTab.querySelector(".anticon-line-chart")).not.toBeNull();
+    expect(wearableTab.querySelector(".anticon-heart")).not.toBeNull();
+    expect(trainingTab).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tabpanel")).toHaveTextContent("处方完成情况");
 
-    fireEvent.click(screen.getByRole("tab", { name: "穿戴健康" }));
+    fireEvent.click(wearableTab);
+    expect(wearableTab).toHaveAttribute("aria-selected", "true");
+    expect(trainingTab).toHaveAttribute("aria-selected", "false");
     expect(await screen.findByText("穿戴健康面板：201/9001")).toBeInTheDocument();
     expect(screen.getByRole("tabpanel")).toHaveTextContent("穿戴健康面板：201/9001");
 
-    fireEvent.click(screen.getByRole("tab", { name: "训练跟踪" }));
+    fireEvent.click(trainingTab);
     expect(await screen.findByRole("tabpanel")).toHaveTextContent("处方完成情况");
     expect(screen.getByRole("button", { name: "播放训练视频" })).toBeInTheDocument();
   });
