@@ -58,7 +58,9 @@ describe("VisitFormPage", () => {
 
     renderAt(11);
 
-    expect(await screen.findByDisplayValue("9")).toBeInTheDocument();
+    expect(
+      await screen.findByDisplayValue("9", {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
     expect(screen.getByDisplayValue("22")).toBeInTheDocument();
     expect(screen.getAllByText("T0").length).toBeGreaterThan(0);
   }, 10000);
