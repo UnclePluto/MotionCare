@@ -66,7 +66,7 @@ def test_segmented_training_video_models(
 
 
 @pytest.mark.django_db
-def test_training_video_session_accepts_600_seconds_and_rejects_601(
+def test_training_video_session_accepts_2400_seconds_and_rejects_2401(
     project_patient,
     active_prescription,
     monkeypatch,
@@ -75,7 +75,7 @@ def test_training_video_session_accepts_600_seconds_and_rejects_601(
         ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press"),
         weekly_frequency="2 次/周",
         weekly_target_count=2,
-        duration_minutes=12,
+        duration_minutes=40,
     )
     monkeypatch.setattr(
         "apps.training.video_services._ensure_staging_available",
@@ -87,16 +87,16 @@ def test_training_video_session_accepts_600_seconds_and_rejects_601(
         client_session_id=uuid.uuid4(),
         prescription_action_id=action.id,
         training_date=timezone.localdate(),
-        expected_duration_seconds=600,
+        expected_duration_seconds=2400,
     )
 
     assert created is True
-    assert accepted.expected_duration_seconds == 600
+    assert accepted.expected_duration_seconds == 2400
     with pytest.raises(ValidationError, match="时长超过限制"):
         create_training_video_session(
             project_patient=project_patient,
             client_session_id=uuid.uuid4(),
             prescription_action_id=action.id,
             training_date=timezone.localdate(),
-            expected_duration_seconds=601,
+            expected_duration_seconds=2401,
         )
