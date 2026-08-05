@@ -1,8 +1,10 @@
 import { containsSensitiveCredentialText } from '../../api/safeError'
 import type { UploadedVideoSegment, VideoSessionStatus } from './api'
 import {
+  isCompressedShoulderPressSegment,
   isSegmentReadyForLocalDeletion,
   markServerUploadedSegments,
+  type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession,
   type PendingShoulderPressUpload
@@ -13,7 +15,7 @@ export type ShoulderPressUploadPhase = 'session' | 'status' | 'upload' | 'finali
 export type ShoulderPressUploadEvent = {
   phase?: ShoulderPressUploadPhase
   index: number
-  state: PendingShoulderPressSegment['uploadState'] | 'finalized'
+  state: 'pending' | 'uploading' | 'uploaded' | 'finalized'
   progress?: number
 }
 
@@ -102,21 +104,23 @@ function persist(
   return session
 }
 
-function updateSegment(
+function updateCompressedSegment(
   session: PendingShoulderPressSession,
   index: number,
-  update: Partial<PendingShoulderPressSegment>
+  update: Partial<CompressedShoulderPressSegment>
 ): PendingShoulderPressSession {
   return {
     ...session,
     segments: session.segments.map((segment) => (
-      segment.index === index ? { ...segment, ...update } : segment
+      segment.index === index && isCompressedShoulderPressSegment(segment)
+        ? { ...segment, ...update }
+        : segment
     ))
   }
 }
 
 async function deleteUploadedLocalFile(
-  segment: PendingShoulderPressSegment,
+  segment: CompressedShoulderPressSegment,
   dependencies: Pick<PendingSegmentUploadDependencies, 'deleteSavedFile'>
 ): Promise<void> {
   if (!isSegmentReadyForLocalDeletion(segment)) return
@@ -135,6 +139,10 @@ export async function runPendingSegmentUploads(
   let session: PendingShoulderPressSession = { ...initialSession, lastError: undefined }
 
   try {
+    if (session.segments.some((segment) => !isCompressedShoulderPressSegment(segment))) {
+      throw new Error('录像分段尚未压缩，请重试')
+    }
+
     if (!session.videoId) {
       const created = await dependencies.createVideoSession({
         actionId: session.actionId,
@@ -154,9 +162,12 @@ export async function runPendingSegmentUploads(
     }
 
     for (const segment of session.segments) {
+      if (!isCompressedShoulderPressSegment(segment)) {
+        throw new Error('录像分段尚未压缩，请重试')
+      }
       if (segment.uploadState === 'uploaded') continue
 
-      session = persist(updateSegment(session, segment.index, {
+      session = persist(updateCompressedSegment(session, segment.index, {
         uploadState: 'uploading',
         sha256: undefined
       }), dependencies)
@@ -176,12 +187,15 @@ export async function runPendingSegmentUploads(
         })
       })
 
-      session = persist(updateSegment(session, segment.index, {
+      session = persist(updateCompressedSegment(session, segment.index, {
         uploadState: 'uploaded',
         sha256: uploaded.sha256
       }), dependencies)
       onProgress({ phase: 'upload', index: segment.index, state: 'uploaded', progress: 100 })
-      await deleteUploadedLocalFile(session.segments[segment.index], dependencies)
+      const uploadedSegment = session.segments[segment.index]
+      if (uploadedSegment && isCompressedShoulderPressSegment(uploadedSegment)) {
+        await deleteUploadedLocalFile(uploadedSegment, dependencies)
+      }
     }
 
     if (!session.finalized) {
@@ -197,9 +211,11 @@ export async function runPendingSegmentUploads(
 
     return session
   } catch (error) {
-    const uploading = session.segments.find((segment) => segment.uploadState === 'uploading')
+    const uploading = session.segments.find((segment) => (
+      isCompressedShoulderPressSegment(segment) && segment.uploadState === 'uploading'
+    ))
     if (uploading) {
-      session = updateSegment(session, uploading.index, {
+      session = updateCompressedSegment(session, uploading.index, {
         uploadState: 'pending',
         sha256: undefined
       })
@@ -218,6 +234,7 @@ export async function runShoulderPressUploadWorkflow(
   if (
     initialPending.segments.length !== 1 ||
     !firstSegment ||
+    !isCompressedShoulderPressSegment(firstSegment) ||
     !firstSegment.savedFilePath ||
     !Number.isInteger(firstSegment.durationMs) ||
     firstSegment.durationMs <= 0 ||
@@ -261,6 +278,9 @@ export async function runShoulderPressUploadWorkflow(
 
   const toLegacyPending = (session: PendingShoulderPressSession): PendingShoulderPressUpload => {
     const segment = session.segments[0]
+    if (!segment || !isCompressedShoulderPressSegment(segment)) {
+      throw new Error('录像上传信息不完整，请重新开始')
+    }
     return {
       ...initialPending,
       ...session,

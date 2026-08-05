@@ -115,6 +115,26 @@ describe('shoulder press pending segment upload workflow', () => {
       .toBeLessThan(eventLog.indexOf('delete:wxfile://store/segment-0.mp4'))
   })
 
+  it('does not create a server session or upload an uncompressed raw segment', async () => {
+    const { deps } = dependencies()
+    const session: PendingShoulderPressSession = {
+      ...baseSession(),
+      actualDurationMs: 30_000,
+      segments: [{
+        index: 0,
+        compressionState: 'pending_compression',
+        rawSavedFilePath: 'wxfile://store/raw-0.mp4',
+        durationMs: 30_000
+      }]
+    }
+
+    await expect(runPendingSegmentUploads(session, deps, vi.fn()))
+      .rejects.toThrow('录像分段尚未压缩，请重试')
+
+    expect(deps.createVideoSession).not.toHaveBeenCalled()
+    expect(deps.uploadVideoSegment).not.toHaveBeenCalled()
+  })
+
   it('skips server-confirmed indexes during cold recovery and continues with the first local pending segment', async () => {
     const { deps } = dependencies()
     deps.getVideoSessionStatus.mockResolvedValueOnce({

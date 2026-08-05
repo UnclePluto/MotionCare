@@ -2,14 +2,27 @@ export const SHOULDER_PRESS_SOURCE_KEY = 'motion-resistance-shoulder-press'
 export const PENDING_SHOULDER_PRESS_SESSION_KEY = 'motioncare.pendingShoulderPressSession'
 export const PENDING_SHOULDER_PRESS_UPLOAD_KEY = PENDING_SHOULDER_PRESS_SESSION_KEY
 
-export type PendingShoulderPressSegment = {
+export type PendingCompressionShoulderPressSegment = {
   index: number
+  compressionState: 'pending_compression' | 'compression_failed'
+  rawSavedFilePath: string
+  durationMs: number
+  compressionError?: string
+}
+
+export type CompressedShoulderPressSegment = {
+  index: number
+  compressionState: 'compressed'
   savedFilePath: string
   durationMs: number
   sizeBytes: number
   uploadState: 'pending' | 'uploading' | 'uploaded'
   sha256?: string
 }
+
+export type PendingShoulderPressSegment =
+  | PendingCompressionShoulderPressSegment
+  | CompressedShoulderPressSegment
 
 export type PendingShoulderPressSession = {
   clientSessionId: string
@@ -43,7 +56,7 @@ type VideoInfo = {
 }
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS = 600_000
+const MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS = 2_400_000
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -89,13 +102,17 @@ export function buildShoulderPressSessionUrl(actionId: number): string {
   return `/pages/shoulder-press/index?actionId=${encodeURIComponent(String(actionId))}`
 }
 
+export function buildShoulderPressCameraUrl(actionId: number): string {
+  return `/pages/shoulder-press/camera?actionId=${encodeURIComponent(String(actionId))}`
+}
+
 export function buildShoulderPressUploadUrl(): string {
   return '/pages/shoulder-press/upload'
 }
 
 export function normalizeShoulderPressExpectedDurationSeconds(value: number): number {
   if (!Number.isFinite(value)) return 1
-  return Math.min(600, Math.max(1, Math.round(value)))
+  return Math.min(2400, Math.max(1, Math.round(value)))
 }
 
 export function createPendingShoulderPressSession(input: {
@@ -147,6 +164,7 @@ export function appendPendingSegment(
   }
   const segment: PendingShoulderPressSegment = {
     index: session.segments.length,
+    compressionState: 'compressed',
     savedFilePath: input.savedFilePath,
     durationMs,
     sizeBytes,
@@ -161,6 +179,103 @@ export function appendPendingSegment(
   }
 }
 
+export function appendPendingCompressionSegment(
+  session: PendingShoulderPressSession,
+  input: {
+    rawSavedFilePath: string
+    durationMs: number
+  }
+): PendingShoulderPressSession {
+  if (!isUsableTempVideoPath(input.rawSavedFilePath)) throw new Error('录像文件路径无效')
+  if (!isPositiveInteger(input.durationMs)) throw new Error('录像时长无效')
+  if (session.actualDurationMs + input.durationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
+    throw new Error('录像总时长超过限制，请重新录制')
+  }
+
+  return {
+    ...session,
+    actualDurationMs: session.actualDurationMs + input.durationMs,
+    segments: [...session.segments, {
+      index: session.segments.length,
+      compressionState: 'pending_compression',
+      rawSavedFilePath: input.rawSavedFilePath,
+      durationMs: input.durationMs
+    }],
+    lastError: undefined
+  }
+}
+
+export function isCompressedShoulderPressSegment(
+  segment: PendingShoulderPressSegment
+): segment is CompressedShoulderPressSegment {
+  return segment.compressionState === 'compressed'
+}
+
+export function completePendingSegmentCompression(
+  session: PendingShoulderPressSession,
+  index: number,
+  input: {
+    savedFilePath: string
+    durationMs: number
+    sizeBytes: number
+  }
+): PendingShoulderPressSession {
+  if (!isUsableTempVideoPath(input.savedFilePath)) throw new Error('压缩录像文件路径无效')
+  if (!isPositiveInteger(input.durationMs)) throw new Error('压缩录像时长无效')
+  if (!isPositiveInteger(input.sizeBytes)) throw new Error('压缩录像文件大小无效')
+  const current = session.segments[index]
+  if (!current || current.index !== index || isCompressedShoulderPressSegment(current)) {
+    throw new Error('待压缩录像分段不存在')
+  }
+  const actualDurationMs = session.actualDurationMs - current.durationMs + input.durationMs
+  if (actualDurationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
+    throw new Error('录像总时长超过限制，请重新录制')
+  }
+
+  return {
+    ...session,
+    actualDurationMs,
+    segments: session.segments.map((segment) => (
+      segment.index === index
+        ? {
+            index,
+            compressionState: 'compressed',
+            savedFilePath: input.savedFilePath,
+            durationMs: input.durationMs,
+            sizeBytes: input.sizeBytes,
+            uploadState: 'pending'
+          }
+        : segment
+    )),
+    lastError: undefined
+  }
+}
+
+export function markPendingSegmentCompressionFailed(
+  session: PendingShoulderPressSession,
+  index: number,
+  compressionError: string
+): PendingShoulderPressSession {
+  const current = session.segments[index]
+  if (!current || current.index !== index || isCompressedShoulderPressSegment(current)) {
+    throw new Error('待压缩录像分段不存在')
+  }
+  const message = compressionError.trim() || '录像压缩失败，可重试'
+  return {
+    ...session,
+    segments: session.segments.map((segment) => (
+      segment.index === index
+        ? {
+            ...segment,
+            compressionState: 'compression_failed',
+            compressionError: message
+          }
+        : segment
+    )),
+    lastError: message
+  }
+}
+
 export function markServerUploadedSegments(
   session: PendingShoulderPressSession,
   uploadedIndexes: number[]
@@ -169,21 +284,48 @@ export function markServerUploadedSegments(
   return {
     ...session,
     segments: session.segments.map((segment) => (
-      uploaded.has(segment.index) ? { ...segment, uploadState: 'uploaded' } : segment
+      uploaded.has(segment.index) && isCompressedShoulderPressSegment(segment)
+        ? { ...segment, uploadState: 'uploaded' }
+        : segment
     ))
   }
 }
 
 export function isSegmentReadyForLocalDeletion(segment: PendingShoulderPressSegment): boolean {
-  return segment.uploadState === 'uploaded' && isNonEmptyString(segment.sha256)
+  return (
+    isCompressedShoulderPressSegment(segment) &&
+    segment.uploadState === 'uploaded' &&
+    isNonEmptyString(segment.sha256)
+  )
 }
 
 function normalizeSegment(value: unknown, expectedIndex: number): PendingShoulderPressSegment | null {
   if (!value || typeof value !== 'object') return null
-  const segment = value as Partial<PendingShoulderPressSegment>
+  const segment = value as Record<string, unknown>
   if (segment.index !== expectedIndex) return null
-  if (!isUsableTempVideoPath(segment.savedFilePath)) return null
   if (!isPositiveInteger(segment.durationMs)) return null
+  if (
+    segment.compressionState === 'pending_compression' ||
+    segment.compressionState === 'compression_failed'
+  ) {
+    if (!isUsableTempVideoPath(segment.rawSavedFilePath)) return null
+    if (
+      segment.compressionState === 'compression_failed' &&
+      !isNonEmptyString(segment.compressionError)
+    ) return null
+    return {
+      index: expectedIndex,
+      compressionState: segment.compressionState,
+      rawSavedFilePath: segment.rawSavedFilePath,
+      durationMs: segment.durationMs,
+      ...(isNonEmptyString(segment.compressionError)
+        ? { compressionError: segment.compressionError }
+        : {})
+    }
+  }
+
+  if (segment.compressionState !== undefined && segment.compressionState !== 'compressed') return null
+  if (!isUsableTempVideoPath(segment.savedFilePath)) return null
   if (!isPositiveInteger(segment.sizeBytes)) return null
   if (segment.uploadState !== 'pending' && segment.uploadState !== 'uploading' && segment.uploadState !== 'uploaded') {
     return null
@@ -192,6 +334,7 @@ function normalizeSegment(value: unknown, expectedIndex: number): PendingShoulde
 
   return {
     index: expectedIndex,
+    compressionState: 'compressed',
     savedFilePath: segment.savedFilePath,
     durationMs: segment.durationMs,
     sizeBytes: segment.sizeBytes,
@@ -217,7 +360,12 @@ function normalizeSession(value: unknown): PendingShoulderPressSession | null {
   const normalizedSegments = segments as PendingShoulderPressSegment[]
   const actualDurationMs = normalizedSegments.reduce((total, segment) => total + segment.durationMs, 0)
   if (session.actualDurationMs !== actualDurationMs) return null
-  if (session.finalized && normalizedSegments.some((segment) => segment.uploadState !== 'uploaded')) return null
+  if (
+    session.finalized &&
+    normalizedSegments.some((segment) => (
+      !isCompressedShoulderPressSegment(segment) || segment.uploadState !== 'uploaded'
+    ))
+  ) return null
 
   return {
     clientSessionId: session.clientSessionId,
@@ -293,7 +441,7 @@ export function loadPendingShoulderPressUpload(storage: StorageLike): PendingSho
   const firstSegment = session.segments[0]
   return {
     ...session,
-    ...(firstSegment ? {
+    ...(firstSegment && isCompressedShoulderPressSegment(firstSegment) ? {
       tempFilePath: firstSegment.savedFilePath,
       durationSeconds: Math.max(1, Math.round(firstSegment.durationMs / 1000)),
       sizeBytes: firstSegment.sizeBytes,
