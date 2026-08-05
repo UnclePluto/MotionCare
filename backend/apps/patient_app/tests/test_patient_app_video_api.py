@@ -491,11 +491,12 @@ def test_upload_segment_size_limit_leaves_no_partial_file(
 
 
 @pytest.mark.django_db
-def test_upload_segment_total_size_limit_leaves_rejected_segment_no_residue(
+def test_upload_segment_allows_total_size_above_legacy_limit(
     project_patient, doctor, active_prescription, settings, tmp_path
 ):
     settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = 10
-    settings.TRAINING_VIDEO_MAX_SIZE_BYTES = 10
+    if hasattr(settings, "TRAINING_VIDEO_MAX_SIZE_BYTES"):
+        del settings.TRAINING_VIDEO_MAX_SIZE_BYTES
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
     session = _create_session(client, action)
@@ -510,11 +511,11 @@ def test_upload_segment_total_size_limit_leaves_rejected_segment_no_residue(
     )
 
     assert first.status_code == 201, first.data
-    assert response.status_code == 400, response.data
-    assert TrainingVideoSegment.objects.count() == 1
+    assert response.status_code == 201, response.data
+    assert TrainingVideoSegment.objects.count() == 2
     session_root = _staged_segment_path(tmp_path, session.data["video_id"], 0).parent
     assert (session_root / "000000.mp4").read_bytes() == b"123456"
-    assert not (session_root / "000001.mp4").exists()
+    assert (session_root / "000001.mp4").read_bytes() == b"abcdef"
     _assert_no_partial_files(tmp_path)
 
 
@@ -707,6 +708,47 @@ def test_finalize_requires_contiguous_segments_and_enqueues_once(
     assert video.expected_segment_count == 2
     assert video.actual_duration_seconds == 60
     assert video.finalized_at is not None
+    assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
+
+
+@pytest.mark.django_db
+def test_finalize_allows_total_size_above_legacy_limit(
+    project_patient,
+    doctor,
+    active_prescription,
+    tmp_path,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_date=timezone.localdate(),
+        expected_duration_seconds=60,
+        status=TrainingVideo.Status.UPLOADING_SEGMENTS,
+    )
+    _create_uploaded_segments(video, tmp_path, [30000, 30000])
+    TrainingVideoSegment.objects.filter(training_video=video, index=0).update(
+        size_bytes=200 * 1024 * 1024
+    )
+    TrainingVideoSegment.objects.filter(training_video=video, index=1).update(
+        size_bytes=1
+    )
+    delay = Mock()
+    monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", delay)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            _finalize_url(video),
+            {"segment_count": 2, "actual_duration_seconds": 60, "note": ""},
+            format="json",
+        )
+
+    assert response.status_code == 202, response.data
+    assert delay.call_count == 1
     assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
 
 

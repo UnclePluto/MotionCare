@@ -187,7 +187,6 @@ class VideoSegmentServiceFixture:
         self.settings_override = override_settings(
             TRAINING_VIDEO_STAGING_ROOT=self.staging_directory.name,
             TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES=1024,
-            TRAINING_VIDEO_MAX_SIZE_BYTES=4096,
             TRAINING_VIDEO_MAX_DURATION_SECONDS=10,
             TRAINING_VIDEO_MAX_SEGMENTS=4,
             TRAINING_VIDEO_MIN_FREE_BYTES=0,

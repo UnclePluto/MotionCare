@@ -223,10 +223,7 @@ def run_motion_analysis_job(job_id):
             private_url,
             temporary_path,
             timeout=settings.MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS,
-            max_bytes=min(
-                job.training_video.size_bytes,
-                settings.TRAINING_VIDEO_MAX_SIZE_BYTES,
-            ),
+            max_bytes=job.training_video.size_bytes,
             deadline_seconds=settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS,
         )
         stage = "关键点推理"

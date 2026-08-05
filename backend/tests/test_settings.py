@@ -13,6 +13,15 @@ def test_reverse_proxy_and_static_settings_are_production_ready():
     assert settings.STATIC_ROOT.name == "staticfiles"
 
 
+def test_training_video_limits_support_compressed_forty_minute_sessions():
+    assert settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES == 50 * 1024 * 1024
+    assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 2400
+    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 80
+    assert settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS == 900
+    assert settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS == 7200
+    assert not hasattr(settings, "TRAINING_VIDEO_MAX_SIZE_BYTES")
+
+
 def test_wearable_sync_uses_shanghai_timezone_and_https_provider():
     assert settings.TIME_ZONE == "Asia/Shanghai"
     assert settings.CELERY_TIMEZONE == "Asia/Shanghai"

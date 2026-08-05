@@ -542,7 +542,6 @@ def test_private_video_download_rejects_response_without_controllable_socket(tmp
     MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS=17,
     MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS=41,
     MOTION_ANALYSIS_SAMPLE_FPS=4,
-    TRAINING_VIDEO_MAX_SIZE_BYTES=900,
 )
 def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     project_patient,
@@ -569,7 +568,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     ):
         assert url == "https://cdn.example.com/private.mp4?token=sensitive"
         assert timeout == 17
-        assert max_bytes == 900
+        assert max_bytes == job.training_video.size_bytes
         assert deadline_seconds == 41
         destination.write_bytes(b"video")
         seen_paths.append(str(destination))
