@@ -1,8 +1,12 @@
-> 状态：approved
+> 状态：implementing
 > 日期：2026-08-05
 > 范围：实施 720P 分段压缩、50MB 单段限制、40 分钟录像上限和处方缓存即时展示。
 > 关联：`docs/superpowers/specs/2026-08-05-training-video-compression-and-prescription-cache-design.md`
 > 实施基线 commit：de1fc9d
+>
+> 执行记录（2026-08-05, Codex）：Task 1–5 已落地于 commits `1c99a91`、`06917c7`、
+> `903aeab`、`b8ed5ae`、`6339b85`；后端完整测试 639 passed，小程序完整测试
+> 253 passed，生产构建成功。Task 6 待发布。
 
 # 训练视频压缩与处方缓存实施计划
 
@@ -50,7 +54,7 @@
 - Produces: `MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=7200`
 - Removes: `settings.TRAINING_VIDEO_MAX_SIZE_BYTES`
 
-- [ ] **Step 1: 写后端边界失败测试**
+- [x] **Step 1: 写后端边界失败测试**
 
 在 `backend/tests/test_settings.py` 增加默认配置断言：
 
@@ -78,7 +82,7 @@ def test_training_video_limits_support_compressed_forty_minute_sessions():
 assert max_bytes == job.training_video.size_bytes
 ```
 
-- [ ] **Step 2: 运行后端定向测试并确认红灯**
+- [x] **Step 2: 运行后端定向测试并确认红灯**
 
 Run:
 
@@ -91,7 +95,7 @@ pytest tests/test_settings.py \
 
 Expected: 默认值仍为 32MB/600 秒/120 段、总大小测试仍被拒绝、动作分析仍读取旧总大小配置。
 
-- [ ] **Step 3: 实施服务端最小改动**
+- [x] **Step 3: 实施服务端最小改动**
 
 在 `backend/config/settings.py`：
 
@@ -124,7 +128,7 @@ max_bytes=job.training_video.size_bytes
 从并发测试的 `override_settings` 删除旧总大小字段。同步更新 Compose 环境映射与生产环境
 示例，新增两个动作分析超时映射。
 
-- [ ] **Step 4: 运行后端定向测试并确认绿灯**
+- [x] **Step 4: 运行后端定向测试并确认绿灯**
 
 Run:
 
@@ -138,7 +142,7 @@ pytest tests/test_settings.py \
 
 Expected: 全部通过。
 
-- [ ] **Step 5: 提交后端边界改动**
+- [x] **Step 5: 提交后端边界改动**
 
 ```bash
 git add backend/config/settings.py backend/apps/training/video_services.py \
@@ -170,7 +174,7 @@ git commit -m "feat(training): 放宽压缩录像时长与分段边界"
 - Produces: `markPendingSegmentCompressionFailed(...)`
 - Produces: `isCompressedShoulderPressSegment(...)`
 
-- [ ] **Step 1: 写压缩参数与会话恢复失败测试**
+- [x] **Step 1: 写压缩参数与会话恢复失败测试**
 
 `compression.test.ts` 使用字面量断言：
 
@@ -193,7 +197,7 @@ expect(shoulderPressCompressionScale(640, 480)).toBe(1)
 - 旧版没有 `compressionState` 的分段加载为 `compressed`。
 - 2400 秒允许，2400001ms 拒绝。
 
-- [ ] **Step 2: 运行定向测试并确认红灯**
+- [x] **Step 2: 运行定向测试并确认红灯**
 
 Run:
 
@@ -206,7 +210,7 @@ npm test -- src/pages/shoulder-press/compression.test.ts \
 
 Expected: 新模块和新状态函数尚不存在，测试失败。
 
-- [ ] **Step 3: 实施压缩模块**
+- [x] **Step 3: 实施压缩模块**
 
 `compression.ts` 定义：
 
@@ -221,7 +225,7 @@ export const SHOULDER_PRESS_VIDEO_FPS = 24
 压缩结果 `getVideoInfo` 和 `saveFile`，返回压缩后的永久路径、时长和字节数。不得传
 `quality`，因为微信会忽略同时传入的码率、帧率和 resolution。
 
-- [ ] **Step 4: 实施可判别分段状态**
+- [x] **Step 4: 实施可判别分段状态**
 
 在 `session.ts` 把分段改为：
 
@@ -251,7 +255,7 @@ type CompressedSegment = {
 `'pending' | 'uploading' | 'uploaded' | 'finalized'`，不能再从只对 compressed 分段存在的
 `uploadState` 索引类型。
 
-- [ ] **Step 5: 运行定向测试并确认绿灯**
+- [x] **Step 5: 运行定向测试并确认绿灯**
 
 Run:
 
@@ -264,7 +268,7 @@ npm test -- src/pages/shoulder-press/compression.test.ts \
 
 Expected: 全部通过。
 
-- [ ] **Step 6: 提交压缩领域模型**
+- [x] **Step 6: 提交压缩领域模型**
 
 ```bash
 git add miniapp/src/pages/shoulder-press/compression.ts \
@@ -293,7 +297,7 @@ git commit -m "feat(miniapp): 建立可恢复的录像分段压缩"
 - Consumes: Task 2 的压缩模块与分段状态函数。
 - Produces: 摄像页实时压缩、上传页冷启动补压缩、40 分钟安全停止。
 
-- [ ] **Step 1: 写页面集成失败测试**
+- [x] **Step 1: 写页面集成失败测试**
 
 在 `pages.test.tsx` 扩展 Taro mock：`compressVideo` 返回压缩临时路径，两个
 `getVideoInfo` 分别返回原始尺寸和压缩结果。
@@ -313,7 +317,7 @@ git commit -m "feat(miniapp): 建立可恢复的录像分段压缩"
 更新 `pageState.test.ts` 的硬边界断言为 `2_400_000`、安全停止为 `2_397_000`、格式化结果
 为 `40:00`。
 
-- [ ] **Step 2: 运行页面定向测试并确认红灯**
+- [x] **Step 2: 运行页面定向测试并确认红灯**
 
 Run:
 
@@ -326,7 +330,7 @@ npm test -- src/pages/shoulder-press/pages.test.tsx \
 
 Expected: 相机仍为 medium、没有压缩调用、时长仍为 10 分钟。
 
-- [ ] **Step 3: 接入摄像页压缩**
+- [x] **Step 3: 接入摄像页压缩**
 
 `camera.tsx` 调整 `persistRecordedSegment`：
 
@@ -340,13 +344,13 @@ Expected: 相机仍为 medium、没有压缩调用、时长仍为 10 分钟。
 相机 JSX 改为 `resolution='low'`。压缩异常通过既有 recorder 失败分段机制显示并允许重试，
 不得丢失已经写入 session 的原始分段。
 
-- [ ] **Step 4: 接入强制上传页补压缩**
+- [x] **Step 4: 接入强制上传页补压缩**
 
 `upload.tsx` 在创建服务端会话前，按 index 查找首个未压缩分段并执行压缩。压缩失败时保持
 上传页 `0/N`、显示重试按钮和错误；成功后继续原有 `ensureVideoSession -> status ->
 segments -> finalize` 流程。重新训练清理 raw 与 compressed 两类路径。
 
-- [ ] **Step 5: 更新 40 分钟边界**
+- [x] **Step 5: 更新 40 分钟边界**
 
 `pageState.ts`：
 
@@ -357,7 +361,7 @@ export const SHOULDER_PRESS_RECORDING_STOP_MS = 2_397_000
 
 `session.ts` 的预计时长规范化上限与 manifest 累计上限同步改为 2400 秒。
 
-- [ ] **Step 6: 运行页面定向测试并确认绿灯**
+- [x] **Step 6: 运行页面定向测试并确认绿灯**
 
 Run:
 
@@ -370,7 +374,7 @@ npm test -- src/pages/shoulder-press/pages.test.tsx \
 
 Expected: 全部通过。
 
-- [ ] **Step 7: 提交摄像与上传集成**
+- [x] **Step 7: 提交摄像与上传集成**
 
 ```bash
 git add miniapp/src/pages/shoulder-press/camera.tsx \
@@ -400,7 +404,7 @@ git commit -m "feat(miniapp): 接入低档位录像压缩与四十分钟训练"
 - Produces: `writeCurrentPrescriptionCache(value)`
 - Produces: `clearCurrentPrescriptionCache()`
 
-- [ ] **Step 1: 写缓存与页面行为失败测试**
+- [x] **Step 1: 写缓存与页面行为失败测试**
 
 `cache.test.ts` 验证 null 处方也可缓存、读取返回当前进程值、clear 后为空。
 
@@ -413,7 +417,7 @@ git commit -m "feat(miniapp): 接入低档位录像压缩与四十分钟训练"
 
 在 token/client 测试中断言设置新 token、清除 token 和 401/403 都调用缓存清理。
 
-- [ ] **Step 2: 运行缓存定向测试并确认红灯**
+- [x] **Step 2: 运行缓存定向测试并确认红灯**
 
 Run:
 
@@ -426,7 +430,7 @@ npm test -- src/pages/prescription/cache.test.ts \
 
 Expected: 缓存模块不存在，处方页仍清空后等待网络。
 
-- [ ] **Step 3: 实施进程内缓存**
+- [x] **Step 3: 实施进程内缓存**
 
 `cache.ts` 使用模块级状态和显式命中标记，区分“未缓存”和“已缓存 null”：
 
@@ -440,7 +444,7 @@ let cachedValue: CurrentPrescription = null
 
 `token.ts` 在 `setPatientAppToken` 和 `clearPatientAppToken` 中清理缓存，避免账号切换串数据。
 
-- [ ] **Step 4: 运行缓存定向测试并确认绿灯**
+- [x] **Step 4: 运行缓存定向测试并确认绿灯**
 
 Run:
 
@@ -453,7 +457,7 @@ npm test -- src/pages/prescription/cache.test.ts \
 
 Expected: 全部通过。
 
-- [ ] **Step 5: 提交处方性能优化**
+- [x] **Step 5: 提交处方性能优化**
 
 ```bash
 git add miniapp/src/pages/prescription/cache.ts \
@@ -472,7 +476,7 @@ git commit -m "perf(miniapp): 缓存处方并后台刷新"
 - No production source changes expected; verification failures return to the owning task.
 - Update execution record: `docs/superpowers/plans/2026-08-05-training-video-compression-and-prescription-cache.md`
 
-- [ ] **Step 1: 运行完整后端测试**
+- [x] **Step 1: 运行完整后端测试**
 
 Run:
 
@@ -483,7 +487,7 @@ pytest
 
 Expected: 0 failed。
 
-- [ ] **Step 2: 运行完整小程序测试**
+- [x] **Step 2: 运行完整小程序测试**
 
 Run:
 
@@ -494,7 +498,7 @@ npm test
 
 Expected: 0 failed。
 
-- [ ] **Step 3: 执行生产构建和静态检查**
+- [x] **Step 3: 执行生产构建和静态检查**
 
 Run:
 
@@ -508,7 +512,7 @@ rg -n -m 1 'https://mcare-wx\\.whestsun\\.com/api' miniapp/dist
 
 Expected: 构建成功、无空白错误、构建产物使用生产 API。
 
-- [ ] **Step 4: 审查最终差异与配置残留**
+- [x] **Step 4: 审查最终差异与配置残留**
 
 Run:
 
@@ -522,7 +526,7 @@ git diff --stat HEAD
 Expected: 业务代码和部署配置不再依赖旧总大小或 10 分钟常量；仅历史 migration、spec 或明确
 兼容测试可以保留旧字样。
 
-- [ ] **Step 5: 更新计划执行记录并提交验证收口**
+- [x] **Step 5: 更新计划执行记录并提交验证收口**
 
 在计划顶部追加执行记录，列出各任务 commit 与完整验证结果，然后：
 
