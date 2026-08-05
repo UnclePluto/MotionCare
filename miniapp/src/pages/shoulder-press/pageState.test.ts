@@ -71,9 +71,9 @@ describe('shoulder press page state', () => {
     })).toBe(true)
   })
 
-  it('auto finishes with a safety margin before the hard ten minute limit', () => {
-    expect(shouldAutoFinishShoulderPressTraining(596_999)).toBe(false)
-    expect(shouldAutoFinishShoulderPressTraining(597_000)).toBe(true)
+  it('auto finishes with a safety margin before the hard forty minute limit', () => {
+    expect(shouldAutoFinishShoulderPressTraining(2_396_999)).toBe(false)
+    expect(shouldAutoFinishShoulderPressTraining(2_397_000)).toBe(true)
   })
 
   it('computes effective duration from the continuous recording anchor without double counting saved segments', () => {
@@ -103,21 +103,40 @@ describe('shoulder press page state', () => {
       recording: true,
       recordingBaseDurationMs: 0,
       recordingStartedAtMs: 1_000,
-      nowMs: 601_000
-    })).toBe(600_000)
+      nowMs: 2_401_000
+    })).toBe(2_400_000)
   })
 
   it('formats the fixed-size recording timer', () => {
     expect(formatShoulderPressTimer(0)).toBe('00:00')
     expect(formatShoulderPressTimer(61_400)).toBe('01:01')
-    expect(formatShoulderPressTimer(600_000)).toBe('10:00')
+    expect(formatShoulderPressTimer(2_400_000)).toBe('40:00')
   })
 
   it('counts uploaded and pending segments for stable page status', () => {
     expect(shoulderPressUploadCounters([
-      { uploadState: 'uploaded' },
-      { uploadState: 'uploading' },
-      { uploadState: 'pending' }
+      {
+        index: 0,
+        compressionState: 'compressed',
+        savedFilePath: 'wxfile://store/0.mp4',
+        durationMs: 30_000,
+        sizeBytes: 1024,
+        uploadState: 'uploaded'
+      },
+      {
+        index: 1,
+        compressionState: 'compressed',
+        savedFilePath: 'wxfile://store/1.mp4',
+        durationMs: 30_000,
+        sizeBytes: 1024,
+        uploadState: 'uploading'
+      },
+      {
+        index: 2,
+        compressionState: 'pending_compression',
+        rawSavedFilePath: 'wxfile://store/raw-2.mp4',
+        durationMs: 30_000
+      }
     ])).toEqual({ uploaded: 1, total: 3, percent: 33 })
   })
 

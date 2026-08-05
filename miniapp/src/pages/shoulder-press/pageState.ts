@@ -1,6 +1,7 @@
 import type { CurrentPrescription } from '../../types/patientApp'
 import {
   buildShoulderPressUploadUrl,
+  isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
   savePendingShoulderPressSession,
   SHOULDER_PRESS_SOURCE_KEY,
@@ -20,8 +21,8 @@ export type TrainingVideoStatus = (
   | 'expired'
 )
 
-export const SHOULDER_PRESS_HARD_LIMIT_MS = 600_000
-export const SHOULDER_PRESS_RECORDING_STOP_MS = 597_000
+export const SHOULDER_PRESS_HARD_LIMIT_MS = 2_400_000
+export const SHOULDER_PRESS_RECORDING_STOP_MS = 2_397_000
 
 type ShoulderPressStorage = {
   getStorageSync: (key: string) => unknown
@@ -97,10 +98,12 @@ export function formatShoulderPressTimer(actualDurationMs: number): string {
 }
 
 export function shoulderPressUploadCounters(
-  segments: Array<Pick<PendingShoulderPressSegment, 'uploadState'>>
+  segments: PendingShoulderPressSegment[]
 ): { uploaded: number; total: number; percent: number } {
   const total = segments.length
-  const uploaded = segments.filter((segment) => segment.uploadState === 'uploaded').length
+  const uploaded = segments.filter((segment) => (
+    isCompressedShoulderPressSegment(segment) && segment.uploadState === 'uploaded'
+  )).length
   return {
     uploaded,
     total,

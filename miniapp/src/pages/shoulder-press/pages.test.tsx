@@ -93,8 +93,10 @@ const taroHarness = vi.hoisted(() => {
     getCurrentPages: vi.fn(() => [{ route: currentRoute }]),
     reLaunch: vi.fn(),
     navigateTo: vi.fn(),
+    setKeepScreenOn: vi.fn(() => Promise.resolve()),
     saveFile: vi.fn(),
     getVideoInfo: vi.fn(),
+    compressVideo: vi.fn(),
     createCameraContext: vi.fn(() => ({
       startRecord: vi.fn((options) => options.success?.()),
       stopRecord: vi.fn((options) => options.success?.({ tempVideoPath: 'wxfile://temp/stop.mp4' }))
@@ -233,7 +235,8 @@ vi.mock('./recorder', () => ({ ShoulderPressRecorder: recorderHarness.MockShould
 
 import App from '../../app'
 import HomePage from '../home'
-import ShoulderPressPage from './index'
+import ShoulderPressCameraPage from './camera'
+import ShoulderPressGuidePage from './index'
 import ShoulderPressUploadPage from './upload'
 
 const PRESCRIPTION = {
@@ -277,6 +280,7 @@ function pendingSession(segmentCount = 2) {
     createdAt: 1783692000000,
     segments: Array.from({ length: segmentCount }, (_, index) => ({
       index,
+      compressionState: 'compressed' as const,
       savedFilePath: `wxfile://store/segment-${index}.mp4`,
       durationMs: 30_000,
       sizeBytes: 1024,
@@ -373,8 +377,21 @@ beforeEach(async () => {
   apiMocks.getVideoSessionStatus.mockResolvedValue({ video_id: 9, status: 'recording', uploaded_segments: [] })
   apiMocks.uploadVideoSegment.mockImplementation(async (input) => ({ index: input.index, sha256: `sha-${input.index}` }))
   apiMocks.finalizeVideoSession.mockResolvedValue({ video_id: 9, status: 'queued', assembly_job_id: 9 })
-  taroHarness.taroMock.saveFile.mockResolvedValue({ savedFilePath: 'wxfile://store/saved.mp4' })
-  taroHarness.taroMock.getVideoInfo.mockResolvedValue({ duration: 30, size: 1 })
+  taroHarness.taroMock.saveFile.mockImplementation(async ({ tempFilePath }) => ({
+    savedFilePath: tempFilePath.includes('compressed')
+      ? `wxfile://store/${tempFilePath.split('/').at(-1)}`
+      : `wxfile://store/raw-${tempFilePath.split('/').at(-1)}`
+  }))
+  taroHarness.taroMock.getVideoInfo.mockImplementation(async ({ src }) => ({
+    duration: 30,
+    size: src.includes('compressed') ? 1024 : 2048,
+    width: src.includes('compressed') ? 720 : 1080,
+    height: src.includes('compressed') ? 1280 : 1920
+  }))
+  taroHarness.taroMock.compressVideo.mockImplementation(async ({ src }) => ({
+    tempFilePath: `wxfile://temp/compressed-${src.split('/').at(-1)}`,
+    size: 1024
+  }))
 })
 
 afterEach(async () => {
@@ -384,6 +401,35 @@ afterEach(async () => {
 })
 
 describe('shoulder press pages', () => {
+  it('separates the example video from the native camera recording page', async () => {
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(findAll(page.element, (element) => element.type === 'Video')).toHaveLength(1)
+    expect(findAll(page.element, (element) => element.type === 'Camera')).toHaveLength(0)
+
+    findButtonByText(page.element, '进入摄像训练').props.onClick?.()
+
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/camera?actionId=42'
+    })
+  })
+
+  it('records with the low camera resolution and forty-minute safety boundary', async () => {
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(findFirstByType(page.element, 'Camera').props.resolution).toBe('low')
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(2_397_000)
+  })
+
   it('keeps the forced page until all segments and finalize succeed', async () => {
     saveStorageSession(pendingSession(2))
     const finalize = deferred<{ video_id: number; status: 'queued'; assembly_job_id: number }>()
@@ -407,7 +453,7 @@ describe('shoulder press pages', () => {
   })
 
   it('pauses on page hide and requires a manual continue after returning', async () => {
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -433,9 +479,43 @@ describe('shoulder press pages', () => {
     expect(recorder.start).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps the screen awake only while shoulder-press recording is active', async () => {
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
+      keepScreenOn: true
+    })
+
+    await taroHarness.hideCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
+      keepScreenOn: false
+    })
+
+    findButtonByText(page.element, '继续训练').props.onClick?.()
+    await flushPromises()
+    expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
+      keepScreenOn: true
+    })
+
+    page.unmount()
+    expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
+      keepScreenOn: false
+    })
+  })
+
   it('queues page-hide pause until an asynchronous start command settles', async () => {
     const start = deferred<void>()
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -452,11 +532,13 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).toContain('继续训练')
   })
 
-  it('writes the manifest only after saveFile and getVideoInfo succeed', async () => {
+  it('persists pending compression after raw save and uploads only the persisted compressed file', async () => {
     const saveFile = deferred<{ savedFilePath: string }>()
     taroHarness.taroMock.saveFile.mockReturnValueOnce(saveFile.promise)
+    const compression = deferred<{ tempFilePath: string; size: number }>()
+    taroHarness.taroMock.compressVideo.mockReturnValueOnce(compression.promise)
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -469,23 +551,166 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalled()
 
     saveFile.resolve({ savedFilePath: 'wxfile://store/segment-0.mp4' })
-    await segmentPromise
+    await flushPromises()
 
     expect(taroHarness.taroMock.getVideoInfo).toHaveBeenCalledWith({ src: 'wxfile://store/segment-0.mp4' })
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        segments: [expect.objectContaining({
+          compressionState: 'pending_compression',
+          rawSavedFilePath: 'wxfile://store/segment-0.mp4'
+        })]
+      })
+    )
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+
+    compression.resolve({
+      tempFilePath: 'wxfile://temp/compressed-segment-0.mp4',
+      size: 1024
+    })
+    await segmentPromise
+    await flushPromises(20)
+
+    expect(taroHarness.taroMock.compressVideo).toHaveBeenCalledWith({
+      src: 'wxfile://store/segment-0.mp4',
+      bitrate: 2000,
+      fps: 24,
+      resolution: 2 / 3
+    })
     expect(taroHarness.taroMock.setStorageSync).toHaveBeenCalledWith(
       PENDING_SHOULDER_PRESS_SESSION_KEY,
       expect.objectContaining({
-        segments: [expect.objectContaining({ savedFilePath: 'wxfile://store/segment-0.mp4' })]
+        segments: [expect.objectContaining({
+          compressionState: 'compressed',
+          savedFilePath: 'wxfile://store/compressed-segment-0.mp4',
+          sizeBytes: 1_048_576
+        })]
       })
     )
-    await flushPromises(20)
+    expect(apiMocks.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://store/compressed-segment-0.mp4',
+      sizeBytes: 1_048_576
+    }))
+    expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://store/segment-0.mp4'
+    }))
+    expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://store/compressed-segment-0.mp4'
+    }))
+  })
+
+  it('keeps the iOS temporary raw path when saveFile fails and still compresses it', async () => {
+    taroHarness.taroMock.saveFile.mockRejectedValueOnce(new Error('saveFile:fail temp path'))
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    await recorderHarness.instances[0].options.onSegment('wxfile://temp/ios-raw.mp4', 30_000)
+    await flushPromises()
+
+    expect(taroHarness.taroMock.compressVideo).toHaveBeenCalledWith(expect.objectContaining({
+      src: 'wxfile://temp/ios-raw.mp4'
+    }))
+    expect(apiMocks.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: expect.stringContaining('compressed-ios-raw.mp4')
+    }))
+  })
+
+  it('keeps the raw segment retryable and never uploads when compression fails', async () => {
+    taroHarness.taroMock.compressVideo.mockRejectedValueOnce(new Error('compressVideo:fail'))
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    await expect(recorderHarness.instances[0].options.onSegment(
+      'wxfile://temp/compression-failed.mp4',
+      30_000
+    )).rejects.toThrow('录像压缩失败，可重试')
+    page.rerender()
+
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        segments: [expect.objectContaining({
+          compressionState: 'compression_failed',
+          rawSavedFilePath: expect.stringContaining('compression-failed.mp4')
+        })]
+      })
+    )
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('录像压缩失败，可重试')
+  })
+
+  it('compresses a cold-start raw manifest before creating the server upload session', async () => {
+    saveStorageSession({
+      ...pendingSession(1),
+      videoId: undefined,
+      segments: [{
+        index: 0,
+        compressionState: 'compression_failed',
+        rawSavedFilePath: 'wxfile://store/cold-raw.mp4',
+        durationMs: 30_000,
+        compressionError: '上次压缩失败'
+      }]
+    })
+
+    renderPage(ShoulderPressUploadPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises(30)
+
+    expect(taroHarness.taroMock.compressVideo).toHaveBeenCalledWith(expect.objectContaining({
+      src: 'wxfile://store/cold-raw.mp4'
+    }))
+    expect(taroHarness.taroMock.compressVideo.mock.invocationCallOrder[0])
+      .toBeLessThan(apiMocks.createVideoSession.mock.invocationCallOrder[0])
+    expect(apiMocks.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: expect.stringContaining('compressed-cold-raw.mp4')
+    }))
+  })
+
+  it('uses the recorder duration when iOS reports zero duration for a closed segment', async () => {
+    taroHarness.taroMock.getVideoInfo.mockResolvedValueOnce({ duration: 0, size: 1 })
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    await recorderHarness.instances[0].options.onSegment(
+      'wxfile://temp/zero-duration.mp4',
+      30_000
+    )
+
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        actualDurationMs: 30_000,
+        segments: [
+          expect.objectContaining({
+            durationMs: 30_000
+          })
+        ]
+      })
+    )
   })
 
   it('does not let a late segment save overwrite a newer client session manifest', async () => {
     const videoInfo = deferred<{ duration: number; size: number }>()
     taroHarness.taroMock.getVideoInfo.mockReturnValueOnce(videoInfo.promise)
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -523,7 +748,7 @@ describe('shoulder press pages', () => {
     const saveFile = deferred<{ savedFilePath: string }>()
     taroHarness.taroMock.saveFile.mockReturnValueOnce(saveFile.promise)
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -549,11 +774,7 @@ describe('shoulder press pages', () => {
   })
 
   it('allows the active page to create the first manifest and append a later segment for the same client session', async () => {
-    taroHarness.taroMock.saveFile
-      .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/owned-0.mp4' })
-      .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/owned-1.mp4' })
-
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -571,8 +792,8 @@ describe('shoulder press pages', () => {
 
     expect(firstSaved.clientSessionId).toBe(secondSaved.clientSessionId)
     expect(secondSaved.segments.map((segment) => segment.savedFilePath)).toEqual([
-      'wxfile://store/owned-0.mp4',
-      'wxfile://store/owned-1.mp4'
+      'wxfile://store/compressed-raw-owned-0.mp4',
+      'wxfile://store/compressed-raw-owned-1.mp4'
     ])
     expect(apiMocks.uploadVideoSegment.mock.calls.map(([input]) => input.index)).toEqual([0, 1])
   })
@@ -586,7 +807,7 @@ describe('shoulder press pages', () => {
       .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/segment-0.mp4' })
       .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/segment-1.mp4' })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -612,20 +833,23 @@ describe('shoulder press pages', () => {
   it('serializes concurrent onSegment saves so delayed first save cannot overwrite segment indexes', async () => {
     const firstSave = deferred<{ savedFilePath: string }>()
     const events: string[] = []
-    taroHarness.taroMock.saveFile
-      .mockImplementationOnce(async (input) => {
-        events.push(`save-start:${input.tempFilePath}`)
+    let firstRawPending = true
+    taroHarness.taroMock.saveFile.mockImplementation(async (input) => {
+      events.push(`save-start:${input.tempFilePath}`)
+      if (firstRawPending && input.tempFilePath === 'wxfile://temp/0.mp4') {
+        firstRawPending = false
         const result = await firstSave.promise
         events.push(`save-done:${result.savedFilePath}`)
         return result
-      })
-      .mockImplementationOnce(async (input) => {
-        events.push(`save-start:${input.tempFilePath}`)
-        events.push('save-done:wxfile://store/segment-1.mp4')
-        return { savedFilePath: 'wxfile://store/segment-1.mp4' }
-      })
+      }
+      const savedFilePath = input.tempFilePath.includes('compressed')
+        ? `wxfile://store/${input.tempFilePath.split('/').at(-1)}`
+        : `wxfile://store/raw-${input.tempFilePath.split('/').at(-1)}`
+      events.push(`save-done:${savedFilePath}`)
+      return { savedFilePath }
+    })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -648,13 +872,17 @@ describe('shoulder press pages', () => {
     expect(events).toEqual([
       'save-start:wxfile://temp/0.mp4',
       'save-done:wxfile://store/segment-0.mp4',
+      'save-start:wxfile://temp/compressed-segment-0.mp4',
+      'save-done:wxfile://store/compressed-segment-0.mp4',
       'save-start:wxfile://temp/1.mp4',
-      'save-done:wxfile://store/segment-1.mp4'
+      'save-done:wxfile://store/raw-1.mp4',
+      'save-start:wxfile://temp/compressed-raw-1.mp4',
+      'save-done:wxfile://store/compressed-raw-1.mp4'
     ])
     expect(saved.segments.map((segment) => segment.index)).toEqual([0, 1])
     expect(saved.segments.map((segment) => segment.savedFilePath)).toEqual([
-      'wxfile://store/segment-0.mp4',
-      'wxfile://store/segment-1.mp4'
+      'wxfile://store/compressed-segment-0.mp4',
+      'wxfile://store/compressed-raw-1.mp4'
     ])
     await flushPromises(20)
   })
@@ -674,7 +902,7 @@ describe('shoulder press pages', () => {
       return upload.promise
     })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -699,6 +927,9 @@ describe('shoulder press pages', () => {
     }
 
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/shoulder-press/upload' })
+    expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
+      keepScreenOn: false
+    })
   })
 
   it('does not let a late old background upload rewrite the manifest after forced finalize clears it', async () => {
@@ -710,7 +941,7 @@ describe('shoulder press pages', () => {
       return Promise.resolve({ index: input.index, sha256: `sha-${input.index}` })
     })
 
-    const trainingPage = renderPage(ShoulderPressPage)
+    const trainingPage = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     trainingPage.rerender()
     findFirstByType(trainingPage.element, 'Camera').props.onInitDone?.()
@@ -771,7 +1002,7 @@ describe('shoulder press pages', () => {
       actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 0.5 }]
     })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -807,7 +1038,7 @@ describe('shoulder press pages', () => {
       actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 1.5 }]
     })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -838,7 +1069,7 @@ describe('shoulder press pages', () => {
       actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 1 }]
     })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -873,16 +1104,16 @@ describe('shoulder press pages', () => {
     expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(false)
   })
 
-  it('stops at the safe boundary before 600 seconds after automatic segment splits', async () => {
+  it('stops at the safe boundary before 2400 seconds after automatic segment splits', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
     requestMock.mockResolvedValueOnce({
       ...PRESCRIPTION,
-      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 12 }]
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 45 }]
     })
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -894,40 +1125,43 @@ describe('shoulder press pages', () => {
     await recorderHarness.instances[0].options.onSegment('wxfile://temp/0.mp4', 30_000)
     await flushPromises()
     expect(apiMocks.createVideoSession).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedDurationSeconds: 600 })
+      expect.objectContaining({ expectedDurationSeconds: 2400 })
     )
-    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(597_000)
+    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(2_397_000)
 
-    vi.setSystemTime(startAt + 570_000)
+    vi.setSystemTime(startAt + 2_370_000)
     vi.advanceTimersByTime(1000)
     await flushPromises()
 
     expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
     expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
 
-    vi.setSystemTime(startAt + 597_000)
+    vi.setSystemTime(startAt + 2_397_000)
     vi.advanceTimersByTime(1000)
     await flushPromises()
 
     expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
   })
 
-  it('fails closed at 600001ms and only enters forced upload after tail retry succeeds', async () => {
+  it('fails closed above 2400000ms and only enters forced upload after tail retry succeeds', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
     requestMock.mockResolvedValueOnce({
       ...PRESCRIPTION,
-      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 12 }]
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 45 }]
     })
     taroHarness.taroMock.saveFile
-      .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/first-570.mp4' })
+      .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/first-2370.mp4' })
       .mockResolvedValueOnce({ savedFilePath: 'wxfile://store/final-30.mp4' })
-    taroHarness.taroMock.getVideoInfo
-      .mockResolvedValueOnce({ duration: 570, size: 1 })
-      .mockResolvedValueOnce({ duration: 30.001, size: 1 })
+    taroHarness.taroMock.getVideoInfo.mockImplementation(async ({ src }) => ({
+      duration: src.includes('first-2370') ? 2370 : src.includes('final') ? 30.001 : 30,
+      size: src.includes('compressed') ? 1 : 2,
+      width: src.includes('compressed') ? 720 : 1080,
+      height: src.includes('compressed') ? 1280 : 1920
+    }))
 
-    const page = renderPage(ShoulderPressPage)
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -936,7 +1170,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
     const recorder = recorderHarness.instances[0]
 
-    await recorder.options.onSegment('wxfile://temp/first-570.mp4', 570_000)
+    await recorder.options.onSegment('wxfile://temp/first-2370.mp4', 2_370_000)
     await expect(
       recorder.options.onSegment('wxfile://temp/final.mp4', 30_001)
     ).rejects.toThrow('录像总时长超过限制')
@@ -949,13 +1183,21 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
     expect(findButtonByText(page.element, '重试保存尾段')).toBeTruthy()
     expect(findButtonByText(page.element, '重新训练')).toBeTruthy()
-    expect(taroHarness.unlinkMock).not.toHaveBeenCalled()
+    expect(taroHarness.unlinkMock.mock.calls.map(([options]) => options.filePath)).toEqual([
+      'wxfile://store/first-2370.mp4',
+      'wxfile://store/final-30.mp4'
+    ])
 
     vi.advanceTimersByTime(2_000)
     await flushPromises()
     expect(recorder.finish).toHaveBeenCalledTimes(1)
 
-    taroHarness.taroMock.getVideoInfo.mockResolvedValueOnce({ duration: 27, size: 1 })
+    taroHarness.taroMock.getVideoInfo.mockImplementation(async ({ src }) => ({
+      duration: src.includes('first-2370') ? 2370 : src.includes('final') ? 27 : 30,
+      size: src.includes('compressed') ? 1 : 2,
+      width: src.includes('compressed') ? 720 : 1080,
+      height: src.includes('compressed') ? 1280 : 1920
+    }))
     recorder.retryFailedSegment.mockImplementationOnce(async () => {
       await recorder.options.onSegment('wxfile://temp/final.mp4', 27_000)
       recorder.hasFailedSegment.mockReturnValue(false)
@@ -964,15 +1206,16 @@ describe('shoulder press pages', () => {
     await findButtonByText(page.element, '重试保存尾段').props.onClick?.()
     await flushPromises(20)
 
-    expect(taroHarness.taroMock.saveFile).toHaveBeenCalledTimes(2)
+    expect(taroHarness.taroMock.saveFile).toHaveBeenCalled()
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
       url: '/pages/shoulder-press/upload'
     })
   })
 
-  it('keeps the original tail path after saveFile failure until retraining is chosen', async () => {
+  it('keeps the original temp path when persistence and temp inspection both fail', async () => {
     taroHarness.taroMock.saveFile.mockRejectedValueOnce(new Error('saveFile failed'))
-    const page = renderPage(ShoulderPressPage)
+    taroHarness.taroMock.getVideoInfo.mockRejectedValue(new Error('getVideoInfo failed'))
+    const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
     findFirstByType(page.element, 'Camera').props.onInitDone?.()
@@ -983,18 +1226,25 @@ describe('shoulder press pages', () => {
 
     await expect(
       recorder.options.onSegment('wxfile://temp/final-save-failed.mp4', 30_000)
-    ).rejects.toThrow('saveFile failed')
+    ).rejects.toThrow('录像压缩失败，可重试')
     recorder.hasFailedSegment.mockReturnValue(true)
     recorder.abandonFailedSegment.mockReturnValue({
       savedFilePath: 'wxfile://temp/final-save-failed.mp4',
       durationMs: 30_000
     })
-    recorder.finish.mockRejectedValue(new Error('saveFile failed'))
+    recorder.finish.mockRejectedValue(new Error('getVideoInfo failed'))
     recorder.options.onMaxDuration?.()
     await flushPromises()
     page.rerender()
 
-    expect(taroHarness.unlinkMock).not.toHaveBeenCalled()
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        segments: [expect.objectContaining({
+          compressionState: 'compression_failed',
+          rawSavedFilePath: 'wxfile://temp/final-save-failed.mp4'
+        })]
+      })
+    )
     await findButtonByText(page.element, '重新训练').props.onClick?.()
     await flushPromises()
 
@@ -1005,6 +1255,67 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
       url: '/pages/shoulder-press/index?actionId=42'
     })
+  })
+
+  it('falls back to the camera temp path when saveFile cannot persist a segment', async () => {
+    taroHarness.taroMock.saveFile.mockResolvedValueOnce({
+      errMsg: 'saveFile:fail the maximum size of the file storage limit is exceeded'
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    await recorderHarness.instances[0].options.onSegment(
+      'wxfile://temp/storage-fallback.mp4',
+      30_000
+    )
+    await flushPromises()
+
+    expect(taroHarness.taroMock.getVideoInfo).toHaveBeenCalledWith({
+      src: 'wxfile://temp/storage-fallback.mp4'
+    })
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        segments: [
+          expect.objectContaining({
+            compressionState: 'compressed',
+            savedFilePath: expect.stringContaining('compressed-storage-fallback.mp4')
+          })
+        ]
+      })
+    )
+  })
+
+  it('shows the native media errMsg when the temp recording is also unreadable', async () => {
+    taroHarness.taroMock.saveFile.mockResolvedValueOnce({
+      errMsg: 'saveFile:fail the maximum size of the file storage limit is exceeded'
+    })
+    taroHarness.taroMock.getVideoInfo.mockRejectedValue({
+      errMsg: 'getVideoInfo:fail tempFilePath file not exist'
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+
+    await expect(
+      recorderHarness.instances[0].options.onSegment(
+        'wxfile://temp/missing.mp4',
+        30_000
+      )
+    ).rejects.toThrow('getVideoInfo:fail tempFilePath file not exist')
+    page.rerender()
+
+    expect(textContent(page.element)).toContain(
+      'getVideoInfo:fail tempFilePath file not exist'
+    )
   })
 
   it('blocks the home page entry and redirects to forced upload when a shoulder press manifest is pending', async () => {

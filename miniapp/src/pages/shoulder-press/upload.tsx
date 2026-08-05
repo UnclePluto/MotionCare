@@ -3,6 +3,10 @@ import Taro, { useDidShow } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 
 import {
+  compressSavedShoulderPressSegment,
+  type ShoulderPressCompressVideoOptions
+} from './compression'
+import {
   isServerRetryableFinalizeStatus,
   isServerSafeFinalizeStatus,
   loadOwnedPendingShoulderPressSession,
@@ -12,7 +16,11 @@ import {
 } from './pageState'
 import {
   clearPendingShoulderPressSession,
+  completePendingSegmentCompression,
+  isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
+  markPendingSegmentCompressionFailed,
+  type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
 } from './session'
@@ -24,10 +32,11 @@ import {
   type VideoSessionStatus
 } from './api'
 
-type UploadPhase = 'session' | 'status' | 'segments' | 'finalize' | 'done'
+type UploadPhase = 'compression' | 'session' | 'status' | 'segments' | 'finalize' | 'done'
 const ABANDONED_SHOULDER_PRESS_FILES_KEY = 'motioncare.shoulderPress.abandonedFiles.v1'
 
 const PHASE_LABELS: Record<UploadPhase, string> = {
+  compression: '压缩训练分段',
   session: '建立上传会话',
   status: '确认已上传片段',
   segments: '上传训练分段',
@@ -35,15 +44,26 @@ const PHASE_LABELS: Record<UploadPhase, string> = {
   done: '已提交'
 }
 
+function mediaErrorDetail(error: unknown): string {
+  if (error instanceof Error) return error.message.trim()
+  if (error && typeof error === 'object') {
+    const errMsg = (error as { errMsg?: unknown }).errMsg
+    if (typeof errMsg === 'string') return errMsg.trim()
+  }
+  return ''
+}
+
 function updateSegment(
   session: PendingShoulderPressSession,
   index: number,
-  update: Partial<PendingShoulderPressSegment>
+  update: Partial<CompressedShoulderPressSegment>
 ): PendingShoulderPressSession {
   return {
     ...session,
     segments: session.segments.map((segment) => (
-      segment.index === index ? { ...segment, ...update } : segment
+      segment.index === index && isCompressedShoulderPressSegment(segment)
+        ? { ...segment, ...update }
+        : segment
     ))
   }
 }
@@ -58,6 +78,7 @@ function mergeServerUploaded(
   return {
     ...session,
     segments: session.segments.map((segment) => {
+      if (!isCompressedShoulderPressSegment(segment)) return segment
       if (uploaded.has(segment.index)) return { ...segment, uploadState: 'uploaded' }
       if (segment.uploadState === 'uploading') return { ...segment, uploadState: 'pending', sha256: undefined }
       return segment
@@ -89,8 +110,11 @@ async function cleanupAfterServerReceipt(session: PendingShoulderPressSession): 
   const failedPaths: string[] = []
   try {
     for (const segment of session.segments) {
-      if (!await deleteSavedFile(segment.savedFilePath)) {
-        failedPaths.push(segment.savedFilePath)
+      const filePath = isCompressedShoulderPressSegment(segment)
+        ? segment.savedFilePath
+        : segment.rawSavedFilePath
+      if (!await deleteSavedFile(filePath)) {
+        failedPaths.push(filePath)
       }
     }
     if (failedPaths.length > 0) {
@@ -157,6 +181,63 @@ export default function ShoulderPressUploadPage() {
     return nextSession
   }
 
+  async function compressPendingSegments(
+    initialSession: PendingShoulderPressSession
+  ): Promise<PendingShoulderPressSession | null> {
+    setPhase('compression')
+    const clientSessionId = initialSession.clientSessionId
+    let current = initialSession
+
+    for (;;) {
+      const latest = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+      if (!latest) return null
+      current = latest
+      const segment = current.segments.find((item) => !isCompressedShoulderPressSegment(item))
+      if (!segment || isCompressedShoulderPressSegment(segment)) return current
+      setActiveIndex(segment.index)
+      setSegmentProgress(0)
+
+      try {
+        const compressed = await compressSavedShoulderPressSegment({
+          rawSavedFilePath: segment.rawSavedFilePath
+        }, {
+          getVideoInfo: (options) => Taro.getVideoInfo(options),
+          compressVideo: (options: ShoulderPressCompressVideoOptions) => (
+            Taro.compressVideo(options as Parameters<typeof Taro.compressVideo>[0])
+          ),
+          saveFile: (options) => Taro.saveFile(options)
+        })
+        const beforePersist = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!beforePersist) {
+          await deleteSavedFile(compressed.savedFilePath)
+          return null
+        }
+        current = persist(completePendingSegmentCompression(
+          beforePersist,
+          segment.index,
+          compressed
+        ))
+        if (!current) return null
+        await deleteSavedFile(segment.rawSavedFilePath)
+        setSegmentProgress(100)
+      } catch (compressionError) {
+        const beforeFailure = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (beforeFailure) {
+          const failedSegment = beforeFailure.segments[segment.index]
+          if (failedSegment && !isCompressedShoulderPressSegment(failedSegment)) {
+            persist(markPendingSegmentCompressionFailed(
+              beforeFailure,
+              segment.index,
+              '录像压缩失败，可重试'
+            ))
+          }
+        }
+        const detail = mediaErrorDetail(compressionError) || '压缩服务不可用'
+        throw new Error(`录像压缩失败，可重试：${detail}`)
+      }
+    }
+  }
+
   async function mergeRemoteStatus(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
     if (!session.videoId) return session
     setPhase('status')
@@ -189,8 +270,13 @@ export default function ShoulderPressUploadPage() {
       if (!latest) return null
       current = latest
       if (!current.videoId) return null
-      const segment = current.segments.find((item) => item.uploadState !== 'uploaded')
+      const segment = current.segments.find((item) => (
+        isCompressedShoulderPressSegment(item) && item.uploadState !== 'uploaded'
+      ))
       if (!segment) break
+      if (!isCompressedShoulderPressSegment(segment)) {
+        throw new Error('录像分段尚未压缩，请重试')
+      }
       setActiveIndex(segment.index)
       setSegmentProgress(0)
 
@@ -264,7 +350,9 @@ export default function ShoulderPressUploadPage() {
     setPending(currentPending)
 
     try {
-      let session = await ensureVideoSession(currentPending)
+      let session = await compressPendingSegments(currentPending)
+      if (!session) return
+      session = await ensureVideoSession(session)
       if (!session) return
       session = await mergeRemoteStatus(session)
       if (!session) return
