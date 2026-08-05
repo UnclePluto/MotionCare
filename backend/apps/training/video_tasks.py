@@ -617,7 +617,8 @@ def _record_assembly_failure(job_id, reason, *, lease_attempt):
 @shared_task(bind=True, max_retries=MAX_ASSEMBLY_ATTEMPTS - 1)
 def run_video_assembly_job(self, job_id):
     try:
-        return process_video_assembly_job(job_id)
+        job = process_video_assembly_job(job_id)
+        return {"job_id": job.id, "status": job.status}
     except VideoAssemblyJob.DoesNotExist:
         return None
     except Exception as exc:
@@ -637,7 +638,7 @@ def run_video_assembly_job(self, job_id):
                 args=[job_id],
                 countdown=RETRY_BASE_SECONDS * 2 ** (job.attempt_count - 1),
             )
-        return job
+        return {"job_id": job.id, "status": job.status}
 
 
 def _remove_session_files(video):

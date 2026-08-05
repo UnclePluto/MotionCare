@@ -6,6 +6,7 @@ from celery.exceptions import Retry
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError
 from django.utils import timezone
+from kombu.serialization import dumps
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.training.models import (
@@ -49,6 +50,27 @@ def test_video_assembly_job_task_routes_to_dedicated_queue():
     for task in default_queue_tasks:
         route = celery_app.amqp.router.route({}, task.name, args=(), kwargs={})
         assert route["queue"].name == "celery"
+
+
+@pytest.mark.django_db
+def test_video_assembly_task_returns_json_serializable_job_summary(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    _, job = _pending_job(project_patient, active_prescription, tmp_path)
+    job.status = VideoAssemblyJob.Status.SUCCEEDED
+    job.save(update_fields=["status", "updated_at"])
+
+    result = _video_tasks().run_video_assembly_job.run(job.id)
+
+    assert result == {
+        "job_id": job.id,
+        "status": VideoAssemblyJob.Status.SUCCEEDED,
+    }
+    dumps(result, serializer="json")
 
 
 def _shoulder_press_action(prescription):
@@ -257,7 +279,10 @@ def test_qiniu_failure_reuses_final_file_and_stops_after_three_attempts(
 
     job.refresh_from_db()
     video.refresh_from_db()
-    assert final.status == VideoAssemblyJob.Status.FAILED
+    assert final == {
+        "job_id": job.id,
+        "status": VideoAssemblyJob.Status.FAILED,
+    }
     assert job.status == VideoAssemblyJob.Status.FAILED
     assert job.attempt_count == 3
     assert video.status == TrainingVideo.Status.FAILED
