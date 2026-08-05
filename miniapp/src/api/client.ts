@@ -2,7 +2,10 @@ import Taro from '@tarojs/taro'
 
 import { clearPatientAppToken, getPatientAppToken } from '../auth/token'
 import { resolveApiBaseUrl } from './baseUrl'
-import { containsSensitiveCredentialText } from './safeError'
+import {
+  containsSensitiveCredentialText,
+  networkRequestErrorMessage,
+} from './safeError'
 
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL || 'http://127.0.0.1:8000/api'
 
@@ -67,8 +70,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
         ...patientAuthorizationHeader()
       }
     })
-  } catch {
-    throw new Error('请求失败，请检查网络后重试')
+  } catch (error) {
+    throw new Error(networkRequestErrorMessage(error))
   }
 
   if (response.statusCode === 401 || response.statusCode === 403) {

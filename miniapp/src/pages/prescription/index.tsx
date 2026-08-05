@@ -15,6 +15,10 @@ import {
 } from '../shoulder-press/session'
 import { reLaunchPendingShoulderPressUploadIfNeeded } from '../shoulder-press/pageState'
 import { actionButtonLabel, actionEntryUrl } from './actionRouting'
+import {
+  readCurrentPrescriptionCache,
+  writeCurrentPrescriptionCache
+} from './cache'
 import { loadGameSessionSubpackage } from './gameSubpackage'
 
 function pendingGameUploadBannerText(): string {
@@ -26,9 +30,13 @@ function pendingGameUploadBannerText(): string {
 }
 
 export default function PrescriptionPage() {
-  const [data, setData] = useState<CurrentPrescription>(null)
+  const [data, setData] = useState<CurrentPrescription>(() => (
+    readCurrentPrescriptionCache() ?? null
+  ))
   const [error, setError] = useState('')
-  const [loaded, setLoaded] = useState(false)
+  const [loaded, setLoaded] = useState(() => (
+    readCurrentPrescriptionCache() !== undefined
+  ))
   const [pendingUploadBanner, setPendingUploadBanner] = useState('')
   const [gameLoadingActionId, setGameLoadingActionId] = useState<number | null>(null)
   const [gameLoadProgress, setGameLoadProgress] = useState(0)
@@ -42,8 +50,10 @@ export default function PrescriptionPage() {
   function loadPrescriptionData() {
     request<CurrentPrescription>('/patient-app/current-prescription/')
       .then((body) => {
+        writeCurrentPrescriptionCache(body)
         if (!mountedRef.current) return
         setData(body)
+        setError('')
         setLoaded(true)
       })
       .catch((err) => {
@@ -93,8 +103,6 @@ export default function PrescriptionPage() {
 
   useDidShow(() => {
     setError('')
-    setLoaded(false)
-    setData(null)
     setGameLoadError('')
     void reLaunchPendingShoulderPressUploadIfNeeded(Taro).then((redirected) => {
       if (!mountedRef.current) return
@@ -157,6 +165,7 @@ export default function PrescriptionPage() {
         </Text>
       </View>
       {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
+      {error ? <Text className='muted prescription-refresh-error'>{error}</Text> : null}
       {gameLoadError ? <Text className='error'>{gameLoadError}</Text> : null}
       {gameLoadingActionId !== null ? (
         <View className='subpackage-loader'>

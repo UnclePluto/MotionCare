@@ -11,6 +11,7 @@ import {
   tryUploadPendingGameRecord,
 } from '../game-session/retryUpload'
 import { reLaunchPendingShoulderPressUploadIfNeeded } from '../shoulder-press/pageState'
+import { writeCurrentPrescriptionCache } from '../prescription/cache'
 import { HOME_ACTIONS, type HomeActionContext } from './homeActions'
 
 function pendingGameUploadBannerText(): string {
@@ -35,6 +36,7 @@ export default function HomePage() {
   function loadHomeData() {
     request<HomeData>('/patient-app/home/')
       .then((body) => {
+        writeCurrentPrescriptionCache(body.current_prescription)
         if (!mountedRef.current) return
         setData(body)
         setLoaded(true)

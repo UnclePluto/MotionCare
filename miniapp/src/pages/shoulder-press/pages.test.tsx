@@ -235,6 +235,12 @@ vi.mock('./recorder', () => ({ ShoulderPressRecorder: recorderHarness.MockShould
 
 import App from '../../app'
 import HomePage from '../home'
+import PrescriptionPage from '../prescription'
+import {
+  clearCurrentPrescriptionCache,
+  readCurrentPrescriptionCache,
+  writeCurrentPrescriptionCache
+} from '../prescription/cache'
 import ShoulderPressCameraPage from './camera'
 import ShoulderPressGuidePage from './index'
 import ShoulderPressUploadPage from './upload'
@@ -370,6 +376,7 @@ beforeEach(async () => {
   reactHarness.reset()
   taroHarness.reset()
   recorderHarness.reset()
+  clearCurrentPrescriptionCache()
   requestMock.mockResolvedValue(PRESCRIPTION)
   retryMocks.loadPendingGameUpload.mockReturnValue(null)
   retryMocks.tryUploadPendingGameRecord.mockResolvedValue('idle')
@@ -401,6 +408,57 @@ afterEach(async () => {
 })
 
 describe('shoulder press pages', () => {
+  it('writes the home prescription response into the process cache', async () => {
+    requestMock.mockResolvedValueOnce({
+      patient: { name: '王阿姨' },
+      project: { name: '康复研究' },
+      current_prescription: PRESCRIPTION
+    })
+
+    renderPage(HomePage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(readCurrentPrescriptionCache()).toBe(PRESCRIPTION)
+  })
+
+  it('renders a cached prescription immediately while refreshing in the background', async () => {
+    writeCurrentPrescriptionCache(PRESCRIPTION)
+    const refresh = deferred<typeof PRESCRIPTION>()
+    requestMock.mockReturnValueOnce(refresh.promise)
+
+    const page = renderPage(PrescriptionPage)
+
+    expect(textContent(page.element)).toContain('肩部推举')
+    expect(textContent(page.element)).not.toContain('正在加载当前处方')
+
+    await taroHarness.showCallbacks[0]()
+    refresh.resolve({
+      ...PRESCRIPTION,
+      version: 2,
+      actions: [{ ...PRESCRIPTION.actions[0], action_name: '肩部推举（更新）' }]
+    })
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('肩部推举（更新）')
+    expect(textContent(page.element)).toContain('当前处方 v2')
+  })
+
+  it('keeps cached actions visible when the background refresh fails', async () => {
+    writeCurrentPrescriptionCache(PRESCRIPTION)
+    requestMock.mockRejectedValueOnce(new Error('处方刷新失败'))
+
+    const page = renderPage(PrescriptionPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('肩部推举')
+    expect(textContent(page.element)).toContain('处方刷新失败')
+    expect(textContent(page.element)).not.toContain('正在加载当前处方')
+  })
+
   it('separates the example video from the native camera recording page', async () => {
     const page = renderPage(ShoulderPressGuidePage)
     await flushPromises()
