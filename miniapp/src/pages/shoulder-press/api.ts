@@ -148,6 +148,17 @@ export async function uploadVideoSegment(input: {
   sizeBytes: number
   onProgress?: (progress: number) => void
 }): Promise<UploadedVideoSegment> {
+  let exactSizeBytes: number
+  try {
+    const fileInfo = await Taro.getFileInfo({ filePath: input.filePath })
+    if (!isObject(fileInfo) || !isPositiveInteger(fileInfo.size)) {
+      throw new Error('invalid file info')
+    }
+    exactSizeBytes = fileInfo.size
+  } catch {
+    throw new Error('无法读取录像分段实际大小，请重试')
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false
     const settleResolve = (value: UploadedVideoSegment) => {
@@ -169,7 +180,7 @@ export async function uploadVideoSegment(input: {
         header: patientAuthorizationHeader(),
         formData: {
           duration_ms: input.durationMs,
-          size_bytes: input.sizeBytes
+          size_bytes: exactSizeBytes
         },
         success(response: UploadFileSuccess) {
           if (settled) return

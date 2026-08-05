@@ -11,6 +11,7 @@ const { taroMock } = vi.hoisted(() => ({
   taroMock: {
     request: vi.fn(),
     uploadFile: vi.fn(),
+    getFileInfo: vi.fn(),
     getStorageSync: vi.fn(),
     removeStorageSync: vi.fn(),
     redirectTo: vi.fn()
@@ -23,6 +24,7 @@ describe('shoulder press segmented upload api', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     taroMock.getStorageSync.mockReturnValue('patient-token')
+    taroMock.getFileInfo.mockResolvedValue({ size: 2_097_152 })
   })
 
   it('creates, finalizes, and reads video sessions through the patient app API', async () => {
@@ -111,6 +113,27 @@ describe('shoulder press segmented upload api', () => {
     ]
     expect(Object.keys(uploadOptions.formData)).not.toEqual(expect.arrayContaining(forbiddenFields))
     expect(uploadOptions.header.Authorization).toBe('Bearer patient-token')
+  })
+
+  it('declares the final file exact byte size instead of rounded video metadata', async () => {
+    taroMock.getFileInfo.mockResolvedValueOnce({ size: 2_096_731 })
+    taroMock.uploadFile.mockImplementation((options) => {
+      options.success?.({ statusCode: 201, data: '{"index":0,"sha256":"segment-sha"}' })
+      return { onProgressUpdate: vi.fn() }
+    })
+
+    await uploadVideoSegment({
+      videoId: 9,
+      index: 0,
+      filePath: 'wxfile://store/segment-0.mp4',
+      durationMs: 29_800,
+      sizeBytes: 2_097_152
+    })
+
+    expect(taroMock.getFileInfo).toHaveBeenCalledWith({
+      filePath: 'wxfile://store/segment-0.mp4'
+    })
+    expect(taroMock.uploadFile.mock.calls[0][0].formData.size_bytes).toBe(2_096_731)
   })
 
   it('normalizes upload progress while preserving single backend upload semantics', async () => {
