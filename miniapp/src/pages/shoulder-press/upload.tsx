@@ -2,10 +2,7 @@ import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 
-import {
-  compressSavedShoulderPressSegment,
-  type ShoulderPressCompressVideoOptions
-} from './compression'
+import { saveTemporaryShoulderPressSegmentForRetry } from './localFile'
 import {
   isServerRetryableFinalizeStatus,
   isServerSafeFinalizeStatus,
@@ -16,10 +13,9 @@ import {
 } from './pageState'
 import {
   clearPendingShoulderPressSession,
-  completePendingSegmentCompression,
   isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
-  markPendingSegmentCompressionFailed,
+  promoteLegacyShoulderPressSegment,
   type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
@@ -32,11 +28,11 @@ import {
   type VideoSessionStatus
 } from './api'
 
-type UploadPhase = 'compression' | 'session' | 'status' | 'segments' | 'finalize' | 'done'
+type UploadPhase = 'preparing' | 'session' | 'status' | 'segments' | 'finalize' | 'done'
 const ABANDONED_SHOULDER_PRESS_FILES_KEY = 'motioncare.shoulderPress.abandonedFiles.v1'
 
 const PHASE_LABELS: Record<UploadPhase, string> = {
-  compression: '压缩训练分段',
+  preparing: '准备训练分段',
   session: '建立上传会话',
   status: '确认已上传片段',
   segments: '上传训练分段',
@@ -181,10 +177,10 @@ export default function ShoulderPressUploadPage() {
     return nextSession
   }
 
-  async function compressPendingSegments(
+  async function preparePendingSegments(
     initialSession: PendingShoulderPressSession
   ): Promise<PendingShoulderPressSession | null> {
-    setPhase('compression')
+    setPhase('preparing')
     const clientSessionId = initialSession.clientSessionId
     let current = initialSession
 
@@ -198,42 +194,32 @@ export default function ShoulderPressUploadPage() {
       setSegmentProgress(0)
 
       try {
-        const compressed = await compressSavedShoulderPressSegment({
-          rawSavedFilePath: segment.rawSavedFilePath
-        }, {
-          getVideoInfo: (options) => Taro.getVideoInfo(options),
-          compressVideo: (options: ShoulderPressCompressVideoOptions) => (
-            Taro.compressVideo(options as Parameters<typeof Taro.compressVideo>[0])
-          ),
-          saveFile: (options) => Taro.saveFile(options)
-        })
-        const beforePersist = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
-        if (!beforePersist) {
-          await deleteSavedFile(compressed.savedFilePath)
-          return null
+        const fileInfo = await Taro.getFileInfo({ filePath: segment.rawSavedFilePath })
+        const sizeBytes = Number(fileInfo.size)
+        if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
+          throw new Error('录像文件大小无效')
         }
-        current = persist(completePendingSegmentCompression(
+        const beforePersist = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!beforePersist) return null
+        current = persist(promoteLegacyShoulderPressSegment(
           beforePersist,
           segment.index,
-          compressed
+          {
+            savedFilePath: segment.rawSavedFilePath,
+            durationMs: segment.durationMs,
+            sizeBytes,
+            localFileState: segment.rawSavedFilePath.includes('wxfile://temp')
+              ? 'temporary'
+              : 'saved'
+          }
         ))
         if (!current) return null
-        await deleteSavedFile(segment.rawSavedFilePath)
         setSegmentProgress(100)
-      } catch (compressionError) {
-        const beforeFailure = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
-        if (beforeFailure) {
-          const failedSegment = beforeFailure.segments[segment.index]
-          if (failedSegment && !isCompressedShoulderPressSegment(failedSegment)) {
-            persist(markPendingSegmentCompressionFailed(
-              beforeFailure,
-              segment.index,
-              '录像压缩失败，可重试'
-            ))
-          }
-        }
-        const detail = mediaErrorDetail(compressionError) || '压缩服务不可用'
-        throw new Error(`录像压缩失败，可重试：${detail}`)
+      } catch (preparationError) {
+        const detail = mediaErrorDetail(preparationError)
+        throw new Error(detail
+          ? `录像文件已失效，请重新训练：${detail}`
+          : '录像文件已失效，请重新训练')
       }
     }
   }
@@ -306,8 +292,16 @@ export default function ShoulderPressUploadPage() {
       } catch (uploadError) {
         current = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
         if (!current) return null
+        const retained = await saveTemporaryShoulderPressSegmentForRetry({
+          filePath: segment.savedFilePath,
+          localFileState: segment.localFileState ?? 'saved'
+        }, (options) => Taro.saveFile(options))
+        current = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+        if (!current) return null
         persist({
           ...updateSegment(current, segment.index, {
+            savedFilePath: retained.filePath,
+            localFileState: retained.localFileState,
             uploadState: 'pending',
             sha256: undefined
           }),
@@ -350,7 +344,7 @@ export default function ShoulderPressUploadPage() {
     setPending(currentPending)
 
     try {
-      let session = await compressPendingSegments(currentPending)
+      let session = await preparePendingSegments(currentPending)
       if (!session) return
       session = await ensureVideoSession(session)
       if (!session) return

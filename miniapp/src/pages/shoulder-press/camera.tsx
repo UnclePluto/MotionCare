@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { request } from '../../api/client'
 import { containsSensitiveCredentialText } from '../../api/safeError'
 import type { CurrentPrescription } from '../../types/patientApp'
+import { saveTemporaryShoulderPressSegmentForRetry } from './localFile'
 import {
   canCompleteShoulderPressTraining,
   canStartShoulderPressRecording,
@@ -23,19 +24,13 @@ import {
 } from './pageState'
 import { ShoulderPressRecorder } from './recorder'
 import {
-  compressSavedShoulderPressSegment,
-  type ShoulderPressCompressVideoOptions
-} from './compression'
-import {
-  appendPendingCompressionSegment,
+  appendUploadableShoulderPressSegment,
   buildShoulderPressSessionUrl,
   buildShoulderPressUploadUrl,
   clearPendingShoulderPressSession,
-  completePendingSegmentCompression,
   createPendingShoulderPressSession,
   isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
-  markPendingSegmentCompressionFailed,
   savePendingShoulderPressSession,
   normalizeShoulderPressExpectedDurationSeconds,
   type CompressedShoulderPressSegment,
@@ -222,8 +217,16 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
     } catch (error) {
       session = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
       if (!session) return
+      const retained = await saveTemporaryShoulderPressSegmentForRetry({
+        filePath: segment.savedFilePath,
+        localFileState: segment.localFileState ?? 'saved'
+      }, (options) => Taro.saveFile(options))
+      session = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
+      if (!session) return
       persistOwnedSession({
         ...updateSegment(session, segment.index, {
+          savedFilePath: retained.filePath,
+          localFileState: retained.localFileState,
           uploadState: 'pending',
           sha256: undefined
         }),
@@ -285,7 +288,6 @@ export default function ShoulderPressCameraPage() {
   const recordingBaseDurationMsRef = useRef(0)
   const recordingStartedAtRef = useRef(0)
   const segmentSaveChainRef = useRef<Promise<void>>(Promise.resolve())
-  const retainedSegmentPathsRef = useRef(new Map<string, string>())
 
   function syncSession(nextSession: PendingShoulderPressSession) {
     sessionRef.current = nextSession
@@ -363,90 +365,41 @@ export default function ShoulderPressCameraPage() {
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
       const expectedClientSessionId = currentSession.clientSessionId
 
-      let savedFilePath = retainedSegmentPathsRef.current.get(tempFilePath)
-      if (!savedFilePath) {
-        try {
-          const saved = await Taro.saveFile({ tempFilePath })
-          savedFilePath = typeof saved.savedFilePath === 'string' && saved.savedFilePath
-            ? saved.savedFilePath
-            : tempFilePath
-        } catch {
-          savedFilePath = tempFilePath
-        }
-        retainedSegmentPathsRef.current.set(tempFilePath, savedFilePath)
-      }
       let durationMs = Math.max(1, Math.round(recordedDurationMs))
       try {
-        const info = await Taro.getVideoInfo({ src: savedFilePath })
+        const info = await Taro.getVideoInfo({ src: tempFilePath })
         if (Number.isFinite(info.duration) && info.duration > 0) {
           durationMs = Math.max(1, Math.round(info.duration * 1000))
         }
       } catch {
-        // 压缩阶段会再次读取媒体信息；这里优先把原始文件写入可恢复清单。
+        // iOS 偶尔返回无效媒体时长；录像器计时仍可作为分段时长。
+      }
+      const fileInfo = await Taro.getFileInfo({ filePath: tempFilePath })
+      const sizeBytes = Number(fileInfo.size)
+      if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
+        throw new Error('无法读取录像分段实际大小，请重试')
       }
 
       let writeBase = resolveOwnedSegmentWriteBase(expectedClientSessionId)
       if (!writeBase) {
-        retainedSegmentPathsRef.current.delete(tempFilePath)
-        deleteOrphanedSavedFile(savedFilePath)
+        deleteOrphanedSavedFile(tempFilePath)
         return
       }
 
-      let pendingSegment = writeBase.segments.find((segment) => (
-        !isCompressedShoulderPressSegment(segment) &&
-        segment.rawSavedFilePath === savedFilePath
+      const existingSegment = writeBase.segments.find((segment) => (
+        isCompressedShoulderPressSegment(segment) &&
+        segment.savedFilePath === tempFilePath
       ))
-      if (!pendingSegment) {
-        writeBase = appendPendingCompressionSegment(writeBase, {
-          rawSavedFilePath: savedFilePath,
-          durationMs
+      if (!existingSegment) {
+        writeBase = appendUploadableShoulderPressSegment(writeBase, {
+          filePath: tempFilePath,
+          durationMs,
+          sizeBytes,
+          localFileState: 'temporary'
         })
-        pendingSegment = writeBase.segments.at(-1)
         saveCurrentSession(writeBase)
       }
-      if (!pendingSegment || isCompressedShoulderPressSegment(pendingSegment)) {
-        throw new Error('待压缩录像分段不存在')
-      }
-
-      try {
-        const compressed = await compressSavedShoulderPressSegment({
-          rawSavedFilePath: pendingSegment.rawSavedFilePath
-        }, {
-          getVideoInfo: (options) => Taro.getVideoInfo(options),
-          compressVideo: (options: ShoulderPressCompressVideoOptions) => (
-            Taro.compressVideo(options as Parameters<typeof Taro.compressVideo>[0])
-          ),
-          saveFile: (options) => Taro.saveFile(options)
-        })
-        const latest = resolveOwnedSegmentWriteBase(expectedClientSessionId)
-        if (!latest) {
-          deleteOrphanedSavedFile(compressed.savedFilePath)
-          return
-        }
-        const completed = completePendingSegmentCompression(
-          latest,
-          pendingSegment.index,
-          compressed
-        )
-        saveCurrentSession(completed)
-        deleteOrphanedSavedFile(pendingSegment.rawSavedFilePath)
-        retainedSegmentPathsRef.current.delete(tempFilePath)
-        void uploadPendingSegmentsInBackground(syncSession)
-      } catch (compressionError) {
-        const latest = resolveOwnedSegmentWriteBase(expectedClientSessionId)
-        if (latest) {
-          const segment = latest.segments[pendingSegment.index]
-          if (segment && !isCompressedShoulderPressSegment(segment)) {
-            saveCurrentSession(markPendingSegmentCompressionFailed(
-              latest,
-              pendingSegment.index,
-              '录像压缩失败，可重试'
-            ))
-          }
-        }
-        const detail = mediaErrorDetail(compressionError) || '压缩服务不可用'
-        throw new Error(`录像压缩失败，可重试：${detail}`)
-      }
+      void uploadPendingSegmentsInBackground(syncSession)
     })
 
     segmentSaveChainRef.current = write.catch(() => undefined)
@@ -646,11 +599,9 @@ export default function ShoulderPressCameraPage() {
             ? segment.savedFilePath
             : segment.rawSavedFilePath
         )) ?? []),
-        ...retainedSegmentPathsRef.current.values(),
         ...(abandoned?.savedFilePath ? [abandoned.savedFilePath] : [])
       ])
       for (const path of paths) deleteOrphanedSavedFile(path)
-      retainedSegmentPathsRef.current.clear()
       clearPendingShoulderPressSession(Taro)
       sessionRef.current = null
       tailSaveFailedRef.current = false

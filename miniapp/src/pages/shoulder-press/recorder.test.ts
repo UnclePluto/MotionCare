@@ -57,10 +57,12 @@ describe('ShoulderPressRecorder', () => {
     })
 
     await recorder.start()
+    expect(startOptions[0].timeout).toBe(15)
     now = 30000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     await Promise.resolve()
 
+    expect(startOptions[1].timeout).toBe(15)
     expect(order).toEqual([
       'start',
       'start',
@@ -147,7 +149,7 @@ describe('ShoulderPressRecorder', () => {
     ])
   })
 
-  it('uses the remaining duration for generation 80 and never records past the upload contract', async () => {
+  it('uses the remaining duration for generation 160 and never records past the upload contract', async () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
     const onMaxDuration = vi.fn()
@@ -160,24 +162,24 @@ describe('ShoulderPressRecorder', () => {
     })
 
     await recorder.start()
-    for (let index = 0; index < 79; index += 1) {
-      now = (index + 1) * 30_000
+    for (let index = 0; index < 159; index += 1) {
+      now = (index + 1) * 15_000
       startOptions[index].timeoutCallback?.({ tempVideoPath: `wxfile://store/segment-${index}.mp4` })
       await flushPromises()
     }
 
-    expect(camera.startRecord).toHaveBeenCalledTimes(80)
-    expect(startOptions.slice(0, 79).every((options) => options.timeout === 30)).toBe(true)
-    expect(startOptions[79].timeout).toBe(27)
+    expect(camera.startRecord).toHaveBeenCalledTimes(160)
+    expect(startOptions.slice(0, 159).every((options) => options.timeout === 15)).toBe(true)
+    expect(startOptions[159].timeout).toBe(12)
 
     now = 2_397_000
-    startOptions[79].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-79.mp4' })
+    startOptions[159].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-159.mp4' })
     const finishPromise = recorder.finish()
     await flushPromises()
 
-    expect(camera.startRecord).toHaveBeenCalledTimes(80)
+    expect(camera.startRecord).toHaveBeenCalledTimes(160)
     const segments = await finishPromise
-    expect(segments).toHaveLength(80)
+    expect(segments).toHaveLength(160)
     expect(segments.reduce((total, segment) => total + segment.durationMs, 0)).toBe(2_397_000)
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })

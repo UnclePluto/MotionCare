@@ -2,7 +2,7 @@ export const SHOULDER_PRESS_SOURCE_KEY = 'motion-resistance-shoulder-press'
 export const PENDING_SHOULDER_PRESS_SESSION_KEY = 'motioncare.pendingShoulderPressSession'
 export const PENDING_SHOULDER_PRESS_UPLOAD_KEY = PENDING_SHOULDER_PRESS_SESSION_KEY
 
-export type PendingCompressionShoulderPressSegment = {
+export type LegacyPendingCompressionShoulderPressSegment = {
   index: number
   compressionState: 'pending_compression' | 'compression_failed'
   rawSavedFilePath: string
@@ -17,11 +17,12 @@ export type CompressedShoulderPressSegment = {
   durationMs: number
   sizeBytes: number
   uploadState: 'pending' | 'uploading' | 'uploaded'
+  localFileState?: 'temporary' | 'save_failed' | 'saved'
   sha256?: string
 }
 
 export type PendingShoulderPressSegment =
-  | PendingCompressionShoulderPressSegment
+  | LegacyPendingCompressionShoulderPressSegment
   | CompressedShoulderPressSegment
 
 export type PendingShoulderPressSession = {
@@ -159,16 +160,38 @@ export function appendPendingSegment(
 
   const durationMs = Math.max(1, Math.round(input.durationSeconds * 1000))
   const sizeBytes = Math.max(1, Math.round(input.sizeKb * 1024))
+  return appendUploadableShoulderPressSegment(session, {
+    filePath: input.savedFilePath,
+    durationMs,
+    sizeBytes,
+    localFileState: 'saved'
+  })
+}
+
+export function appendUploadableShoulderPressSegment(
+  session: PendingShoulderPressSession,
+  input: {
+    filePath: string
+    durationMs: number
+    sizeBytes: number
+    localFileState: 'temporary' | 'save_failed' | 'saved'
+  }
+): PendingShoulderPressSession {
+  if (!isUsableTempVideoPath(input.filePath)) throw new Error('录像文件路径无效')
+  if (!isPositiveInteger(input.durationMs)) throw new Error('录像时长无效')
+  if (!isPositiveInteger(input.sizeBytes)) throw new Error('录像文件大小无效')
+  const durationMs = input.durationMs
   if (session.actualDurationMs + durationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
     throw new Error('录像总时长超过限制，请重新录制')
   }
   const segment: PendingShoulderPressSegment = {
     index: session.segments.length,
     compressionState: 'compressed',
-    savedFilePath: input.savedFilePath,
+    savedFilePath: input.filePath,
     durationMs,
-    sizeBytes,
-    uploadState: 'pending'
+    sizeBytes: input.sizeBytes,
+    uploadState: 'pending',
+    localFileState: input.localFileState
   }
 
   return {
@@ -179,53 +202,28 @@ export function appendPendingSegment(
   }
 }
 
-export function appendPendingCompressionSegment(
-  session: PendingShoulderPressSession,
-  input: {
-    rawSavedFilePath: string
-    durationMs: number
-  }
-): PendingShoulderPressSession {
-  if (!isUsableTempVideoPath(input.rawSavedFilePath)) throw new Error('录像文件路径无效')
-  if (!isPositiveInteger(input.durationMs)) throw new Error('录像时长无效')
-  if (session.actualDurationMs + input.durationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
-    throw new Error('录像总时长超过限制，请重新录制')
-  }
-
-  return {
-    ...session,
-    actualDurationMs: session.actualDurationMs + input.durationMs,
-    segments: [...session.segments, {
-      index: session.segments.length,
-      compressionState: 'pending_compression',
-      rawSavedFilePath: input.rawSavedFilePath,
-      durationMs: input.durationMs
-    }],
-    lastError: undefined
-  }
-}
-
 export function isCompressedShoulderPressSegment(
   segment: PendingShoulderPressSegment
 ): segment is CompressedShoulderPressSegment {
   return segment.compressionState === 'compressed'
 }
 
-export function completePendingSegmentCompression(
+export function promoteLegacyShoulderPressSegment(
   session: PendingShoulderPressSession,
   index: number,
   input: {
     savedFilePath: string
     durationMs: number
     sizeBytes: number
+    localFileState?: 'temporary' | 'save_failed' | 'saved'
   }
 ): PendingShoulderPressSession {
-  if (!isUsableTempVideoPath(input.savedFilePath)) throw new Error('压缩录像文件路径无效')
-  if (!isPositiveInteger(input.durationMs)) throw new Error('压缩录像时长无效')
-  if (!isPositiveInteger(input.sizeBytes)) throw new Error('压缩录像文件大小无效')
+  if (!isUsableTempVideoPath(input.savedFilePath)) throw new Error('录像文件路径无效')
+  if (!isPositiveInteger(input.durationMs)) throw new Error('录像时长无效')
+  if (!isPositiveInteger(input.sizeBytes)) throw new Error('录像文件大小无效')
   const current = session.segments[index]
   if (!current || current.index !== index || isCompressedShoulderPressSegment(current)) {
-    throw new Error('待压缩录像分段不存在')
+    throw new Error('待上传录像分段不存在')
   }
   const actualDurationMs = session.actualDurationMs - current.durationMs + input.durationMs
   if (actualDurationMs > MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS) {
@@ -243,36 +241,12 @@ export function completePendingSegmentCompression(
             savedFilePath: input.savedFilePath,
             durationMs: input.durationMs,
             sizeBytes: input.sizeBytes,
-            uploadState: 'pending'
+            uploadState: 'pending',
+            localFileState: input.localFileState ?? 'saved'
           }
         : segment
     )),
     lastError: undefined
-  }
-}
-
-export function markPendingSegmentCompressionFailed(
-  session: PendingShoulderPressSession,
-  index: number,
-  compressionError: string
-): PendingShoulderPressSession {
-  const current = session.segments[index]
-  if (!current || current.index !== index || isCompressedShoulderPressSegment(current)) {
-    throw new Error('待压缩录像分段不存在')
-  }
-  const message = compressionError.trim() || '录像压缩失败，可重试'
-  return {
-    ...session,
-    segments: session.segments.map((segment) => (
-      segment.index === index
-        ? {
-            ...segment,
-            compressionState: 'compression_failed',
-            compressionError: message
-          }
-        : segment
-    )),
-    lastError: message
   }
 }
 
@@ -331,6 +305,12 @@ function normalizeSegment(value: unknown, expectedIndex: number): PendingShoulde
     return null
   }
   if (segment.sha256 !== undefined && !isNonEmptyString(segment.sha256)) return null
+  if (
+    segment.localFileState !== undefined &&
+    segment.localFileState !== 'temporary' &&
+    segment.localFileState !== 'save_failed' &&
+    segment.localFileState !== 'saved'
+  ) return null
 
   return {
     index: expectedIndex,
@@ -339,6 +319,7 @@ function normalizeSegment(value: unknown, expectedIndex: number): PendingShoulde
     durationMs: segment.durationMs,
     sizeBytes: segment.sizeBytes,
     uploadState: segment.uploadState,
+    localFileState: segment.localFileState ?? 'saved',
     ...(segment.sha256 ? { sha256: segment.sha256 } : {})
   }
 }

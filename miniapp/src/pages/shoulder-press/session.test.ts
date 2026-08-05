@@ -2,19 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   PENDING_SHOULDER_PRESS_SESSION_KEY,
+  appendUploadableShoulderPressSegment,
   appendPendingSegment,
-  appendPendingCompressionSegment,
   buildShoulderPressCameraUrl,
   buildShoulderPressSessionUrl,
   buildShoulderPressUploadUrl,
   clearPendingShoulderPressSession,
-  completePendingSegmentCompression,
   createPendingShoulderPressSession,
   isCompressedShoulderPressSegment,
   isSegmentReadyForLocalDeletion,
   loadPendingShoulderPressSession,
-  markPendingSegmentCompressionFailed,
   markServerUploadedSegments,
+  promoteLegacyShoulderPressSegment,
   savePendingShoulderPressSession
 } from './session'
 
@@ -60,6 +59,34 @@ describe('shoulder press segmented session helpers', () => {
     expect(updated.trainingDate).toBe('2026-07-11')
   })
 
+  it('appends a temporary raw segment with exact duration and byte size', () => {
+    const session = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-07-11',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    })
+
+    const updated = appendUploadableShoulderPressSegment(session, {
+      filePath: 'wxfile://temp/raw-segment-0.mp4',
+      durationMs: 15_001,
+      sizeBytes: 19_876_543,
+      localFileState: 'temporary'
+    })
+
+    expect(updated.segments[0]).toEqual({
+      index: 0,
+      compressionState: 'compressed',
+      savedFilePath: 'wxfile://temp/raw-segment-0.mp4',
+      durationMs: 15_001,
+      sizeBytes: 19_876_543,
+      uploadState: 'pending',
+      localFileState: 'temporary'
+    })
+    expect(updated.actualDurationMs).toBe(15_001)
+  })
+
   it('allows 2400 seconds and rejects a manifest duration above 2400000ms', () => {
     const session = createPendingShoulderPressSession({
       actionId: 42,
@@ -69,30 +96,40 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: 1783692000000
     })
 
-    const full = appendPendingCompressionSegment(session, {
-      rawSavedFilePath: 'wxfile://store/raw-0.mp4',
-      durationMs: 2_400_000
+    const full = appendUploadableShoulderPressSegment(session, {
+      filePath: 'wxfile://temp/raw-0.mp4',
+      durationMs: 2_400_000,
+      sizeBytes: 1,
+      localFileState: 'temporary'
     })
 
     expect(full.actualDurationMs).toBe(2_400_000)
-    expect(() => appendPendingCompressionSegment(session, {
-      rawSavedFilePath: 'wxfile://store/raw-1.mp4',
-      durationMs: 2_400_001
+    expect(() => appendUploadableShoulderPressSegment(session, {
+      filePath: 'wxfile://temp/raw-1.mp4',
+      durationMs: 2_400_001,
+      sizeBytes: 1,
+      localFileState: 'temporary'
     })).toThrow('录像总时长超过限制')
   })
 
-  it('persists raw segments before compression and completes the same index', () => {
-    const session = createPendingShoulderPressSession({
+  it('promotes a legacy pending-compression segment without changing its index', () => {
+    const base = createPendingShoulderPressSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       createdAt: 1783692000000
     })
-    const pending = appendPendingCompressionSegment(session, {
-      rawSavedFilePath: 'wxfile://store/raw-0.mp4',
-      durationMs: 29_800
-    })
+    const pending = {
+      ...base,
+      actualDurationMs: 29_800,
+      segments: [{
+        index: 0,
+        compressionState: 'pending_compression' as const,
+        rawSavedFilePath: 'wxfile://store/raw-0.mp4',
+        durationMs: 29_800
+      }]
+    }
 
     expect(pending.actualDurationMs).toBe(29_800)
     expect(pending.segments[0]).toEqual({
@@ -102,8 +139,8 @@ describe('shoulder press segmented session helpers', () => {
       durationMs: 29_800
     })
 
-    const completed = completePendingSegmentCompression(pending, 0, {
-      savedFilePath: 'wxfile://store/compressed-0.mp4',
+    const completed = promoteLegacyShoulderPressSegment(pending, 0, {
+      savedFilePath: 'wxfile://store/raw-0.mp4',
       durationMs: 29_800,
       sizeBytes: 2_097_152
     })
@@ -112,36 +149,42 @@ describe('shoulder press segmented session helpers', () => {
     expect(completed.segments[0]).toEqual({
       index: 0,
       compressionState: 'compressed',
-      savedFilePath: 'wxfile://store/compressed-0.mp4',
+      savedFilePath: 'wxfile://store/raw-0.mp4',
       durationMs: 29_800,
       sizeBytes: 2_097_152,
-      uploadState: 'pending'
+      uploadState: 'pending',
+      localFileState: 'saved'
     })
     expect(isCompressedShoulderPressSegment(completed.segments[0])).toBe(true)
   })
 
-  it('keeps the raw path and error when compression fails', () => {
-    const pending = appendPendingCompressionSegment(createPendingShoulderPressSession({
+  it('loads the raw path and error from a legacy compression-failed manifest', () => {
+    const restored = loadPendingShoulderPressSession(memoryStorage({
+      ...createPendingShoulderPressSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       createdAt: 1783692000000
-    }), {
-      rawSavedFilePath: 'wxfile://store/raw-0.mp4',
-      durationMs: 30_000
-    })
+      }),
+      actualDurationMs: 30_000,
+      segments: [{
+        index: 0,
+        compressionState: 'compression_failed',
+        rawSavedFilePath: 'wxfile://store/raw-0.mp4',
+        durationMs: 30_000,
+        compressionError: '旧版压缩失败'
+      }]
+    }))
 
-    const failed = markPendingSegmentCompressionFailed(pending, 0, '压缩服务不可用')
-
-    expect(failed.segments[0]).toEqual({
+    expect(restored?.segments[0]).toEqual({
       index: 0,
       compressionState: 'compression_failed',
       rawSavedFilePath: 'wxfile://store/raw-0.mp4',
       durationMs: 30_000,
-      compressionError: '压缩服务不可用'
+      compressionError: '旧版压缩失败'
     })
-    expect(isCompressedShoulderPressSegment(failed.segments[0])).toBe(false)
+    expect(restored && isCompressedShoulderPressSegment(restored.segments[0])).toBe(false)
   })
 
   it('loads old manifests without compressionState as compressed segments', () => {
@@ -165,7 +208,8 @@ describe('shoulder press segmented session helpers', () => {
     expect(restored?.segments[0]).toMatchObject({
       compressionState: 'compressed',
       savedFilePath: 'wxfile://store/segment-0.mp4',
-      uploadState: 'pending'
+      uploadState: 'pending',
+      localFileState: 'saved'
     })
   })
 
