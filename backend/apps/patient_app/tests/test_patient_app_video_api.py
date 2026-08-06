@@ -182,6 +182,7 @@ def test_create_session_saves_client_training_started_at(
         "2026-07-11T09:32:14",
         "2026-07-11+08:00",
         "2026-07-11Z",
+        "2026-07-11T09+08:00",
     ],
 )
 def test_create_session_rejects_training_started_at_without_complete_offset_datetime(
@@ -844,6 +845,7 @@ def test_finalize_saves_client_training_ended_at(
         ("2026-07-11T09:32:30", "时区"),
         ("2026-07-11+08:00", "时区"),
         ("2026-07-11Z", "时区"),
+        ("2026-07-11T09+08:00", "时区"),
     ],
 )
 def test_finalize_rejects_invalid_training_window(

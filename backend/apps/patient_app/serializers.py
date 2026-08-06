@@ -7,7 +7,9 @@ from apps.patient_app.services import BINDING_CODE_PATTERN
 from apps.training.models import TrainingRecord
 
 BINDING_CODE_ERROR = "绑定码必须是 4 位数字"
-CLIENT_TIMEZONE_SUFFIX = re.compile(r"(?:Z|[+-]\d{2}:\d{2})$")
+CLIENT_OFFSET_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 class ClientOffsetDateTimeField(serializers.DateTimeField):
@@ -17,15 +19,14 @@ class ClientOffsetDateTimeField(serializers.DateTimeField):
     }
 
     def to_internal_value(self, value):
-        if not isinstance(value, str) or "T" not in value:
+        if not isinstance(value, str) or not CLIENT_OFFSET_DATETIME_PATTERN.fullmatch(value):
             self.fail("timezone_required")
         try:
             client_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             self.fail("timezone_required")
         if (
-            not CLIENT_TIMEZONE_SUFFIX.search(value)
-            or client_datetime.tzinfo is None
+            client_datetime.tzinfo is None
             or client_datetime.utcoffset() is None
         ):
             self.fail("timezone_required")
