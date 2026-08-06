@@ -31,6 +31,8 @@ from .video_staging import (
 )
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
+MAX_TRAINING_WALL_TIME = timedelta(hours=24)
+TRAINING_DURATION_TOLERANCE_SECONDS = 5
 
 
 def _active_prescription(project_patient):
@@ -70,6 +72,7 @@ def _ensure_session_payload_matches(
     prescription_action_id,
     training_date,
     expected_duration_seconds,
+    training_started_at,
 ):
     if video.prescription_action_id != prescription_action_id:
         raise SessionConflict("客户端会话动作与已创建会话冲突")
@@ -77,6 +80,8 @@ def _ensure_session_payload_matches(
         raise SessionConflict("客户端会话训练日期与已创建会话冲突")
     if video.expected_duration_seconds != expected_duration_seconds:
         raise SessionConflict("客户端会话计划时长与已创建会话冲突")
+    if video.training_started_at != training_started_at:
+        raise SessionConflict("客户端会话训练开始时间与已创建会话冲突")
 
 
 def create_training_video_session(
@@ -86,6 +91,7 @@ def create_training_video_session(
     prescription_action_id,
     training_date,
     expected_duration_seconds,
+    training_started_at=None,
 ):
     lookup = {
         "project_patient": project_patient,
@@ -98,6 +104,7 @@ def create_training_video_session(
             prescription_action_id=prescription_action_id,
             training_date=training_date,
             expected_duration_seconds=expected_duration_seconds,
+            training_started_at=training_started_at,
         )
         return existing, False
 
@@ -115,6 +122,7 @@ def create_training_video_session(
                 prescription_action=action,
                 training_date=training_date,
                 expected_duration_seconds=expected_duration_seconds,
+                training_started_at=training_started_at,
                 status=TrainingVideo.Status.RECORDING,
             )
     except IntegrityError:
@@ -126,6 +134,7 @@ def create_training_video_session(
             prescription_action_id=prescription_action_id,
             training_date=training_date,
             expected_duration_seconds=expected_duration_seconds,
+            training_started_at=training_started_at,
         )
         return winner, False
     return video, True
@@ -289,11 +298,28 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
             raise ValidationError("训练视频分段尚未安全落盘")
 
 
-def _finalize_payload_matches(video, *, segment_count, actual_duration_seconds, note):
+def _validate_training_window(video, *, training_ended_at, actual_duration_seconds):
+    if training_ended_at is None:
+        return
+    if video.training_started_at is None:
+        raise ValidationError("训练开始时间缺失，不能提交训练结束时间")
+    wall_time = training_ended_at - video.training_started_at
+    if wall_time <= timedelta(0):
+        raise ValidationError("训练结束时间必须晚于开始时间")
+    if wall_time > MAX_TRAINING_WALL_TIME:
+        raise ValidationError("训练时间跨度不能超过 24 小时")
+    if actual_duration_seconds > wall_time.total_seconds() + TRAINING_DURATION_TOLERANCE_SECONDS:
+        raise ValidationError("实际录像时长不能超过训练时间跨度")
+
+
+def _finalize_payload_matches(
+    video, *, segment_count, actual_duration_seconds, note, training_ended_at
+):
     return (
         video.expected_segment_count == segment_count
         and video.actual_duration_seconds == actual_duration_seconds
         and video.note == note
+        and video.training_ended_at == training_ended_at
     )
 
 
@@ -312,6 +338,7 @@ def finalize_training_video_session(
     segment_count: int,
     actual_duration_seconds: int,
     note: str,
+    training_ended_at=None,
 ):
     locked_project_patient = ProjectPatient.objects.select_for_update().filter(
         pk=project_patient.pk
@@ -333,6 +360,7 @@ def finalize_training_video_session(
             segment_count=segment_count,
             actual_duration_seconds=actual_duration_seconds,
             note=note,
+            training_ended_at=training_ended_at,
         ):
             raise SessionConflict("重复提交的训练视频完成数据冲突")
         return video, existing_job, False
@@ -342,6 +370,11 @@ def finalize_training_video_session(
         segment_count=segment_count,
         actual_duration_seconds=actual_duration_seconds,
     )
+    _validate_training_window(
+        video,
+        training_ended_at=training_ended_at,
+        actual_duration_seconds=actual_duration_seconds,
+    )
     now = timezone.now()
     video.expected_segment_count = segment_count
     video.actual_duration_seconds = actual_duration_seconds
@@ -349,6 +382,7 @@ def finalize_training_video_session(
     video.finalized_at = now
     video.status = TrainingVideo.Status.QUEUED
     video.failure_reason = ""
+    video.training_ended_at = training_ended_at
     video.save(
         update_fields=[
             "expected_segment_count",
@@ -357,6 +391,7 @@ def finalize_training_video_session(
             "finalized_at",
             "status",
             "failure_reason",
+            "training_ended_at",
             "updated_at",
         ]
     )

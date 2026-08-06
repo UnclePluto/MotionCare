@@ -15,7 +15,7 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     prescription_action,
 ):
     migrate_from = [("training", "0009_current_training_pipeline")]
-    migrate_to = [("training", "0012_repair_unbound_qiniu_canonical_keys")]
+    migrate_to = [("training", "0013_trainingvideo_training_window")]
     executor = MigrationExecutor(connection)
     executor.migrate(migrate_from)
     old_apps = executor.loader.project_state(migrate_from).apps

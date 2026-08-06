@@ -72,6 +72,8 @@ class TrainingVideo(UserStampedModel):
     )
     client_session_id = models.UUIDField("客户端会话 ID", default=uuid.uuid4)
     training_date = models.DateField("训练日期", default=timezone.localdate)
+    training_started_at = models.DateTimeField("训练开始时间", null=True, blank=True)
+    training_ended_at = models.DateTimeField("训练结束时间", null=True, blank=True)
     note = models.TextField("备注", blank=True)
     expected_duration_seconds = models.PositiveIntegerField("计划时长", null=True, blank=True)
     actual_duration_seconds = models.PositiveIntegerField("实际时长", null=True, blank=True)

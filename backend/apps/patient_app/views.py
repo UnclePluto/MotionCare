@@ -258,6 +258,7 @@ class PatientAppTrainingVideoSessionView(PatientAppBaseView):
                 prescription_action_id=serializer.validated_data["prescription_action"],
                 training_date=serializer.validated_data["training_date"],
                 expected_duration_seconds=serializer.validated_data["expected_duration_seconds"],
+                training_started_at=serializer.validated_data.get("training_started_at"),
             )
         except SessionConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
@@ -314,6 +315,7 @@ class PatientAppTrainingVideoFinalizeView(PatientAppBaseView):
                     "actual_duration_seconds"
                 ],
                 note=serializer.validated_data["note"],
+                training_ended_at=serializer.validated_data.get("training_ended_at"),
             )
         except SessionConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)

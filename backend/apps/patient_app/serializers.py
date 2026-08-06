@@ -1,9 +1,29 @@
+import re
+from datetime import datetime
+
 from rest_framework import serializers
 
 from apps.patient_app.services import BINDING_CODE_PATTERN
 from apps.training.models import TrainingRecord
 
 BINDING_CODE_ERROR = "绑定码必须是 4 位数字"
+CLIENT_TIMEZONE_SUFFIX = re.compile(r"(?:Z|[+-]\d{2}:\d{2})$")
+
+
+class ClientOffsetDateTimeField(serializers.DateTimeField):
+    default_error_messages = {
+        **serializers.DateTimeField.default_error_messages,
+        "timezone_required": "训练时间必须包含手机时区。",
+    }
+
+    def to_internal_value(self, value):
+        if not isinstance(value, str) or not CLIENT_TIMEZONE_SUFFIX.search(value):
+            self.fail("timezone_required")
+        return super().to_internal_value(value)
+
+
+def client_local_date(value: str):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
 
 
 class BindingCodeField(serializers.CharField):
@@ -62,6 +82,15 @@ class PatientAppTrainingVideoSessionSerializer(serializers.Serializer):
     prescription_action = serializers.IntegerField(min_value=1)
     training_date = serializers.DateField()
     expected_duration_seconds = serializers.IntegerField(min_value=1)
+    training_started_at = ClientOffsetDateTimeField(required=False)
+
+    def validate(self, attrs):
+        raw_started_at = self.initial_data.get("training_started_at")
+        if raw_started_at is not None and client_local_date(raw_started_at) != attrs["training_date"]:
+            raise serializers.ValidationError(
+                {"training_date": "训练日期必须与手机端开始时间一致。"}
+            )
+        return attrs
 
 
 class PatientAppTrainingVideoSegmentSerializer(serializers.Serializer):
@@ -74,3 +103,4 @@ class PatientAppTrainingVideoFinalizeSerializer(serializers.Serializer):
     segment_count = serializers.IntegerField(min_value=1)
     actual_duration_seconds = serializers.IntegerField(min_value=1)
     note = serializers.CharField(required=False, allow_blank=True, default="")
+    training_ended_at = ClientOffsetDateTimeField(required=False)
