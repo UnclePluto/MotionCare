@@ -6,6 +6,7 @@ from .video_views import (
     TrainingVideoAnalysisJobView,
     TrainingVideoDownloadUrlView,
     TrainingVideoLatestAnalysisJobView,
+    TrainingVideoWearableWindowView,
 )
 from .views import TrainingRecordViewSet
 
@@ -17,6 +18,10 @@ urlpatterns = [
     path(
         "videos/<int:video_id>/download-url/",
         TrainingVideoDownloadUrlView.as_view(),
+    ),
+    path(
+        "videos/<int:video_id>/wearable-window/",
+        TrainingVideoWearableWindowView.as_view(),
     ),
     path(
         "videos/<int:video_id>/analysis-jobs/",

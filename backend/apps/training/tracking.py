@@ -487,6 +487,16 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                     video.id if video and video.status == TrainingVideo.Status.ATTACHED else None
                 ),
                 "video_status": video.status if video else None,
+                "training_started_at": (
+                    video.training_started_at.isoformat()
+                    if video and video.training_started_at
+                    else None
+                ),
+                "training_ended_at": (
+                    video.training_ended_at.isoformat()
+                    if video and video.training_ended_at
+                    else None
+                ),
                 "latest_analysis_status": latest_job.status if latest_job else None,
                 "analysis_total_count": latest_job.total_count if latest_job else None,
                 "analysis_standard_count": latest_job.standard_count if latest_job else None,

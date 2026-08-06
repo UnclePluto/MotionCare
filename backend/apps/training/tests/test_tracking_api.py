@@ -1070,12 +1070,16 @@ def test_tracking_recent_records_return_null_video_and_analysis_fields_when_miss
     recent_by_id = {item["id"]: item for item in response.data["recent_records"]}
     assert recent_by_id[record_without_video.id]["video_id"] is None
     assert recent_by_id[record_without_video.id]["video_status"] is None
+    assert recent_by_id[record_without_video.id]["training_started_at"] is None
+    assert recent_by_id[record_without_video.id]["training_ended_at"] is None
     assert all(
         recent_by_id[record_without_video.id][field] is None
         for field in nullable_summary_fields
     )
     assert recent_by_id[record_without_analysis.id]["video_id"] is not None
     assert recent_by_id[record_without_analysis.id]["video_status"] == TrainingVideo.Status.ATTACHED
+    assert recent_by_id[record_without_analysis.id]["training_started_at"] is None
+    assert recent_by_id[record_without_analysis.id]["training_ended_at"] is None
     assert all(
         recent_by_id[record_without_analysis.id][field] is None
         for field in nullable_summary_fields
@@ -1163,6 +1167,8 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
         prescription_action,
         training_date=timezone.localdate(),
     )
+    training_started_at = datetime(2026, 8, 6, 1, 32, 14, tzinfo=UTC)
+    training_ended_at = datetime(2026, 8, 6, 1, 41, 27, tzinfo=UTC)
     video = TrainingVideo.objects.create(
         project_patient=project_patient,
         prescription=active_prescription,
@@ -1175,6 +1181,8 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
         duration_seconds=120,
         status=TrainingVideo.Status.ATTACHED,
         uploaded_at=timezone.now(),
+        training_started_at=training_started_at,
+        training_ended_at=training_ended_at,
     )
     MotionAnalysisJob.objects.create(
         training_video=video,
@@ -1196,6 +1204,8 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
     assert recent["action_source_key"] == "motion-resistance-shoulder-press"
     assert recent["video_id"] == video.id
     assert recent["video_status"] == TrainingVideo.Status.ATTACHED
+    assert recent["training_started_at"] == video.training_started_at.isoformat()
+    assert recent["training_ended_at"] == video.training_ended_at.isoformat()
     assert recent["latest_analysis_status"] == MotionAnalysisJob.Status.SUCCEEDED
     assert recent["analysis_total_count"] == 8
     assert recent["analysis_standard_count"] == 6
