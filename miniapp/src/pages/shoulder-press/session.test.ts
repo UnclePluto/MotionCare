@@ -8,11 +8,14 @@ import {
   buildShoulderPressSessionUrl,
   buildShoulderPressUploadUrl,
   clearPendingShoulderPressSession,
+  clientTrainingMoment,
   createPendingShoulderPressSession,
   isCompressedShoulderPressSegment,
   isSegmentReadyForLocalDeletion,
   loadPendingShoulderPressSession,
   markServerUploadedSegments,
+  markShoulderPressTrainingEnded,
+  markShoulderPressTrainingStarted,
   promoteLegacyShoulderPressSegment,
   savePendingShoulderPressSession
 } from './session'
@@ -32,6 +35,101 @@ describe('shoulder press segmented session helpers', () => {
     expect(buildShoulderPressSessionUrl(42)).toBe('/pages/shoulder-press/index?actionId=42')
     expect(buildShoulderPressCameraUrl(42)).toBe('/pages/shoulder-press/camera?actionId=42')
     expect(buildShoulderPressUploadUrl()).toBe('/pages/shoulder-press/upload')
+  })
+
+  it('formats the phone instant with an explicit local offset', () => {
+    expect(clientTrainingMoment(Date.UTC(2026, 7, 5, 16, 1, 2), 480)).toEqual({
+      trainingDate: '2026-08-06',
+      timestamp: '2026-08-06T00:01:02+08:00'
+    })
+  })
+
+  it('sets the first start once and refreshes a stale pre-midnight training date', () => {
+    const session = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-08-05',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: Date.UTC(2026, 7, 5, 15, 59, 0)
+    })
+
+    const started = markShoulderPressTrainingStarted(
+      session,
+      Date.UTC(2026, 7, 5, 16, 1, 2),
+      480
+    )
+    const resumed = markShoulderPressTrainingStarted(
+      started,
+      Date.UTC(2026, 7, 5, 16, 5, 0),
+      480
+    )
+
+    expect(started.trainingDate).toBe('2026-08-06')
+    expect(started.trainingStartedAt).toBe('2026-08-06T00:01:02+08:00')
+    expect(resumed.trainingStartedAt).toBe(started.trainingStartedAt)
+  })
+
+  it('sets the final end once and keeps it through storage recovery', () => {
+    const started = markShoulderPressTrainingStarted(createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-08-05',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: Date.UTC(2026, 7, 5, 15, 59, 0)
+    }), Date.UTC(2026, 7, 5, 16, 1, 2), 480)
+    const storage = memoryStorage()
+    const ended = markShoulderPressTrainingEnded(started, Date.UTC(2026, 7, 5, 16, 9, 27), 480)
+
+    savePendingShoulderPressSession(storage, ended)
+
+    expect(loadPendingShoulderPressSession(storage)).toMatchObject({
+      trainingStartedAt: '2026-08-06T00:01:02+08:00',
+      trainingEndedAt: '2026-08-06T00:09:27+08:00'
+    })
+    expect(markShoulderPressTrainingEnded(
+      ended,
+      Date.UTC(2026, 7, 5, 16, 10, 0),
+      480
+    ).trainingEndedAt).toBe('2026-08-06T00:09:27+08:00')
+  })
+
+  it('rejects ending without a start and rejects a non-increasing end', () => {
+    const session = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-08-06',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
+    })
+
+    expect(() => markShoulderPressTrainingEnded(
+      session,
+      Date.UTC(2026, 7, 5, 16, 9, 27),
+      480
+    )).toThrow('训练开始时间缺失')
+    expect(() => markShoulderPressTrainingEnded({
+      ...session,
+      trainingStartedAt: '2026-08-06T00:09:27+08:00'
+    }, Date.UTC(2026, 7, 5, 16, 1, 2), 480)).toThrow('训练结束时间必须晚于开始时间')
+  })
+
+  it('keeps legacy manifests valid but rejects malformed offset timestamps', () => {
+    const legacyManifest = {
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-08-06',
+      expectedDurationSeconds: 180,
+      actualDurationMs: 0,
+      segments: [],
+      finalized: false,
+      createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
+    }
+
+    expect(loadPendingShoulderPressSession(memoryStorage(legacyManifest))).not.toBeNull()
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      ...legacyManifest,
+      trainingStartedAt: '2026-08-06T00:01:02'
+    }))).toBeNull()
   })
 
   it('persists multiple saved segments and converts getVideoInfo kB to bytes', () => {

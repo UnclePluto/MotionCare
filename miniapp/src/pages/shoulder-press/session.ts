@@ -30,6 +30,8 @@ export type PendingShoulderPressSession = {
   videoId?: number
   actionId: number
   trainingDate: string
+  trainingStartedAt?: string
+  trainingEndedAt?: string
   expectedDurationSeconds: number
   actualDurationMs: number
   segments: PendingShoulderPressSegment[]
@@ -57,7 +59,12 @@ type VideoInfo = {
 }
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const OFFSET_ISO_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/
 const MAX_SHOULDER_PRESS_MANIFEST_DURATION_MS = 2_400_000
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, '0')
+}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -116,6 +123,27 @@ export function normalizeShoulderPressExpectedDurationSeconds(value: number): nu
   return Math.min(2400, Math.max(1, Math.round(value)))
 }
 
+export function clientTrainingMoment(
+  nowMs: number,
+  offsetMinutes = -new Date(nowMs).getTimezoneOffset()
+): { trainingDate: string; timestamp: string } {
+  const shifted = new Date(nowMs + offsetMinutes * 60_000)
+  const trainingDate = [
+    shifted.getUTCFullYear(),
+    twoDigits(shifted.getUTCMonth() + 1),
+    twoDigits(shifted.getUTCDate())
+  ].join('-')
+  const localTime = [
+    twoDigits(shifted.getUTCHours()),
+    twoDigits(shifted.getUTCMinutes()),
+    twoDigits(shifted.getUTCSeconds())
+  ].join(':')
+  const sign = offsetMinutes >= 0 ? '+' : '-'
+  const absoluteOffset = Math.abs(offsetMinutes)
+  const offset = `${sign}${twoDigits(Math.floor(absoluteOffset / 60))}:${twoDigits(absoluteOffset % 60)}`
+  return { trainingDate, timestamp: `${trainingDate}T${localTime}${offset}` }
+}
+
 export function createPendingShoulderPressSession(input: {
   actionId: number
   expectedDurationSeconds: number
@@ -144,6 +172,34 @@ export function createPendingShoulderPressSession(input: {
     finalized: false,
     createdAt
   }
+}
+
+export function markShoulderPressTrainingStarted(
+  session: PendingShoulderPressSession,
+  nowMs: number,
+  offsetMinutes?: number
+): PendingShoulderPressSession {
+  if (session.trainingStartedAt) return session
+  const moment = clientTrainingMoment(nowMs, offsetMinutes)
+  return {
+    ...session,
+    trainingDate: moment.trainingDate,
+    trainingStartedAt: moment.timestamp
+  }
+}
+
+export function markShoulderPressTrainingEnded(
+  session: PendingShoulderPressSession,
+  nowMs: number,
+  offsetMinutes?: number
+): PendingShoulderPressSession {
+  if (!session.trainingStartedAt) throw new Error('训练开始时间缺失，请重新训练')
+  if (session.trainingEndedAt) return session
+  const moment = clientTrainingMoment(nowMs, offsetMinutes)
+  if (Date.parse(moment.timestamp) <= Date.parse(session.trainingStartedAt)) {
+    throw new Error('训练结束时间必须晚于开始时间')
+  }
+  return { ...session, trainingEndedAt: moment.timestamp }
 }
 
 export function appendPendingSegment(
@@ -335,6 +391,20 @@ function normalizeSession(value: unknown): PendingShoulderPressSession | null {
   if (!Array.isArray(session.segments)) return null
   if (typeof session.finalized !== 'boolean') return null
   if (!isPositiveNumber(session.createdAt)) return null
+  if (
+    session.trainingStartedAt !== undefined &&
+    (!isNonEmptyString(session.trainingStartedAt) || !OFFSET_ISO_PATTERN.test(session.trainingStartedAt))
+  ) return null
+  if (
+    session.trainingEndedAt !== undefined &&
+    (!isNonEmptyString(session.trainingEndedAt) || !OFFSET_ISO_PATTERN.test(session.trainingEndedAt))
+  ) return null
+  if (session.trainingEndedAt && !session.trainingStartedAt) return null
+  if (
+    session.trainingStartedAt &&
+    session.trainingEndedAt &&
+    Date.parse(session.trainingEndedAt) <= Date.parse(session.trainingStartedAt)
+  ) return null
 
   const segments = session.segments.map((segment, index) => normalizeSegment(segment, index))
   if (segments.some((segment) => segment === null)) return null
@@ -353,6 +423,8 @@ function normalizeSession(value: unknown): PendingShoulderPressSession | null {
     ...(isPositiveInteger(session.videoId) ? { videoId: session.videoId } : {}),
     actionId: session.actionId,
     trainingDate: session.trainingDate,
+    ...(session.trainingStartedAt ? { trainingStartedAt: session.trainingStartedAt } : {}),
+    ...(session.trainingEndedAt ? { trainingEndedAt: session.trainingEndedAt } : {}),
     expectedDurationSeconds: normalizeShoulderPressExpectedDurationSeconds(
       session.expectedDurationSeconds
     ),
