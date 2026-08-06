@@ -691,10 +691,10 @@ describe("TrainingTrackingDetailPage", () => {
       await screen.findByRole("button", { name: "播放训练视频" }),
     );
 
+    await waitForWearableQueryToSettle(queryClient, "error");
     expect(
       await screen.findByLabelText("训练视频播放器"),
     ).toBeInTheDocument();
-    await waitForWearableQueryToSettle(queryClient, "error");
     expect(screen.getByText("动作分析")).toBeInTheDocument();
     expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
     expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
