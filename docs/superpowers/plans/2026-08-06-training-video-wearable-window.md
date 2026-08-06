@@ -1,5 +1,19 @@
 # 训练视频时段穿戴趋势 Implementation Plan
 
+> 状态：implemented
+> 日期：2026-08-06
+> 范围：肩部推举视频训练手机端时间与医生端训练时段穿戴趋势
+> 关联：`docs/superpowers/specs/2026-08-06-training-video-wearable-window-design.md`
+> 实施基线 commit：`3d64a60`
+
+执行记录（2026-08-06, codex）：Task 1–6 已落地，提交哈希按下方 `git log` 输出顺序记录；全量验证通过。
+`af964fa feat(training): 记录视频训练手机端时间`
+`85161e1 feat(miniapp): 持久化肩部训练手机时间`
+`2967cc2 feat(miniapp): 上报视频训练起止时间`
+`725731b feat(wearables): 提供训练视频时段趋势统计`
+`228002a feat(frontend): 新增训练时段穿戴趋势面板`
+`3d64a60 feat(frontend): 在视频抽屉展示穿戴趋势`
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 让肩部推举视频训练保存手机端开始、结束时间，并在医生端视频抽屉展示该时段内已同步的心率、血压、血氧趋势及心率、血压统计。
@@ -83,7 +97,7 @@
 - Consumes: 现有 `client_session_id` 幂等约束、`training_date`、分段时长校验和 `SessionConflict`。
 - Produces: `TrainingVideo.training_started_at: datetime | None`、`TrainingVideo.training_ended_at: datetime | None`；`create_training_video_session` 新增关键字参数 `training_started_at=None`，`finalize_training_video_session` 新增关键字参数 `training_ended_at=None`。
 
-- [ ] **Step 1: 写创建会话时间字段的失败测试**
+- [x] **Step 1: 写创建会话时间字段的失败测试**
 
 在 `_session_payload` 的默认请求中加入带手机偏移的开始时间，并新增日期、幂等冲突和旧客户端兼容断言：
 
@@ -184,7 +198,7 @@ def test_legacy_client_can_create_session_without_start_time(
     assert TrainingVideo.objects.get(pk=response.data["video_id"]).training_started_at is None
 ```
 
-- [ ] **Step 2: 运行创建会话测试并确认失败**
+- [x] **Step 2: 运行创建会话测试并确认失败**
 
 Run:
 
@@ -196,7 +210,7 @@ pytest apps/patient_app/tests/test_patient_app_video_api.py \
 
 Expected: FAIL，原因是模型和序列化器尚无 `training_started_at`。
 
-- [ ] **Step 3: 添加模型字段和 migration**
+- [x] **Step 3: 添加模型字段和 migration**
 
 在 `TrainingVideo` 的 `training_date` 后加入：
 
@@ -230,7 +244,7 @@ class Migration(migrations.Migration):
     ]
 ```
 
-- [ ] **Step 4: 实现带时区字段和开始日期校验**
+- [x] **Step 4: 实现带时区字段和开始日期校验**
 
 在 `backend/apps/patient_app/serializers.py` 增加一个只接受显式偏移的字段：
 
@@ -277,7 +291,7 @@ def validate(self, attrs):
 training_ended_at = ClientOffsetDateTimeField(required=False)
 ```
 
-- [ ] **Step 5: 把开始时间接入创建服务的幂等判断**
+- [x] **Step 5: 把开始时间接入创建服务的幂等判断**
 
 扩展 `_ensure_session_payload_matches` 和 `create_training_video_session`：
 
@@ -324,7 +338,7 @@ def create_training_video_session(
 
 保留现有的“先查已存在会话、运行环境校验、时长上限、`IntegrityError` 竞争赢家恢复”顺序；在两个调用 `_ensure_session_payload_matches` 的分支都传入 `training_started_at`。`PatientAppTrainingVideoSessionView` 使用 `.get("training_started_at")` 传参，避免旧客户端缺字段时抛 `KeyError`。
 
-- [ ] **Step 6: 写完成时间和窗口校验的失败测试**
+- [x] **Step 6: 写完成时间和窗口校验的失败测试**
 
 为 finalize 请求加入结束时间，并覆盖正常、顺序、24 小时、录像时长和幂等冲突：
 
@@ -467,7 +481,7 @@ def test_legacy_session_without_training_window_still_finalizes(
     assert video.training_ended_at is None
 ```
 
-- [ ] **Step 7: 运行完成时间测试并确认失败**
+- [x] **Step 7: 运行完成时间测试并确认失败**
 
 Run:
 
@@ -479,7 +493,7 @@ pytest apps/patient_app/tests/test_patient_app_video_api.py \
 
 Expected: FAIL，原因是 finalize 尚未接收和校验结束时间。
 
-- [ ] **Step 8: 实现结束时间校验与幂等保存**
+- [x] **Step 8: 实现结束时间校验与幂等保存**
 
 在 `video_services.py` 增加：
 
@@ -520,7 +534,7 @@ video.save(update_fields=[
 
 视图使用 `serializer.validated_data.get("training_ended_at")` 传参。
 
-- [ ] **Step 9: 运行后端时间相关测试与 migration 检查**
+- [x] **Step 9: 运行后端时间相关测试与 migration 检查**
 
 Run:
 
@@ -533,7 +547,7 @@ python manage.py migrate --plan
 
 Expected: 全部 PASS；`makemigrations --check` 输出 `No changes detected`；迁移计划包含 `training.0013_trainingvideo_training_window`。
 
-- [ ] **Step 10: 提交后端时间模型**
+- [x] **Step 10: 提交后端时间模型**
 
 ```bash
 git add \
@@ -563,7 +577,7 @@ git commit -m "feat(training): 记录视频训练手机端时间"
   - `PendingShoulderPressSession.trainingStartedAt?: string`
   - `PendingShoulderPressSession.trainingEndedAt?: string`
 
-- [ ] **Step 1: 写本地时间格式和状态迁移失败测试**
+- [x] **Step 1: 写本地时间格式和状态迁移失败测试**
 
 新增确定性测试，显式传入 UTC+8 的 480 分钟偏移：
 
@@ -652,7 +666,7 @@ it('keeps legacy manifests valid but rejects malformed offset timestamps', () =>
 })
 ```
 
-- [ ] **Step 2: 运行 session 测试并确认失败**
+- [x] **Step 2: 运行 session 测试并确认失败**
 
 Run:
 
@@ -663,7 +677,7 @@ npm test -- src/pages/shoulder-press/session.test.ts
 
 Expected: FAIL，原因是三个时间辅助函数和本地字段尚不存在。
 
-- [ ] **Step 3: 实现带偏移手机时间格式**
+- [x] **Step 3: 实现带偏移手机时间格式**
 
 在 `session.ts` 增加：
 
@@ -696,7 +710,7 @@ export function clientTrainingMoment(
 }
 ```
 
-- [ ] **Step 4: 实现开始和结束的幂等状态迁移**
+- [x] **Step 4: 实现开始和结束的幂等状态迁移**
 
 扩展会话类型并增加：
 
@@ -737,7 +751,7 @@ export function markShoulderPressTrainingEnded(
 }
 ```
 
-- [ ] **Step 5: 扩展冷恢复校验并保留旧清单兼容**
+- [x] **Step 5: 扩展冷恢复校验并保留旧清单兼容**
 
 `normalizeSession` 使用 `OFFSET_ISO_PATTERN` 校验可选字段：
 
@@ -760,7 +774,7 @@ if (
 
 在规范化返回值中只在字段存在时复制字段。不要把旧清单缺失字段判为损坏。
 
-- [ ] **Step 6: 运行本地会话测试**
+- [x] **Step 6: 运行本地会话测试**
 
 Run:
 
@@ -771,7 +785,7 @@ npm test -- src/pages/shoulder-press/session.test.ts
 
 Expected: PASS。
 
-- [ ] **Step 7: 提交小程序时间状态**
+- [x] **Step 7: 提交小程序时间状态**
 
 ```bash
 git add \
@@ -800,7 +814,7 @@ git commit -m "feat(miniapp): 持久化肩部训练手机时间"
   - `finalizeVideoSession` 输入新增 `trainingEndedAt?: string`
   - 新版录像流程在首次成功开始和最终完成时写入时间，恢复上传原样发送。
 
-- [ ] **Step 1: 写 API 请求体失败测试**
+- [x] **Step 1: 写 API 请求体失败测试**
 
 修改 `api.test.ts` 的创建和完成调用：
 
@@ -851,7 +865,7 @@ expect(taroMock.request.mock.calls.at(-1)?.[0].data)
   .not.toHaveProperty('training_ended_at')
 ```
 
-- [ ] **Step 2: 运行 API 测试并确认失败**
+- [x] **Step 2: 运行 API 测试并确认失败**
 
 Run:
 
@@ -862,7 +876,7 @@ npm test -- src/pages/shoulder-press/api.test.ts
 
 Expected: FAIL，请求体尚未包含两个字段。
 
-- [ ] **Step 3: 扩展 API 输入并条件发送时间**
+- [x] **Step 3: 扩展 API 输入并条件发送时间**
 
 在 `api.ts` 修改输入类型与请求体：
 
@@ -921,7 +935,7 @@ export async function finalizeVideoSession(input: {
 
 同步更新文件底部兼容包装函数的参数透传。
 
-- [ ] **Step 4: 写摄像页时间时机失败测试**
+- [x] **Step 4: 写摄像页时间时机失败测试**
 
 在 `pages.test.tsx` 使用 fake timers 固定手机时间，覆盖：
 
@@ -1002,7 +1016,7 @@ expect(
 
 把这两段分别放入独立 `it`，每个测试按前一个示例完成页面初始化、摄像头 ready 和 fake timer 清理，避免共享状态。
 
-- [ ] **Step 5: 运行摄像页测试并确认失败**
+- [x] **Step 5: 运行摄像页测试并确认失败**
 
 Run:
 
@@ -1013,7 +1027,7 @@ npm test -- src/pages/shoulder-press/pages.test.tsx
 
 Expected: FAIL，摄像页尚未调用 Task 2 的状态迁移。
 
-- [ ] **Step 6: 在首次成功启动和完成入口持久化时间**
+- [x] **Step 6: 在首次成功启动和完成入口持久化时间**
 
 `camera.tsx` 导入两个 helper。在 `await recorder.start()` 成功后、设置 recording 状态前：
 
@@ -1035,7 +1049,7 @@ saveCurrentSession(endedSession)
 
 继续训练会命中 helper 幂等分支，不覆盖开始时间。自动完成继续调用同一 `finishTraining(true)`，因此使用同一路径。
 
-- [ ] **Step 7: 把本地时间透传到所有上传路径**
+- [x] **Step 7: 把本地时间透传到所有上传路径**
 
 在 `camera.tsx` 和 `upload.tsx` 的 `createVideoSession` 调用增加：
 
@@ -1069,7 +1083,7 @@ finalizeVideoSession({
 })
 ```
 
-- [ ] **Step 8: 更新恢复上传断言并运行小程序目标测试**
+- [x] **Step 8: 更新恢复上传断言并运行小程序目标测试**
 
 在 `workflow.test.ts` 的 `baseSession()` 增加固定开始、结束时间，并断言创建、完成依赖收到同一值；在上传页测试中断言重试不重新生成时间。
 
@@ -1085,7 +1099,7 @@ npm test -- \
 
 Expected: PASS。
 
-- [ ] **Step 9: 构建微信小程序**
+- [x] **Step 9: 构建微信小程序**
 
 Run:
 
@@ -1096,7 +1110,7 @@ npm run build:weapp
 
 Expected: 构建成功，无 TypeScript 或 Taro 编译错误。
 
-- [ ] **Step 10: 提交小程序链路**
+- [x] **Step 10: 提交小程序链路**
 
 ```bash
 git add \
@@ -1129,7 +1143,7 @@ git commit -m "feat(miniapp): 上报视频训练起止时间"
   - `GET /api/training/videos/{video_id}/wearable-window/`
   - `TrackingRecentRecord.training_started_at`、`training_ended_at`
 
-- [ ] **Step 1: 写穿戴窗口 API 的失败测试骨架**
+- [x] **Step 1: 写穿戴窗口 API 的失败测试骨架**
 
 新建 `test_training_video_wearable_api.py`，复用现有 `doctor`、`project_patient`、`active_prescription` fixtures，创建带时间的已绑定视频和设备测量点：
 
@@ -1344,7 +1358,7 @@ assert boundary_response.data["metrics"]["blood_oxygen"]["points"] == [
 
 最终成功测试可以保留第一次 GET 的统计断言，再用 `boundary_response` 验证新增的血氧边界点。
 
-- [ ] **Step 2: 增加权限、空数据和归属过滤失败测试**
+- [x] **Step 2: 增加权限、空数据和归属过滤失败测试**
 
 增加以下独立测试和明确断言：
 
@@ -1494,7 +1508,7 @@ assert [
 
 三个断言分别放入独立测试；每个测试重新创建自己的视频和绑定。只有血氧测试不要再创建心率点，稳定排序测试不要创建血氧点。
 
-- [ ] **Step 3: 运行新 API 测试并确认失败**
+- [x] **Step 3: 运行新 API 测试并确认失败**
 
 Run:
 
@@ -1505,7 +1519,7 @@ pytest apps/training/tests/test_training_video_wearable_api.py -v
 
 Expected: FAIL，路由和查询服务尚不存在。
 
-- [ ] **Step 4: 实现查询、分组和十进制统计**
+- [x] **Step 4: 实现查询、分组和十进制统计**
 
 新建 `training_windows.py`：
 
@@ -1565,7 +1579,7 @@ def training_video_wearable_window(video):
 
 所有 `measured_at`、开始和结束时间使用 `.isoformat()`；不要返回 `raw_payload`、设备 ID 或 binding ID。
 
-- [ ] **Step 5: 注册权限受控 API**
+- [x] **Step 5: 注册权限受控 API**
 
 在 `video_views.py` 增加：
 
@@ -1590,7 +1604,7 @@ path(
 ),
 ```
 
-- [ ] **Step 6: 暴露训练跟踪时间并写失败测试**
+- [x] **Step 6: 暴露训练跟踪时间并写失败测试**
 
 在 `test_tracking_api.py` 对有视频的 recent record 断言：
 
@@ -1610,7 +1624,7 @@ pytest apps/training/tests/test_tracking_api.py -k "recent_records and training"
 
 Expected: FAIL，序列化结果尚无字段。
 
-- [ ] **Step 7: 实现训练跟踪时间序列化**
+- [x] **Step 7: 实现训练跟踪时间序列化**
 
 在 `recent_records` 的每一行加入：
 
@@ -1627,7 +1641,7 @@ Expected: FAIL，序列化结果尚无字段。
 ),
 ```
 
-- [ ] **Step 8: 运行后端穿戴与跟踪测试**
+- [x] **Step 8: 运行后端穿戴与跟踪测试**
 
 Run:
 
@@ -1641,7 +1655,7 @@ pytest \
 
 Expected: PASS，现有穿戴查询回归不受影响。
 
-- [ ] **Step 9: 提交穿戴窗口后端**
+- [x] **Step 9: 提交穿戴窗口后端**
 
 ```bash
 git add \
@@ -1672,7 +1686,7 @@ git commit -m "feat(wearables): 提供训练视频时段趋势统计"
   - `<TrainingVideoWearablePanel data={response} />`
   - `TrainingVideoWearableWindowResponse` TypeScript 判别联合。
 
-- [ ] **Step 1: 定义精确响应类型**
+- [x] **Step 1: 定义精确响应类型**
 
 在 `types.ts` 增加：
 
@@ -1740,7 +1754,7 @@ export type TrainingVideoWearableMetric = keyof
   AvailableTrainingVideoWearableWindow["metrics"];
 ```
 
-- [ ] **Step 2: 写图表配置失败测试**
+- [x] **Step 2: 写图表配置失败测试**
 
 新建 `trainingVideoWearableChartConfig.test.ts`：
 
@@ -1807,7 +1821,7 @@ it("builds paired systolic and diastolic series", () => {
 
 再覆盖血氧单位 `%` 和上海本地 tooltip 时间。
 
-- [ ] **Step 3: 运行图表配置测试并确认失败**
+- [x] **Step 3: 运行图表配置测试并确认失败**
 
 Run:
 
@@ -1818,7 +1832,7 @@ npm run test -- src/pages/training-tracking/trainingVideoWearableChartConfig.tes
 
 Expected: FAIL，配置模块尚不存在。
 
-- [ ] **Step 4: 实现训练窗口专用图表配置**
+- [x] **Step 4: 实现训练窗口专用图表配置**
 
 创建 `trainingVideoWearableChartConfig.ts`。返回配置包含：
 
@@ -1895,7 +1909,7 @@ export function buildTrainingVideoWearableChartConfig(
 
 心率、血氧每个点生成单条 series；血压每个原始点展开为“收缩压”和“舒张压”两个同时间点。不要补点、聚合或插值原始数组。
 
-- [ ] **Step 5: 写面板显示规则失败测试**
+- [x] **Step 5: 写面板显示规则失败测试**
 
 Mock `@ant-design/charts` 的 `Line` 并新增：
 
@@ -1961,7 +1975,7 @@ it("renders nothing when the response is unavailable", () => {
 });
 ```
 
-- [ ] **Step 6: 运行面板测试并确认失败**
+- [x] **Step 6: 运行面板测试并确认失败**
 
 Run:
 
@@ -1972,7 +1986,7 @@ npm run test -- src/pages/training-tracking/TrainingVideoWearablePanel.test.tsx
 
 Expected: FAIL，面板组件尚不存在。
 
-- [ ] **Step 7: 实现指标页签与统计表**
+- [x] **Step 7: 实现指标页签与统计表**
 
 组件从 `antd` 导入 `Space`、`Table`、`TableColumnsType`、`Tabs`、`Typography`，从 `@ant-design/charts` 导入 `Line`。组件规则：
 
@@ -2070,7 +2084,7 @@ export function TrainingVideoWearablePanel({ data }: Props) {
 
 统计行顺序固定为心率、收缩压、舒张压。平均值使用后端一位小数结果；最大、最小、次数直接显示整数；血压两行复用相同 count。
 
-- [ ] **Step 8: 运行前端组件测试**
+- [x] **Step 8: 运行前端组件测试**
 
 Run:
 
@@ -2083,7 +2097,7 @@ npm run test -- \
 
 Expected: PASS。
 
-- [ ] **Step 9: 提交趋势组件**
+- [x] **Step 9: 提交趋势组件**
 
 ```bash
 git add \
@@ -2107,7 +2121,7 @@ git commit -m "feat(frontend): 新增训练时段穿戴趋势面板"
 - Consumes: Task 4 的 API 和 tracking 时间字段；Task 5 的 `TrainingVideoWearablePanel`。
 - Produces: 每次打开视频抽屉并行查询穿戴数据；训练时段描述；无数据和失败静默隐藏。
 
-- [ ] **Step 1: 写成功查询和训练时段显示失败测试**
+- [x] **Step 1: 写成功查询和训练时段显示失败测试**
 
 在页面 API mock 中增加：
 
@@ -2158,7 +2172,7 @@ expect(screen.getByText("08-06 23:58:00–08-07 00:05:00"))
 
 该断言放入独立测试，并让 tracking detail mock 返回 `overnightDetail` 后再打开视频抽屉。
 
-- [ ] **Step 2: 写无数据、失败和重新打开失败测试**
+- [x] **Step 2: 写无数据、失败和重新打开失败测试**
 
 增加：
 
@@ -2223,7 +2237,7 @@ it("refetches wearable data when the same video drawer is reopened", async () =>
 
 另加旧视频两个时间为 `null` 的测试：复制 `trackingDetail`，把第一条记录的 `training_started_at`、`training_ended_at` 设为 `null`，让 `videoDrawerGet` 返回该副本；打开抽屉后断言 `screen.queryByText("训练时段")` 为 `null`。
 
-- [ ] **Step 3: 运行抽屉测试并确认失败**
+- [x] **Step 3: 运行抽屉测试并确认失败**
 
 Run:
 
@@ -2234,7 +2248,7 @@ npm run test -- src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx
 
 Expected: FAIL，页面尚未查询或挂载穿戴面板。
 
-- [ ] **Step 4: 增加训练时间格式化**
+- [x] **Step 4: 增加训练时间格式化**
 
 在页面局部增加纯函数：
 
@@ -2255,7 +2269,7 @@ function formatTrainingWindow(
 
 构造 `Descriptions.items` 时只在结果非空时加入训练时段项。
 
-- [ ] **Step 5: 增加按抽屉启用的 TanStack Query**
+- [x] **Step 5: 增加按抽屉启用的 TanStack Query**
 
 ```typescript
 const wearableWindowQuery = useQuery({
@@ -2274,7 +2288,7 @@ const wearableWindowQuery = useQuery({
 
 关闭抽屉时不显示、不中断现有视频卸载逻辑；重新打开相同视频时必须重新请求。查询错误不渲染 `Alert`。
 
-- [ ] **Step 6: 在动作分析下方挂载面板**
+- [x] **Step 6: 在动作分析下方挂载面板**
 
 在现有动作分析块之后加入：
 
@@ -2288,7 +2302,7 @@ const wearableWindowQuery = useQuery({
 
 加载期间不显示 skeleton 或固定高度占位；失败时保持 `null`。
 
-- [ ] **Step 7: 运行页面测试、lint 和构建**
+- [x] **Step 7: 运行页面测试、lint 和构建**
 
 Run:
 
@@ -2301,7 +2315,7 @@ npm run build
 
 Expected: 全部 PASS。
 
-- [ ] **Step 8: 提交视频抽屉集成**
+- [x] **Step 8: 提交视频抽屉集成**
 
 ```bash
 git add \
@@ -2323,7 +2337,7 @@ git commit -m "feat(frontend): 在视频抽屉展示穿戴趋势"
 - Consumes: Tasks 1–6 的完整端到端实现。
 - Produces: 全量测试证据、已完成计划勾选、设计状态和追加式变更日志。
 
-- [ ] **Step 1: 运行完整后端测试**
+- [x] **Step 1: 运行完整后端测试**
 
 Run:
 
@@ -2334,7 +2348,7 @@ pytest
 
 Expected: 全部 PASS，无新增 warning 或失败。
 
-- [ ] **Step 2: 运行完整前端验证**
+- [x] **Step 2: 运行完整前端验证**
 
 Run:
 
@@ -2347,7 +2361,7 @@ npm run build
 
 Expected: 全部 PASS。
 
-- [ ] **Step 3: 运行完整小程序验证**
+- [x] **Step 3: 运行完整小程序验证**
 
 Run:
 
@@ -2359,7 +2373,7 @@ npm run build:weapp
 
 Expected: 全部 PASS，微信小程序构建成功。
 
-- [ ] **Step 4: 验证数据库迁移和工作区差异**
+- [x] **Step 4: 验证数据库迁移和工作区差异**
 
 Run:
 
@@ -2374,7 +2388,7 @@ git status --short
 
 Expected: 无遗漏 migration、无空白错误；工作区只包含本任务计划的文档收口改动。
 
-- [ ] **Step 5: 更新实施记录**
+- [x] **Step 5: 更新实施记录**
 
 在 plan 顶部状态区之后追加逐任务记录，格式固定：
 
@@ -2396,7 +2410,7 @@ git log --reverse --format="%h %s" fa56cf3..HEAD
 - 2026-08-06：肩部推举视频训练记录手机端开始/结束时间；医生端视频抽屉按训练时段展示已同步的心率、血压、血氧趋势及心率、血压统计；步数和主动同步不在一期范围。
 ```
 
-- [ ] **Step 6: 提交文档收口**
+- [x] **Step 6: 提交文档收口**
 
 ```bash
 git add \
@@ -2406,7 +2420,7 @@ git add \
 git commit -m "docs(training): 记录训练时段穿戴趋势实施结果"
 ```
 
-- [ ] **Step 7: 最终确认提交历史与工作区**
+- [x] **Step 7: 最终确认提交历史与工作区**
 
 Run:
 

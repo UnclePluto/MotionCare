@@ -1,8 +1,8 @@
-> 状态：approved
+> 状态：implemented
 > 日期：2026-08-06
 > 范围：为肩部推举视频训练记录手机端开始/结束时间，并在视频分析抽屉展示训练时段内已同步的心率、血压、血氧趋势与统计
 > 关联：`docs/superpowers/specs/2026-07-23-wearable-openapi-integration-design.md`、`docs/superpowers/specs/2026-08-05-training-video-direct-segment-upload-design.md`
-> 实施基线 commit：`daed769`
+> 实施基线 commit：`3d64a60`
 
 # 训练视频时段穿戴趋势设计
 
