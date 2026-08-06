@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import {
   afterAll,
   afterEach,
@@ -13,7 +19,15 @@ import { TrainingVideoWearablePanel } from "./TrainingVideoWearablePanel";
 import type { TrainingVideoWearableWindowResponse } from "./types";
 
 vi.mock("@ant-design/charts", () => ({
-  Line: () => <div aria-label="训练时段趋势图" />,
+  Line: ({
+    data,
+  }: {
+    data: Array<{ series: string; value: number }>;
+  }) => (
+    <div aria-label="训练时段趋势图">
+      {data.map((point) => `${point.series}:${point.value}`).join("|")}
+    </div>
+  ),
 }));
 
 const getComputedStyle = window.getComputedStyle;
@@ -104,6 +118,24 @@ describe("TrainingVideoWearablePanel", () => {
     expect(screen.queryByText("训练时段统计")).not.toBeInTheDocument();
   });
 
+  it("switches the rendered chart data with the selected metric tab", () => {
+    render(<TrainingVideoWearablePanel data={responseWithoutOxygen} />);
+
+    expect(
+      within(screen.getByRole("tabpanel")).getByLabelText("训练时段趋势图"),
+    ).toHaveTextContent("心率:86");
+
+    fireEvent.click(screen.getByRole("tab", { name: "血压" }));
+
+    expect(screen.getByRole("tab", { name: "血压" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      within(screen.getByRole("tabpanel")).getByLabelText("训练时段趋势图"),
+    ).toHaveTextContent("收缩压:126|舒张压:78");
+  });
+
   it("renders nothing when the response is unavailable", () => {
     const { container } = render(
       <TrainingVideoWearablePanel data={{ available: false }} />,
@@ -125,5 +157,68 @@ describe("TrainingVideoWearablePanel", () => {
     );
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders nothing when every metric key has no points", () => {
+    const { container } = render(
+      <TrainingVideoWearablePanel
+        data={{
+          available: true,
+          training_started_at: "2026-08-06T01:32:14Z",
+          training_ended_at: "2026-08-06T01:41:27Z",
+          metrics: {
+            heart_rate: {
+              points: [],
+              statistics: {
+                average: 89.5,
+                maximum: 112,
+                minimum: 67,
+                count: 4,
+              },
+            },
+            blood_pressure: {
+              points: [],
+              statistics: {
+                systolic: { average: 126.3, maximum: 132, minimum: 121 },
+                diastolic: { average: 78, maximum: 82, minimum: 74 },
+                count: 3,
+              },
+            },
+            blood_oxygen: { points: [] },
+          },
+        }}
+      />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("hides an empty metric tab and its statistics when another metric has points", () => {
+    render(
+      <TrainingVideoWearablePanel
+        data={{
+          ...responseWithoutOxygen,
+          metrics: {
+            ...responseWithoutOxygen.metrics,
+            heart_rate: {
+              points: [],
+              statistics: {
+                average: 89.5,
+                maximum: 112,
+                minimum: 67,
+                count: 4,
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("tab", { name: "心率" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "血压" })).toBeInTheDocument();
+    expect(screen.queryByText("心率（次/分）")).not.toBeInTheDocument();
+    expect(screen.getByText("收缩压（mmHg）")).toBeInTheDocument();
   });
 });

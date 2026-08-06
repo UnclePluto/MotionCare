@@ -1,4 +1,7 @@
-import { formatShanghaiChartTime } from "../../utils/shanghaiTime";
+import {
+  formatShanghaiChartTime,
+  inShanghai,
+} from "../../utils/shanghaiTime";
 import type { TrainingVideoWearableWindowResponse } from "./types";
 
 export type AvailableTrainingVideoWearableWindow = Extract<
@@ -42,9 +45,20 @@ type TrainingVideoWearableChartConfig = {
     title: {
       field: "label";
     };
+    items: Array<
+      (point: TrainingVideoWearableChartPoint) => {
+        name: string;
+        value: string;
+      }
+    >;
   };
   smooth: true;
 };
+
+function formatShanghaiTooltipTime(value: string): string {
+  const parsed = inShanghai(value);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm:ss") : "—";
+}
 
 function buildMetricPoints(
   metric: TrainingVideoWearableMetric,
@@ -53,7 +67,7 @@ function buildMetricPoints(
   if (metric === "heart_rate") {
     return (response.metrics.heart_rate?.points ?? []).map((point) => ({
       timestamp: new Date(point.measured_at).valueOf(),
-      label: formatShanghaiChartTime(point.measured_at),
+      label: formatShanghaiTooltipTime(point.measured_at),
       series: "心率",
       value: point.value,
     }));
@@ -63,13 +77,13 @@ function buildMetricPoints(
     return (response.metrics.blood_pressure?.points ?? []).flatMap((point) => [
       {
         timestamp: new Date(point.measured_at).valueOf(),
-        label: formatShanghaiChartTime(point.measured_at),
+        label: formatShanghaiTooltipTime(point.measured_at),
         series: "收缩压",
         value: point.systolic,
       },
       {
         timestamp: new Date(point.measured_at).valueOf(),
-        label: formatShanghaiChartTime(point.measured_at),
+        label: formatShanghaiTooltipTime(point.measured_at),
         series: "舒张压",
         value: point.diastolic,
       },
@@ -78,7 +92,7 @@ function buildMetricPoints(
 
   return (response.metrics.blood_oxygen?.points ?? []).map((point) => ({
     timestamp: new Date(point.measured_at).valueOf(),
-    label: formatShanghaiChartTime(point.measured_at),
+    label: formatShanghaiTooltipTime(point.measured_at),
     series: "血氧",
     value: point.value,
   }));
@@ -93,6 +107,7 @@ export function buildTrainingVideoWearableChartConfig(
     blood_pressure: "mmHg",
     blood_oxygen: "%",
   } satisfies Record<TrainingVideoWearableMetric, string>;
+  const unit = unitByMetric[metric];
 
   return {
     height: 280,
@@ -109,11 +124,20 @@ export function buildTrainingVideoWearableChartConfig(
     },
     axis: {
       x: { labelFormatter: (value) => formatShanghaiChartTime(value) },
-      y: { title: unitByMetric[metric] },
+      y: { title: unit },
     },
     legend:
       metric === "blood_pressure" ? { color: { title: false } } : undefined,
-    tooltip: { title: { field: "label" } },
+    tooltip: {
+      title: { field: "label" },
+      items: [
+        (point) => ({
+          name: `${point.series}（${unit}）`,
+          value:
+            unit === "%" ? `${point.value}%` : `${point.value} ${unit}`,
+        }),
+      ],
+    },
     smooth: true,
   };
 }

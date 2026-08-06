@@ -40,31 +40,40 @@ type Props = {
   data?: TrainingVideoWearableWindowResponse;
 };
 
+function hasMetricPoints(
+  metrics: AvailableTrainingVideoWearableWindow["metrics"],
+  metric: TrainingVideoWearableMetric,
+): boolean {
+  return (metrics[metric]?.points.length ?? 0) > 0;
+}
+
 function buildStatisticRows(
   metrics: AvailableTrainingVideoWearableWindow["metrics"],
 ): StatisticRow[] {
   const rows: StatisticRow[] = [];
+  const heartRate = metrics.heart_rate;
+  const bloodPressure = metrics.blood_pressure;
 
-  if (metrics.heart_rate) {
+  if (heartRate && hasMetricPoints(metrics, "heart_rate")) {
     rows.push({
       metric: "heart_rate",
       label: "心率（次/分）",
-      ...metrics.heart_rate.statistics,
+      ...heartRate.statistics,
     });
   }
 
-  if (metrics.blood_pressure) {
+  if (bloodPressure && hasMetricPoints(metrics, "blood_pressure")) {
     rows.push({
       metric: "systolic",
       label: "收缩压（mmHg）",
-      ...metrics.blood_pressure.statistics.systolic,
-      count: metrics.blood_pressure.statistics.count,
+      ...bloodPressure.statistics.systolic,
+      count: bloodPressure.statistics.count,
     });
     rows.push({
       metric: "diastolic",
       label: "舒张压（mmHg）",
-      ...metrics.blood_pressure.statistics.diastolic,
-      count: metrics.blood_pressure.statistics.count,
+      ...bloodPressure.statistics.diastolic,
+      count: bloodPressure.statistics.count,
     });
   }
 
@@ -87,7 +96,7 @@ function AvailableTrainingVideoWearablePanel({
   const metricTabs = useMemo(
     () =>
       METRIC_ORDER.flatMap((metric) =>
-        data.metrics[metric]
+        hasMetricPoints(data.metrics, metric)
           ? [
               {
                 key: metric,
