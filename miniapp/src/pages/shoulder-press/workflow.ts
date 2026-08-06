@@ -25,6 +25,7 @@ export type PendingSegmentUploadDependencies = {
     clientSessionId: string
     trainingDate: string
     expectedDurationSeconds: number
+    trainingStartedAt?: string
   }) => Promise<VideoSessionStatus>
   getVideoSessionStatus: (videoId: number) => Promise<VideoSessionStatus>
   uploadVideoSegment: (input: {
@@ -40,6 +41,7 @@ export type PendingSegmentUploadDependencies = {
     segmentCount: number
     actualDurationSeconds: number
     note: string
+    trainingEndedAt?: string
   }) => Promise<VideoSessionStatus>
   saveSession: (session: PendingShoulderPressSession) => void
   deleteSavedFile: (path: string) => Promise<void>
@@ -53,6 +55,7 @@ type LegacyWorkflowDependencies = {
     durationSeconds: number
     clientSessionId: string
     trainingDate: string
+    trainingStartedAt?: string
   }) => Promise<VideoSessionStatus>
   getVideoSessionStatus?: PendingSegmentUploadDependencies['getVideoSessionStatus']
   uploadVideoSegment?: PendingSegmentUploadDependencies['uploadVideoSegment']
@@ -148,7 +151,8 @@ export async function runPendingSegmentUploads(
         actionId: session.actionId,
         clientSessionId: session.clientSessionId,
         trainingDate: session.trainingDate,
-        expectedDurationSeconds: session.expectedDurationSeconds
+        expectedDurationSeconds: session.expectedDurationSeconds,
+        trainingStartedAt: session.trainingStartedAt
       })
       session = persist({ ...session, videoId: created.video_id }, dependencies)
     }
@@ -203,7 +207,8 @@ export async function runPendingSegmentUploads(
         videoId: session.videoId,
         segmentCount: session.segments.length,
         actualDurationSeconds: Math.ceil(session.actualDurationMs / 1000),
-        note: ''
+        note: '',
+        trainingEndedAt: session.trainingEndedAt
       })
       session = persist({ ...session, finalized: true, lastError: undefined }, dependencies)
       onProgress({ phase: 'finalize', index: session.segments.length - 1, state: 'finalized', progress: 100 })
@@ -253,7 +258,8 @@ export async function runShoulderPressUploadWorkflow(
       sizeBytes: firstSegment.sizeBytes,
       durationSeconds: Math.ceil(firstSegment.durationMs / 1000),
       clientSessionId: initialPending.clientSessionId,
-      trainingDate: initialPending.trainingDate
+      trainingDate: initialPending.trainingDate,
+      trainingStartedAt: initialPending.trainingStartedAt
     })
     videoId = intent.video_id
   }
@@ -273,7 +279,9 @@ export async function runShoulderPressUploadWorkflow(
       uploadState: firstSegment.uploadState === 'uploaded' ? 'uploaded' : 'pending'
     }],
     finalized: false,
-    createdAt: initialPending.createdAt
+    createdAt: initialPending.createdAt,
+    trainingStartedAt: initialPending.trainingStartedAt,
+    trainingEndedAt: initialPending.trainingEndedAt
   }
 
   const toLegacyPending = (session: PendingShoulderPressSession): PendingShoulderPressUpload => {

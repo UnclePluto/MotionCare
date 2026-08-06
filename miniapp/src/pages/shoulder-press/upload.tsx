@@ -158,7 +158,8 @@ export default function ShoulderPressUploadPage() {
       actionId: session.actionId,
       clientSessionId: session.clientSessionId,
       trainingDate: session.trainingDate,
-      expectedDurationSeconds: session.expectedDurationSeconds
+      expectedDurationSeconds: session.expectedDurationSeconds,
+      trainingStartedAt: session.trainingStartedAt
     })
     const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
     if (!latest) return null
@@ -322,7 +323,8 @@ export default function ShoulderPressUploadPage() {
       videoId: session.videoId,
       segmentCount: session.segments.length,
       actualDurationSeconds: Math.ceil(session.actualDurationMs / 1000),
-      note: ''
+      note: '',
+      trainingEndedAt: session.trainingEndedAt
     })
   }
 

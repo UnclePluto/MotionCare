@@ -31,6 +31,8 @@ import {
   createPendingShoulderPressSession,
   isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
+  markShoulderPressTrainingEnded,
+  markShoulderPressTrainingStarted,
   savePendingShoulderPressSession,
   normalizeShoulderPressExpectedDurationSeconds,
   type CompressedShoulderPressSegment,
@@ -155,7 +157,8 @@ async function ensureRemoteSession(
     actionId: session.actionId,
     clientSessionId: session.clientSessionId,
     trainingDate: session.trainingDate,
-    expectedDurationSeconds: session.expectedDurationSeconds
+    expectedDurationSeconds: session.expectedDurationSeconds,
+    trainingStartedAt: session.trainingStartedAt
   })
   const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
   if (!latest) return null
@@ -453,6 +456,10 @@ export default function ShoulderPressCameraPage() {
     try {
       const recorder = ensureRecorder()
       await recorder.start()
+      const currentSession = sessionRef.current
+      if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
+      const startedSession = markShoulderPressTrainingStarted(currentSession, Date.now())
+      saveCurrentSession(startedSession)
       recordingRef.current = true
       pausedRef.current = false
       recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
@@ -519,13 +526,17 @@ export default function ShoulderPressCameraPage() {
     setProcessing(true)
     setError('')
     try {
+      const currentSession = sessionRef.current
+      if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
+      const endedSession = markShoulderPressTrainingEnded(currentSession, Date.now())
+      saveCurrentSession(endedSession)
       if (recorderRef.current) {
         await recorderRef.current.finish()
       }
       await segmentSaveChainRef.current
       await waitForShoulderPressBackgroundUploadSettled()
-      const currentSession = sessionRef.current
-      if (!currentSession || currentSession.segments.length === 0) {
+      const uploadSession = sessionRef.current
+      if (!uploadSession || uploadSession.segments.length === 0) {
         throw new Error('还没有可上传的训练片段，请先开始训练')
       }
       recordingRef.current = false

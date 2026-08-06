@@ -125,6 +125,7 @@ export async function createVideoSession(input: {
   clientSessionId: string
   trainingDate: string
   expectedDurationSeconds: number
+  trainingStartedAt?: string
 }): Promise<VideoSessionStatus> {
   const response = await request<unknown>('/patient-app/training-video-sessions/', {
     method: 'POST',
@@ -134,7 +135,10 @@ export async function createVideoSession(input: {
       training_date: input.trainingDate,
       expected_duration_seconds: normalizeShoulderPressExpectedDurationSeconds(
         input.expectedDurationSeconds
-      )
+      ),
+      ...(input.trainingStartedAt
+        ? { training_started_at: input.trainingStartedAt }
+        : {})
     }
   })
   return parseVideoSessionStatus(response, { requireUploadedSegments: true })
@@ -224,13 +228,17 @@ export async function finalizeVideoSession(input: {
   segmentCount: number
   actualDurationSeconds: number
   note: string
+  trainingEndedAt?: string
 }): Promise<VideoSessionStatus> {
   const response = await request<unknown>(`/patient-app/training-video-sessions/${input.videoId}/finalize/`, {
     method: 'POST',
     data: {
       segment_count: input.segmentCount,
       actual_duration_seconds: input.actualDurationSeconds,
-      note: input.note
+      note: input.note,
+      ...(input.trainingEndedAt
+        ? { training_ended_at: input.trainingEndedAt }
+        : {})
     }
   })
   return parseVideoSessionStatus(response, {
@@ -253,12 +261,14 @@ export async function createShoulderPressUploadIntent(input: {
   clientSessionId?: string
   trainingDate?: string
   expectedDurationSeconds?: number
+  trainingStartedAt?: string
 }): Promise<VideoSessionStatus> {
   return createVideoSession({
     actionId: input.actionId,
     clientSessionId: input.clientSessionId ?? createClientSessionId(),
     trainingDate: input.trainingDate ?? new Date().toISOString().slice(0, 10),
-    expectedDurationSeconds: input.expectedDurationSeconds ?? input.durationSeconds
+    expectedDurationSeconds: input.expectedDurationSeconds ?? input.durationSeconds,
+    trainingStartedAt: input.trainingStartedAt
   })
 }
 
@@ -294,12 +304,14 @@ export async function completeShoulderPressUpload(input: {
   videoId: number
   actualDurationMinutes: number
   note: string
+  trainingEndedAt?: string
 } & Record<string, unknown>): Promise<VideoSessionStatus> {
   return finalizeVideoSession({
     videoId: input.videoId,
     segmentCount: 1,
     actualDurationSeconds: input.actualDurationMinutes * 60,
-    note: input.note
+    note: input.note,
+    trainingEndedAt: input.trainingEndedAt
   })
 }
 

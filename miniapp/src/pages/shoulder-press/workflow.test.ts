@@ -12,9 +12,11 @@ import {
 } from './workflow'
 
 const NOW = 1783692000000
+const TRAINING_STARTED_AT = '2026-07-11T09:32:14+08:00'
+const TRAINING_ENDED_AT = '2026-07-11T09:41:27+08:00'
 
 function baseSession(): PendingShoulderPressSession {
-  return [
+  const session = [
     { savedFilePath: 'wxfile://store/segment-0.mp4', durationSeconds: 30, sizeKb: 1000 },
     { savedFilePath: 'wxfile://store/segment-1.mp4', durationSeconds: 31, sizeKb: 1001 },
     { savedFilePath: 'wxfile://store/segment-2.mp4', durationSeconds: 32, sizeKb: 1002 }
@@ -25,6 +27,11 @@ function baseSession(): PendingShoulderPressSession {
     clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
     createdAt: NOW
   }))
+  return {
+    ...session,
+    trainingStartedAt: TRAINING_STARTED_AT,
+    trainingEndedAt: TRAINING_ENDED_AT
+  }
 }
 
 function dependencies() {
@@ -94,14 +101,16 @@ describe('shoulder press pending segment upload workflow', () => {
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      trainingStartedAt: TRAINING_STARTED_AT
     })
     expect(deps.uploadVideoSegment.mock.calls.map(([input]) => input.index)).toEqual([0, 1, 2])
     expect(deps.finalizeVideoSession).toHaveBeenCalledWith({
       videoId: 9,
       segmentCount: 3,
       actualDurationSeconds: 93,
-      note: ''
+      note: '',
+      trainingEndedAt: TRAINING_ENDED_AT
     })
     expect(result.finalized).toBe(true)
     expect(events).toContainEqual({ phase: 'upload', index: 0, state: 'uploaded', progress: 100 })
@@ -257,7 +266,8 @@ describe('shoulder press pending segment upload workflow', () => {
       sizeBytes: 1024000,
       durationSeconds: 30,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
-      trainingDate: '2026-07-11'
+      trainingDate: '2026-07-11',
+      trainingStartedAt: TRAINING_STARTED_AT
     })
     expect(deps.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
       videoId: 77,
@@ -270,14 +280,17 @@ describe('shoulder press pending segment upload workflow', () => {
       videoId: 77,
       segmentCount: 1,
       actualDurationSeconds: 30,
-      note: ''
+      note: '',
+      trainingEndedAt: TRAINING_ENDED_AT
     })
     expect(deps.uploadVideo).not.toHaveBeenCalled()
     expect(deps.completeUpload).not.toHaveBeenCalled()
     expect(result).toMatchObject({
       videoId: 77,
       finalized: true,
-      hash: 'sha-real'
+      hash: 'sha-real',
+      trainingStartedAt: TRAINING_STARTED_AT,
+      trainingEndedAt: TRAINING_ENDED_AT
     })
     expect(saved.at(-1)).toMatchObject({ videoId: 77, finalized: true })
   })
