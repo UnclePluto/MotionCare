@@ -17,7 +17,17 @@ class ClientOffsetDateTimeField(serializers.DateTimeField):
     }
 
     def to_internal_value(self, value):
-        if not isinstance(value, str) or not CLIENT_TIMEZONE_SUFFIX.search(value):
+        if not isinstance(value, str) or "T" not in value:
+            self.fail("timezone_required")
+        try:
+            client_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            self.fail("timezone_required")
+        if (
+            not CLIENT_TIMEZONE_SUFFIX.search(value)
+            or client_datetime.tzinfo is None
+            or client_datetime.utcoffset() is None
+        ):
             self.fail("timezone_required")
         return super().to_internal_value(value)
 

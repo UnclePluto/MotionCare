@@ -176,13 +176,21 @@ def test_create_session_saves_client_training_started_at(
 
 
 @pytest.mark.django_db
-def test_create_session_rejects_training_started_at_without_offset(
-    project_patient, doctor, active_prescription
+@pytest.mark.parametrize(
+    "started_at",
+    [
+        "2026-07-11T09:32:14",
+        "2026-07-11+08:00",
+        "2026-07-11Z",
+    ],
+)
+def test_create_session_rejects_training_started_at_without_complete_offset_datetime(
+    project_patient, doctor, active_prescription, started_at
 ):
     action = _shoulder_press_action(active_prescription)
     response = _auth_client(project_patient, doctor).post(
         "/api/patient-app/training-video-sessions/",
-        _session_payload(action, training_started_at="2026-07-11T09:32:14"),
+        _session_payload(action, training_started_at=started_at),
         format="json",
     )
 
@@ -834,6 +842,8 @@ def test_finalize_saves_client_training_ended_at(
         ("2026-07-11T09:32:14+08:00", "晚于"),
         ("2026-07-12T09:32:15+08:00", "24 小时"),
         ("2026-07-11T09:32:30", "时区"),
+        ("2026-07-11+08:00", "时区"),
+        ("2026-07-11Z", "时区"),
     ],
 )
 def test_finalize_rejects_invalid_training_window(
