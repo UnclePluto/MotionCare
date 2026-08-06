@@ -4,6 +4,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrainingTrackingDetailPage } from "./TrainingTrackingDetailPage";
+import type {
+  TrackingDetail,
+  TrainingVideoWearableWindowResponse,
+} from "./types";
 
 const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
 
@@ -17,6 +21,9 @@ vi.mock("../../api/client", () => ({
 vi.mock("@ant-design/charts", () => ({
   DualAxes: (props: Record<string, unknown>) => (
     <pre data-testid="dual-axes-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
+  ),
+  Line: (props: Record<string, unknown>) => (
+    <pre data-testid="line-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
   ),
 }));
 
@@ -213,6 +220,8 @@ const trackingDetail = {
       note: "肩推视频已上传",
       video_id: 8101,
       video_status: "attached",
+      training_started_at: "2026-08-06T01:32:14Z",
+      training_ended_at: "2026-08-06T01:41:27Z",
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -242,6 +251,8 @@ const trackingDetail = {
       note: "完成顺利",
       video_id: null,
       video_status: null,
+      training_started_at: null,
+      training_ended_at: null,
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -271,6 +282,8 @@ const trackingDetail = {
       note: "旧版明细缺失",
       video_id: null,
       video_status: null,
+      training_started_at: null,
+      training_ended_at: null,
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -300,6 +313,8 @@ const trackingDetail = {
       note: "非游戏记录",
       video_id: 8102,
       video_status: "attached",
+      training_started_at: null,
+      training_ended_at: null,
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -320,8 +335,43 @@ function trendChartData() {
   return (chart?.data ?? []) as Array<Record<string, unknown>>;
 }
 
-function cloneTrackingDetail() {
-  return JSON.parse(JSON.stringify(trackingDetail)) as typeof trackingDetail;
+function cloneTrackingDetail(): TrackingDetail {
+  return JSON.parse(JSON.stringify(trackingDetail)) as TrackingDetail;
+}
+
+const wearableWindowResponse: TrainingVideoWearableWindowResponse = {
+  available: true,
+  training_started_at: "2026-08-06T01:32:14Z",
+  training_ended_at: "2026-08-06T01:41:27Z",
+  metrics: {
+    heart_rate: {
+      points: [{ measured_at: "2026-08-06T01:33:00Z", value: 86 }],
+      statistics: { average: 86, maximum: 86, minimum: 86, count: 1 },
+    },
+  },
+};
+
+function videoDrawerGet(
+  url: string,
+  wearableResult: TrainingVideoWearableWindowResponse | Error =
+    wearableWindowResponse,
+  detail: TrackingDetail = trackingDetail as TrackingDetail,
+) {
+  if (url === "/training/tracking/patients/201/") {
+    return Promise.resolve({ data: detail });
+  }
+  if (url === "/training/videos/8101/download-url/") {
+    return Promise.resolve({ data: { url: "https://cdn.example.com/video.mp4" } });
+  }
+  if (url === "/training/videos/8101/analysis-jobs/latest/") {
+    return Promise.resolve({ data: null });
+  }
+  if (url === "/training/videos/8101/wearable-window/") {
+    return wearableResult instanceof Error
+      ? Promise.reject(wearableResult)
+      : Promise.resolve({ data: wearableResult });
+  }
+  return Promise.reject(new Error(`unexpected GET ${url}`));
 }
 
 describe("TrainingTrackingDetailPage", () => {
@@ -548,6 +598,201 @@ describe("TrainingTrackingDetailPage", () => {
     });
     expect(pauseSpy).toHaveBeenCalled();
     expect(loadSpy).toHaveBeenCalled();
+  });
+
+  it("打开视频抽屉后查询穿戴窗口并按上海时区显示同日训练时段", async () => {
+    mockGet.mockImplementation((url: string) => videoDrawerGet(url));
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    expect(mockGet).not.toHaveBeenCalledWith(
+      "/training/videos/8101/wearable-window/",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    expect(screen.getByText("训练时段")).toBeInTheDocument();
+    expect(screen.getByText("09:32:14–09:41:27")).toBeInTheDocument();
+    expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
+  });
+
+  it("跨日训练窗口显示两端月日和上海时区时间", async () => {
+    const overnightDetail = cloneTrackingDetail();
+    overnightDetail.recent_records[0].training_started_at =
+      "2026-08-06T15:58:00Z";
+    overnightDetail.recent_records[0].training_ended_at =
+      "2026-08-06T16:05:00Z";
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, wearableWindowResponse, overnightDetail),
+    );
+
+    renderAt("/training-tracking/patients/201");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    expect(
+      screen.getByText("08-06 23:58:00–08-07 00:05:00"),
+    ).toBeInTheDocument();
+  });
+
+  it("穿戴窗口不可用时完全隐藏穿戴区", async () => {
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, { available: false }),
+    );
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("穿戴窗口请求失败时保留视频和动作分析且不展示错误", async () => {
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, new Error("wearable failed")),
+    );
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("同一视频抽屉重新打开时重新查询穿戴窗口", async () => {
+    mockGet.mockImplementation((url: string) => videoDrawerGet(url));
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+    expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
+    await waitFor(() => {
+      expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    await waitFor(() => {
+      expect(
+        mockGet.mock.calls.filter(
+          ([url]) => url === "/training/videos/8101/wearable-window/",
+        ),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("同一视频重开请求失败时不展示上次成功的穿戴数据", async () => {
+    let wearableCallCount = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/videos/8101/wearable-window/") {
+        wearableCallCount += 1;
+        return wearableCallCount === 1
+          ? Promise.resolve({ data: wearableWindowResponse })
+          : Promise.reject(new Error("wearable failed"));
+      }
+      return videoDrawerGet(url);
+    });
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+    expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
+    await waitFor(() => {
+      expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+    await waitFor(() => expect(wearableCallCount).toBe(2));
+    expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("旧视频缺少完整训练时间时不查询也不显示训练时段", async () => {
+    const detailWithoutTrainingWindow = cloneTrackingDetail();
+    detailWithoutTrainingWindow.recent_records[0].training_started_at = null;
+    detailWithoutTrainingWindow.recent_records[0].training_ended_at = null;
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, wearableWindowResponse, detailWithoutTrainingWindow),
+    );
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await screen.findByLabelText("训练视频播放器");
+    expect(mockGet).not.toHaveBeenCalledWith(
+      "/training/videos/8101/wearable-window/",
+    );
+    expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
+  });
+
+  it("三个穿戴指标都为空时完全隐藏穿戴区", async () => {
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, {
+        available: true,
+        training_started_at: "2026-08-06T01:32:14Z",
+        training_ended_at: "2026-08-06T01:41:27Z",
+        metrics: {
+          heart_rate: {
+            points: [],
+            statistics: {
+              average: 0,
+              maximum: 0,
+              minimum: 0,
+              count: 0,
+            },
+          },
+          blood_pressure: {
+            points: [],
+            statistics: {
+              systolic: { average: 0, maximum: 0, minimum: 0 },
+              diastolic: { average: 0, maximum: 0, minimum: 0 },
+              count: 0,
+            },
+          },
+          blood_oxygen: { points: [] },
+        },
+      }),
+    );
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
   });
 
   it("手动创建动作分析任务，进行中禁用重复触发并每 2 秒轮询到成功计数后停止", async () => {
