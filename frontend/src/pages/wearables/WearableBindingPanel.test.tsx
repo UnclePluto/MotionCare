@@ -2,7 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WearableBindingPanel } from "./WearableBindingPanel";
+import {
+  WearableBindingActions,
+  WearableBindingFeedback,
+  WearableBindingModals,
+  WearableBindingPanel,
+  WearableBindingProvider,
+  useWearableBindingView,
+} from "./WearableBindingPanel";
 import type { ProjectPatientWearableBinding, WearableBinding, WearableStatus } from "./types";
 
 const { mockGet, mockPost } = vi.hoisted(() => ({
@@ -50,6 +57,10 @@ function status(overrides: Partial<StatusFixture> = {}): StatusFixture {
   };
 }
 
+function postCount(url: string) {
+  return mockPost.mock.calls.filter(([calledUrl]) => calledUrl === url).length;
+}
+
 function renderPanel(projectPatientId = 12) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(
@@ -67,6 +78,45 @@ function renderPanel(projectPatientId = 12) {
         </QueryClientProvider>,
       ),
   };
+}
+
+function ComposableBindingDetails() {
+  const view = useWearableBindingView();
+  const binding = view.isLoading ? null : view.binding;
+  return (
+    <div>
+      <span>设备简码：{binding?.short_code ?? "—"}</span>
+      <span>设备 ID：{binding?.device_id ?? "—"}</span>
+      <span>设备绑定时间：{binding?.bound_at ?? "—"}</span>
+    </div>
+  );
+}
+
+function ComposableBindingControls() {
+  const view = useWearableBindingView();
+  return (
+    <>
+      <button type="button" onClick={view.openBind}>强制打开绑定</button>
+      <button type="button" onClick={() => view.setShortCode("0826")}>强制填入简码</button>
+      <button type="button" onClick={view.submitBind}>强制提交绑定</button>
+    </>
+  );
+}
+
+function renderComposableBinding(projectPatientId = 12) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <WearableBindingProvider projectPatientId={projectPatientId}>
+        <WearableBindingActions />
+        <ComposableBindingDetails />
+        <ComposableBindingControls />
+        <WearableBindingFeedback />
+        <WearableBindingModals />
+      </WearableBindingProvider>
+    </QueryClientProvider>,
+  );
+  return { ...view, queryClient };
 }
 
 describe("WearableBindingPanel", () => {
@@ -97,24 +147,130 @@ describe("WearableBindingPanel", () => {
     });
     renderPanel();
 
-    fireEvent.change(await screen.findByLabelText("设备固定简码"), { target: { value: "0826" } });
-    fireEvent.click(screen.getByRole("button", { name: "绑定设备" }));
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+    const input = await screen.findByLabelText("设备固定简码");
+    fireEvent.change(input, { target: { value: "0a8269" } });
+    expect(input).toHaveValue("0826");
+    fireEvent.click(screen.getByRole("button", { name: "确认绑定" }));
 
     expect(await screen.findByText("患者设备绑定成功")).toBeInTheDocument();
     expect(await screen.findByText("设备通信异常")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "让设备响铃" })).not.toBeInTheDocument();
     expect(mockPost).toHaveBeenCalledWith("/wearables/project-patients/12/bind/", { short_code: "0826" });
     expect(mockPost).toHaveBeenCalledWith("/wearables/devices/7/check-status/");
+    expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+  });
+
+  it("组合片段在未绑定时通过共享 Provider 打开绑定弹窗", async () => {
+    renderComposableBinding();
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+
+    expect(await screen.findByRole("dialog", { name: "绑定穿戴设备" })).toBeInTheDocument();
+    expect(screen.getByText("设备固定简码").closest("label")).not.toBeNull();
+    expect(screen.getByLabelText("设备固定简码")).toBeInTheDocument();
+  });
+
+  it("组合片段在已有绑定时共享设备详情且不显示绑定按钮", async () => {
+    mockGet.mockResolvedValue({
+      data: { ...emptyBinding(), binding: binding() },
+    });
+    renderComposableBinding();
+
+    expect(await screen.findByText(/设备简码：0826/)).toBeInTheDocument();
+    expect(screen.getByText(/设备 ID：7/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "绑定穿戴设备" })).not.toBeInTheDocument();
+  });
+
+  it("公开 Provider 操作不会为已有绑定打开或提交新绑定", async () => {
+    mockGet.mockResolvedValue({ data: { ...emptyBinding(), binding: binding() } });
+    renderComposableBinding();
+
+    await screen.findByText(/设备简码：0826/);
+    fireEvent.click(screen.getByRole("button", { name: "强制打开绑定" }));
+    fireEvent.click(screen.getByRole("button", { name: "强制填入简码" }));
+    fireEvent.click(screen.getByRole("button", { name: "强制提交绑定" }));
+
+    expect(screen.queryByRole("dialog", { name: "绑定穿戴设备" })).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("绑定弹窗打开期间到达绑定更新会关闭弹窗并拒绝提交", async () => {
+    const { queryClient } = renderComposableBinding();
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+    fireEvent.change(await screen.findByLabelText("设备固定简码"), { target: { value: "0826" } });
+    act(() => {
+      queryClient.setQueryData<ProjectPatientWearableBinding>(
+        ["project-patient-wearable-binding", 12],
+        { ...emptyBinding(), binding: binding() },
+      );
+    });
+    expect(await screen.findByText(/设备简码：0826/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    expect(screen.getByRole("button", { name: "确认绑定" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "强制提交绑定" }));
+
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("外部绑定更新自动关闭弹窗时会清空简码和旧错误", async () => {
+    mockPost.mockRejectedValue({ response: { data: { detail: "设备已绑定患者王*。" } } });
+    const { queryClient } = renderComposableBinding();
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+    fireEvent.change(await screen.findByLabelText("设备固定简码"), { target: { value: "0826" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认绑定" }));
+    expect(await screen.findByText("设备已绑定患者王*。")).toBeInTheDocument();
+
+    act(() => {
+      queryClient.setQueryData<ProjectPatientWearableBinding>(
+        ["project-patient-wearable-binding", 12],
+        { ...emptyBinding(), binding: binding() },
+      );
+    });
+    expect(await screen.findByText(/设备简码：0826/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+
+    act(() => {
+      queryClient.setQueryData<ProjectPatientWearableBinding>(
+        ["project-patient-wearable-binding", 12],
+        emptyBinding(),
+      );
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+
+    expect(await screen.findByLabelText("设备固定简码")).toHaveValue("");
+    expect(screen.queryByText("设备已绑定患者王*。")).not.toBeInTheDocument();
   });
 
   it("直接显示后端返回的脱敏绑定冲突信息", async () => {
     mockPost.mockRejectedValue({ response: { data: { detail: "设备已绑定患者王*。" } } });
     renderPanel();
 
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
     fireEvent.change(await screen.findByLabelText("设备固定简码"), { target: { value: "0826" } });
-    fireEvent.click(screen.getByRole("button", { name: "绑定设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认绑定" }));
 
     expect(await screen.findByText("设备已绑定患者王*。")).toBeInTheDocument();
+  });
+
+  it("取消绑定弹窗后再次打开会清空简码和旧错误", async () => {
+    mockPost.mockRejectedValue({ response: { data: { detail: "设备已绑定患者王*。" } } });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+    const input = await screen.findByLabelText("设备固定简码");
+    fireEvent.change(input, { target: { value: "0a8269" } });
+    expect(input).toHaveValue("0826");
+    fireEvent.click(screen.getByRole("button", { name: "确认绑定" }));
+    expect(await screen.findByText("设备已绑定患者王*。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
+    fireEvent.click(screen.getByRole("button", { name: "绑定穿戴设备" }));
+
+    expect(await screen.findByLabelText("设备固定简码")).toHaveValue("");
+    expect(screen.queryByText("设备已绑定患者王*。")).not.toBeInTheDocument();
   });
 
   it("解绑确认明确保留历史研究数据", async () => {
@@ -127,10 +283,80 @@ describe("WearableBindingPanel", () => {
     });
     renderPanel();
 
-    await screen.findByText("当前设备");
+    await screen.findByText("0826");
     fireEvent.click(screen.getByRole("button", { name: "解绑设备" }));
 
     expect(await screen.findByText(/历史研究数据不会删除/)).toBeInTheDocument();
+  });
+
+  it("解绑请求待响应时重复确认只发送一次", async () => {
+    let resolveUnbind!: (value: { data: unknown }) => void;
+    const pendingUnbind = new Promise<{ data: unknown }>((resolve) => {
+      resolveUnbind = resolve;
+    });
+    mockGet.mockResolvedValue({ data: { ...emptyBinding(), binding: binding() } });
+    mockPost.mockReturnValue(pendingUnbind);
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "解绑设备" }));
+    const confirm = await screen.findByRole("button", { name: /确认解绑/ });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+    fireEvent.click(confirm);
+
+    await act(async () => {
+      await Promise.resolve();
+      expect(mockPost).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveClass("ant-btn-loading");
+      resolveUnbind({ data: { historical_data_preserved: true } });
+      await pendingUnbind;
+    });
+  });
+
+  it("解绑请求 pending 时患者 A 到 B 再回 A 仍只发送一次", async () => {
+    let resolveUnbind!: (value: { data: unknown }) => void;
+    const pendingUnbind = new Promise<{ data: unknown }>((resolve) => {
+      resolveUnbind = resolve;
+    });
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes("/12/")) {
+        return Promise.resolve({ data: { ...emptyBinding(12, 101), binding: binding() } });
+      }
+      if (url.includes("/13/")) {
+        return Promise.resolve({
+          data: {
+            ...emptyBinding(13, 202),
+            binding: binding({ id: 44, patient_id: 202, device_id: 8, short_code: "1002" }),
+          },
+        });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/bindings/33/unbind/") return pendingUnbind;
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    const { rerenderPanel } = renderPanel(12);
+
+    fireEvent.click(await screen.findByRole("button", { name: "解绑设备" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认解绑" }));
+    await waitFor(() => expect(postCount("/wearables/bindings/33/unbind/")).toBe(1));
+
+    rerenderPanel(13);
+    expect(await screen.findByText("1002")).toBeInTheDocument();
+    rerenderPanel(12);
+    expect(await screen.findByText("0826")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "解绑设备" }));
+    const confirm = await screen.findByRole("button", { name: /确认解绑/ });
+    fireEvent.click(confirm);
+
+    await act(async () => {
+      await Promise.resolve();
+      expect(postCount("/wearables/bindings/33/unbind/")).toBe(1);
+      expect(confirm).toHaveClass("ant-btn-loading");
+      resolveUnbind({ data: { historical_data_preserved: true } });
+      await pendingUnbind;
+    });
   });
 
   it("仅在通信测试明确返回响铃能力时显示响铃操作", async () => {
@@ -151,23 +377,29 @@ describe("WearableBindingPanel", () => {
     expect(await screen.findByRole("button", { name: "让设备响铃" })).toBeInTheDocument();
   });
 
-  it("首次绑定状态查询完成前显示加载态且不能提交绑定", async () => {
+  it("首次绑定状态查询完成前没有绑定入口且 Provider 拒绝打开或提交", async () => {
     let resolveGet!: (value: { data: ProjectPatientWearableBinding }) => void;
     const pendingGet = new Promise<{ data: ProjectPatientWearableBinding }>((resolve) => {
       resolveGet = resolve;
     });
     mockGet.mockReturnValue(pendingGet);
-    renderPanel();
+    renderComposableBinding();
 
     expect(await screen.findByText("设备绑定状态加载中")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "绑定穿戴设备" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("设备固定简码")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "强制打开绑定" }));
+    fireEvent.click(screen.getByRole("button", { name: "强制填入简码" }));
+    fireEvent.click(screen.getByRole("button", { name: "强制提交绑定" }));
+
+    expect(screen.queryByRole("dialog", { name: "绑定穿戴设备" })).not.toBeInTheDocument();
     expect(mockPost).not.toHaveBeenCalled();
 
     await act(async () => {
       resolveGet({ data: emptyBinding() });
       await pendingGet;
     });
-    expect(await screen.findByLabelText("设备固定简码")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "绑定穿戴设备" })).toBeInTheDocument();
   });
 
   it("绑定成功会覆盖迟到的旧 GET 并写入完整绑定缓存", async () => {
@@ -190,6 +422,7 @@ describe("WearableBindingPanel", () => {
     });
     const { queryClient } = renderPanel();
 
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
     fireEvent.change(await screen.findByLabelText("设备固定简码"), {
       target: { value: "0826" },
     });
@@ -197,9 +430,9 @@ describe("WearableBindingPanel", () => {
       queryKey: ["project-patient-wearable-binding", 12],
     });
     await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole("button", { name: "绑定设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认绑定" }));
 
-    expect(await screen.findByText("当前设备")).toBeInTheDocument();
+    expect(await screen.findByText("0826")).toBeInTheDocument();
     expect(queryClient.getQueryData(["project-patient-wearable-binding", 12])).toEqual({
       project_patient_id: 12,
       patient_id: 101,
@@ -210,8 +443,8 @@ describe("WearableBindingPanel", () => {
       resolveStaleGet({ data: emptyBinding() });
       await staleGet;
     });
-    expect(screen.getByText("当前设备")).toBeInTheDocument();
-    expect(screen.queryByLabelText("设备固定简码")).not.toBeInTheDocument();
+    expect(screen.getByText("0826")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "绑定穿戴设备" })).not.toBeInTheDocument();
   });
 
   it("切换患者会清理简码且旧患者迟到的绑定响应不污染新患者", async () => {
@@ -227,20 +460,21 @@ describe("WearableBindingPanel", () => {
     mockPost.mockReturnValueOnce(pendingBind);
     const { rerenderPanel } = renderPanel(12);
 
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
     fireEvent.change(await screen.findByLabelText("设备固定简码"), {
       target: { value: "0826" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "绑定设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认绑定" }));
     rerenderPanel(13);
 
-    expect(await screen.findByLabelText("设备固定简码")).toHaveValue("");
+    expect(await screen.findByRole("button", { name: "绑定穿戴设备" })).toBeInTheDocument();
     await act(async () => {
       resolveBind({ data: binding() });
       await pendingBind;
     });
 
     expect(screen.queryByText("患者设备绑定成功")).not.toBeInTheDocument();
-    expect(screen.queryByText("当前设备")).not.toBeInTheDocument();
+    expect(screen.queryByText("0826")).not.toBeInTheDocument();
     expect(mockPost).toHaveBeenCalledWith("/wearables/project-patients/12/bind/", {
       short_code: "0826",
     });
@@ -267,7 +501,7 @@ describe("WearableBindingPanel", () => {
     expect(await screen.findByText(/历史研究数据不会删除/)).toBeInTheDocument();
 
     rerenderPanel(13);
-    expect(await screen.findByLabelText("设备固定简码")).toHaveValue("");
+    expect(await screen.findByRole("button", { name: "绑定穿戴设备" })).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toHaveClass("ant-zoom-leave");
 
     await act(async () => {
@@ -409,6 +643,7 @@ describe("WearableBindingPanel", () => {
     mockPost.mockResolvedValue({ data: binding() });
     renderPanel();
 
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
     const input = await screen.findByLabelText("设备固定简码");
     fireEvent.change(input, { target: { value: "082" } });
     fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
@@ -418,6 +653,71 @@ describe("WearableBindingPanel", () => {
     });
 
     expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("四位简码连续回车在请求 pending 时只提交一次", async () => {
+    let resolveBind!: (value: { data: WearableBinding }) => void;
+    const pendingBind = new Promise<{ data: WearableBinding }>((resolve) => {
+      resolveBind = resolve;
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/project-patients/12/bind/") return pendingBind;
+      if (url === "/wearables/devices/7/check-status/") {
+        return Promise.resolve({ data: status() });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+    const input = await screen.findByLabelText("设备固定简码");
+    fireEvent.change(input, { target: { value: "0826" } });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(postCount("/wearables/project-patients/12/bind/")).toBe(1);
+    expect(input).toBeDisabled();
+    expect(screen.getByRole("button", { name: /确认绑定/ })).toBeDisabled();
+    await act(async () => {
+      resolveBind({ data: binding() });
+      await pendingBind;
+    });
+  });
+
+  it("四位简码回车后立即点击确认在请求 pending 时只提交一次", async () => {
+    let resolveBind!: (value: { data: WearableBinding }) => void;
+    const pendingBind = new Promise<{ data: WearableBinding }>((resolve) => {
+      resolveBind = resolve;
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url === "/wearables/project-patients/12/bind/") return pendingBind;
+      if (url === "/wearables/devices/7/check-status/") {
+        return Promise.resolve({ data: status() });
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("button", { name: "绑定穿戴设备" }));
+    const input = await screen.findByLabelText("设备固定简码");
+    fireEvent.change(input, { target: { value: "0826" } });
+    const confirm = screen.getByRole("button", { name: "确认绑定" });
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter", keyCode: 13 });
+      fireEvent.click(confirm);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(postCount("/wearables/project-patients/12/bind/")).toBe(1);
+    await act(async () => {
+      resolveBind({ data: binding() });
+      await pendingBind;
+    });
   });
 
   it("解绑成功立即清空绑定、显示成功反馈并在后台校准", async () => {
@@ -442,7 +742,7 @@ describe("WearableBindingPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确认解绑" }));
 
     expect(await screen.findByText("设备解绑成功")).toBeInTheDocument();
-    expect(screen.getByLabelText("设备固定简码")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "绑定穿戴设备" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "解绑设备" })).not.toBeInTheDocument();
 
     await act(async () => {
