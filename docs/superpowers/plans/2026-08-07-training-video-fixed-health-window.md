@@ -13,7 +13,8 @@
 - Task 3「让小程序强制上报开始时间并容忍结束时间缺失」落地于 commit `1f75ab0`。
 - Task 4「医生端改用固定健康观察窗口」落地于 commit `036cf79`。
 - Task 5「全量验证并更新实施记录」落地于 commit `c8ec3a2`。
-- 全量验证：Django 无待生成迁移，复杂状态机扫描零匹配；后端 `670 passed`；医生端 `37` 个测试文件、`239 passed`，lint `0 errors / 4 warnings`，生产构建成功；小程序 `23` 个测试文件、`271 passed`，注入正式 HTTPS API 地址后微信生产构建成功。
+- 最终审查异常路径收口落地于 commit `e44512a`；用户授权的自动超时尾段竞态修复落地于 commit `66876b2`。
+- 最终全量验证：Django 无待生成迁移，复杂状态机扫描零匹配；后端 `671 passed`；医生端 `37` 个测试文件、`240 passed`，lint `0 errors / 4 warnings`，生产构建成功；小程序 `23` 个测试文件、`287 passed`，注入正式 HTTPS API 地址后微信生产构建成功。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
