@@ -93,11 +93,11 @@ class PatientAppTrainingVideoSessionSerializer(serializers.Serializer):
     prescription_action = serializers.IntegerField(min_value=1)
     training_date = serializers.DateField()
     expected_duration_seconds = serializers.IntegerField(min_value=1)
-    training_started_at = ClientOffsetDateTimeField(required=False)
+    training_started_at = ClientOffsetDateTimeField()
 
     def validate(self, attrs):
-        raw_started_at = self.initial_data.get("training_started_at")
-        if raw_started_at is not None and client_local_date(raw_started_at) != attrs["training_date"]:
+        raw_started_at = self.initial_data["training_started_at"]
+        if client_local_date(raw_started_at) != attrs["training_date"]:
             raise serializers.ValidationError(
                 {"training_date": "训练日期必须与手机端开始时间一致。"}
             )

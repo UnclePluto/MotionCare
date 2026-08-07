@@ -238,7 +238,7 @@ def test_create_session_start_time_is_idempotent_and_immutable(
 
 
 @pytest.mark.django_db
-def test_legacy_client_can_create_session_without_start_time(
+def test_create_session_requires_training_started_at(
     project_patient, doctor, active_prescription
 ):
     action = _shoulder_press_action(active_prescription)
@@ -251,8 +251,12 @@ def test_legacy_client_can_create_session_without_start_time(
         format="json",
     )
 
-    assert response.status_code == 201
-    assert TrainingVideo.objects.get(pk=response.data["video_id"]).training_started_at is None
+    assert response.status_code == 400
+    assert "training_started_at" in response.data
+    assert not TrainingVideo.objects.filter(
+        project_patient=project_patient,
+        client_session_id=payload["client_session_id"],
+    ).exists()
 
 
 @pytest.mark.django_db
@@ -841,7 +845,6 @@ def test_finalize_saves_client_training_ended_at(
     ("ended_at", "expected_fragment"),
     [
         ("2026-07-11T09:32:14+08:00", "晚于"),
-        ("2026-07-12T09:32:15+08:00", "24 小时"),
         ("2026-07-11T09:32:30", "时区"),
         ("2026-07-11+08:00", "时区"),
         ("2026-07-11Z", "时区"),
@@ -873,7 +876,7 @@ def test_finalize_rejects_invalid_training_window(
 
 
 @pytest.mark.django_db
-def test_finalize_rejects_video_duration_longer_than_wall_time(
+def test_finalize_accepts_video_duration_longer_than_training_wall_time(
     project_patient, doctor, active_prescription, tmp_path
 ):
     action = _shoulder_press_action(active_prescription)
@@ -888,8 +891,26 @@ def test_finalize_rejects_video_duration_longer_than_wall_time(
         format="json",
     )
 
-    assert response.status_code == 400
-    assert "录像时长" in str(response.data)
+    assert response.status_code == 202
+
+
+@pytest.mark.django_db
+def test_finalize_accepts_end_more_than_24_hours_after_start(
+    project_patient, doctor, active_prescription, tmp_path
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    _create_uploaded_segments(video, tmp_path, [60_000])
+
+    response = client.post(
+        _finalize_url(video),
+        _finalize_payload(training_ended_at="2026-07-12T09:32:15+08:00"),
+        format="json",
+    )
+
+    assert response.status_code == 202
 
 
 @pytest.mark.django_db
@@ -921,29 +942,52 @@ def test_finalize_end_time_is_idempotent_and_immutable(
 
 
 @pytest.mark.django_db
-def test_legacy_session_without_training_window_still_finalizes(
+def test_finalize_accepts_missing_training_ended_at(
     project_patient, doctor, active_prescription, tmp_path
 ):
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
-    create_payload = _session_payload(action)
-    create_payload.pop("training_started_at")
-    session = client.post(
-        "/api/patient-app/training-video-sessions/",
-        create_payload,
-        format="json",
-    )
+    session = _create_session(client, action)
     video = TrainingVideo.objects.get(pk=session.data["video_id"])
     _create_uploaded_segments(video, tmp_path, [60_000])
-    finalize_payload = _finalize_payload()
-    finalize_payload.pop("training_ended_at")
+    payload = _finalize_payload()
+    payload.pop("training_ended_at")
 
-    response = client.post(_finalize_url(video), finalize_payload, format="json")
+    response = client.post(_finalize_url(video), payload, format="json")
 
     assert response.status_code == 202
     video.refresh_from_db()
-    assert video.training_started_at is None
     assert video.training_ended_at is None
+
+
+@pytest.mark.django_db
+def test_finalize_missing_end_time_is_idempotent_and_cannot_be_backfilled(
+    project_patient,
+    doctor,
+    active_prescription,
+    tmp_path,
+    django_capture_on_commit_callbacks,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    _create_uploaded_segments(video, tmp_path, [60_000])
+    payload = _finalize_payload()
+    payload.pop("training_ended_at")
+
+    with django_capture_on_commit_callbacks(execute=False):
+        first = client.post(_finalize_url(video), payload, format="json")
+    same = client.post(_finalize_url(video), payload, format="json")
+    backfilled = client.post(
+        _finalize_url(video),
+        _finalize_payload(training_ended_at="2026-07-11T09:41:27+08:00"),
+        format="json",
+    )
+
+    assert first.status_code == 202
+    assert same.status_code == 200
+    assert backfilled.status_code == 409
 
 
 @pytest.mark.django_db

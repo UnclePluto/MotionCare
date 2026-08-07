@@ -1,4 +1,4 @@
-from datetime import timedelta
+import datetime
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -31,8 +31,6 @@ from .video_staging import (
 )
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
-MAX_TRAINING_WALL_TIME = timedelta(hours=24)
-TRAINING_DURATION_TOLERANCE_SECONDS = 5
 
 
 def _active_prescription(project_patient):
@@ -91,7 +89,7 @@ def create_training_video_session(
     prescription_action_id,
     training_date,
     expected_duration_seconds,
-    training_started_at=None,
+    training_started_at,
 ):
     lookup = {
         "project_patient": project_patient,
@@ -298,18 +296,13 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
             raise ValidationError("训练视频分段尚未安全落盘")
 
 
-def _validate_training_window(video, *, training_ended_at, actual_duration_seconds):
+def _validate_training_end(video, *, training_ended_at):
     if training_ended_at is None:
         return
     if video.training_started_at is None:
         raise ValidationError("训练开始时间缺失，不能提交训练结束时间")
-    wall_time = training_ended_at - video.training_started_at
-    if wall_time <= timedelta(0):
+    if training_ended_at <= video.training_started_at:
         raise ValidationError("训练结束时间必须晚于开始时间")
-    if wall_time > MAX_TRAINING_WALL_TIME:
-        raise ValidationError("训练时间跨度不能超过 24 小时")
-    if actual_duration_seconds > wall_time.total_seconds() + TRAINING_DURATION_TOLERANCE_SECONDS:
-        raise ValidationError("实际录像时长不能超过训练时间跨度")
 
 
 def _finalize_payload_matches(
@@ -370,10 +363,9 @@ def finalize_training_video_session(
         segment_count=segment_count,
         actual_duration_seconds=actual_duration_seconds,
     )
-    _validate_training_window(
+    _validate_training_end(
         video,
         training_ended_at=training_ended_at,
-        actual_duration_seconds=actual_duration_seconds,
     )
     now = timezone.now()
     video.expected_segment_count = segment_count
@@ -473,7 +465,9 @@ def create_private_download_url(video):
         ]
     ):
         raise ValidationError("七牛下载配置不完整")
-    expires_at = timezone.now() + timedelta(seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS)
+    expires_at = timezone.now() + datetime.timedelta(
+        seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS
+    )
     base_url = f"{settings.QINIU_DOWNLOAD_DOMAIN.rstrip('/')}/{video.object_key}"
     return private_download_url(base_url, expires_at=int(expires_at.timestamp()))
 
