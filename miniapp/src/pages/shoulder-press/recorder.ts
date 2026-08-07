@@ -28,6 +28,7 @@ type RecordingGeneration = {
   startedAt: number
   requestedDurationMs: number
   state: GenerationState
+  timeoutHandled: boolean
 }
 
 const MIN_PAUSE_SEGMENT_MS = 2000
@@ -155,7 +156,8 @@ export class ShoulderPressRecorder {
       id: this.generation + 1,
       startedAt: this.now(),
       requestedDurationMs: timeoutSeconds * 1000,
-      state: 'starting'
+      state: 'starting',
+      timeoutHandled: false
     }
     this.generation = generation.id
     this.currentGeneration = generation
@@ -192,9 +194,12 @@ export class ShoulderPressRecorder {
 
   private handleTimeout(generationId: number, path: string): void {
     const generation = this.currentGeneration
-    if (!generation || generation.id !== generationId || this.mode !== 'recording') return
+    if (!generation || generation.id !== generationId || generation.timeoutHandled) return
+    const finishStopPending = this.mode === 'finishing' && generation.state === 'stopping'
+    if (this.mode !== 'recording' && !finishStopPending) return
+
+    generation.timeoutHandled = true
     const cutoffMs = this.now()
-    generation.state = 'stopped'
     const durationMs = this.durationSinceStart(
       generation,
       generation.requestedDurationMs,
@@ -203,7 +208,15 @@ export class ShoulderPressRecorder {
     this.recordedDurationMs += durationMs
     const reachedLimit = generation.requestedDurationMs < TIMEOUT_SEGMENT_MS ||
       this.recordedDurationMs >= this.maxDurationMs
+    const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
 
+    if (finishStopPending) {
+      if (reachedLimit) this.onMaxDuration?.(cutoffMs)
+      void delivery
+      return
+    }
+
+    generation.state = 'stopped'
     if (reachedLimit) {
       this.mode = 'finishing'
       this.currentGeneration = null
@@ -214,7 +227,6 @@ export class ShoulderPressRecorder {
       void startPromise
     }
 
-    const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
     if (reachedLimit) {
       this.onMaxDuration?.(cutoffMs)
     }
@@ -234,6 +246,10 @@ export class ShoulderPressRecorder {
             return
           }
           targetGeneration.state = 'stopped'
+          if (targetGeneration.timeoutHandled) {
+            resolve(null)
+            return
+          }
           const durationMs = this.durationSinceStart(targetGeneration, 0)
           if (discardShortPause && durationMs < MIN_PAUSE_SEGMENT_MS) {
             resolve(null)

@@ -175,6 +175,51 @@ describe('ShoulderPressRecorder', () => {
     ])
   })
 
+  it('keeps one timeout tail when finish starts before timeout and native stop fails', async () => {
+    const { camera, startOptions, stopOptions } = fakeCamera()
+    let now = 0
+    const onMaxDuration = vi.fn()
+    const onSegment = vi.fn(async () => undefined)
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      maxDurationMs: 15_000,
+      onMaxDuration,
+      onSegment
+    })
+
+    await recorder.start()
+    now = 14_900
+    const firstFinish = recorder.finish()
+    const firstFinishResult = firstFinish.catch((error: unknown) => error)
+    expect(camera.stopRecord).toHaveBeenCalledTimes(1)
+
+    now = 15_000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
+
+    expect(onMaxDuration).toHaveBeenCalledWith(15_000)
+    expect(camera.stopRecord).toHaveBeenCalledTimes(1)
+    await flushPromises()
+    expect(onSegment).toHaveBeenCalledWith('wxfile://temp/timeout-tail.mp4', 15_000)
+
+    stopOptions[0].fail?.()
+    await expect(firstFinishResult).resolves.toEqual(
+      expect.objectContaining({ message: '录像停止失败，请稍后重试' })
+    )
+
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
+    now = 16_000
+    const retriedFinish = recorder.finish()
+    expect(camera.stopRecord).toHaveBeenCalledTimes(2)
+    stopOptions[1].success?.({ tempVideoPath: 'wxfile://temp/stop-duplicate.mp4' })
+
+    await expect(retriedFinish).resolves.toEqual([
+      { savedFilePath: 'wxfile://temp/timeout-tail.mp4', durationMs: 15_000 }
+    ])
+    expect(onSegment).toHaveBeenCalledTimes(1)
+    expect(onMaxDuration).toHaveBeenCalledTimes(1)
+  })
+
   it('uses the remaining duration for generation 160 and never records past the upload contract', async () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
