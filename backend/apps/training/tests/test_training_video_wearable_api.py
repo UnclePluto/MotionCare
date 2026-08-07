@@ -24,7 +24,14 @@ def _client(user):
     return client
 
 
-def _video(project_patient, active_prescription, *, started_at, ended_at):
+def _video(
+    project_patient,
+    active_prescription,
+    *,
+    started_at,
+    ended_at=None,
+    expected_duration_seconds=180,
+):
     item = ActionLibraryItem.objects.get(source_key=SHOULDER_PRESS_SOURCE_KEY)
     action = active_prescription.actions.filter(action_library_item=item).first()
     if action is None:
@@ -50,6 +57,7 @@ def _video(project_patient, active_prescription, *, started_at, ended_at):
         training_date=record.training_date,
         training_started_at=started_at,
         training_ended_at=ended_at,
+        expected_duration_seconds=expected_duration_seconds,
         object_key=f"training-videos/{project_patient.id}/{uuid.uuid4().hex}.mp4",
         status=TrainingVideo.Status.ATTACHED,
     )
@@ -125,12 +133,14 @@ def test_wearable_window_returns_inclusive_raw_points_and_statistics(
     project_patient, doctor, active_prescription
 ):
     started_at = datetime(2026, 8, 6, 1, 32, 14, tzinfo=UTC)
-    ended_at = datetime(2026, 8, 6, 1, 41, 27, tzinfo=UTC)
+    expected_duration_seconds = 180
+    window_ended_at = started_at + timedelta(seconds=480)
     video = _video(
         project_patient,
         active_prescription,
         started_at=started_at,
-        ended_at=ended_at,
+        ended_at=started_at + timedelta(seconds=60),
+        expected_duration_seconds=expected_duration_seconds,
     )
     device, binding = _bound_device(project_patient, doctor)
     for second, value in [(0, 67), (60, 89), (120, 90), (180, 112)]:
@@ -161,8 +171,12 @@ def test_wearable_window_returns_inclusive_raw_points_and_statistics(
 
     assert response.status_code == 200
     assert response.data["available"] is True
-    assert response.data["training_started_at"] == started_at.isoformat()
-    assert response.data["training_ended_at"] == ended_at.isoformat()
+    assert response.data["window_started_at"] == started_at.isoformat()
+    assert response.data["window_ended_at"] == window_ended_at.isoformat()
+    assert response.data["expected_duration_seconds"] == 180
+    assert response.data["buffer_seconds"] == 300
+    assert "training_started_at" not in response.data
+    assert "training_ended_at" not in response.data
     assert response.data["metrics"]["heart_rate"]["statistics"] == {
         "average": 89.5,
         "maximum": 112,
@@ -181,12 +195,20 @@ def test_wearable_window_returns_inclusive_raw_points_and_statistics(
         device=device,
         binding=binding,
         metric_type=WearableMeasurement.MetricType.BLOOD_OXYGEN,
-        measured_at=ended_at,
+        measured_at=started_at,
         blood_oxygen=97,
+    )
+    _measurement(
+        patient=project_patient.patient,
+        device=device,
+        binding=binding,
+        metric_type=WearableMeasurement.MetricType.BLOOD_OXYGEN,
+        measured_at=window_ended_at,
+        blood_oxygen=96,
     )
     for measured_at in (
         started_at - timedelta(microseconds=1),
-        ended_at + timedelta(microseconds=1),
+        window_ended_at + timedelta(microseconds=1),
     ):
         _measurement(
             patient=project_patient.patient,
@@ -200,15 +222,23 @@ def test_wearable_window_returns_inclusive_raw_points_and_statistics(
     boundary_response = _client(doctor).get(f"/api/training/videos/{video.id}/wearable-window/")
 
     assert boundary_response.data["metrics"]["blood_oxygen"]["points"] == [
-        {"measured_at": ended_at.isoformat(), "value": 97}
+        {"measured_at": started_at.isoformat(), "value": 97},
+        {"measured_at": window_ended_at.isoformat(), "value": 96},
     ]
     assert "statistics" not in boundary_response.data["metrics"]["blood_oxygen"]
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("missing_field", ["training_started_at", "training_ended_at"])
-def test_wearable_window_is_unavailable_when_video_time_is_incomplete(
-    project_patient, doctor, active_prescription, missing_field
+@pytest.mark.parametrize(
+    ("missing_field", "missing_value"),
+    [
+        ("training_started_at", None),
+        ("expected_duration_seconds", None),
+        ("expected_duration_seconds", 0),
+    ],
+)
+def test_wearable_window_is_unavailable_without_fixed_window_inputs(
+    project_patient, doctor, active_prescription, missing_field, missing_value
 ):
     started_at = datetime(2026, 8, 6, 1, 32, 14, tzinfo=UTC)
     video = _video(
@@ -217,13 +247,61 @@ def test_wearable_window_is_unavailable_when_video_time_is_incomplete(
         started_at=started_at,
         ended_at=started_at + timedelta(minutes=10),
     )
-    setattr(video, missing_field, None)
+    setattr(video, missing_field, missing_value)
     video.save(update_fields=[missing_field, "updated_at"])
 
     response = _client(doctor).get(f"/api/training/videos/{video.id}/wearable-window/")
 
     assert response.status_code == 200
     assert response.data == {"available": False}
+
+
+@pytest.mark.django_db
+def test_wearable_window_ignores_actual_training_end(
+    project_patient, doctor, active_prescription
+):
+    started_at = datetime(2026, 8, 6, 1, 32, 14, tzinfo=UTC)
+    expected_duration_seconds = 180
+    video_without_end = _video(
+        project_patient,
+        active_prescription,
+        started_at=started_at,
+        expected_duration_seconds=expected_duration_seconds,
+    )
+    video_with_early_end = _video(
+        project_patient,
+        active_prescription,
+        started_at=started_at,
+        ended_at=started_at + timedelta(seconds=30),
+        expected_duration_seconds=expected_duration_seconds,
+    )
+    device, binding = _bound_device(project_patient, doctor)
+    _measurement(
+        patient=project_patient.patient,
+        device=device,
+        binding=binding,
+        metric_type=WearableMeasurement.MetricType.HEART_RATE,
+        measured_at=started_at + timedelta(seconds=240),
+        heart_rate=88,
+    )
+
+    response_without_end = _client(doctor).get(
+        f"/api/training/videos/{video_without_end.id}/wearable-window/"
+    )
+    response_with_early_end = _client(doctor).get(
+        f"/api/training/videos/{video_with_early_end.id}/wearable-window/"
+    )
+
+    assert response_without_end.status_code == 200
+    assert response_with_early_end.status_code == 200
+    for field in (
+        "window_started_at",
+        "window_ended_at",
+        "expected_duration_seconds",
+        "buffer_seconds",
+        "metrics",
+    ):
+        assert response_without_end.data[field] == response_with_early_end.data[field]
 
 
 @pytest.mark.django_db

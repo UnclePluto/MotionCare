@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,18 @@ if TYPE_CHECKING:
     from apps.training.models import TrainingVideo
 
 ONE_DECIMAL = Decimal("0.1")
+TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS = 300
+
+
+def _health_window(video: "TrainingVideo"):
+    duration = video.expected_duration_seconds
+    if video.training_started_at is None or duration is None or duration <= 0:
+        return None
+    started_at = video.training_started_at
+    ended_at = started_at + timedelta(
+        seconds=duration + TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS
+    )
+    return started_at, ended_at
 
 
 def _average(values):
@@ -31,15 +44,17 @@ def _scalar_statistics(values):
 
 
 def training_video_wearable_window(video: "TrainingVideo") -> dict:
-    if video.training_started_at is None or video.training_ended_at is None:
+    health_window = _health_window(video)
+    if health_window is None:
         return {"available": False}
+    window_started_at, window_ended_at = health_window
 
     points = (
         WearableMeasurement.objects.filter(
             patient_id=video.project_patient.patient_id,
             attribution_status=WearableMeasurement.AttributionStatus.ATTRIBUTED,
-            measured_at__gte=video.training_started_at,
-            measured_at__lte=video.training_ended_at,
+            measured_at__gte=window_started_at,
+            measured_at__lte=window_ended_at,
         )
         .filter(
             Q(
@@ -110,7 +125,9 @@ def training_video_wearable_window(video: "TrainingVideo") -> dict:
         return {"available": False}
     return {
         "available": True,
-        "training_started_at": video.training_started_at.isoformat(),
-        "training_ended_at": video.training_ended_at.isoformat(),
+        "window_started_at": window_started_at.isoformat(),
+        "window_ended_at": window_ended_at.isoformat(),
+        "expected_duration_seconds": video.expected_duration_seconds,
+        "buffer_seconds": TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS,
         "metrics": metrics,
     }
