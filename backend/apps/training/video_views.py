@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAdminOrDoctor
+from apps.wearables.services.training_windows import training_video_wearable_window
 
 from .models import MotionAnalysisJob
 from .video_serializers import MotionAnalysisJobSerializer
@@ -13,6 +14,14 @@ from .video_services import (
     get_training_video_for_user,
 )
 from .views import validation_detail
+
+
+class TrainingVideoWearableWindowView(APIView):
+    permission_classes = [IsAdminOrDoctor]
+
+    def get(self, request, video_id):
+        video = get_training_video_for_user(request.user, video_id)
+        return Response(training_video_wearable_window(video))
 
 
 class TrainingVideoDownloadUrlView(APIView):

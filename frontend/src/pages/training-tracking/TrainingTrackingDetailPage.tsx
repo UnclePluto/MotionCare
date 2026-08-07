@@ -25,6 +25,7 @@ import { useParams } from "react-router-dom";
 import { apiClient } from "../../api/client";
 import { formatShanghaiDate } from "../../utils/shanghaiTime";
 import { WearableHealthTab } from "../wearables/WearableHealthTab";
+import { TrainingVideoWearablePanel } from "./TrainingVideoWearablePanel";
 import type {
   TrackingDailyTrendPoint,
   TrackingDetail,
@@ -35,6 +36,7 @@ import type {
   TrackingRecentRecord,
   TrackingWeeklyTrendPoint,
   TrainingTrackingRange,
+  TrainingVideoWearableWindowResponse,
 } from "./types";
 import "./TrainingTrackingDetailPage.css";
 
@@ -320,6 +322,19 @@ export function TrainingTrackingDetailPage() {
     },
     enabled: drawerOpen && selectedVideoId != null && selectedVideoSupportsAnalysis,
     refetchInterval: (query) => (isActiveAnalysisStatus(query.state.data?.status) ? 2000 : false),
+  });
+
+  const wearableWindowQuery = useQuery({
+    queryKey: ["training-video-wearable-window", selectedVideoId],
+    queryFn: async () => {
+      const response = await apiClient.get<TrainingVideoWearableWindowResponse>(
+        `/training/videos/${selectedVideoId}/wearable-window/`,
+      );
+      return response.data;
+    },
+    enabled: drawerOpen && selectedVideoId != null,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const createAnalysisMutation = useMutation({
@@ -772,6 +787,7 @@ export function TrainingTrackingDetailPage() {
               ) : downloadUrl ? (
                 <video
                   ref={videoRef}
+                  aria-label="训练视频播放器"
                   controls
                   preload="metadata"
                   src={downloadUrl}
@@ -843,6 +859,12 @@ export function TrainingTrackingDetailPage() {
                   />
                 ) : null}
               </Space>
+            ) : null}
+
+            {!wearableWindowQuery.isFetching &&
+            !wearableWindowQuery.isError &&
+            wearableWindowQuery.data?.available ? (
+              <TrainingVideoWearablePanel data={wearableWindowQuery.data} />
             ) : null}
           </Space>
         ) : null}

@@ -85,6 +85,56 @@ export type TrackingGameSummary = {
   by_game: TrackingGameSummaryRow[];
 };
 
+export type TrainingVideoHeartRatePoint = {
+  measured_at: string;
+  value: number;
+};
+
+export type TrainingVideoBloodPressurePoint = {
+  measured_at: string;
+  systolic: number;
+  diastolic: number;
+};
+
+export type TrainingVideoBloodOxygenPoint = {
+  measured_at: string;
+  value: number;
+};
+
+export type TrainingVideoScalarStatistics = {
+  average: number;
+  maximum: number;
+  minimum: number;
+  count: number;
+};
+
+export type TrainingVideoWearableWindowResponse =
+  | { available: false }
+  | {
+      available: true;
+      window_started_at: string;
+      window_ended_at: string;
+      expected_duration_seconds: number;
+      buffer_seconds: number;
+      metrics: {
+        heart_rate?: {
+          points: TrainingVideoHeartRatePoint[];
+          statistics: TrainingVideoScalarStatistics;
+        };
+        blood_pressure?: {
+          points: TrainingVideoBloodPressurePoint[];
+          statistics: {
+            systolic: Omit<TrainingVideoScalarStatistics, "count">;
+            diastolic: Omit<TrainingVideoScalarStatistics, "count">;
+            count: number;
+          };
+        };
+        blood_oxygen?: {
+          points: TrainingVideoBloodOxygenPoint[];
+        };
+      };
+    };
+
 export type TrackingRecentRecord = {
   id: number;
   training_date: string;
@@ -109,6 +159,8 @@ export type TrackingRecentRecord = {
   note: string;
   video_id: number | null;
   video_status: string | null;
+  training_started_at: string | null;
+  training_ended_at: string | null;
   latest_analysis_status: "pending" | "running" | "succeeded" | "failed" | null;
   analysis_total_count: number | null;
   analysis_standard_count: number | null;

@@ -11,7 +11,7 @@ def test_deployed_training_migrations_upgrade_without_recreating_video_tables(
     prescription_action,
 ):
     migrate_from = [("training", "0004_trainingvideo_training_date")]
-    migrate_to = [("training", "0012_repair_unbound_qiniu_canonical_keys")]
+    migrate_to = [("training", "0013_trainingvideo_training_window")]
 
     executor = MigrationExecutor(connection)
     executor.migrate(migrate_from)
@@ -121,7 +121,7 @@ def test_schema_retirement_backfills_sessions_created_after_initial_uuid_pass(
     prescription_action,
 ):
     migrate_from = [("training", "0007_populate_training_client_session_ids")]
-    migrate_to = [("training", "0009_current_training_pipeline")]
+    migrate_to = [("training", "0013_trainingvideo_training_window")]
 
     executor = MigrationExecutor(connection)
     executor.migrate(migrate_from)

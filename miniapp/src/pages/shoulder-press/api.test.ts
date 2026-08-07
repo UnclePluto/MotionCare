@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  completeShoulderPressUpload,
+  createShoulderPressUploadIntent,
   createVideoSession,
   finalizeVideoSession,
   getVideoSessionStatus,
@@ -37,13 +39,15 @@ describe('shoulder press segmented upload api', () => {
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      trainingStartedAt: '2026-07-11T09:32:14+08:00'
     })).resolves.toEqual({ video_id: 9, status: 'recording', uploaded_segments: [] })
     await expect(finalizeVideoSession({
       videoId: 9,
       segmentCount: 2,
       actualDurationSeconds: 60,
-      note: ''
+      note: '',
+      trainingEndedAt: '2026-07-11T09:41:27+08:00'
     })).resolves.toEqual({ video_id: 9, status: 'queued', assembly_job_id: 1 })
     await expect(getVideoSessionStatus(9)).resolves.toEqual({
       video_id: 9,
@@ -58,7 +62,8 @@ describe('shoulder press segmented upload api', () => {
         prescription_action: 42,
         client_session_id: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
         training_date: '2026-07-11',
-        expected_duration_seconds: 180
+        expected_duration_seconds: 180,
+        training_started_at: '2026-07-11T09:32:14+08:00'
       },
       header: expect.objectContaining({ Authorization: 'Bearer patient-token' })
     })
@@ -68,12 +73,86 @@ describe('shoulder press segmented upload api', () => {
       data: {
         segment_count: 2,
         actual_duration_seconds: 60,
-        note: ''
+        note: '',
+        training_ended_at: '2026-07-11T09:41:27+08:00'
       }
     })
     expect(taroMock.request.mock.calls[2][0]).toMatchObject({
       url: 'http://127.0.0.1:8000/api/patient-app/training-video-sessions/9/status/',
       method: 'GET'
+    })
+  })
+
+  it('omits the optional training end timestamp when finalizing', async () => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 202,
+      data: { video_id: 9, status: 'queued', assembly_job_id: 1 }
+    })
+
+    await finalizeVideoSession({
+      videoId: 9,
+      segmentCount: 2,
+      actualDurationSeconds: 60,
+      note: ''
+    })
+
+    expect(taroMock.request.mock.calls[0][0].data)
+      .not.toHaveProperty('training_ended_at')
+  })
+
+  it('sends the recorded training end timestamp when finalizing', async () => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 202,
+      data: { video_id: 9, status: 'queued', assembly_job_id: 1 }
+    })
+
+    await finalizeVideoSession({
+      videoId: 9,
+      segmentCount: 2,
+      actualDurationSeconds: 60,
+      note: '',
+      trainingEndedAt: '2026-07-11T09:41:27+08:00'
+    })
+
+    expect(taroMock.request.mock.calls[0][0].data).toMatchObject({
+      training_ended_at: '2026-07-11T09:41:27+08:00'
+    })
+  })
+
+  it('passes the start timestamp through the legacy create wrapper', async () => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 201,
+      data: { video_id: 9, status: 'recording', uploaded_segments: [] }
+    })
+
+    await createShoulderPressUploadIntent({
+      actionId: 42,
+      durationSeconds: 180,
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      trainingDate: '2026-07-11',
+      trainingStartedAt: '2026-07-11T09:32:14+08:00'
+    })
+
+    expect(taroMock.request.mock.calls[0][0].data).toMatchObject({
+      training_started_at: '2026-07-11T09:32:14+08:00'
+    })
+  })
+
+  it('passes the end timestamp through the legacy completion wrapper', async () => {
+    taroMock.request.mockResolvedValueOnce({
+      statusCode: 202,
+      data: { video_id: 9, status: 'queued', assembly_job_id: 1 }
+    })
+
+    await completeShoulderPressUpload({
+      videoId: 9,
+      actualDurationMinutes: 1,
+      note: '',
+      trainingEndedAt: '2026-07-11T09:41:27+08:00'
+    })
+
+    expect(taroMock.request.mock.calls[0][0].data).toMatchObject({
+      training_ended_at: '2026-07-11T09:41:27+08:00'
     })
   })
 
@@ -198,7 +277,8 @@ describe('shoulder press segmented upload api', () => {
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      trainingStartedAt: '2026-07-11T09:32:14+08:00'
     })).rejects.toThrow('服务端忙，请稍后重试')
   })
 
@@ -219,7 +299,8 @@ describe('shoulder press segmented upload api', () => {
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      trainingStartedAt: '2026-07-11T09:32:14+08:00'
     })).rejects.toThrow('请求失败')
   })
 
@@ -239,7 +320,8 @@ describe('shoulder press segmented upload api', () => {
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      trainingStartedAt: '2026-07-11T09:32:14+08:00'
     })).rejects.toThrow('视频会话响应格式无效')
   })
 
@@ -284,7 +366,8 @@ describe('shoulder press segmented upload api', () => {
       actionId: 42,
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       trainingDate: '2026-07-11',
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      trainingStartedAt: '2026-07-11T09:32:14+08:00'
     })],
     ['status', () => getVideoSessionStatus(9)],
     ['finalize', () => finalizeVideoSession({

@@ -4,6 +4,10 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TrainingTrackingDetailPage } from "./TrainingTrackingDetailPage";
+import type {
+  TrackingDetail,
+  TrainingVideoWearableWindowResponse,
+} from "./types";
 
 const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
 
@@ -18,6 +22,9 @@ vi.mock("@ant-design/charts", () => ({
   DualAxes: (props: Record<string, unknown>) => (
     <pre data-testid="dual-axes-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
   ),
+  Line: (props: Record<string, unknown>) => (
+    <pre data-testid="line-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
+  ),
 }));
 
 vi.mock("../wearables/WearableHealthTab", () => ({
@@ -28,7 +35,7 @@ vi.mock("../wearables/WearableHealthTab", () => ({
 
 function renderAt(path: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
@@ -37,6 +44,7 @@ function renderAt(path: string) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...rendered, queryClient: qc };
 }
 
 function RouteSwitcher() {
@@ -213,6 +221,8 @@ const trackingDetail = {
       note: "肩推视频已上传",
       video_id: 8101,
       video_status: "attached",
+      training_started_at: "2026-08-06T01:32:14Z",
+      training_ended_at: "2026-08-06T01:41:27Z",
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -242,6 +252,8 @@ const trackingDetail = {
       note: "完成顺利",
       video_id: null,
       video_status: null,
+      training_started_at: null,
+      training_ended_at: null,
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -271,6 +283,8 @@ const trackingDetail = {
       note: "旧版明细缺失",
       video_id: null,
       video_status: null,
+      training_started_at: null,
+      training_ended_at: null,
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -300,6 +314,8 @@ const trackingDetail = {
       note: "非游戏记录",
       video_id: 8102,
       video_status: "attached",
+      training_started_at: null,
+      training_ended_at: null,
       latest_analysis_status: null,
       analysis_total_count: null,
       analysis_standard_count: null,
@@ -320,8 +336,59 @@ function trendChartData() {
   return (chart?.data ?? []) as Array<Record<string, unknown>>;
 }
 
-function cloneTrackingDetail() {
-  return JSON.parse(JSON.stringify(trackingDetail)) as typeof trackingDetail;
+function cloneTrackingDetail(): TrackingDetail {
+  return JSON.parse(JSON.stringify(trackingDetail)) as TrackingDetail;
+}
+
+const wearableWindowResponse: TrainingVideoWearableWindowResponse = {
+  available: true,
+  window_started_at: "2026-08-06T01:32:14Z",
+  window_ended_at: "2026-08-06T01:40:14Z",
+  expected_duration_seconds: 180,
+  buffer_seconds: 300,
+  metrics: {
+    heart_rate: {
+      points: [{ measured_at: "2026-08-06T01:33:00Z", value: 86 }],
+      statistics: { average: 86, maximum: 86, minimum: 86, count: 1 },
+    },
+  },
+};
+
+function videoDrawerGet(
+  url: string,
+  wearableResult: TrainingVideoWearableWindowResponse | Error =
+    wearableWindowResponse,
+  detail: TrackingDetail = trackingDetail as TrackingDetail,
+) {
+  if (url === "/training/tracking/patients/201/") {
+    return Promise.resolve({ data: detail });
+  }
+  if (url === "/training/videos/8101/download-url/") {
+    return Promise.resolve({ data: { url: "https://cdn.example.com/video.mp4" } });
+  }
+  if (url === "/training/videos/8101/analysis-jobs/latest/") {
+    return Promise.resolve({ data: null });
+  }
+  if (url === "/training/videos/8101/wearable-window/") {
+    return wearableResult instanceof Error
+      ? Promise.reject(wearableResult)
+      : Promise.resolve({ data: wearableResult });
+  }
+  return Promise.reject(new Error(`unexpected GET ${url}`));
+}
+
+async function waitForWearableQueryToSettle(
+  queryClient: QueryClient,
+  status: "success" | "error",
+) {
+  await waitFor(() => {
+    expect(
+      queryClient.getQueryState([
+        "training-video-wearable-window",
+        8101,
+      ]),
+    ).toMatchObject({ status, fetchStatus: "idle" });
+  });
 }
 
 describe("TrainingTrackingDetailPage", () => {
@@ -548,6 +615,217 @@ describe("TrainingTrackingDetailPage", () => {
     });
     expect(pauseSpy).toHaveBeenCalled();
     expect(loadSpy).toHaveBeenCalled();
+  });
+
+  it("实际结束时间缺失时仍查询固定穿戴窗口且不展示实际训练时段", async () => {
+    const detailWithoutTrainingEnd = cloneTrackingDetail();
+    detailWithoutTrainingEnd.recent_records[0].training_ended_at = null;
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, wearableWindowResponse, detailWithoutTrainingEnd),
+    );
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    expect(mockGet).not.toHaveBeenCalledWith(
+      "/training/videos/8101/wearable-window/",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
+    expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
+  });
+
+  it("穿戴窗口不可用时完全隐藏穿戴区", async () => {
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, { available: false }),
+    );
+
+    const { queryClient } = renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    await waitForWearableQueryToSettle(queryClient, "success");
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("穿戴窗口请求失败时保留视频和动作分析且不展示错误", async () => {
+    const detailWithoutTrainingEnd = cloneTrackingDetail();
+    detailWithoutTrainingEnd.recent_records[0].training_ended_at = null;
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(
+        url,
+        new Error("wearable failed"),
+        detailWithoutTrainingEnd,
+      ),
+    );
+
+    const { queryClient } = renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await waitForWearableQueryToSettle(queryClient, "error");
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("同一视频抽屉重新打开时重新查询穿戴窗口", async () => {
+    mockGet.mockImplementation((url: string) => videoDrawerGet(url));
+
+    renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+    expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
+    await waitFor(() => {
+      expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    await waitFor(() => {
+      expect(
+        mockGet.mock.calls.filter(
+          ([url]) => url === "/training/videos/8101/wearable-window/",
+        ),
+      ).toHaveLength(2);
+    });
+  });
+
+  it("同一视频重开请求失败时不展示上次成功的穿戴数据", async () => {
+    let wearableCallCount = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/videos/8101/wearable-window/") {
+        wearableCallCount += 1;
+        return wearableCallCount === 1
+          ? Promise.resolve({ data: wearableWindowResponse })
+          : Promise.reject(new Error("wearable failed"));
+      }
+      return videoDrawerGet(url);
+    });
+
+    const { queryClient } = renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+    expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
+    await waitFor(() => {
+      expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+    await waitFor(() => expect(wearableCallCount).toBe(2));
+    await waitForWearableQueryToSettle(queryClient, "error");
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("实际开始时间缺失时仍查询且以后端不可用响应隐藏穿戴区", async () => {
+    const detailWithoutTrainingStart = cloneTrackingDetail();
+    detailWithoutTrainingStart.recent_records[0].training_started_at = null;
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(
+        url,
+        { available: false },
+        detailWithoutTrainingStart,
+      ),
+    );
+
+    const { queryClient } = renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    await waitForWearableQueryToSettle(queryClient, "success");
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
+
+  it("三个穿戴指标都为空时完全隐藏穿戴区", async () => {
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, {
+        available: true,
+        window_started_at: "2026-08-06T01:32:14Z",
+        window_ended_at: "2026-08-06T01:40:14Z",
+        expected_duration_seconds: 180,
+        buffer_seconds: 300,
+        metrics: {
+          heart_rate: {
+            points: [],
+            statistics: {
+              average: 0,
+              maximum: 0,
+              minimum: 0,
+              count: 0,
+            },
+          },
+          blood_pressure: {
+            points: [],
+            statistics: {
+              systolic: { average: 0, maximum: 0, minimum: 0 },
+              diastolic: { average: 0, maximum: 0, minimum: 0 },
+              count: 0,
+            },
+          },
+          blood_oxygen: { points: [] },
+        },
+      }),
+    );
+
+    const { queryClient } = renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
+        "/training/videos/8101/wearable-window/",
+      );
+    });
+    await waitForWearableQueryToSettle(queryClient, "success");
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
   });
 
   it("手动创建动作分析任务，进行中禁用重复触发并每 2 秒轮询到成功计数后停止", async () => {

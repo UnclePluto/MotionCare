@@ -1,9 +1,40 @@
+import re
+from datetime import datetime
+
 from rest_framework import serializers
 
 from apps.patient_app.services import BINDING_CODE_PATTERN
 from apps.training.models import TrainingRecord
 
 BINDING_CODE_ERROR = "绑定码必须是 4 位数字"
+CLIENT_OFFSET_DATETIME_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$"
+)
+
+
+class ClientOffsetDateTimeField(serializers.DateTimeField):
+    default_error_messages = {
+        **serializers.DateTimeField.default_error_messages,
+        "timezone_required": "训练时间必须包含手机时区。",
+    }
+
+    def to_internal_value(self, value):
+        if not isinstance(value, str) or not CLIENT_OFFSET_DATETIME_PATTERN.fullmatch(value):
+            self.fail("timezone_required")
+        try:
+            client_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            self.fail("timezone_required")
+        if (
+            client_datetime.tzinfo is None
+            or client_datetime.utcoffset() is None
+        ):
+            self.fail("timezone_required")
+        return super().to_internal_value(value)
+
+
+def client_local_date(value: str):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
 
 
 class BindingCodeField(serializers.CharField):
@@ -62,6 +93,15 @@ class PatientAppTrainingVideoSessionSerializer(serializers.Serializer):
     prescription_action = serializers.IntegerField(min_value=1)
     training_date = serializers.DateField()
     expected_duration_seconds = serializers.IntegerField(min_value=1)
+    training_started_at = ClientOffsetDateTimeField()
+
+    def validate(self, attrs):
+        raw_started_at = self.initial_data["training_started_at"]
+        if client_local_date(raw_started_at) != attrs["training_date"]:
+            raise serializers.ValidationError(
+                {"training_date": "训练日期必须与手机端开始时间一致。"}
+            )
+        return attrs
 
 
 class PatientAppTrainingVideoSegmentSerializer(serializers.Serializer):
@@ -74,3 +114,4 @@ class PatientAppTrainingVideoFinalizeSerializer(serializers.Serializer):
     segment_count = serializers.IntegerField(min_value=1)
     actual_duration_seconds = serializers.IntegerField(min_value=1)
     note = serializers.CharField(required=False, allow_blank=True, default="")
+    training_ended_at = ClientOffsetDateTimeField(required=False)

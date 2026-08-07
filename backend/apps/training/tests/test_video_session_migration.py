@@ -10,7 +10,7 @@ def test_legacy_pipeline_retirement_assigns_distinct_session_ids_to_history(
 ):
     executor = MigrationExecutor(connection)
     migrate_from = [("training", "0004_trainingvideo_training_date")]
-    migrate_to = [("training", "0009_current_training_pipeline")]
+    migrate_to = [("training", "0013_trainingvideo_training_window")]
 
     executor.migrate(migrate_from)
     old_apps = executor.loader.project_state(migrate_from).apps
@@ -54,7 +54,7 @@ def test_legacy_pipeline_retirement_fails_incomplete_sessions_and_keeps_attached
 ):
     executor = MigrationExecutor(connection)
     migrate_from = [("training", "0004_trainingvideo_training_date")]
-    migrate_to = [("training", "0009_current_training_pipeline")]
+    migrate_to = [("training", "0013_trainingvideo_training_window")]
 
     executor.migrate(migrate_from)
     old_apps = executor.loader.project_state(migrate_from).apps

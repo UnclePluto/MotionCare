@@ -1,5 +1,6 @@
 import threading
 import uuid
+from datetime import UTC, datetime
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -408,6 +409,7 @@ class TrainingVideoPostgresConcurrencyTests(
                 prescription_action_id=self.video.prescription_action_id,
                 training_date=self.video.training_date,
                 expected_duration_seconds=expected_duration_seconds,
+                training_started_at=datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC),
             )
 
         first = _start_database_thread(

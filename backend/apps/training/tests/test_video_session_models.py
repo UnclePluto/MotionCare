@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -88,6 +89,7 @@ def test_training_video_session_accepts_2400_seconds_and_rejects_2401(
         prescription_action_id=action.id,
         training_date=timezone.localdate(),
         expected_duration_seconds=2400,
+        training_started_at=datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC),
     )
 
     assert created is True
@@ -99,4 +101,5 @@ def test_training_video_session_accepts_2400_seconds_and_rejects_2401(
             prescription_action_id=action.id,
             training_date=timezone.localdate(),
             expected_duration_seconds=2401,
+            training_started_at=datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC),
         )

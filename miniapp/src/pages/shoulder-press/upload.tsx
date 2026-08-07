@@ -16,6 +16,7 @@ import {
   isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
   promoteLegacyShoulderPressSegment,
+  requireShoulderPressTrainingStartedAt,
   type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
@@ -154,11 +155,13 @@ export default function ShoulderPressUploadPage() {
   async function ensureVideoSession(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
     setPhase('session')
     if (session.videoId) return session
+    const trainingStartedAt = requireShoulderPressTrainingStartedAt(session)
     const created = await createVideoSession({
       actionId: session.actionId,
       clientSessionId: session.clientSessionId,
       trainingDate: session.trainingDate,
-      expectedDurationSeconds: session.expectedDurationSeconds
+      expectedDurationSeconds: session.expectedDurationSeconds,
+      trainingStartedAt
     })
     const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
     if (!latest) return null
@@ -322,7 +325,8 @@ export default function ShoulderPressUploadPage() {
       videoId: session.videoId,
       segmentCount: session.segments.length,
       actualDurationSeconds: Math.ceil(session.actualDurationMs / 1000),
-      note: ''
+      note: '',
+      trainingEndedAt: session.trainingEndedAt
     })
   }
 
@@ -344,6 +348,9 @@ export default function ShoulderPressUploadPage() {
     setPending(currentPending)
 
     try {
+      if (currentPending.segments.length === 0) {
+        throw new Error('没有可上传的训练片段，请重新训练')
+      }
       let session = await preparePendingSegments(currentPending)
       if (!session) return
       session = await ensureVideoSession(session)
