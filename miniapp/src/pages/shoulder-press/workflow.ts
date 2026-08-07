@@ -4,6 +4,7 @@ import {
   isCompressedShoulderPressSegment,
   isSegmentReadyForLocalDeletion,
   markServerUploadedSegments,
+  requireShoulderPressTrainingStartedAt,
   type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession,
@@ -25,7 +26,7 @@ export type PendingSegmentUploadDependencies = {
     clientSessionId: string
     trainingDate: string
     expectedDurationSeconds: number
-    trainingStartedAt?: string
+    trainingStartedAt: string
   }) => Promise<VideoSessionStatus>
   getVideoSessionStatus: (videoId: number) => Promise<VideoSessionStatus>
   uploadVideoSegment: (input: {
@@ -55,7 +56,7 @@ type LegacyWorkflowDependencies = {
     durationSeconds: number
     clientSessionId: string
     trainingDate: string
-    trainingStartedAt?: string
+    trainingStartedAt: string
   }) => Promise<VideoSessionStatus>
   getVideoSessionStatus?: PendingSegmentUploadDependencies['getVideoSessionStatus']
   uploadVideoSegment?: PendingSegmentUploadDependencies['uploadVideoSegment']
@@ -147,12 +148,13 @@ export async function runPendingSegmentUploads(
     }
 
     if (!session.videoId) {
+      const trainingStartedAt = requireShoulderPressTrainingStartedAt(session)
       const created = await dependencies.createVideoSession({
         actionId: session.actionId,
         clientSessionId: session.clientSessionId,
         trainingDate: session.trainingDate,
         expectedDurationSeconds: session.expectedDurationSeconds,
-        trainingStartedAt: session.trainingStartedAt
+        trainingStartedAt
       })
       session = persist({ ...session, videoId: created.video_id }, dependencies)
     }
@@ -252,6 +254,7 @@ export async function runShoulderPressUploadWorkflow(
   let videoId = initialPending.videoId
   if (!videoId) {
     if (!dependencies.createIntent) throw new Error('录像上传信息不完整，请重新开始')
+    const trainingStartedAt = requireShoulderPressTrainingStartedAt(initialPending)
     onEvent({ phase: 'credential', progress: 0 })
     const intent = await dependencies.createIntent({
       actionId: initialPending.actionId,
@@ -259,7 +262,7 @@ export async function runShoulderPressUploadWorkflow(
       durationSeconds: Math.ceil(firstSegment.durationMs / 1000),
       clientSessionId: initialPending.clientSessionId,
       trainingDate: initialPending.trainingDate,
-      trainingStartedAt: initialPending.trainingStartedAt
+      trainingStartedAt
     })
     videoId = intent.video_id
   }

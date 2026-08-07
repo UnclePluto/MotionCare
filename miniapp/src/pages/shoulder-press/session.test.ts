@@ -17,6 +17,7 @@ import {
   markShoulderPressTrainingEnded,
   markShoulderPressTrainingStarted,
   promoteLegacyShoulderPressSegment,
+  requireShoulderPressTrainingStartedAt,
   savePendingShoulderPressSession
 } from './session'
 
@@ -67,6 +68,23 @@ describe('shoulder press segmented session helpers', () => {
     expect(started.trainingDate).toBe('2026-08-06')
     expect(started.trainingStartedAt).toBe('2026-08-06T00:01:02+08:00')
     expect(resumed.trainingStartedAt).toBe(started.trainingStartedAt)
+  })
+
+  it('requires a recorded training start before creating a remote session', () => {
+    const session = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-08-06',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
+    })
+
+    expect(() => requireShoulderPressTrainingStartedAt(session))
+      .toThrow('训练开始时间缺失，请重新训练')
+    expect(requireShoulderPressTrainingStartedAt({
+      ...session,
+      trainingStartedAt: '2026-08-06T00:01:02+08:00'
+    })).toBe('2026-08-06T00:01:02+08:00')
   })
 
   it('sets the final end once and keeps it through storage recovery', () => {

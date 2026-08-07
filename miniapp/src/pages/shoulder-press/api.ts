@@ -125,7 +125,7 @@ export async function createVideoSession(input: {
   clientSessionId: string
   trainingDate: string
   expectedDurationSeconds: number
-  trainingStartedAt?: string
+  trainingStartedAt: string
 }): Promise<VideoSessionStatus> {
   const response = await request<unknown>('/patient-app/training-video-sessions/', {
     method: 'POST',
@@ -136,9 +136,7 @@ export async function createVideoSession(input: {
       expected_duration_seconds: normalizeShoulderPressExpectedDurationSeconds(
         input.expectedDurationSeconds
       ),
-      ...(input.trainingStartedAt
-        ? { training_started_at: input.trainingStartedAt }
-        : {})
+      training_started_at: input.trainingStartedAt
     }
   })
   return parseVideoSessionStatus(response, { requireUploadedSegments: true })
@@ -261,7 +259,7 @@ export async function createShoulderPressUploadIntent(input: {
   clientSessionId?: string
   trainingDate?: string
   expectedDurationSeconds?: number
-  trainingStartedAt?: string
+  trainingStartedAt: string
 }): Promise<VideoSessionStatus> {
   return createVideoSession({
     actionId: input.actionId,

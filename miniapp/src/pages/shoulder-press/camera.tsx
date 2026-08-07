@@ -35,6 +35,7 @@ import {
   markShoulderPressTrainingStarted,
   savePendingShoulderPressSession,
   normalizeShoulderPressExpectedDurationSeconds,
+  requireShoulderPressTrainingStartedAt,
   type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
@@ -153,12 +154,13 @@ async function ensureRemoteSession(
   onSession?: SessionUpdate
 ): Promise<PendingShoulderPressSession | null> {
   if (session.videoId) return session
+  const trainingStartedAt = requireShoulderPressTrainingStartedAt(session)
   const created = await createVideoSession({
     actionId: session.actionId,
     clientSessionId: session.clientSessionId,
     trainingDate: session.trainingDate,
     expectedDurationSeconds: session.expectedDurationSeconds,
-    trainingStartedAt: session.trainingStartedAt
+    trainingStartedAt
   })
   const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
   if (!latest) return null

@@ -124,6 +124,36 @@ describe('shoulder press pending segment upload workflow', () => {
       .toBeLessThan(eventLog.indexOf('delete:wxfile://store/segment-0.mp4'))
   })
 
+  it('stops before every network call when the training start is missing', async () => {
+    const { deps } = dependencies()
+    const session = { ...baseSession() }
+    delete session.trainingStartedAt
+
+    await expect(runPendingSegmentUploads(session, deps, vi.fn()))
+      .rejects.toThrow('训练开始时间缺失，请重新训练')
+
+    expect(deps.createVideoSession).not.toHaveBeenCalled()
+    expect(deps.getVideoSessionStatus).not.toHaveBeenCalled()
+    expect(deps.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(deps.finalizeVideoSession).not.toHaveBeenCalled()
+  })
+
+  it('finalizes an uploaded session when the training end is missing', async () => {
+    const { deps } = dependencies()
+    const session = { ...baseSession() }
+    delete session.trainingEndedAt
+
+    await runPendingSegmentUploads(session, deps, vi.fn())
+
+    expect(deps.finalizeVideoSession).toHaveBeenCalledWith({
+      videoId: 9,
+      segmentCount: 3,
+      actualDurationSeconds: 93,
+      note: '',
+      trainingEndedAt: undefined
+    })
+  })
+
   it('does not create a server session or upload an uncompressed raw segment', async () => {
     const { deps } = dependencies()
     const session: PendingShoulderPressSession = {

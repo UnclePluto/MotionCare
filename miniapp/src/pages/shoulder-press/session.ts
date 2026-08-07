@@ -188,6 +188,15 @@ export function markShoulderPressTrainingStarted(
   }
 }
 
+export function requireShoulderPressTrainingStartedAt(
+  session: PendingShoulderPressSession
+): string {
+  if (!session.trainingStartedAt) {
+    throw new Error('训练开始时间缺失，请重新训练')
+  }
+  return session.trainingStartedAt
+}
+
 export function markShoulderPressTrainingEnded(
   session: PendingShoulderPressSession,
   nowMs: number,

@@ -540,6 +540,8 @@ describe('shoulder press pages', () => {
     page.rerender()
 
     expect(recorder.pause).toHaveBeenCalledTimes(1)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY))
+      .not.toHaveProperty('trainingEndedAt')
     expect(textContent(page.element)).toContain('继续训练')
     expect(recorder.start).toHaveBeenCalledTimes(1)
 

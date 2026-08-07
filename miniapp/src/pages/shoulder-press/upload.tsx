@@ -16,6 +16,7 @@ import {
   isCompressedShoulderPressSegment,
   loadPendingShoulderPressSession,
   promoteLegacyShoulderPressSegment,
+  requireShoulderPressTrainingStartedAt,
   type CompressedShoulderPressSegment,
   type PendingShoulderPressSegment,
   type PendingShoulderPressSession
@@ -154,12 +155,13 @@ export default function ShoulderPressUploadPage() {
   async function ensureVideoSession(session: PendingShoulderPressSession): Promise<PendingShoulderPressSession | null> {
     setPhase('session')
     if (session.videoId) return session
+    const trainingStartedAt = requireShoulderPressTrainingStartedAt(session)
     const created = await createVideoSession({
       actionId: session.actionId,
       clientSessionId: session.clientSessionId,
       trainingDate: session.trainingDate,
       expectedDurationSeconds: session.expectedDurationSeconds,
-      trainingStartedAt: session.trainingStartedAt
+      trainingStartedAt
     })
     const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
     if (!latest) return null
