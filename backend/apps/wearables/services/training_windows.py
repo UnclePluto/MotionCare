@@ -71,6 +71,15 @@ def training_video_wearable_window(video: "TrainingVideo") -> dict:
                 blood_oxygen__isnull=False,
             )
         )
+        .values(
+            "id",
+            "measured_at",
+            "metric_type",
+            "heart_rate",
+            "systolic",
+            "diastolic",
+            "blood_oxygen",
+        )
         .order_by("measured_at", "id")
     )
 
@@ -78,19 +87,21 @@ def training_video_wearable_window(video: "TrainingVideo") -> dict:
     blood_pressure_points = []
     blood_oxygen_points = []
     for point in points:
-        measured_at = point.measured_at.isoformat()
-        if point.metric_type == WearableMeasurement.MetricType.HEART_RATE:
-            heart_rate_points.append({"measured_at": measured_at, "value": point.heart_rate})
-        elif point.metric_type == WearableMeasurement.MetricType.BLOOD_PRESSURE:
+        measured_at = point["measured_at"].isoformat()
+        if point["metric_type"] == WearableMeasurement.MetricType.HEART_RATE:
+            heart_rate_points.append({"measured_at": measured_at, "value": point["heart_rate"]})
+        elif point["metric_type"] == WearableMeasurement.MetricType.BLOOD_PRESSURE:
             blood_pressure_points.append(
                 {
                     "measured_at": measured_at,
-                    "systolic": point.systolic,
-                    "diastolic": point.diastolic,
+                    "systolic": point["systolic"],
+                    "diastolic": point["diastolic"],
                 }
             )
         else:
-            blood_oxygen_points.append({"measured_at": measured_at, "value": point.blood_oxygen})
+            blood_oxygen_points.append(
+                {"measured_at": measured_at, "value": point["blood_oxygen"]}
+            )
 
     metrics = {}
     if heart_rate_points:

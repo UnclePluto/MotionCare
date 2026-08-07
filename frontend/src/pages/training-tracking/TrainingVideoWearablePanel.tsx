@@ -82,7 +82,11 @@ function buildStatisticRows(
 
 const STATISTIC_COLUMNS: TableColumnsType<StatisticRow> = [
   { title: "指标", dataIndex: "label" },
-  { title: "平均", dataIndex: "average" },
+  {
+    title: "平均",
+    dataIndex: "average",
+    render: (average: number) => average.toFixed(1),
+  },
   { title: "最高", dataIndex: "maximum" },
   { title: "最低", dataIndex: "minimum" },
   { title: "测量次数", dataIndex: "count" },

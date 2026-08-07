@@ -2,6 +2,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -226,6 +228,68 @@ def test_wearable_window_returns_inclusive_raw_points_and_statistics(
         {"measured_at": window_ended_at.isoformat(), "value": 96},
     ]
     assert "statistics" not in boundary_response.data["metrics"]["blood_oxygen"]
+
+
+@pytest.mark.django_db
+def test_wearable_window_uses_a_narrow_measurement_projection_without_changing_response(
+    project_patient, doctor, active_prescription
+):
+    started_at = datetime(2026, 8, 6, 1, 32, 14, tzinfo=UTC)
+    window_ended_at = started_at + timedelta(seconds=480)
+    video = _video(
+        project_patient,
+        active_prescription,
+        started_at=started_at,
+        expected_duration_seconds=180,
+    )
+    device, binding = _bound_device(project_patient, doctor)
+    measurement = _measurement(
+        patient=project_patient.patient,
+        device=device,
+        binding=binding,
+        metric_type=WearableMeasurement.MetricType.HEART_RATE,
+        measured_at=started_at + timedelta(seconds=30),
+        heart_rate=78,
+    )
+    measurement.raw_payload = {"secret": "must-not-be-selected"}
+    measurement.save(update_fields=["raw_payload", "updated_at"])
+
+    with CaptureQueriesContext(connection) as queries:
+        response = _client(doctor).get(
+            f"/api/training/videos/{video.id}/wearable-window/"
+        )
+
+    measurement_queries = [
+        query["sql"]
+        for query in queries.captured_queries
+        if "wearables_wearablemeasurement" in query["sql"].lower()
+    ]
+    assert measurement_queries
+    assert all("raw_payload" not in query.lower() for query in measurement_queries)
+    assert response.status_code == 200
+    assert response.data == {
+        "available": True,
+        "window_started_at": started_at.isoformat(),
+        "window_ended_at": window_ended_at.isoformat(),
+        "expected_duration_seconds": 180,
+        "buffer_seconds": 300,
+        "metrics": {
+            "heart_rate": {
+                "points": [
+                    {
+                        "measured_at": (started_at + timedelta(seconds=30)).isoformat(),
+                        "value": 78,
+                    }
+                ],
+                "statistics": {
+                    "average": 78.0,
+                    "maximum": 78,
+                    "minimum": 78,
+                    "count": 1,
+                },
+            }
+        },
+    }
 
 
 @pytest.mark.django_db

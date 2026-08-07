@@ -158,7 +158,7 @@ const recorderHarness = vi.hoisted(() => {
     abandonFailedSegment: ReturnType<typeof vi.fn>
     options: {
       maxDurationMs?: number
-      onMaxDuration?: () => void
+      onMaxDuration?: (cutoffMs: number) => void
       onSegment: (path: string, durationMs: number) => Promise<void> | void
     }
   }> = []
@@ -176,13 +176,13 @@ const recorderHarness = vi.hoisted(() => {
     abandonFailedSegment = vi.fn(() => null)
     options: {
       maxDurationMs?: number
-      onMaxDuration?: () => void
+      onMaxDuration?: (cutoffMs: number) => void
       onSegment: (path: string, durationMs: number) => Promise<void> | void
     }
 
     constructor(options: {
       maxDurationMs?: number
-      onMaxDuration?: () => void
+      onMaxDuration?: (cutoffMs: number) => void
       onSegment: (path: string, durationMs: number) => Promise<void> | void
     }) {
       this.options = options
@@ -522,6 +522,26 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/prescription/index' })
   })
 
+  it('rejects a zero-segment recovery before file work or any video API call', async () => {
+    saveStorageSession({
+      ...pendingSession(0),
+      videoId: undefined
+    })
+
+    const page = renderPage(ShoulderPressUploadPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.getFileInfo).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.getVideoSessionStatus).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('没有可上传的训练片段，请重新训练')
+    expect(findButtonByText(page.element, '重新训练')).toBeTruthy()
+  })
+
   it('pauses on page hide and requires a manual continue after returning', async () => {
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
@@ -614,6 +634,84 @@ describe('shoulder press pages', () => {
     }
   })
 
+  it('keeps the first start and recording controls when persistence and compensating stop both fail', async () => {
+    const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
+    vi.useFakeTimers()
+    const firstStartMs = new Date('2026-08-06T01:32:14Z').valueOf()
+    vi.setSystemTime(firstStartMs)
+    const page = renderPage(ShoulderPressCameraPage)
+    try {
+      await flushPromises()
+      page.rerender()
+      findFirstByType(page.element, 'Camera').props.onInitDone?.()
+      page.rerender()
+
+      taroHarness.taroMock.setStorageSync.mockImplementationOnce(() => {
+        throw new Error('本地写入失败')
+      })
+      findButtonByText(page.element, '开始训练').props.onClick?.()
+      const recorder = recorderHarness.instances[0]
+      recorder.finish.mockRejectedValueOnce(new Error('录像停止失败，请稍后重试'))
+      await flushPromises()
+      page.rerender()
+
+      expect(recorder.finish).toHaveBeenCalledTimes(1)
+      expect(textContent(page.element)).toContain('正在录像')
+      expect(findButtonByText(page.element, '完成训练')).toBeTruthy()
+
+      vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
+      await recorder.options.onSegment('wxfile://temp/retained-start.mp4', 15_000)
+      await flushPromises()
+
+      expect(
+        (taroHarness.storage.get(
+          PENDING_SHOULDER_PRESS_SESSION_KEY
+        ) as PendingShoulderPressSession | undefined)?.trainingStartedAt
+      ).toBe('2026-08-06T09:32:14+08:00')
+    } finally {
+      page.unmount()
+      timezoneOffset.mockRestore()
+    }
+  })
+
+  it('returns to a retryable non-recording state when compensating stop succeeds', async () => {
+    const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-06T01:32:14Z'))
+    const page = renderPage(ShoulderPressCameraPage)
+    try {
+      await flushPromises()
+      page.rerender()
+      findFirstByType(page.element, 'Camera').props.onInitDone?.()
+      page.rerender()
+
+      taroHarness.taroMock.setStorageSync.mockImplementationOnce(() => {
+        throw new Error('本地写入失败')
+      })
+      findButtonByText(page.element, '开始训练').props.onClick?.()
+      await flushPromises()
+      page.rerender()
+
+      const recorder = recorderHarness.instances[0]
+      expect(recorder.finish).toHaveBeenCalledTimes(1)
+      expect(textContent(page.element)).not.toContain('正在录像')
+
+      vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
+      findButtonByText(page.element, '开始训练').props.onClick?.()
+      await flushPromises()
+
+      expect(recorder.start).toHaveBeenCalledTimes(2)
+      expect(
+        (taroHarness.storage.get(
+          PENDING_SHOULDER_PRESS_SESSION_KEY
+        ) as PendingShoulderPressSession | undefined)?.trainingStartedAt
+      ).toBe('2026-08-06T09:32:14+08:00')
+    } finally {
+      page.unmount()
+      timezoneOffset.mockRestore()
+    }
+  })
+
   it('persists end before recorder finalization and upload work', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
@@ -650,7 +748,48 @@ describe('shoulder press pages', () => {
     }
   })
 
-  it('persists end when the recorder reaches the automatic duration limit', async () => {
+  it('still stops and enters upload when the optional end timestamp cannot be persisted', async () => {
+    const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
+    vi.useFakeTimers()
+    const startAt = new Date('2026-08-06T01:32:14Z').valueOf()
+    vi.setSystemTime(startAt)
+    const page = renderPage(ShoulderPressCameraPage)
+    try {
+      await flushPromises()
+      page.rerender()
+      findFirstByType(page.element, 'Camera').props.onInitDone?.()
+      page.rerender()
+      findButtonByText(page.element, '开始训练').props.onClick?.()
+      await flushPromises()
+
+      await recorderHarness.instances[0].options.onSegment(
+        'wxfile://temp/completed-before-end-write.mp4',
+        30_000
+      )
+      await flushPromises(20)
+      vi.setSystemTime(startAt + 120_000)
+      page.rerender()
+      taroHarness.taroMock.setStorageSync.mockImplementationOnce(() => {
+        throw new Error('结束时间写入失败')
+      })
+
+      findButtonByText(page.element, '完成训练').props.onClick?.()
+      await flushPromises(20)
+
+      expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+      expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+        url: '/pages/shoulder-press/upload'
+      })
+      expect(
+        taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)
+      ).not.toHaveProperty('trainingEndedAt')
+    } finally {
+      page.unmount()
+      timezoneOffset.mockRestore()
+    }
+  })
+
+  it('persists the recorder cutoff even when automatic completion runs later', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-06T01:32:14Z'))
@@ -663,8 +802,9 @@ describe('shoulder press pages', () => {
       findButtonByText(page.element, '开始训练').props.onClick?.()
       await flushPromises()
 
-      vi.setSystemTime(new Date('2026-08-06T02:12:11Z'))
-      recorderHarness.instances[0].options.onMaxDuration?.()
+      const cutoffMs = new Date('2026-08-06T02:12:11Z').valueOf()
+      vi.setSystemTime(new Date('2026-08-06T02:20:00Z'))
+      recorderHarness.instances[0].options.onMaxDuration?.(cutoffMs)
       await flushPromises()
 
       expect(
@@ -1342,7 +1482,7 @@ describe('shoulder press pages', () => {
     recorder.hasFailedSegment.mockReturnValue(true)
     recorder.finish.mockRejectedValue(new Error('录像总时长超过限制，请重新录制'))
     vi.setSystemTime(startAt + 2_397_000)
-    recorder.options.onMaxDuration?.()
+    recorder.options.onMaxDuration?.(startAt + 2_397_000)
     await flushPromises()
     page.rerender()
 

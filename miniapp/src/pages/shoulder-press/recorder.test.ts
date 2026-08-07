@@ -149,6 +149,32 @@ describe('ShoulderPressRecorder', () => {
     ])
   })
 
+  it('keeps the active generation stoppable after the native stop fails', async () => {
+    const { camera, stopOptions } = fakeCamera()
+    let now = 1000
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      onSegment: vi.fn(async () => undefined)
+    })
+
+    await recorder.start()
+    now = 4000
+    const firstFinish = recorder.finish()
+    stopOptions[0].fail?.()
+
+    await expect(firstFinish).rejects.toThrow('录像停止失败，请稍后重试')
+
+    now = 5000
+    const retriedFinish = recorder.finish()
+    expect(camera.stopRecord).toHaveBeenCalledTimes(2)
+    stopOptions[1].success?.({ tempVideoPath: 'wxfile://store/retried-stop.mp4' })
+
+    await expect(retriedFinish).resolves.toEqual([
+      { savedFilePath: 'wxfile://store/retried-stop.mp4', durationMs: 4000 }
+    ])
+  })
+
   it('uses the remaining duration for generation 160 and never records past the upload contract', async () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
@@ -181,6 +207,43 @@ describe('ShoulderPressRecorder', () => {
     const segments = await finishPromise
     expect(segments).toHaveLength(160)
     expect(segments.reduce((total, segment) => total + segment.durationMs, 0)).toBe(2_397_000)
+    expect(onMaxDuration).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports the fixed timeout cutoff before the final segment delivery settles', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let now = 1000
+    let releaseSegment!: () => void
+    const segmentPending = new Promise<void>((resolve) => {
+      releaseSegment = resolve
+    })
+    const onMaxDuration = vi.fn()
+    const recorder = new ShoulderPressRecorder({
+      camera,
+      now: () => now,
+      maxDurationMs: 15_000,
+      onMaxDuration,
+      onSegment: async () => segmentPending
+    })
+
+    await recorder.start()
+    now = 16_000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
+
+    expect(onMaxDuration).toHaveBeenCalledWith(16_000)
+
+    let finishSettled = false
+    const finishPromise = recorder.finish().finally(() => {
+      finishSettled = true
+    })
+    await flushPromises()
+    expect(finishSettled).toBe(false)
+
+    now = 30_000
+    releaseSegment()
+    await expect(finishPromise).resolves.toEqual([
+      { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 15_000 }
+    ])
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
 
@@ -379,7 +442,7 @@ describe('ShoulderPressRecorder', () => {
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
     await flushPromises()
 
-    expect(onMaxDuration).not.toHaveBeenCalled()
+    expect(onMaxDuration).toHaveBeenCalledWith(30_000)
     await expect(recorder.finish()).rejects.toThrow('尾段保存失败')
     expect(recorder.hasFailedSegment()).toBe(true)
 

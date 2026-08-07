@@ -115,6 +115,25 @@ describe("TrainingVideoWearablePanel", () => {
     expect(within(rows[3]).getByText("3")).toBeInTheDocument();
   });
 
+  it("formats only the average column with one decimal place", () => {
+    render(<TrainingVideoWearablePanel data={responseWithoutOxygen} />);
+
+    const diastolicRow = screen
+      .getAllByRole("row")
+      .find((row) =>
+        within(row).queryByText("舒张压（mmHg）"),
+      );
+
+    expect(diastolicRow).toBeDefined();
+    expect(within(diastolicRow!).getByText("78.0")).toBeInTheDocument();
+    expect(within(diastolicRow!).getByText("82")).toBeInTheDocument();
+    expect(within(diastolicRow!).getByText("74")).toBeInTheDocument();
+    expect(within(diastolicRow!).getByText("3")).toBeInTheDocument();
+    expect(within(diastolicRow!).queryByText("82.0")).not.toBeInTheDocument();
+    expect(within(diastolicRow!).queryByText("74.0")).not.toBeInTheDocument();
+    expect(within(diastolicRow!).queryByText("3.0")).not.toBeInTheDocument();
+  });
+
   it("renders oxygen trend without a statistics table", () => {
     render(<TrainingVideoWearablePanel data={oxygenOnlyResponse} />);
 

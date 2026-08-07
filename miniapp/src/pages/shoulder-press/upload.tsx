@@ -348,6 +348,9 @@ export default function ShoulderPressUploadPage() {
     setPending(currentPending)
 
     try {
+      if (currentPending.segments.length === 0) {
+        throw new Error('没有可上传的训练片段，请重新训练')
+      }
       let session = await preparePendingSegments(currentPending)
       if (!session) return
       session = await ensureVideoSession(session)

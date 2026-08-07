@@ -425,8 +425,8 @@ export default function ShoulderPressCameraPage() {
       camera: context,
       now: () => Date.now(),
       maxDurationMs: SHOULDER_PRESS_RECORDING_STOP_MS,
-      onMaxDuration: () => {
-        void finishTraining(true)
+      onMaxDuration: (cutoffMs) => {
+        void finishTraining(true, cutoffMs)
       },
       onSegment: (tempFilePath, durationMs) => persistRecordedSegment(tempFilePath, durationMs),
       onPause: () => {
@@ -460,17 +460,51 @@ export default function ShoulderPressCameraPage() {
       await recorder.start()
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
-      const startedSession = markShoulderPressTrainingStarted(currentSession, Date.now())
-      saveCurrentSession(startedSession)
+      const startedAtMs = Date.now()
+      const startedSession = markShoulderPressTrainingStarted(currentSession, startedAtMs)
+      syncSession(startedSession)
+      try {
+        savePendingShoulderPressSession(Taro, startedSession)
+      } catch (persistenceError) {
+        try {
+          await recorder.finish()
+          recordingRef.current = false
+          pausedRef.current = false
+          recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
+          recordingStartedAtRef.current = 0
+          setRecording(false)
+          setPaused(false)
+        } catch (compensationError) {
+          if (recorder.hasFailedSegment()) {
+            tailSaveFailedRef.current = true
+            recordingRef.current = false
+            pausedRef.current = false
+            recordingStartedAtRef.current = 0
+            setTailSaveFailed(true)
+            setRecording(false)
+            setPaused(false)
+          } else {
+            recordingRef.current = true
+            pausedRef.current = false
+            recordingBaseDurationMsRef.current = startedSession.actualDurationMs
+            recordingStartedAtRef.current = startedAtMs
+            setTrainingScreenAwake(true)
+            setRecording(true)
+            setPaused(false)
+          }
+          throw compensationError
+        }
+        throw persistenceError
+      }
       recordingRef.current = true
       pausedRef.current = false
       recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
-      recordingStartedAtRef.current = Date.now()
+      recordingStartedAtRef.current = startedAtMs
       setTrainingScreenAwake(true)
       setRecording(true)
       setPaused(false)
     } catch (startError) {
-      setTrainingScreenAwake(false)
+      if (!recordingRef.current) setTrainingScreenAwake(false)
       setError(startError instanceof Error ? startError.message : '摄像头录像启动失败，请检查权限后重试')
     } finally {
       commandInFlightRef.current = false
@@ -511,7 +545,7 @@ export default function ShoulderPressCameraPage() {
     }
   }
 
-  async function finishTraining(force = false) {
+  async function finishTraining(force = false, endedAtMs = Date.now()) {
     if (finishInFlightRef.current || tailSaveFailedRef.current) return
     const elapsedMs = currentElapsedMs()
     const expectedSeconds = sessionRef.current?.expectedDurationSeconds ?? session?.expectedDurationSeconds ?? 1
@@ -530,8 +564,13 @@ export default function ShoulderPressCameraPage() {
     try {
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
-      const endedSession = markShoulderPressTrainingEnded(currentSession, Date.now())
-      saveCurrentSession(endedSession)
+      try {
+        const endedSession = markShoulderPressTrainingEnded(currentSession, endedAtMs)
+        syncSession(endedSession)
+        savePendingShoulderPressSession(Taro, endedSession)
+      } catch {
+        // 训练结束时间是可选审计字段，写入失败不能阻止录像停止与上传。
+      }
       if (recorderRef.current) {
         await recorderRef.current.finish()
       }

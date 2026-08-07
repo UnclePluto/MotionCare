@@ -150,6 +150,65 @@ describe('shoulder press segmented session helpers', () => {
     }))).toBeNull()
   })
 
+  it.each([
+    ['a non-existent calendar date', '2026-02-29T00:01:02+08:00'],
+    ['an out-of-range hour', '2026-08-06T24:01:02+08:00'],
+    ['an out-of-range minute', '2026-08-06T00:60:02+08:00'],
+    ['an out-of-range second', '2026-08-06T00:01:60+08:00'],
+    ['an out-of-range offset hour', '2026-08-06T00:01:02+24:00'],
+    ['an out-of-range offset minute', '2026-08-06T00:01:02+08:60']
+  ])('rejects %s during cold recovery', (_caseName, trainingStartedAt) => {
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-08-06',
+      trainingStartedAt,
+      expectedDurationSeconds: 180,
+      actualDurationMs: 0,
+      segments: [],
+      finalized: false,
+      createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
+    }))).toBeNull()
+  })
+
+  it.each([
+    ['the same instant', '2026-08-05T16:00:00Z'],
+    ['an earlier instant', '2026-08-05T15:59:59Z']
+  ])('rejects %s as the cold-recovery end', (_caseName, trainingEndedAt) => {
+    expect(loadPendingShoulderPressSession(memoryStorage({
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      actionId: 42,
+      trainingDate: '2026-08-06',
+      trainingStartedAt: '2026-08-06T00:00:00+08:00',
+      trainingEndedAt,
+      expectedDurationSeconds: 180,
+      actualDurationMs: 0,
+      segments: [],
+      finalized: false,
+      createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
+    }))).toBeNull()
+  })
+
+  it('rejects cold recovery when the platform timestamp parser is non-finite', () => {
+    const parse = vi.spyOn(Date, 'parse').mockReturnValue(Number.NaN)
+    try {
+      expect(loadPendingShoulderPressSession(memoryStorage({
+        clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+        actionId: 42,
+        trainingDate: '2026-08-06',
+        trainingStartedAt: '2026-08-06T00:00:00+08:00',
+        trainingEndedAt: '2026-08-06T00:01:00+08:00',
+        expectedDurationSeconds: 180,
+        actualDurationMs: 0,
+        segments: [],
+        finalized: false,
+        createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
+      }))).toBeNull()
+    } finally {
+      parse.mockRestore()
+    }
+  })
+
   it('persists multiple saved segments and converts getVideoInfo kB to bytes', () => {
     const session = createPendingShoulderPressSession({
       actionId: 42,
