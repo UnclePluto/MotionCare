@@ -46,8 +46,10 @@ afterAll(() => {
 
 const responseWithoutOxygen: TrainingVideoWearableWindowResponse = {
   available: true,
-  training_started_at: "2026-08-06T01:32:14Z",
-  training_ended_at: "2026-08-06T01:41:27Z",
+  window_started_at: "2026-08-06T01:32:14Z",
+  window_ended_at: "2026-08-06T01:40:14Z",
+  expected_duration_seconds: 180,
+  buffer_seconds: 300,
   metrics: {
     heart_rate: {
       points: [{ measured_at: "2026-08-06T01:33:00Z", value: 86 }],
@@ -72,8 +74,10 @@ const responseWithoutOxygen: TrainingVideoWearableWindowResponse = {
 
 const oxygenOnlyResponse: TrainingVideoWearableWindowResponse = {
   available: true,
-  training_started_at: "2026-08-06T01:32:14Z",
-  training_ended_at: "2026-08-06T01:41:27Z",
+  window_started_at: "2026-08-06T01:32:14Z",
+  window_ended_at: "2026-08-06T01:40:14Z",
+  expected_duration_seconds: 180,
+  buffer_seconds: 300,
   metrics: {
     blood_oxygen: {
       points: [{ measured_at: "2026-08-06T01:35:00Z", value: 97 }],
@@ -149,8 +153,10 @@ describe("TrainingVideoWearablePanel", () => {
       <TrainingVideoWearablePanel
         data={{
           available: true,
-          training_started_at: "2026-08-06T01:32:14Z",
-          training_ended_at: "2026-08-06T01:41:27Z",
+          window_started_at: "2026-08-06T01:32:14Z",
+          window_ended_at: "2026-08-06T01:40:14Z",
+          expected_duration_seconds: 180,
+          buffer_seconds: 300,
           metrics: {},
         }}
       />,
@@ -164,8 +170,10 @@ describe("TrainingVideoWearablePanel", () => {
       <TrainingVideoWearablePanel
         data={{
           available: true,
-          training_started_at: "2026-08-06T01:32:14Z",
-          training_ended_at: "2026-08-06T01:41:27Z",
+          window_started_at: "2026-08-06T01:32:14Z",
+          window_ended_at: "2026-08-06T01:40:14Z",
+          expected_duration_seconds: 180,
+          buffer_seconds: 300,
           metrics: {
             heart_rate: {
               points: [],

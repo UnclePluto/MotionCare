@@ -342,8 +342,10 @@ function cloneTrackingDetail(): TrackingDetail {
 
 const wearableWindowResponse: TrainingVideoWearableWindowResponse = {
   available: true,
-  training_started_at: "2026-08-06T01:32:14Z",
-  training_ended_at: "2026-08-06T01:41:27Z",
+  window_started_at: "2026-08-06T01:32:14Z",
+  window_ended_at: "2026-08-06T01:40:14Z",
+  expected_duration_seconds: 180,
+  buffer_seconds: 300,
   metrics: {
     heart_rate: {
       points: [{ measured_at: "2026-08-06T01:33:00Z", value: 86 }],
@@ -615,8 +617,12 @@ describe("TrainingTrackingDetailPage", () => {
     expect(loadSpy).toHaveBeenCalled();
   });
 
-  it("打开视频抽屉后查询穿戴窗口并按上海时区显示同日训练时段", async () => {
-    mockGet.mockImplementation((url: string) => videoDrawerGet(url));
+  it("实际结束时间缺失时仍查询固定穿戴窗口且不展示实际训练时段", async () => {
+    const detailWithoutTrainingEnd = cloneTrackingDetail();
+    detailWithoutTrainingEnd.recent_records[0].training_ended_at = null;
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(url, wearableWindowResponse, detailWithoutTrainingEnd),
+    );
 
     renderAt("/training-tracking/patients/201");
 
@@ -632,30 +638,8 @@ describe("TrainingTrackingDetailPage", () => {
         "/training/videos/8101/wearable-window/",
       );
     });
-    expect(screen.getByText("训练时段")).toBeInTheDocument();
-    expect(screen.getByText("09:32:14–09:41:27")).toBeInTheDocument();
     expect(await screen.findByText("训练时段穿戴趋势")).toBeInTheDocument();
-  });
-
-  it("跨日训练窗口显示两端月日和上海时区时间", async () => {
-    const overnightDetail = cloneTrackingDetail();
-    overnightDetail.recent_records[0].training_started_at =
-      "2026-08-06T15:58:00Z";
-    overnightDetail.recent_records[0].training_ended_at =
-      "2026-08-06T16:05:00Z";
-    mockGet.mockImplementation((url: string) =>
-      videoDrawerGet(url, wearableWindowResponse, overnightDetail),
-    );
-
-    renderAt("/training-tracking/patients/201");
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "播放训练视频" }),
-    );
-
-    expect(
-      screen.getByText("08-06 23:58:00–08-07 00:05:00"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
   });
 
   it("穿戴窗口不可用时完全隐藏穿戴区", async () => {
@@ -682,8 +666,14 @@ describe("TrainingTrackingDetailPage", () => {
   });
 
   it("穿戴窗口请求失败时保留视频和动作分析且不展示错误", async () => {
+    const detailWithoutTrainingEnd = cloneTrackingDetail();
+    detailWithoutTrainingEnd.recent_records[0].training_ended_at = null;
     mockGet.mockImplementation((url: string) =>
-      videoDrawerGet(url, new Error("wearable failed")),
+      videoDrawerGet(
+        url,
+        new Error("wearable failed"),
+        detailWithoutTrainingEnd,
+      ),
     );
 
     const { queryClient } = renderAt("/training-tracking/patients/201");
@@ -759,44 +749,44 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["开始时间", null, "2026-08-06T01:41:27Z"],
-    ["结束时间", "2026-08-06T01:32:14Z", null],
-  ] as const)(
-    "旧视频仅缺%s时不查询也不显示训练时段",
-    async (_missingField, startedAt, endedAt) => {
-      const detailWithoutTrainingWindow = cloneTrackingDetail();
-      detailWithoutTrainingWindow.recent_records[0].training_started_at =
-        startedAt;
-      detailWithoutTrainingWindow.recent_records[0].training_ended_at =
-        endedAt;
-      mockGet.mockImplementation((url: string) =>
-        videoDrawerGet(
-          url,
-          wearableWindowResponse,
-          detailWithoutTrainingWindow,
-        ),
-      );
+  it("实际开始时间缺失时仍查询且以后端不可用响应隐藏穿戴区", async () => {
+    const detailWithoutTrainingStart = cloneTrackingDetail();
+    detailWithoutTrainingStart.recent_records[0].training_started_at = null;
+    mockGet.mockImplementation((url: string) =>
+      videoDrawerGet(
+        url,
+        { available: false },
+        detailWithoutTrainingStart,
+      ),
+    );
 
-      renderAt("/training-tracking/patients/201");
-      fireEvent.click(
-        await screen.findByRole("button", { name: "播放训练视频" }),
-      );
+    const { queryClient } = renderAt("/training-tracking/patients/201");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "播放训练视频" }),
+    );
 
-      await screen.findByLabelText("训练视频播放器");
-      expect(mockGet).not.toHaveBeenCalledWith(
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith(
         "/training/videos/8101/wearable-window/",
       );
-      expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
-    },
-  );
+    });
+    await waitForWearableQueryToSettle(queryClient, "success");
+    expect(
+      await screen.findByLabelText("训练视频播放器"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("动作分析")).toBeInTheDocument();
+    expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
+    expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
+  });
 
   it("三个穿戴指标都为空时完全隐藏穿戴区", async () => {
     mockGet.mockImplementation((url: string) =>
       videoDrawerGet(url, {
         available: true,
-        training_started_at: "2026-08-06T01:32:14Z",
-        training_ended_at: "2026-08-06T01:41:27Z",
+        window_started_at: "2026-08-06T01:32:14Z",
+        window_ended_at: "2026-08-06T01:40:14Z",
+        expected_duration_seconds: 180,
+        buffer_seconds: 300,
         metrics: {
           heart_rate: {
             points: [],

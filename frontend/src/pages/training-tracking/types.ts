@@ -112,8 +112,10 @@ export type TrainingVideoWearableWindowResponse =
   | { available: false }
   | {
       available: true;
-      training_started_at: string;
-      training_ended_at: string;
+      window_started_at: string;
+      window_ended_at: string;
+      expected_duration_seconds: number;
+      buffer_seconds: number;
       metrics: {
         heart_rate?: {
           points: TrainingVideoHeartRatePoint[];

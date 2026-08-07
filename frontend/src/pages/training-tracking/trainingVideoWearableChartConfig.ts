@@ -118,8 +118,8 @@ export function buildTrainingVideoWearableChartConfig(
     scale: {
       x: {
         type: "time",
-        domainMin: new Date(response.training_started_at).valueOf(),
-        domainMax: new Date(response.training_ended_at).valueOf(),
+        domainMin: new Date(response.window_started_at).valueOf(),
+        domainMax: new Date(response.window_ended_at).valueOf(),
       },
     },
     axis: {

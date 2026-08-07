@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { apiClient } from "../../api/client";
-import { formatShanghaiDate, inShanghai } from "../../utils/shanghaiTime";
+import { formatShanghaiDate } from "../../utils/shanghaiTime";
 import { WearableHealthTab } from "../wearables/WearableHealthTab";
 import { TrainingVideoWearablePanel } from "./TrainingVideoWearablePanel";
 import type {
@@ -129,19 +129,6 @@ function formatTrendDateLabel(value: string) {
   const match = value.match(/^\d{4}-(\d{2})-(\d{2})$/);
   if (!match) return value;
   return `${match[1]}-${match[2]}`;
-}
-
-function formatTrainingWindow(
-  startedAt: string | null,
-  endedAt: string | null,
-): string | null {
-  if (!startedAt || !endedAt) return null;
-  const start = inShanghai(startedAt);
-  const end = inShanghai(endedAt);
-  if (start.isSame(end, "day")) {
-    return `${start.format("HH:mm:ss")}–${end.format("HH:mm:ss")}`;
-  }
-  return `${start.format("MM-DD HH:mm:ss")}–${end.format("MM-DD HH:mm:ss")}`;
 }
 
 function errorMessage(error: unknown, fallback = "加载训练追踪数据失败") {
@@ -291,13 +278,6 @@ export function TrainingTrackingDetailPage() {
   const drawerOpen = videoDrawerRecord !== null;
   const selectedVideoId = videoDrawerRecord?.video_id ?? null;
   const selectedVideoSupportsAnalysis = videoDrawerRecord ? isShoulderPressRecord(videoDrawerRecord) : false;
-  const selectedVideoHasTrainingWindow =
-    Boolean(videoDrawerRecord?.training_started_at) &&
-    Boolean(videoDrawerRecord?.training_ended_at);
-  const trainingWindowLabel = formatTrainingWindow(
-    videoDrawerRecord?.training_started_at ?? null,
-    videoDrawerRecord?.training_ended_at ?? null,
-  );
 
   useEffect(() => {
     setSelectedProjectPatient(null);
@@ -352,10 +332,7 @@ export function TrainingTrackingDetailPage() {
       );
       return response.data;
     },
-    enabled:
-      drawerOpen &&
-      selectedVideoId != null &&
-      selectedVideoHasTrainingWindow,
+    enabled: drawerOpen && selectedVideoId != null,
     staleTime: 0,
     refetchOnMount: "always",
   });
@@ -792,15 +769,6 @@ export function TrainingTrackingDetailPage() {
               items={[
                 { key: "date", label: "训练日期", children: videoDrawerRecord.training_date },
                 { key: "action", label: "动作", children: videoDrawerRecord.action_name },
-                ...(trainingWindowLabel
-                  ? [
-                      {
-                        key: "trainingWindow",
-                        label: "训练时段",
-                        children: trainingWindowLabel,
-                      },
-                    ]
-                  : []),
                 {
                   key: "videoStatus",
                   label: "视频状态",

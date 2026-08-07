@@ -7,8 +7,10 @@ import {
 
 const wearableResponse: AvailableTrainingVideoWearableWindow = {
   available: true,
-  training_started_at: "2026-08-06T01:32:14Z",
-  training_ended_at: "2026-08-06T01:41:27Z",
+  window_started_at: "2026-08-06T01:32:14Z",
+  window_ended_at: "2026-08-06T01:40:14Z",
+  expected_duration_seconds: 180,
+  buffer_seconds: 300,
   metrics: {
     heart_rate: {
       points: [{ measured_at: "2026-08-06T01:33:00Z", value: 86 }],
@@ -35,7 +37,7 @@ const wearableResponse: AvailableTrainingVideoWearableWindow = {
 };
 
 describe("buildTrainingVideoWearableChartConfig", () => {
-  it("builds one heart-rate series on the exact training time domain", () => {
+  it("builds one heart-rate series on the fixed health observation window", () => {
     const config = buildTrainingVideoWearableChartConfig(
       "heart_rate",
       wearableResponse,
@@ -53,7 +55,7 @@ describe("buildTrainingVideoWearableChartConfig", () => {
       Date.parse("2026-08-06T01:32:14Z"),
     );
     expect(config.scale?.x?.domainMax).toBe(
-      Date.parse("2026-08-06T01:41:27Z"),
+      Date.parse("2026-08-06T01:40:14Z"),
     );
     expect(config.axis?.y?.title).toBe("次/分");
   });
