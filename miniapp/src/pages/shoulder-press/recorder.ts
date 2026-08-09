@@ -32,7 +32,7 @@ type RecordingGeneration = {
 }
 
 const MIN_PAUSE_SEGMENT_MS = 2000
-const TIMEOUT_SEGMENT_MS = 15000
+export const SHOULDER_PRESS_SEGMENT_DURATION_MS = 5_000
 
 export class ShoulderPressRecorder {
   private readonly camera: CameraContext
@@ -149,7 +149,7 @@ export class ShoulderPressRecorder {
       return Promise.resolve()
     }
     const timeoutSeconds = Math.min(
-      TIMEOUT_SEGMENT_MS / 1000,
+      SHOULDER_PRESS_SEGMENT_DURATION_MS / 1000,
       Math.floor(remainingMs / 1000)
     )
     const generation: RecordingGeneration = {
@@ -206,7 +206,7 @@ export class ShoulderPressRecorder {
       cutoffMs
     )
     this.recordedDurationMs += durationMs
-    const reachedLimit = generation.requestedDurationMs < TIMEOUT_SEGMENT_MS ||
+    const reachedLimit = generation.requestedDurationMs < SHOULDER_PRESS_SEGMENT_DURATION_MS ||
       this.recordedDurationMs >= this.maxDurationMs
     const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
 
