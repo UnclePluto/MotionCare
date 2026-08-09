@@ -21,6 +21,7 @@ export type ShoulderPressTrainingOverlayProps = {
   videoUrl: string | null
   elapsedMs: number
   expectedDurationSeconds: number
+  started: boolean
 }
 
 export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlayProps) {
@@ -43,30 +44,41 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
     }))
   }
 
+  const startSwipe = (event: unknown) => {
+    const point = touchPointFromEvent(event, 'touches')
+    if (point) touchStartRef.current = point
+  }
+
+  const endSwipe = (event: unknown) => {
+    const point = touchPointFromEvent(event, 'changedTouches')
+    if (point) finishSwipe(point)
+  }
+
+  const hiddenClassName = visibility === 'hidden'
+    ? ' shoulder-training-preview-hidden'
+    : ''
+
   return (
     <View className='shoulder-training-overlay'>
-      <View className='shoulder-training-timer'>
-        <View><Text>已训练</Text><Text>{formatShoulderPressTimer(props.elapsedMs)}</Text></View>
-        <View><Text>剩余</Text><Text>{formatShoulderPressTimer(remainingSeconds * 1000)}</Text></View>
-      </View>
-      {props.videoUrl && visibility === 'visible' && !videoError ? (
+      {props.started ? (
+        <View className='shoulder-training-timer'>
+          <View><Text>已训练</Text><Text>{formatShoulderPressTimer(props.elapsedMs)}</Text></View>
+          <View><Text>剩余</Text><Text>{formatShoulderPressTimer(remainingSeconds * 1000)}</Text></View>
+        </View>
+      ) : null}
+      {props.videoUrl && !videoError ? (
         <Video
-          className='shoulder-training-preview'
+          className={`shoulder-training-preview${hiddenClassName}`}
           src={props.videoUrl}
           autoplay
           loop
           muted
           controls={false}
+          enableProgressGesture={false}
           objectFit='contain'
           onError={() => setVideoError(true)}
-          onTouchStart={(event) => {
-            const point = touchPointFromEvent(event, 'touches')
-            if (point) touchStartRef.current = point
-          }}
-          onTouchEnd={(event) => {
-            const point = touchPointFromEvent(event, 'changedTouches')
-            if (point) finishSwipe(point)
-          }}
+          onTouchStart={visibility === 'visible' ? startSwipe : undefined}
+          onTouchEnd={visibility === 'visible' ? endSwipe : undefined}
         />
       ) : null}
       {props.videoUrl && visibility === 'hidden' ? (
@@ -84,17 +96,11 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
           <Text>←</Text><Text>向左滑恢复示范</Text>
         </View>
       ) : null}
-      {videoError && visibility === 'visible' ? (
+      {videoError ? (
         <View
-          className='shoulder-training-preview-error'
-          onTouchStart={(event) => {
-            const point = touchPointFromEvent(event, 'touches')
-            if (point) touchStartRef.current = point
-          }}
-          onTouchEnd={(event) => {
-            const point = touchPointFromEvent(event, 'changedTouches')
-            if (point) finishSwipe(point)
-          }}
+          className={`shoulder-training-preview-error${hiddenClassName}`}
+          onTouchStart={visibility === 'visible' ? startSwipe : undefined}
+          onTouchEnd={visibility === 'visible' ? endSwipe : undefined}
         >
           <Text>示范视频暂时无法播放</Text>
         </View>

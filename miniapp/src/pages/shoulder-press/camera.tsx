@@ -532,8 +532,14 @@ export default function ShoulderPressCameraPage() {
     hidePauseRequestedRef.current = false
     commandInFlightRef.current = true
     setProcessing(true)
+    let shouldFinishAfterPause = false
     try {
       await recorderRef.current.pause()
+      const pausedSession = sessionRef.current
+      shouldFinishAfterPause = Boolean(pausedSession) && shouldAutoFinishShoulderPressTraining({
+        actualDurationMs: pausedSession?.actualDurationMs ?? 0,
+        expectedDurationSeconds: pausedSession?.expectedDurationSeconds ?? 1
+      })
     } catch (pauseError) {
       setError(pauseError instanceof Error ? pauseError.message : '暂停录像失败，请稍后重试')
     } finally {
@@ -546,6 +552,9 @@ export default function ShoulderPressCameraPage() {
       setPaused(true)
       commandInFlightRef.current = false
       setProcessing(false)
+    }
+    if (shouldFinishAfterPause) {
+      await finishTraining()
     }
   }
 
@@ -624,6 +633,14 @@ export default function ShoulderPressCameraPage() {
         finishAttemptGeneration !== finishAttemptGenerationRef.current
       ) return
       await finishTraining()
+    } catch {
+      if (
+        mountedRef.current &&
+        !finishCompletedRef.current &&
+        finishAttemptGeneration === finishAttemptGenerationRef.current
+      ) {
+        setError('结束确认失败，请继续训练或稍后重试')
+      }
     } finally {
       finishPromptInFlightRef.current = false
     }
@@ -817,6 +834,7 @@ export default function ShoulderPressCameraPage() {
               videoUrl={action?.video_url ?? null}
               elapsedMs={elapsedMs}
               expectedDurationSeconds={session?.expectedDurationSeconds ?? 1}
+              started={Boolean(session?.trainingStartedAt)}
             />
           </View>
         </View>
@@ -839,7 +857,9 @@ export default function ShoulderPressCameraPage() {
 
       {!loaded ? <Text className='muted loading-text'>正在加载当前动作</Text> : null}
       {remainingSeconds > 0 && session?.segments.length ? (
-        <Text className='recording-status'>还需约 {remainingSeconds} 秒，可完成本次训练。</Text>
+        <Text className='recording-status'>
+          处方建议剩余约 {remainingSeconds} 秒，可按需提前结束训练。
+        </Text>
       ) : null}
       {error ? <Text className='error'>{error}</Text> : null}
 

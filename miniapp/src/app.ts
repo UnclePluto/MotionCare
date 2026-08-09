@@ -3,12 +3,12 @@ import Taro, { useDidShow } from '@tarojs/taro'
 
 import './app.scss'
 import { resetRetryWindowForLaunch, startPendingGameUploadRetryLoop } from './pages/game-session/retryUpload'
-import { reLaunchPendingShoulderPressUploadIfNeeded } from './pages/shoulder-press/pageState'
+import { handlePendingShoulderPressUploadOnAppShow } from './pages/shoulder-press/pageState'
 
 function App({ children }: PropsWithChildren<any>) {
   useDidShow(() => {
-    void reLaunchPendingShoulderPressUploadIfNeeded(Taro).then((redirected) => {
-      if (redirected) return
+    void handlePendingShoulderPressUploadOnAppShow(Taro).then((handled) => {
+      if (handled) return
       resetRetryWindowForLaunch(Taro)
       startPendingGameUploadRetryLoop(Taro)
     })

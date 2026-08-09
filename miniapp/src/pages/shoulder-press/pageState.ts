@@ -186,6 +186,12 @@ export function isShoulderPressUploadRoute(route: string | undefined | null): bo
   return normalized.split('?')[0] === buildShoulderPressUploadUrl()
 }
 
+export function isShoulderPressCameraRoute(route: string | undefined | null): boolean {
+  if (!route) return false
+  const normalized = route.startsWith('/') ? route : `/${route}`
+  return normalized.split('?')[0] === '/pages/shoulder-press/camera'
+}
+
 function currentRoute(taro: ShoulderPressNavigator): string {
   try {
     const pages = taro.getCurrentPages?.() ?? []
@@ -195,12 +201,23 @@ function currentRoute(taro: ShoulderPressNavigator): string {
   }
 }
 
+function isShoulderPressRecoveryRoute(
+  route: string,
+  preserveActiveCameraRoute: boolean
+): boolean {
+  return isShoulderPressUploadRoute(route) || (
+    preserveActiveCameraRoute && isShoulderPressCameraRoute(route)
+  )
+}
+
 export async function reLaunchPendingShoulderPressUploadIfNeeded(
-  taro: ShoulderPressNavigator
+  taro: ShoulderPressNavigator,
+  options: { preserveActiveCameraRoute?: boolean } = {}
 ): Promise<boolean> {
   const pending = loadPendingShoulderPressSession(taro)
   if (!pending || pending.finalized) return false
-  if (isShoulderPressUploadRoute(currentRoute(taro))) return true
+  const preserveActiveCameraRoute = options.preserveActiveCameraRoute ?? false
+  if (isShoulderPressRecoveryRoute(currentRoute(taro), preserveActiveCameraRoute)) return true
 
   try {
     await waitForShoulderPressBackgroundUploadSettled()
@@ -210,8 +227,16 @@ export async function reLaunchPendingShoulderPressUploadIfNeeded(
 
   const latest = loadPendingShoulderPressSession(taro)
   if (!latest || latest.finalized) return false
-  if (isShoulderPressUploadRoute(currentRoute(taro))) return true
+  if (isShoulderPressRecoveryRoute(currentRoute(taro), preserveActiveCameraRoute)) return true
 
   await taro.reLaunch({ url: buildShoulderPressUploadUrl() })
   return true
+}
+
+export async function handlePendingShoulderPressUploadOnAppShow(
+  taro: ShoulderPressNavigator
+): Promise<boolean> {
+  return reLaunchPendingShoulderPressUploadIfNeeded(taro, {
+    preserveActiveCameraRoute: true
+  })
 }

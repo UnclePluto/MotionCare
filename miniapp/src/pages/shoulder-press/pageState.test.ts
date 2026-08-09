@@ -97,6 +97,18 @@ describe('shoulder press page state', () => {
     expect(nextShoulderPressPreviewVisibility({
       visibility: 'visible', deltaX: 45, deltaY: 60
     })).toBe('visible')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'visible', deltaX: 40, deltaY: 0
+    })).toBe('hidden')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'hidden', deltaX: -40, deltaY: 0
+    })).toBe('visible')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'visible', deltaX: 39, deltaY: 0
+    })).toBe('visible')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'visible', deltaX: 40, deltaY: 40
+    })).toBe('visible')
   })
 
   it('computes effective duration from the continuous recording anchor without double counting saved segments', () => {

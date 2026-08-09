@@ -1,5 +1,11 @@
 # 微信小程序肩部推举动作预览与录像画中画 Implementation Plan
 
+> 执行记录（2026-08-09, codex）：Task 1 已落地于 commit `efed6af`。
+> 执行记录（2026-08-09, codex）：Task 2 已落地于 commit `40bbd04`。
+> 执行记录（2026-08-09, codex）：Task 3 已落地于 commit `3ad015d`。
+> 执行记录（2026-08-09, codex）：Task 4 已落地于 commit `d69cdf6`，结束竞态修复见 `d54f78a`、`e070be9`。
+> 修订（2026-08-09, codex）：完成最终审查自动化修复；微信开发者工具、iOS 与 Android 人工门禁仍待验收。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在微信小程序肩部推举流程中增加独立静音循环预览页，并在录像页提供左侧固定计时、右侧可滑动隐藏的示范视频，以及按处方时长自动结束的统一完成流程。
@@ -19,6 +25,9 @@
 - 患者可提前结束，必须二次确认；手动、自动和 40 分钟安全截止只允许执行一次结束流程。
 - 保留 15 秒低分辨率原始分段、后台单并发上传、尾段失败恢复、强制上传页和固定健康观察窗口。
 - 正常手动或自动结束尽力保存手机端 `training_ended_at`；意外退出仍允许缺失，且该字段不参与健康图表查询。
+- App 前台恢复只豁免当前活动的 camera 路径；camera 页面自身 bootstrap 仍须把冷启动残留会话导向强制上传页。
+- 暂停尾段落盘后必须用最新有效录像时长再次判断自动结束，并复用同一幂等结束流程。
+- 录像画中画隐藏时保留原生 `Video` 节点，以位移/透明度 class 完成动画并禁用触摸；同时关闭原生进度手势。
 - 微信原生 `Camera` 与 `Video` 同层渲染必须在微信开发者工具、iOS 和 Android 真机验收。
 
 ---
@@ -58,7 +67,7 @@
 - Consumes: `resolveShoulderPressAction(prescription, actionId)`、`buildShoulderPressCameraUrl(actionId)`、`CurrentPrescription.actions[].video_url`。
 - Produces: `buildShoulderPressPreviewUrl(actionId: number): string`；页面路由 `/pages/shoulder-press/preview?actionId=<id>`；默认导出的 `ShoulderPressPreviewPage`。
 
-- [ ] **Step 1: 写入失败的路由与页面行为测试**
+- [x] **Step 1: 写入失败的路由与页面行为测试**
 
 在 `session.test.ts` 的地址构造用例中加入：
 
@@ -130,7 +139,7 @@ it('hides the preview entry when the action has no video url', async () => {
 })
 ```
 
-- [ ] **Step 2: 运行目标测试，确认因缺少路由和预览页而失败**
+- [x] **Step 2: 运行目标测试，确认因缺少路由和预览页而失败**
 
 Run:
 
@@ -141,7 +150,7 @@ npm test -- src/pages/shoulder-press/session.test.ts src/pages/shoulder-press/pa
 
 Expected: FAIL，至少包含 `buildShoulderPressPreviewUrl is not a function` 或找不到“动作预览”。
 
-- [ ] **Step 3: 实现地址、双入口和预览页**
+- [x] **Step 3: 实现地址、双入口和预览页**
 
 在 `session.ts` 与 `app.config.ts` 增加：
 
@@ -155,7 +164,8 @@ export function buildShoulderPressPreviewUrl(actionId: number): string {
 'pages/shoulder-press/preview',
 ```
 
-把动作介绍页内嵌 `Video` 和 `videoError` 状态移除，动作有效时渲染：
+把动作介绍页内嵌 `Video` 和 `videoError` 状态移除；`action_instruction` 独立展示，不受
+`video_url` 有无影响。动作有效时渲染：
 
 ```tsx
 <View className='button-row shoulder-guide-actions'>
@@ -297,7 +307,7 @@ export default definePageConfig({
 }
 ```
 
-- [ ] **Step 4: 运行目标测试和开发构建**
+- [x] **Step 4: 运行目标测试和开发构建**
 
 Run:
 
@@ -309,7 +319,7 @@ npm run build:weapp
 
 Expected: 两个测试文件全部 PASS，微信小程序开发构建成功且新页面进入 `dist/app.json`。
 
-- [ ] **Step 5: 提交独立预览流程**
+- [x] **Step 5: 提交独立预览流程**
 
 ```bash
 git add miniapp/src/app.config.ts miniapp/src/app.scss \
@@ -334,7 +344,7 @@ git commit -m "feat(miniapp): 增加肩部推举独立动作预览"
 - Consumes: `SHOULDER_PRESS_RECORDING_STOP_MS = 2_397_000` 与会话的 `expectedDurationSeconds`。
 - Produces: `remainingShoulderPressSeconds(actualDurationMs, expectedDurationSeconds): number`；`shouldAutoFinishShoulderPressTraining({ actualDurationMs, expectedDurationSeconds }): boolean`；`nextShoulderPressPreviewVisibility(input): 'visible' | 'hidden'`。
 
-- [ ] **Step 1: 写入倒计时、处方时长和手势失败测试**
+- [x] **Step 1: 写入倒计时、处方时长和手势失败测试**
 
 在 `pageState.test.ts` 增加：
 
@@ -377,7 +387,7 @@ it('only changes preview visibility for a dominant horizontal swipe', () => {
 })
 ```
 
-- [ ] **Step 2: 运行目标测试，确认新接口尚不存在或旧自动结束语义不符**
+- [x] **Step 2: 运行目标测试，确认新接口尚不存在或旧自动结束语义不符**
 
 Run:
 
@@ -388,7 +398,7 @@ npm test -- src/pages/shoulder-press/pageState.test.ts
 
 Expected: FAIL，原因是缺少倒计时/手势函数，且现有自动结束函数只判断 40 分钟安全截止。
 
-- [ ] **Step 3: 实现最小纯状态函数**
+- [x] **Step 3: 实现最小纯状态函数**
 
 在 `pageState.ts` 中替换旧自动结束签名并加入：
 
@@ -432,7 +442,7 @@ export function nextShoulderPressPreviewVisibility(input: {
 
 更新旧的 `shouldAutoFinishShoulderPressTraining` 测试调用为对象参数，保留 40 分钟安全边界断言。
 
-- [ ] **Step 4: 运行纯状态测试**
+- [x] **Step 4: 运行纯状态测试**
 
 Run:
 
@@ -443,7 +453,7 @@ npm test -- src/pages/shoulder-press/pageState.test.ts
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交纯状态规则**
+- [x] **Step 5: 提交纯状态规则**
 
 ```bash
 git add miniapp/src/pages/shoulder-press/pageState.ts \
@@ -463,9 +473,9 @@ git commit -m "feat(miniapp): 增加肩部推举倒计时与画中画手势规�
 
 **Interfaces:**
 - Consumes: `nextShoulderPressPreviewVisibility()`、`remainingShoulderPressSeconds()`、当前动作 `video_url`、录像页 `elapsedMs` 和 `expectedDurationSeconds`。
-- Produces: `ShoulderPressTrainingOverlay(props)`，其中 props 为 `{ videoUrl: string | null; elapsedMs: number; expectedDurationSeconds: number }`；组件内部独占 `visible/hidden` 与播放失败状态。
+- Produces: `ShoulderPressTrainingOverlay(props)`，其中 props 为 `{ videoUrl: string | null; elapsedMs: number; expectedDurationSeconds: number; started: boolean }`；组件内部独占 `visible/hidden` 与播放失败状态。
 
-- [ ] **Step 1: 写入画中画渲染、固定计时、滑动和失败降级测试**
+- [x] **Step 1: 写入画中画渲染、固定计时、滑动和失败降级测试**
 
 在 `pages.test.tsx` 导入 `ShoulderPressTrainingOverlay`，增加按现有 harness 直接渲染组件的测试：
 
@@ -512,7 +522,7 @@ it('degrades preview playback without changing timer content', () => {
 })
 ```
 
-- [ ] **Step 2: 运行页面测试，确认组件不存在**
+- [x] **Step 2: 运行页面测试，确认组件不存在**
 
 Run:
 
@@ -523,7 +533,7 @@ npm test -- src/pages/shoulder-press/pages.test.tsx
 
 Expected: FAIL，原因是无法导入 `trainingOverlay.tsx`。
 
-- [ ] **Step 3: 实现画中画组件并嵌入相机容器**
+- [x] **Step 3: 实现画中画组件并嵌入相机容器**
 
 `trainingOverlay.tsx` 必须维护触摸起点与组件本地显示状态，核心接口和行为为：
 
@@ -534,6 +544,7 @@ export type ShoulderPressTrainingOverlayProps = {
   videoUrl: string | null
   elapsedMs: number
   expectedDurationSeconds: number
+  started: boolean
 }
 
 export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlayProps) {
@@ -558,28 +569,33 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
 
   return (
     <View className='shoulder-training-overlay'>
-      <View className='shoulder-training-timer'>
-        <View><Text>已训练</Text><Text>{formatShoulderPressTimer(props.elapsedMs)}</Text></View>
-        <View><Text>剩余</Text><Text>{formatShoulderPressTimer(remainingSeconds * 1000)}</Text></View>
-      </View>
-      {props.videoUrl && visibility === 'visible' && !videoError ? (
+      {props.started ? (
+        <View className='shoulder-training-timer'>
+          <View><Text>已训练</Text><Text>{formatShoulderPressTimer(props.elapsedMs)}</Text></View>
+          <View><Text>剩余</Text><Text>{formatShoulderPressTimer(remainingSeconds * 1000)}</Text></View>
+        </View>
+      ) : null}
+      {props.videoUrl && !videoError ? (
         <Video
-          className='shoulder-training-preview'
+          className={`shoulder-training-preview${
+            visibility === 'hidden' ? ' shoulder-training-preview-hidden' : ''
+          }`}
           src={props.videoUrl}
           autoplay
           loop
           muted
           controls={false}
+          enableProgressGesture={false}
           objectFit='contain'
           onError={() => setVideoError(true)}
-          onTouchStart={(event) => {
+          onTouchStart={visibility === 'visible' ? (event) => {
             const point = event.touches[0]
             if (point) touchStartRef.current = point
-          }}
-          onTouchEnd={(event) => {
+          } : undefined}
+          onTouchEnd={visibility === 'visible' ? (event) => {
             const point = event.changedTouches[0]
             if (point) finishSwipe(point)
-          }}
+          } : undefined}
         />
       ) : null}
       {props.videoUrl && visibility === 'hidden' ? (
@@ -597,17 +613,19 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
           <Text>←</Text><Text>向左滑恢复示范</Text>
         </View>
       ) : null}
-      {videoError && visibility === 'visible' ? (
+      {videoError ? (
         <View
-          className='shoulder-training-preview-error'
-          onTouchStart={(event) => {
+          className={`shoulder-training-preview-error${
+            visibility === 'hidden' ? ' shoulder-training-preview-hidden' : ''
+          }`}
+          onTouchStart={visibility === 'visible' ? (event) => {
             const point = event.touches[0]
             if (point) touchStartRef.current = point
-          }}
-          onTouchEnd={(event) => {
+          } : undefined}
+          onTouchEnd={visibility === 'visible' ? (event) => {
             const point = event.changedTouches[0]
             if (point) finishSwipe(point)
-          }}
+          } : undefined}
         >
           <Text>示范视频暂时无法播放</Text>
         </View>
@@ -637,6 +655,7 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
     videoUrl={action?.video_url ?? null}
     elapsedMs={elapsedMs}
     expectedDurationSeconds={session?.expectedDurationSeconds ?? 1}
+    started={Boolean(session?.trainingStartedAt)}
   />
 </View>
 ```
@@ -669,6 +688,12 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
   transition: transform 180ms ease, opacity 180ms ease;
 }
 
+.shoulder-training-preview-hidden {
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+}
+
 .shoulder-training-preview-restore {
   display: flex;
   width: 54px;
@@ -682,7 +707,7 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
 }
 ```
 
-- [ ] **Step 4: 运行页面测试、TypeScript 与微信开发构建**
+- [x] **Step 4: 运行页面测试、TypeScript 与微信开发构建**
 
 Run:
 
@@ -693,9 +718,10 @@ npx tsc --noEmit
 npm run build:weapp
 ```
 
-Expected: PASS；构建产物同时包含 `camera` 和 `video` 原生组件，不出现类型或编译错误。
+Expected: 页面测试与构建成功；TypeScript 维持仓库既有基线且本轮不新增错误；构建产物同时包含
+`camera` 和 `video` 原生组件。
 
-- [ ] **Step 5: 提交录像画中画**
+- [x] **Step 5: 提交录像画中画**
 
 ```bash
 git add miniapp/src/app.scss \
@@ -719,7 +745,7 @@ git commit -m "feat(miniapp): 增加肩部推举录像画中画"
 - Consumes: Task 2 的 `remainingShoulderPressSeconds()` 和对象参数版 `shouldAutoFinishShoulderPressTraining()`；现有结束函数、`finishInFlightRef`、`markShoulderPressTrainingEnded()` 与强制上传路由。
 - Produces: `finishTraining(endedAtMs?: number): Promise<void>` 与 `requestManualFinishTraining(): Promise<void>`；录像中或暂停后只要已经有 `trainingStartedAt`，即可请求提前结束。
 
-- [ ] **Step 1: 写入提前结束确认、取消与自动结束失败测试**
+- [x] **Step 1: 写入提前结束确认、取消与自动结束失败测试**
 
 在 Taro mock 中加入默认确认行为：
 
@@ -798,7 +824,7 @@ it('auto finishes once at the prescription duration without a confirmation', asy
 })
 ```
 
-- [ ] **Step 2: 运行页面测试，确认旧完成门槛和旧自动结束条件导致失败**
+- [x] **Step 2: 运行页面测试，确认旧完成门槛和旧自动结束条件导致失败**
 
 Run:
 
@@ -809,7 +835,7 @@ npm test -- src/pages/shoulder-press/pages.test.tsx src/pages/shoulder-press/pag
 
 Expected: FAIL；“完成训练”仍在处方时长前禁用，且自动结束仍只在 40 分钟触发。
 
-- [ ] **Step 3: 统一手动、处方倒计时与安全截止的结束入口**
+- [x] **Step 3: 统一手动、处方倒计时与安全截止的结束入口**
 
 在 `camera.tsx` 增加：
 
@@ -875,7 +901,7 @@ if (shouldAutoFinishShoulderPressTraining({
 `finishInFlightRef` 去重。正常自动结束继续在 `finishTraining` 最前面调用现有
 `markShoulderPressTrainingEnded(currentSession, endedAtMs)`，写入失败仍不得阻止上传。
 
-- [ ] **Step 4: 运行肩部推举目标测试和完整小程序验证**
+- [x] **Step 4: 运行肩部推举目标测试和完整小程序验证**
 
 Run:
 
@@ -895,9 +921,10 @@ npm run build:weapp:prod
 git diff --check
 ```
 
-Expected: 所有测试 PASS；TypeScript、ESLint、Stylelint、开发构建和生产构建成功；无空白错误。
+Expected: 所有测试、开发构建和生产构建成功；TypeScript、ESLint、Stylelint 与仓库既有基线比较
+均不新增错误；无空白错误。
 
-- [ ] **Step 5: 提交统一结束流程**
+- [x] **Step 5: 提交统一结束流程**
 
 ```bash
 git add miniapp/src/pages/shoulder-press/camera.tsx \

@@ -79,6 +79,9 @@ export default function ShoulderPressPage() {
           <Text className='preparation-mark'>3</Text>
           <Text className='paragraph'>进入摄像页后，等待画面就绪再开始训练。</Text>
         </View>
+        {action?.action_instruction ? (
+          <Text className='shoulder-action-instruction'>{action.action_instruction}</Text>
+        ) : null}
       </View>
 
       {!loaded ? <Text className='muted loading-text'>正在加载当前动作</Text> : null}

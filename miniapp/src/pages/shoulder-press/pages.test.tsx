@@ -492,6 +492,7 @@ describe('shoulder press pages', () => {
     guide.rerender()
 
     expect(findAll(guide.element, (element) => element.type === 'Video')).toHaveLength(0)
+    expect(textContent(guide.element)).toContain('保持正面，缓慢推举。')
     findButtonByText(guide.element, '动作预览').props.onClick?.()
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
       url: '/pages/shoulder-press/preview?actionId=42'
@@ -534,14 +535,73 @@ describe('shoulder press pages', () => {
     guide.rerender()
 
     expect(textContent(guide.element)).not.toContain('动作预览')
+    expect(textContent(guide.element)).toContain('保持正面，缓慢推举。')
     expect(findButtonByText(guide.element, '开始训练')).toBeTruthy()
+  })
+
+  it('retries a failed preview without disabling training', async () => {
+    const preview = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    preview.rerender()
+
+    findFirstByType(preview.element, 'Video').props.onError?.()
+    preview.rerender()
+
+    expect(textContent(preview.element)).toContain('视频加载失败')
+    expect(findButtonByText(preview.element, '开始训练')).toBeTruthy()
+    clickButtonByText(preview.element, '重新加载')
+    preview.rerender()
+
+    expect(findFirstByType(preview.element, 'Video').props.src)
+      .toBe('https://cdn.example.com/demo.mp4')
+    expect(textContent(preview.element)).not.toContain('视频加载失败')
+  })
+
+  it('rejects a preview action that is no longer in the current prescription', async () => {
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], source_key: 'motion-resistance-row' }]
+    })
+    const preview = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    preview.rerender()
+
+    expect(findAll(preview.element, (element) => element.type === 'Video')).toHaveLength(0)
+    expect(textContent(preview.element)).toContain('返回当前处方')
+    expect(findButtonByText(preview.element, '返回当前处方')).toBeTruthy()
+  })
+
+  it('does not show the training timer before recording has started', () => {
+    const overlay = renderPage(ShoulderPressTrainingOverlay, {
+      videoUrl: 'https://cdn.example.com/demo.mp4',
+      elapsedMs: 0,
+      expectedDurationSeconds: 180,
+      started: false
+    })
+
+    expect(findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-timer'
+    ))).toHaveLength(0)
+    expect(findFirstByType(overlay.element, 'Video')).toBeTruthy()
+  })
+
+  it('disables native progress gestures on the swipeable training preview', () => {
+    const overlay = renderPage(ShoulderPressTrainingOverlay, {
+      videoUrl: 'https://cdn.example.com/demo.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180,
+      started: true
+    })
+
+    expect(findFirstByType(overlay.element, 'Video').props.enableProgressGesture).toBe(false)
   })
 
   it('keeps the timer fixed while the muted preview hides and restores', () => {
     const overlay = renderPage(ShoulderPressTrainingOverlay, {
       videoUrl: 'https://cdn.example.com/demo.mp4',
       elapsedMs: 24_000,
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      started: true
     })
 
     expect(textContent(overlay.element)).toContain('已训练00:24')
@@ -556,19 +616,34 @@ describe('shoulder press pages', () => {
     preview.props.onTouchEnd?.({ changedTouches: [{ clientX: 60, clientY: 12 }] })
     overlay.rerender()
 
-    expect(findAll(overlay.element, (element) => element.type === 'Video')).toHaveLength(0)
+    const hiddenPreview = findFirstByType(overlay.element, 'Video')
+    expect(hiddenPreview.props.className).toContain('shoulder-training-preview-hidden')
+    expect(hiddenPreview.props.onTouchStart).toBeUndefined()
+    expect(hiddenPreview.props.onTouchEnd).toBeUndefined()
     expect(textContent(overlay.element)).toContain('向左滑恢复示范')
     const timerAfter = findAll(overlay.element, (element) => (
       element.props.className === 'shoulder-training-timer'
     ))[0]
     expect(timerAfter.props.className).toBe(timerBefore.props.className)
+
+    const restore = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-preview-restore'
+    ))[0]
+    restore.props.onTouchStart?.({ touches: [{ clientX: 60, clientY: 12 }] })
+    restore.props.onTouchEnd?.({ changedTouches: [{ clientX: 10, clientY: 10 }] })
+    overlay.rerender()
+
+    expect(findFirstByType(overlay.element, 'Video').props.className)
+      .toBe('shoulder-training-preview')
+    expect(textContent(overlay.element)).not.toContain('向左滑恢复示范')
   })
 
   it('degrades preview playback without changing timer content', () => {
     const overlay = renderPage(ShoulderPressTrainingOverlay, {
       videoUrl: 'https://cdn.example.com/demo.mp4',
       elapsedMs: 24_000,
-      expectedDurationSeconds: 180
+      expectedDurationSeconds: 180,
+      started: true
     })
     findFirstByType(overlay.element, 'Video').props.onError?.()
     overlay.rerender()
@@ -576,6 +651,45 @@ describe('shoulder press pages', () => {
     expect(textContent(overlay.element)).toContain('示范视频暂时无法播放')
     expect(textContent(overlay.element)).toContain('已训练00:24')
     expect(textContent(overlay.element)).toContain('剩余02:36')
+  })
+
+  it('lets a failed preview slide away and restore without changing the timer', () => {
+    const overlay = renderPage(ShoulderPressTrainingOverlay, {
+      videoUrl: 'https://cdn.example.com/demo.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180,
+      started: true
+    })
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    overlay.rerender()
+
+    const errorPreview = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-preview-error'
+    ))[0]
+    errorPreview.props.onTouchStart?.({ touches: [{ clientX: 10, clientY: 10 }] })
+    errorPreview.props.onTouchEnd?.({ changedTouches: [{ clientX: 60, clientY: 12 }] })
+    overlay.rerender()
+
+    const hiddenError = findAll(overlay.element, (element) => (
+      String(element.props.className).includes('shoulder-training-preview-error')
+    ))[0]
+    expect(hiddenError.props.className).toContain('shoulder-training-preview-hidden')
+    expect(hiddenError.props.onTouchStart).toBeUndefined()
+    expect(hiddenError.props.onTouchEnd).toBeUndefined()
+    expect(textContent(overlay.element)).toContain('向左滑恢复示范')
+    expect(textContent(overlay.element)).toContain('已训练00:24')
+
+    const restore = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-preview-restore'
+    ))[0]
+    restore.props.onTouchStart?.({ touches: [{ clientX: 60, clientY: 12 }] })
+    restore.props.onTouchEnd?.({ changedTouches: [{ clientX: 10, clientY: 10 }] })
+    overlay.rerender()
+
+    expect(findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-preview-error'
+    ))).toHaveLength(1)
+    expect(textContent(overlay.element)).not.toContain('向左滑恢复示范')
   })
 
   it('records with the low camera resolution and forty-minute safety boundary', async () => {
@@ -590,6 +704,34 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(recorderHarness.instances[0].options.maxDurationMs).toBe(2_397_000)
+  })
+
+  it('completes recording and upload when the action has no preview video', async () => {
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], video_url: null }]
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+    await recorderHarness.instances[0].options.onSegment(
+      'wxfile://temp/no-preview.mp4',
+      30_000
+    )
+    await flushPromises()
+    page.rerender()
+
+    clickButtonByText(page.element, '结束训练')
+    await flushPromises(20)
+
+    expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/upload'
+    })
   })
 
   it('keeps the forced page until all segments and finalize succeed', async () => {
@@ -666,6 +808,49 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(recorder.start).toHaveBeenCalledTimes(2)
+  })
+
+  it('auto finishes when the pause tail crosses the prescription duration', async () => {
+    vi.useFakeTimers()
+    const startAt = 1783692000000
+    vi.setSystemTime(startAt)
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 17 / 60 }]
+    })
+    taroHarness.taroMock.getVideoInfo
+      .mockResolvedValueOnce({ duration: 15, size: 2048, width: 1080, height: 1920 })
+      .mockResolvedValueOnce({ duration: 2.1, size: 2048, width: 1080, height: 1920 })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+
+    const recorder = recorderHarness.instances[0]
+    vi.setSystemTime(startAt + 15_000)
+    await recorder.options.onSegment('wxfile://temp/segment-15s.mp4', 15_000)
+    await flushPromises()
+    recorder.pause.mockImplementationOnce(async () => {
+      await recorder.options.onSegment('wxfile://temp/pause-tail.mp4', 2_100)
+      return null
+    })
+    vi.setSystemTime(startAt + 17_100)
+    await taroHarness.hideCallbacks[0]()
+    await flushPromises(20)
+
+    expect(taroHarness.taroMock.showModal).not.toHaveBeenCalled()
+    expect(recorder.finish).toHaveBeenCalledTimes(1)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      actualDurationMs: 17_100,
+      trainingEndedAt: expect.any(String),
+      segments: [{ durationMs: 15_000 }, { durationMs: 2_100 }]
+    })
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/upload'
+    })
   })
 
   it('persists start only after recorder start succeeds and keeps it on resume', async () => {
@@ -847,6 +1032,34 @@ describe('shoulder press pages', () => {
 
     expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
     expect(textContent(page.element)).toContain('正在录像')
+  })
+
+  it('keeps recording and reports a non-blocking error when finish confirmation fails', async () => {
+    taroHarness.taroMock.showModal.mockRejectedValueOnce(new Error('modal unavailable'))
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+    page.rerender()
+
+    clickButtonByText(page.element, '结束训练')
+    await flushPromises()
+    page.rerender()
+
+    expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('结束确认失败，请继续训练或稍后重试')
+    expect(textContent(page.element)).toContain('正在录像')
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY))
+      .not.toHaveProperty('trainingEndedAt')
+
+    clickButtonByText(page.element, '结束训练')
+    await flushPromises()
+
+    expect(taroHarness.taroMock.showModal).toHaveBeenCalledTimes(2)
+    expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
   })
 
   it('does not stop recording while the manual finish confirmation is pending', async () => {
@@ -1490,6 +1703,50 @@ describe('shoulder press pages', () => {
     expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
   })
 
+  it('keeps the active camera session on app foreground after page-hide pause', async () => {
+    taroHarness.setCurrentRoute('pages/shoulder-press/camera')
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+
+    await taroHarness.hideCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('继续训练')
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY))
+      .not.toHaveProperty('trainingEndedAt')
+
+    renderPage(App, { children: null })
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(retryMocks.resetRetryWindowForLaunch).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+
+    page.rerender()
+    clickButtonByText(page.element, '继续训练')
+    await flushPromises()
+    expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(2)
+  })
+
+  it('still sends a cold residual session from camera bootstrap to forced upload', async () => {
+    saveStorageSession(pendingSession(1))
+    taroHarness.setCurrentRoute('pages/shoulder-press/camera')
+
+    renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/upload'
+    })
+    expect(requestMock).not.toHaveBeenCalled()
+  })
+
   it('does not relaunch the forced upload page when app show already happens on that route', async () => {
     saveStorageSession(pendingSession(1))
     taroHarness.setCurrentRoute('pages/shoulder-press/upload')
@@ -1562,7 +1819,8 @@ describe('shoulder press pages', () => {
     await flushPromises()
     page.rerender()
 
-    expect(textContent(page.element)).toContain('还需约 30 秒')
+    expect(textContent(page.element)).toContain('处方建议剩余约 30 秒，可按需提前结束训练')
+    expect(textContent(page.element)).not.toContain('可完成本次训练')
     expect(findButtonByText(page.element, '结束训练').props.disabled).toBe(false)
 
     vi.setSystemTime(startAt + 90_000)
@@ -1605,7 +1863,8 @@ describe('shoulder press pages', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('00:50')
-    expect(textContent(page.element)).toContain('还需约 10 秒')
+    expect(textContent(page.element)).toContain('处方建议剩余约 10 秒，可按需提前结束训练')
+    expect(textContent(page.element)).not.toContain('可完成本次训练')
     expect(findButtonByText(page.element, '结束训练').props.disabled).toBe(false)
 
     vi.setSystemTime(startAt + 70_000)
