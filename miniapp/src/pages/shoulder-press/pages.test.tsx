@@ -849,6 +849,72 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).toContain('正在录像')
   })
 
+  it('does not stop recording while the manual finish confirmation is pending', async () => {
+    const confirmation = deferred<{ confirm: boolean; cancel: boolean }>()
+    taroHarness.taroMock.showModal.mockReturnValueOnce(confirmation.promise)
+    const page = renderPage(ShoulderPressCameraPage)
+    try {
+      await flushPromises()
+      page.rerender()
+      initializeCamera(page.element)
+      page.rerender()
+      clickButtonByText(page.element, '开始训练')
+      await flushPromises()
+      page.rerender()
+
+      clickButtonByText(page.element, '结束训练')
+      await flushPromises()
+
+      expect(taroHarness.taroMock.showModal).toHaveBeenCalledTimes(1)
+      expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
+    } finally {
+      confirmation.resolve({ confirm: false, cancel: true })
+      await flushPromises()
+      page.unmount()
+    }
+  })
+
+  it('ignores a stale confirmation after automatic finish has completed', async () => {
+    vi.useFakeTimers()
+    const startAt = 1783692000000
+    vi.setSystemTime(startAt)
+    const confirmation = deferred<{ confirm: boolean; cancel: boolean }>()
+    taroHarness.taroMock.showModal.mockReturnValueOnce(confirmation.promise)
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 1 / 60 }]
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    try {
+      await flushPromises()
+      page.rerender()
+      initializeCamera(page.element)
+      page.rerender()
+      clickButtonByText(page.element, '开始训练')
+      await flushPromises()
+      await recorderHarness.instances[0].options.onSegment('wxfile://temp/automatic-finish.mp4', 1_000)
+      await flushPromises()
+      page.rerender()
+
+      clickButtonByText(page.element, '结束训练')
+      await flushPromises()
+      expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1_100)
+      await flushPromises(20)
+      expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+      expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledTimes(1)
+
+      confirmation.resolve({ confirm: true, cancel: false })
+      await flushPromises(20)
+
+      expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+      expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledTimes(1)
+    } finally {
+      page.unmount()
+    }
+  })
+
   it('persists end before recorder finalization and upload work', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()

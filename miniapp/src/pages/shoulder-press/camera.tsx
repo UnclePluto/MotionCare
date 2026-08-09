@@ -288,6 +288,8 @@ export default function ShoulderPressCameraPage() {
   const commandInFlightRef = useRef(false)
   const finishInFlightRef = useRef(false)
   const finishPromptInFlightRef = useRef(false)
+  const finishAttemptGenerationRef = useRef(0)
+  const finishCompletedRef = useRef(false)
   const tailSaveFailedRef = useRef(false)
   const hidePauseRequestedRef = useRef(false)
   const mountedRef = useRef(true)
@@ -548,8 +550,9 @@ export default function ShoulderPressCameraPage() {
   }
 
   async function finishTraining(endedAtMs = Date.now()) {
-    if (finishInFlightRef.current || tailSaveFailedRef.current) return
+    if (finishCompletedRef.current || finishInFlightRef.current || tailSaveFailedRef.current) return
 
+    finishAttemptGenerationRef.current += 1
     finishInFlightRef.current = true
     commandInFlightRef.current = true
     setProcessing(true)
@@ -578,6 +581,7 @@ export default function ShoulderPressCameraPage() {
       setRecording(false)
       setPaused(false)
       await Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
+      finishCompletedRef.current = true
     } catch (finishError) {
       if (recorderRef.current?.hasFailedSegment()) {
         tailSaveFailedRef.current = true
@@ -598,7 +602,13 @@ export default function ShoulderPressCameraPage() {
   }
 
   async function requestManualFinishTraining() {
-    if (finishInFlightRef.current || commandInFlightRef.current || finishPromptInFlightRef.current) return
+    if (
+      finishCompletedRef.current ||
+      finishInFlightRef.current ||
+      commandInFlightRef.current ||
+      finishPromptInFlightRef.current
+    ) return
+    const finishAttemptGeneration = finishAttemptGenerationRef.current
     finishPromptInFlightRef.current = true
     try {
       const result = await Taro.showModal({
@@ -608,7 +618,11 @@ export default function ShoulderPressCameraPage() {
         confirmColor: '#ff4d4f',
         cancelText: '继续训练'
       })
-      if (!result.confirm) return
+      if (
+        !result.confirm ||
+        finishCompletedRef.current ||
+        finishAttemptGeneration !== finishAttemptGenerationRef.current
+      ) return
       await finishTraining()
     } finally {
       finishPromptInFlightRef.current = false
