@@ -83,7 +83,15 @@ def _shoulder_press_action(prescription):
     )
 
 
-def _pending_job(project_patient, active_prescription, tmp_path, *, duration=61):
+def _pending_job(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    *,
+    duration=61,
+    segment_count=2,
+    segment_duration_ms=None,
+):
     action = _shoulder_press_action(active_prescription)
     video = TrainingVideo.objects.create(
         project_patient=project_patient,
@@ -93,25 +101,31 @@ def _pending_job(project_patient, active_prescription, tmp_path, *, duration=61)
         note="训练备注",
         expected_duration_seconds=duration,
         actual_duration_seconds=duration,
-        expected_segment_count=2,
-        uploaded_segment_count=2,
+        expected_segment_count=segment_count,
+        uploaded_segment_count=segment_count,
         finalized_at=timezone.now(),
         status=TrainingVideo.Status.QUEUED,
     )
-    for index in range(2):
+    if segment_duration_ms is None:
+        segment_duration_ms = (duration * 1000) // segment_count
+    rows = []
+    for index in range(segment_count):
         path = segment_path(video, index)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"segment-{index}".encode())
-        TrainingVideoSegment.objects.create(
-            training_video=video,
-            index=index,
-            duration_ms=(duration * 1000) // 2,
-            size_bytes=path.stat().st_size,
-            sha256=f"{index}" * 64,
-            relative_path=path.relative_to(tmp_path).as_posix(),
-            status=TrainingVideoSegment.Status.UPLOADED,
-            uploaded_at=timezone.now(),
+        path.write_bytes(b"x")
+        rows.append(
+            TrainingVideoSegment(
+                training_video=video,
+                index=index,
+                duration_ms=segment_duration_ms,
+                size_bytes=path.stat().st_size,
+                sha256=f"{index:064x}",
+                relative_path=path.relative_to(tmp_path).as_posix(),
+                status=TrainingVideoSegment.Status.UPLOADED,
+                uploaded_at=timezone.now(),
+            )
         )
+    TrainingVideoSegment.objects.bulk_create(rows)
     key = (
         f"training-videos/{project_patient.id}/{video.training_date:%Y/%m/%d}/"
         f"{video.client_session_id}.mp4"
@@ -217,6 +231,53 @@ def test_process_job_attaches_one_historical_training_record_after_upload(
     upload.assert_called_once()
     cleanup_delay.assert_called_once_with(job.id)
     tombstone_delay.assert_called_once_with(tombstone.id)
+
+
+@pytest.mark.django_db
+def test_process_job_assembles_480_ordered_segments_once(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    video, job = _pending_job(
+        project_patient,
+        active_prescription,
+        tmp_path,
+        duration=2_400,
+        segment_count=480,
+        segment_duration_ms=5_000,
+    )
+    result = _assembly_result(video, duration=2_400)
+    assemble = Mock(return_value=result)
+    upload = Mock(return_value=_remote_metadata(result))
+    cleanup_delay = Mock()
+    tombstone_delay = Mock()
+    module = _video_tasks()
+    monkeypatch.setattr(module, "assemble_video", assemble)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
+    monkeypatch.setattr(module.cleanup_training_video_files, "delay", cleanup_delay)
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", tombstone_delay)
+
+    with django_capture_on_commit_callbacks(execute=True):
+        first = module.process_video_assembly_job(job.id)
+        second = module.process_video_assembly_job(job.id)
+
+    expected_paths = [segment_path(video, index) for index in range(480)]
+    assert assemble.call_args.args[0] == expected_paths
+    assert TrainingRecord.objects.count() == 1
+    assert TrainingRecord.objects.get().actual_duration_minutes == 40
+    job.refresh_from_db()
+    assert first.id == second.id == job.id
+    assert job.status == VideoAssemblyJob.Status.SUCCEEDED
+    assemble.assert_called_once()
+    upload.assert_called_once()
+    cleanup_delay.assert_called_once_with(job.id)
+    tombstone_delay.assert_called_once()
 
 
 @pytest.mark.django_db

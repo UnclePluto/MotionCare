@@ -110,6 +110,27 @@ def _create_uploaded_segments(video, root, durations_ms):
         )
 
 
+def _bulk_create_uploaded_segments(video, root, count, duration_ms):
+    rows = []
+    for index in range(count):
+        path = segment_path(video, index)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+        rows.append(
+            TrainingVideoSegment(
+                training_video=video,
+                index=index,
+                duration_ms=duration_ms,
+                size_bytes=1,
+                sha256=f"{index:064x}",
+                relative_path=path.relative_to(root).as_posix(),
+                status=TrainingVideoSegment.Status.UPLOADED,
+                uploaded_at=timezone.now(),
+            )
+        )
+    TrainingVideoSegment.objects.bulk_create(rows)
+
+
 def _finalize_url(video):
     return f"/api/patient-app/training-video-sessions/{video.id}/finalize/"
 
@@ -141,6 +162,10 @@ def _other_project_patient(project_patient, doctor):
 
 def _assert_no_partial_files(root: Path):
     assert list(root.rglob("*.part")) == []
+
+
+def test_default_training_video_segment_limit_supports_forty_minute_sessions(settings):
+    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 600
 
 
 @pytest.mark.django_db
@@ -663,6 +688,27 @@ def test_upload_segment_index_boundary_leaves_no_rejected_file(
 
 
 @pytest.mark.django_db
+def test_upload_segment_rejects_index_600_without_file_residue(
+    project_patient,
+    doctor,
+    active_prescription,
+    tmp_path,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+
+    response = client.post(
+        _segment_url(session.data["video_id"], 600),
+        _segment_payload(b"rejected-index", duration_ms=5_000),
+    )
+
+    assert response.status_code == 400, response.data
+    assert not _staged_segment_path(tmp_path, session.data["video_id"], 600).exists()
+    _assert_no_partial_files(tmp_path)
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     ("existing_count", "expected_status"),
     [(1, 201), (2, 400)],
@@ -1078,6 +1124,88 @@ def test_finalize_rejects_missing_index_and_duration_mismatch(
     assert response.status_code == 400
     assert expected_fragment in response.content.decode()
     assert not VideoAssemblyJob.objects.exists()
+
+
+@pytest.mark.django_db
+def test_finalize_accepts_480_five_second_segments(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    tmp_path,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 600
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    _bulk_create_uploaded_segments(video, tmp_path, 480, 5_000)
+    monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", Mock())
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            _finalize_url(video),
+            _finalize_payload(segment_count=480, actual_duration_seconds=2_400),
+            format="json",
+        )
+
+    assert response.status_code == 202, response.data
+    assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
+
+
+@pytest.mark.django_db
+def test_finalize_accepts_exactly_600_segments(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+    tmp_path,
+    monkeypatch,
+    django_capture_on_commit_callbacks,
+):
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 600
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    _bulk_create_uploaded_segments(video, tmp_path, 600, 4_000)
+    monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", Mock())
+
+    with django_capture_on_commit_callbacks(execute=True):
+        response = client.post(
+            _finalize_url(video),
+            _finalize_payload(segment_count=600, actual_duration_seconds=2_400),
+            format="json",
+        )
+
+    assert response.status_code == 202, response.data
+    assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
+
+
+@pytest.mark.django_db
+def test_finalize_rejects_601_segments_without_creating_job(
+    project_patient,
+    doctor,
+    active_prescription,
+    settings,
+):
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 600
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    session = _create_session(client, action)
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+
+    response = client.post(
+        _finalize_url(video),
+        _finalize_payload(segment_count=601, actual_duration_seconds=2_400),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert "分段" in response.content.decode()
+    assert not VideoAssemblyJob.objects.filter(training_video=video).exists()
 
 
 @pytest.mark.django_db
