@@ -1291,6 +1291,22 @@ button:active {
   margin-top: 30px;
 }
 
+.shoulder-guide-actions,
+.shoulder-preview-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  background: $mc-panel-strong;
+}
+
+.shoulder-preview-video {
+  width: 100%;
+  height: 68vh;
+  border-radius: 12px;
+  background: #101418;
+}
+
 .camera-training-stage {
   margin: 0 0 24px;
 }

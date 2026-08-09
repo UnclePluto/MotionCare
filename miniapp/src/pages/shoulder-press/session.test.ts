@@ -5,6 +5,7 @@ import {
   appendUploadableShoulderPressSegment,
   appendPendingSegment,
   buildShoulderPressCameraUrl,
+  buildShoulderPressPreviewUrl,
   buildShoulderPressSessionUrl,
   buildShoulderPressUploadUrl,
   clearPendingShoulderPressSession,
@@ -32,9 +33,12 @@ function memoryStorage(initial?: unknown) {
 }
 
 describe('shoulder press segmented session helpers', () => {
-  it('builds session and upload urls', () => {
+  it('builds session, preview, and upload urls', () => {
     expect(buildShoulderPressSessionUrl(42)).toBe('/pages/shoulder-press/index?actionId=42')
     expect(buildShoulderPressCameraUrl(42)).toBe('/pages/shoulder-press/camera?actionId=42')
+    expect(buildShoulderPressPreviewUrl(42)).toBe(
+      '/pages/shoulder-press/preview?actionId=42'
+    )
     expect(buildShoulderPressUploadUrl()).toBe('/pages/shoulder-press/upload')
   })
 

@@ -150,6 +150,10 @@ export function buildShoulderPressCameraUrl(actionId: number): string {
   return `/pages/shoulder-press/camera?actionId=${encodeURIComponent(String(actionId))}`
 }
 
+export function buildShoulderPressPreviewUrl(actionId: number): string {
+  return `/pages/shoulder-press/preview?actionId=${encodeURIComponent(String(actionId))}`
+}
+
 export function buildShoulderPressUploadUrl(): string {
   return '/pages/shoulder-press/upload'
 }

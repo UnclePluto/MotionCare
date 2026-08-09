@@ -5,6 +5,7 @@ export default defineAppConfig({
     'pages/prescription/index',
     'pages/training/index',
     'pages/shoulder-press/index',
+    'pages/shoulder-press/preview',
     'pages/shoulder-press/camera',
     'pages/shoulder-press/upload',
     'pages/action-history/index'

@@ -96,6 +96,8 @@ const taroHarness = vi.hoisted(() => {
     getCurrentPages: vi.fn(() => [{ route: currentRoute }]),
     reLaunch: vi.fn(),
     navigateTo: vi.fn(),
+    navigateBack: vi.fn(),
+    redirectTo: vi.fn(),
     setKeepScreenOn: vi.fn(() => Promise.resolve()),
     saveFile: vi.fn(),
     getVideoInfo: vi.fn(),
@@ -247,6 +249,7 @@ import {
 } from '../prescription/cache'
 import ShoulderPressCameraPage from './camera'
 import ShoulderPressGuidePage from './index'
+import ShoulderPressPreviewPage from './preview'
 import ShoulderPressUploadPage from './upload'
 
 const PRESCRIPTION = {
@@ -466,19 +469,55 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).not.toContain('正在加载当前处方')
   })
 
-  it('separates the example video from the native camera recording page', async () => {
-    const page = renderPage(ShoulderPressGuidePage)
+  it('offers direct training and a separate muted looping preview', async () => {
+    const guide = renderPage(ShoulderPressGuidePage)
     await flushPromises()
-    page.rerender()
+    guide.rerender()
 
-    expect(findAll(page.element, (element) => element.type === 'Video')).toHaveLength(1)
-    expect(findAll(page.element, (element) => element.type === 'Camera')).toHaveLength(0)
+    expect(findAll(guide.element, (element) => element.type === 'Video')).toHaveLength(0)
+    findButtonByText(guide.element, '动作预览').props.onClick?.()
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/preview?actionId=42'
+    })
 
-    findButtonByText(page.element, '进入摄像训练').props.onClick?.()
+    findButtonByText(guide.element, '开始训练').props.onClick?.()
 
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
       url: '/pages/shoulder-press/camera?actionId=42'
     })
+
+    reactHarness.reset()
+    const preview = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    preview.rerender()
+    const video = findFirstByType(preview.element, 'Video')
+    expect(video.props).toMatchObject({
+      src: 'https://cdn.example.com/demo.mp4',
+      autoplay: true,
+      loop: true,
+      muted: true,
+      controls: false
+    })
+
+    findButtonByText(preview.element, '关闭预览').props.onClick?.()
+    expect(taroHarness.taroMock.navigateBack).toHaveBeenCalledTimes(1)
+    findButtonByText(preview.element, '开始训练').props.onClick?.()
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/camera?actionId=42'
+    })
+  })
+
+  it('hides the preview entry when the action has no video url', async () => {
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], video_url: null }]
+    })
+    const guide = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    guide.rerender()
+
+    expect(textContent(guide.element)).not.toContain('动作预览')
+    expect(findButtonByText(guide.element, '开始训练')).toBeTruthy()
   })
 
   it('records with the low camera resolution and forty-minute safety boundary', async () => {

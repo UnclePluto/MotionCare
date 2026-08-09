@@ -1,4 +1,4 @@
-import { Button, Text, Video, View } from '@tarojs/components'
+import { Button, Text, View } from '@tarojs/components'
 import Taro, { useRouter } from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 
@@ -9,7 +9,10 @@ import {
   resolveShoulderPressAction,
   type ShoulderPressAction
 } from './pageState'
-import { buildShoulderPressCameraUrl } from './session'
+import {
+  buildShoulderPressCameraUrl,
+  buildShoulderPressPreviewUrl
+} from './session'
 
 export default function ShoulderPressPage() {
   const router = useRouter()
@@ -17,7 +20,6 @@ export default function ShoulderPressPage() {
   const [action, setAction] = useState<ShoulderPressAction | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
-  const [videoError, setVideoError] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -63,28 +65,6 @@ export default function ShoulderPressPage() {
         <Text className='muted'>先熟悉动作要领，准备好后再进入独立摄像训练。</Text>
       </View>
 
-      <View className='follow-video-section'>
-        <Text className='section-title'>示例动作</Text>
-        {action?.video_url && !videoError ? (
-          <Video
-            className='follow-video'
-            src={action.video_url}
-            title={action.action_name}
-            controls
-            objectFit='contain'
-            showFullscreenBtn
-            onError={() => setVideoError(true)}
-          />
-        ) : (
-          <View className='example-fallback guide-video-fallback'>
-            <Text className='label'>动作说明</Text>
-            <Text className='paragraph'>
-              {action?.action_instruction || '医生暂未配置可播放的示例视频，请按动作说明缓慢完成肩部推举。'}
-            </Text>
-          </View>
-        )}
-      </View>
-
       <View className='shoulder-instruction-section'>
         <Text className='section-title'>训练准备</Text>
         <View className='preparation-row'>
@@ -102,9 +82,6 @@ export default function ShoulderPressPage() {
       </View>
 
       {!loaded ? <Text className='muted loading-text'>正在加载当前动作</Text> : null}
-      {videoError ? (
-        <Text className='pending-upload-banner'>示例视频暂时无法播放，仍可按动作说明完成训练。</Text>
-      ) : null}
       {error ? <Text className='error'>{error}</Text> : null}
 
       {!action && loaded ? (
@@ -114,15 +91,24 @@ export default function ShoulderPressPage() {
         >
           返回当前处方
         </Button>
-      ) : (
-        <Button
-          className='primary-button full-button shoulder-guide-start'
-          disabled={!action}
-          onClick={() => Taro.navigateTo({ url: buildShoulderPressCameraUrl(actionId) })}
-        >
-          进入摄像训练
-        </Button>
-      )}
+      ) : action ? (
+        <View className='button-row shoulder-guide-actions'>
+          <Button
+            className='primary-button'
+            onClick={() => Taro.navigateTo({ url: buildShoulderPressCameraUrl(actionId) })}
+          >
+            开始训练
+          </Button>
+          {action.video_url ? (
+            <Button
+              className='secondary-button'
+              onClick={() => Taro.navigateTo({ url: buildShoulderPressPreviewUrl(actionId) })}
+            >
+              动作预览
+            </Button>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   )
 }
