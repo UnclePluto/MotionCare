@@ -2,11 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> 状态：approved
+> 状态：implementing
 > 日期：2026-08-09
 > 范围：微信小程序肩部推举全屏录像、启动前清理、5 秒分段、65MB/10MB 缓冲保护与本地语音告警。
 > 关联：`docs/superpowers/specs/2026-08-09-wechat-shoulder-press-fullscreen-storage-guard-design.md`
 > 实施基线 commit：`1514455`
+
+执行记录（2026-08-09, codex）：Task 1 已落地于 commit `4fb77b0`。
+执行记录（2026-08-09, codex）：Task 2 已落地于 commits `5c9a0be`、`79d3b68`。
+执行记录（2026-08-09, codex）：Task 3 已落地于 commits `3a29eb8`、`f8f24ab`。
+执行记录（2026-08-09, codex）：Task 4 已落地于 commits `a8a6254`、`e1c7fcc`。
+执行记录（2026-08-09, codex）：Task 5 已落地于 commit `18d884f`。
+执行记录（2026-08-10, codex）：静态门禁修复已落地于 commit `1814afd`。
 
 **Goal:** 把肩部推举录像页改为真正的全屏画中画训练界面，并通过启动前文件清理、5 秒直传分段和 65MB/10MB 高低水位保护，避免微信 `saveFile` 配额导致录像失败。
 
@@ -90,7 +97,7 @@ export async function cleanupAndCheckShoulderPressStorage(input: {
 }): Promise<ShoulderPressStorageGuardResult>
 ```
 
-- [ ] **Step 1: 写入失败的存储预检测试**
+- [x] **Step 1: 写入失败的存储预检测试**
 
 ```ts
 it('waits for every deletion before relisting and returns ready at exactly 65MB free', async () => {
@@ -133,7 +140,7 @@ it('waits for every deletion before relisting and returns ready at exactly 65MB 
 - `size` 为负数、`NaN` 或 `Infinity` 时按 0 计，累计超过 100MB 时钳制为 100MB，确保可用空间处于
   `0..100MB`。
 
-- [ ] **Step 2: 运行目标测试，确认新模块尚不存在**
+- [x] **Step 2: 运行目标测试，确认新模块尚不存在**
 
 Run:
 
@@ -144,7 +151,7 @@ npx vitest run src/pages/shoulder-press/storageGuard.test.ts
 
 Expected: FAIL，提示无法解析 `./storageGuard`。
 
-- [ ] **Step 3: 实现最小存储预检器**
+- [x] **Step 3: 实现最小存储预检器**
 
 核心实现必须先短路待上传会话，再等待 `Promise.allSettled`，最后重新读取文件清单：
 
@@ -182,7 +189,7 @@ export async function cleanupAndCheckShoulderPressStorage(
 
 文件列表读取失败必须向调用方抛出，由页面转换为安全中文错误；不能把失败当成空列表。
 
-- [ ] **Step 4: 运行测试并检查类型**
+- [x] **Step 4: 运行测试并检查类型**
 
 Run:
 
@@ -194,7 +201,7 @@ npx tsc --noEmit --pretty false
 
 Expected: 存储预检测试全部 PASS；TypeScript 不得比实施基线新增错误。
 
-- [ ] **Step 5: 提交存储预检器**
+- [x] **Step 5: 提交存储预检器**
 
 ```bash
 git add miniapp/src/pages/shoulder-press/storageGuard.ts miniapp/src/pages/shoulder-press/storageGuard.test.ts
@@ -238,7 +245,7 @@ export function nextShoulderPressBufferTransition(input: {
 export function canResumeShoulderPressFromBuffer(pendingBytes: number): boolean
 ```
 
-- [ ] **Step 1: 写入失败的缓冲边界和 5 秒录像测试**
+- [x] **Step 1: 写入失败的缓冲边界和 5 秒录像测试**
 
 ```ts
 it('counts only segments that still depend on a local file', () => {
@@ -288,7 +295,7 @@ expect(onSegment).toHaveBeenNthCalledWith(1, 'wxfile://temp/segment-0.mp4', 5_00
 
 还必须保留并调整暂停/结束尾段、相机最大时长、重复 timeout callback 和失败分段重试测试。
 
-- [ ] **Step 2: 运行目标测试，确认 15 秒旧行为导致失败**
+- [x] **Step 2: 运行目标测试，确认 15 秒旧行为导致失败**
 
 Run:
 
@@ -299,7 +306,7 @@ npx vitest run src/pages/shoulder-press/bufferGuard.test.ts src/pages/shoulder-p
 
 Expected: 新模块不存在，且 recorder 仍请求 `timeout: 15`。
 
-- [ ] **Step 3: 实现缓冲纯函数并把分段常量改为 5 秒**
+- [x] **Step 3: 实现缓冲纯函数并把分段常量改为 5 秒**
 
 `pendingShoulderPressLocalBytes` 只对 `compressionState === 'compressed'` 且
 `uploadState !== 'uploaded'` 的分段累加合法正字节；已上传段不计入。任一 legacy 段没有可信
@@ -321,7 +328,7 @@ return { state, alert: null }
 在 `recorder.ts` 导出并使用 `SHOULDER_PRESS_SEGMENT_DURATION_MS = 5_000`，替换旧
 `TIMEOUT_SEGMENT_MS = 15_000`。不要修改 `MIN_PAUSE_SEGMENT_MS = 2_000`、最大录像时长或尾段去重。
 
-- [ ] **Step 4: 运行目标与肩部推举状态回归**
+- [x] **Step 4: 运行目标与肩部推举状态回归**
 
 Run:
 
@@ -336,7 +343,7 @@ npx vitest run \
 
 Expected: 全部 PASS，且没有测试继续把常规分段写死为 15 秒。
 
-- [ ] **Step 5: 提交分段与缓冲状态机**
+- [x] **Step 5: 提交分段与缓冲状态机**
 
 ```bash
 git add \
@@ -375,7 +382,7 @@ export type ShoulderPressAlertPlayer = {
 export function createShoulderPressAlertPlayer(): ShoulderPressAlertPlayer
 ```
 
-- [ ] **Step 1: 写入失败的播放器生命周期测试**
+- [x] **Step 1: 写入失败的播放器生命周期测试**
 
 ```ts
 it('stops the previous alert before playing the next one', async () => {
@@ -396,7 +403,7 @@ it('stops the previous alert before playing the next one', async () => {
 还要覆盖：暂停/恢复文案完全一致、播放成功 resolve `true`、`onError` resolve `false`、构造异常
 resolve `false`、`dispose()` 停止并销毁、迟到回调不重复 resolve。
 
-- [ ] **Step 2: 运行测试，确认播放器尚不存在**
+- [x] **Step 2: 运行测试，确认播放器尚不存在**
 
 Run:
 
@@ -407,7 +414,7 @@ npx vitest run src/pages/shoulder-press/alertAudio.test.ts
 
 Expected: FAIL，提示无法解析 `./alertAudio`。
 
-- [ ] **Step 3: 实现播放器并生成两条本地音频**
+- [x] **Step 3: 实现播放器并生成两条本地音频**
 
 播放器复用 `miniapp/src/pages/game-session/gameAudio.ts` 已验证的 `InnerAudioContext`
 生命周期模式，但不得读取游戏静音偏好；
@@ -436,7 +443,7 @@ ffprobe -v error -show_entries format=duration:stream=codec_name \
   miniapp/src/pages/shoulder-press/assets/audio/upload_recovered.m4a
 ```
 
-- [ ] **Step 4: 运行播放器测试和微信开发构建**
+- [x] **Step 4: 运行播放器测试和微信开发构建**
 
 Run:
 
@@ -448,7 +455,7 @@ npm run build:weapp
 
 Expected: 测试 PASS；构建产物包含两条 `.m4a` 且构建成功。
 
-- [ ] **Step 5: 提交本地语音**
+- [x] **Step 5: 提交本地语音**
 
 ```bash
 git add \
@@ -478,7 +485,7 @@ git commit -m "feat(miniapp): 增加录像缓冲语音告警"
   - 现有 `ShoulderPressTrainingOverlay`、录像器、会话与后台单并发上传。
 - Produces: 全屏录像页面，以及 `preflight | ready | recording | buffer_paused | buffer_ready` 的页面协调行为。
 
-- [ ] **Step 1: 扩展 Taro 测试 harness 并写入失败的页面测试**
+- [x] **Step 1: 扩展 Taro 测试 harness 并写入失败的页面测试**
 
 在 `pages.test.tsx` 的 Taro mock 中加入：
 
@@ -525,7 +532,7 @@ createInnerAudioContext: vi.fn()
 `training-camera-fullscreen`、旧 `page-hero` / `recording-dashboard` 不存在、覆盖层仍收到
 `started/videoUrl/elapsedMs/expectedDurationSeconds`、底部主按钮位于独立固定容器。
 
-- [ ] **Step 2: 运行页面测试，确认旧布局与缺少预检导致失败**
+- [x] **Step 2: 运行页面测试，确认旧布局与缺少预检导致失败**
 
 Run:
 
@@ -536,7 +543,7 @@ npx vitest run src/pages/shoulder-press/pages.test.tsx
 
 Expected: 新增用例 FAIL；旧页面仍渲染 hero、卡片和滚动录像框。
 
-- [ ] **Step 3: 接入 Promise 风格文件系统适配器**
+- [x] **Step 3: 接入 Promise 风格文件系统适配器**
 
 在 `camera.tsx` 内只保留薄适配，不把遍历逻辑写回页面：
 
@@ -558,7 +565,7 @@ const removeSavedFile = (filePath: string) => new Promise<void>((resolve, reject
 `pending_session` 进入强制上传页，`blocked` 显示 MB 文案，`cancelled` 静默结束。
 列表读取异常统一显示“无法检查录像空间，请重试”，不得透传原始英文错误。
 
-- [ ] **Step 4: 接入缓冲高低水位和语音代次**
+- [x] **Step 4: 接入缓冲高低水位和语音代次**
 
 每次会话更新后根据最新分段计算 `pendingBytes`，并调用纯状态函数。发生
 `recording -> buffer_paused` 时：
@@ -576,7 +583,7 @@ const removeSavedFile = (filePath: string) => new Promise<void>((resolve, reject
 实际 `saveFile`/本地文件异常必须把页面推进 `buffer_paused`，保留已知分段和重试入口；不要仅
 显示错误后继续产生新分段。
 
-- [ ] **Step 5: 改为全屏组件树和自定义导航**
+- [x] **Step 5: 改为全屏组件树和自定义导航**
 
 `camera.config.ts`：
 
@@ -609,7 +616,7 @@ export default definePageConfig({
 紧凑状态条保留。SCSS 必须使用 `env(safe-area-inset-top)` / `env(safe-area-inset-bottom)`，Camera
 和遮罩固定 `inset: 0`；覆盖层仍遵守微信 Camera/Video 同层渲染约束。
 
-- [ ] **Step 6: 运行肩部推举页面与全量小程序验证**
+- [x] **Step 6: 运行肩部推举页面与全量小程序验证**
 
 Run:
 
@@ -632,7 +639,7 @@ npx stylelint "src/**/*.scss"
 Expected: 目标测试和全量测试 PASS；开发/生产构建 PASS；TypeScript、ESLint、Stylelint 相对实施
 基线零新增错误。仓库既有静态错误必须报告准确数量，不能误称全绿。
 
-- [ ] **Step 7: 提交全屏录像页集成**
+- [x] **Step 7: 提交全屏录像页集成**
 
 ```bash
 git add \
@@ -658,7 +665,7 @@ git commit -m "feat(miniapp): 集成全屏录像与缓存暂停恢复"
 - Consumes: 现有分段上传/finalize API、`TrainingVideoSegment`、`VideoAssemblyJob` 和后台合并任务。
 - Produces: `TRAINING_VIDEO_MAX_SEGMENTS=600` 的显式生产边界；480 个连续 5 秒分段可 finalize，601 被拒绝。
 
-- [ ] **Step 1: 写入失败的 480/600/601 边界测试**
+- [x] **Step 1: 写入失败的 480/600/601 边界测试**
 
 在 `test_patient_app_video_api.py` 使用 `bulk_create` 避免 480 次 HTTP 上传：
 
@@ -724,7 +731,7 @@ def test_finalize_accepts_480_five_second_segments(
 
 该测试不运行真实 FFmpeg、ffprobe 或七牛请求。
 
-- [ ] **Step 2: 运行测试，确认默认 200 段上限导致失败**
+- [x] **Step 2: 运行测试，确认默认 200 段上限导致失败**
 
 Run:
 
@@ -737,7 +744,7 @@ pytest \
 
 Expected: 480 段 finalize 被现有 200 上限拒绝，或默认值断言失败。
 
-- [ ] **Step 3: 把配置边界提高到 600 并显式传入生产容器**
+- [x] **Step 3: 把配置边界提高到 600 并显式传入生产容器**
 
 `backend/config/settings.py`：
 
@@ -761,7 +768,7 @@ TRAINING_VIDEO_MAX_SEGMENTS=600
 
 不要取消 `index >= max`、总数量和 finalize 数量的现有后端防护。
 
-- [ ] **Step 4: 运行后端目标、全量与迁移检查**
+- [x] **Step 4: 运行后端目标、全量与迁移检查**
 
 Run:
 
@@ -776,7 +783,7 @@ python manage.py makemigrations --check --dry-run
 
 Expected: 全部 PASS；无新 migration。
 
-- [ ] **Step 5: 提交后端短分段边界**
+- [x] **Step 5: 提交后端短分段边界**
 
 ```bash
 git add \
@@ -800,7 +807,7 @@ git commit -m "fix(training): 支持肩部推举大量短分段"
 - Consumes: Task 1–5 的全部实现与测试。
 - Produces: 可供合并决策的验证证据；人工门禁未完成时保持 `implementing`，不得发布。
 
-- [ ] **Step 1: 运行最终自动化验证**
+- [x] **Step 1: 运行最终自动化验证**
 
 Run:
 
