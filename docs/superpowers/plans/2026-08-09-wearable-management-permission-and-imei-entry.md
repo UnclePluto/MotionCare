@@ -1,7 +1,7 @@
 # 穿戴设备管理权限与 IMEI 录入实施计划
 
-> 执行记录（2026-08-09, Codex）：Task 1–4 已落地于工作区实现，未提交。
-> 最终审查修订（2026-08-09, Codex）：补强跨厂商 IMEI 去重、通信测试自动识别型号、历史标识展示与前端规范化；仍未提交。
+> 执行记录（2026-08-09, Codex）：Task 1–4 已落地于 `844ccf3`，并通过 `e391fd6` 合并到 `main`。
+> 最终审查修订（2026-08-09, Codex）：补强跨厂商 IMEI 去重、通信测试自动识别型号、历史标识展示与前端规范化。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

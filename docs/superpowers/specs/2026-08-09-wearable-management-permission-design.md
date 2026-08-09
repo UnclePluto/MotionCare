@@ -1,4 +1,4 @@
-> 状态：implementing
+> 状态：implemented
 > 日期：2026-08-09
 > 范围：修复已入组患者的穿戴设备管理权限，并把设备新增流程收敛为 IMEI 单字段录入。
 > 关联：`docs/superpowers/plans/2026-08-09-wearable-management-permission-and-imei-entry.md`、`docs/superpowers/specs/2026-07-23-wearable-openapi-integration-design.md`、`docs/superpowers/specs/2026-08-05-patient-binding-info-unified-design.md`
