@@ -77,6 +77,32 @@ describe('shoulder press alert audio', () => {
     expect(audio.destroy).toHaveBeenCalledTimes(1)
   })
 
+  it('does not start or retain a playback after onEnded fires during callback registration', async () => {
+    const { audio } = audioContextHarness()
+    audio.onEnded.mockImplementation((callback: () => void) => callback())
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+
+    const playback = createShoulderPressAlertPlayer().play('pause')
+
+    await expect(playback).resolves.toBe(true)
+    expect(audio.play).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start or retain a playback after onError fires during callback registration', async () => {
+    const { audio } = audioContextHarness()
+    audio.onError.mockImplementation((callback: () => void) => callback())
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+
+    const playback = createShoulderPressAlertPlayer().play('ready')
+
+    await expect(playback).resolves.toBe(false)
+    expect(audio.play).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
   it('resolves false when audio context construction throws', async () => {
     taroMock.createInnerAudioContext.mockImplementation(() => {
       throw new Error('audio unavailable')
@@ -109,6 +135,21 @@ describe('shoulder press alert audio', () => {
     expect(first.audio.stop).toHaveBeenCalledTimes(1)
     expect(second.audio.src).toBe(SHOULDER_PRESS_ALERT_SRC.ready)
     expect(second.audio.play).toHaveBeenCalledTimes(1)
+    second.callbacks.ended?.()
+    await expect(secondPlayback).resolves.toBe(true)
+  })
+
+  it('keeps replacement playback false when stop synchronously emits ended', async () => {
+    const first = audioContextHarness()
+    const second = audioContextHarness()
+    first.audio.stop.mockImplementation(() => first.callbacks.ended?.())
+    taroMock.createInnerAudioContext.mockReturnValueOnce(first.audio).mockReturnValueOnce(second.audio)
+    const player = createShoulderPressAlertPlayer()
+
+    const firstPlayback = player.play('pause')
+    const secondPlayback = player.play('ready')
+
+    await expect(firstPlayback).resolves.toBe(false)
     second.callbacks.ended?.()
     await expect(secondPlayback).resolves.toBe(true)
   })

@@ -39,8 +39,16 @@ export function createShoulderPressAlertPlayer(): ShoulderPressAlertPlayer {
       let playback: ActiveAlertPlayback | undefined
       let settled = false
 
-      const finish = (ok: boolean) => {
-        if (settled) return
+      const destroyAudio = () => {
+        try {
+          audio?.destroy()
+        } catch {
+          // 上下文异常时仍需结束告警流程，避免阻塞训练。
+        }
+      }
+
+      const settle = (): boolean => {
+        if (settled) return false
         settled = true
         if (timeout !== undefined) {
           clearTimeout(timeout)
@@ -48,32 +56,37 @@ export function createShoulderPressAlertPlayer(): ShoulderPressAlertPlayer {
         if (activePlayback === playback) {
           activePlayback = undefined
         }
-        try {
-          audio?.destroy()
-        } catch {
-          // 上下文异常时仍需结束告警流程，避免阻塞训练。
-        }
+        return true
+      }
+
+      const finish = (ok: boolean) => {
+        if (!settle()) return
+        destroyAudio()
         resolve(ok)
       }
 
       try {
         audio = Taro.createInnerAudioContext() as AlertAudioContext
         audio.src = SHOULDER_PRESS_ALERT_SRC[kind]
-        audio.onEnded(() => finish(true))
-        audio.onError(() => finish(false))
-        timeout = setTimeout(() => finish(false), ALERT_PLAYBACK_TIMEOUT_MS)
         playback = {
           stop: () => {
-            if (settled) return
+            if (!settle()) return
             try {
               audio?.stop?.()
             } catch {
               // 停止失败时仍继续销毁，避免残留语音。
             }
-            finish(false)
+            destroyAudio()
+            resolve(false)
           },
         }
         activePlayback = playback
+        audio.onEnded(() => finish(true))
+        if (settled) return
+        audio.onError(() => finish(false))
+        if (settled) return
+        timeout = setTimeout(() => finish(false), ALERT_PLAYBACK_TIMEOUT_MS)
+        if (settled) return
         audio.play()
       } catch {
         finish(false)
