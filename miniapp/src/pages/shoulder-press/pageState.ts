@@ -55,14 +55,6 @@ export function canStartShoulderPressRecording(input: {
   return input.actionReady && input.cameraReady && !input.busy
 }
 
-export function canCompleteShoulderPressTraining(input: {
-  actualDurationMs: number
-  expectedDurationSeconds: number
-}): boolean {
-  if (!Number.isFinite(input.actualDurationMs) || !Number.isFinite(input.expectedDurationSeconds)) return false
-  return input.actualDurationMs >= Math.max(1, Math.round(input.expectedDurationSeconds)) * 1000
-}
-
 export function remainingShoulderPressSeconds(
   actualDurationMs: number,
   expectedDurationSeconds: number

@@ -7,13 +7,13 @@ import { containsSensitiveCredentialText } from '../../api/safeError'
 import type { CurrentPrescription } from '../../types/patientApp'
 import { saveTemporaryShoulderPressSegmentForRetry } from './localFile'
 import {
-  canCompleteShoulderPressTraining,
   canStartShoulderPressRecording,
   computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
   loadOwnedPendingShoulderPressSession,
   registerShoulderPressBackgroundUpload,
   reLaunchPendingShoulderPressUploadIfNeeded,
+  remainingShoulderPressSeconds,
   resolveShoulderPressAction,
   saveOwnedPendingShoulderPressSession,
   shoulderPressUploadCounters,
@@ -287,6 +287,7 @@ export default function ShoulderPressCameraPage() {
   const pausedRef = useRef(false)
   const commandInFlightRef = useRef(false)
   const finishInFlightRef = useRef(false)
+  const finishPromptInFlightRef = useRef(false)
   const tailSaveFailedRef = useRef(false)
   const hidePauseRequestedRef = useRef(false)
   const mountedRef = useRef(true)
@@ -427,7 +428,7 @@ export default function ShoulderPressCameraPage() {
       now: () => Date.now(),
       maxDurationMs: SHOULDER_PRESS_RECORDING_STOP_MS,
       onMaxDuration: (cutoffMs) => {
-        void finishTraining(true, cutoffMs)
+        void finishTraining(cutoffMs)
       },
       onSegment: (tempFilePath, durationMs) => persistRecordedSegment(tempFilePath, durationMs),
       onPause: () => {
@@ -546,17 +547,8 @@ export default function ShoulderPressCameraPage() {
     }
   }
 
-  async function finishTraining(force = false, endedAtMs = Date.now()) {
+  async function finishTraining(endedAtMs = Date.now()) {
     if (finishInFlightRef.current || tailSaveFailedRef.current) return
-    const elapsedMs = currentElapsedMs()
-    const expectedSeconds = sessionRef.current?.expectedDurationSeconds ?? session?.expectedDurationSeconds ?? 1
-    if (!force && !canCompleteShoulderPressTraining({
-      actualDurationMs: elapsedMs,
-      expectedDurationSeconds: expectedSeconds
-    })) {
-      setError('达到本次处方训练时长后才能完成。')
-      return
-    }
 
     finishInFlightRef.current = true
     commandInFlightRef.current = true
@@ -602,6 +594,24 @@ export default function ShoulderPressCameraPage() {
       finishInFlightRef.current = false
       commandInFlightRef.current = false
       setProcessing(false)
+    }
+  }
+
+  async function requestManualFinishTraining() {
+    if (finishInFlightRef.current || commandInFlightRef.current || finishPromptInFlightRef.current) return
+    finishPromptInFlightRef.current = true
+    try {
+      const result = await Taro.showModal({
+        title: '结束训练？',
+        content: '确认结束本次肩部推举训练吗？',
+        confirmText: '结束训练',
+        confirmColor: '#ff4d4f',
+        cancelText: '继续训练'
+      })
+      if (!result.confirm) return
+      await finishTraining()
+    } finally {
+      finishPromptInFlightRef.current = false
     }
   }
 
@@ -718,7 +728,7 @@ export default function ShoulderPressCameraPage() {
     if (!recording) return undefined
     const stopDelayMs = Math.max(0, SHOULDER_PRESS_RECORDING_STOP_MS - currentElapsedMs())
     const hardStopTimer = setTimeout(() => {
-      void finishTraining(true)
+      void finishTraining()
     }, stopDelayMs)
     const timer = setInterval(() => {
       const elapsedMs = currentElapsedMs()
@@ -727,7 +737,7 @@ export default function ShoulderPressCameraPage() {
         actualDurationMs: elapsedMs,
         expectedDurationSeconds: sessionRef.current?.expectedDurationSeconds ?? 1
       })) {
-        void finishTraining(true)
+        void finishTraining()
       }
     }, 1000)
     return () => {
@@ -744,12 +754,11 @@ export default function ShoulderPressCameraPage() {
 
   const elapsedMs = currentElapsedMs()
   const counters = shoulderPressUploadCounters(session?.segments ?? [])
-  const canFinish = canCompleteShoulderPressTraining({
-    actualDurationMs: elapsedMs,
-    expectedDurationSeconds: session?.expectedDurationSeconds ?? 1
-  })
   const timerText = formatShoulderPressTimer(elapsedMs)
-  const remainingSeconds = Math.max(0, Math.ceil(((session?.expectedDurationSeconds ?? 1) * 1000 - elapsedMs) / 1000))
+  const remainingSeconds = remainingShoulderPressSeconds(
+    elapsedMs,
+    session?.expectedDurationSeconds ?? 1
+  )
   const canStart = canStartShoulderPressRecording({
     actionReady: action !== null && session !== null,
     cameraReady,
@@ -815,7 +824,7 @@ export default function ShoulderPressCameraPage() {
       </View>
 
       {!loaded ? <Text className='muted loading-text'>正在加载当前动作</Text> : null}
-      {!canFinish && session?.segments.length ? (
+      {remainingSeconds > 0 && session?.segments.length ? (
         <Text className='recording-status'>还需约 {remainingSeconds} 秒，可完成本次训练。</Text>
       ) : null}
       {error ? <Text className='error'>{error}</Text> : null}
@@ -848,12 +857,12 @@ export default function ShoulderPressCameraPage() {
         </View>
       ) : recording ? (
         <Button
-          className='primary-button full-button'
+          className='primary-button full-button shoulder-finish-button'
           loading={processing}
-          disabled={processing || !canFinish}
-          onClick={() => void finishTraining()}
+          disabled={processing || !session?.trainingStartedAt}
+          onClick={() => void requestManualFinishTraining()}
         >
-          完成训练
+          结束训练
         </Button>
       ) : paused ? (
         <View className='button-row shoulder-press-action-row'>
@@ -866,12 +875,12 @@ export default function ShoulderPressCameraPage() {
             继续训练
           </Button>
           <Button
-            className='secondary-button'
+            className='primary-button full-button shoulder-finish-button'
             loading={processing}
-            disabled={processing || !canFinish}
-            onClick={() => void finishTraining()}
+            disabled={processing || !session?.trainingStartedAt}
+            onClick={() => void requestManualFinishTraining()}
           >
-            完成训练
+            结束训练
           </Button>
         </View>
       ) : (

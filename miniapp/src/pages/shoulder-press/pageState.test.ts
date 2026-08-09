@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import type { CurrentPrescription } from '../../types/patientApp'
 import {
   canStartShoulderPressRecording,
-  canCompleteShoulderPressTraining,
   computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
   isServerSafeFinalizeStatus,
@@ -61,17 +60,6 @@ describe('shoulder press page state', () => {
     expect(canStartShoulderPressRecording({ actionReady: false, cameraReady: true, busy: false })).toBe(false)
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: false, busy: false })).toBe(false)
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
-  })
-
-  it('allows finishing only after the prescribed shoulder press duration', () => {
-    expect(canCompleteShoulderPressTraining({
-      actualDurationMs: 119_000,
-      expectedDurationSeconds: 120
-    })).toBe(false)
-    expect(canCompleteShoulderPressTraining({
-      actualDurationMs: 120_000,
-      expectedDurationSeconds: 120
-    })).toBe(true)
   })
 
   it('computes a clamped prescription countdown from effective recording time', () => {

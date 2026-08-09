@@ -103,6 +103,7 @@ const taroHarness = vi.hoisted(() => {
     navigateTo: vi.fn(),
     navigateBack: vi.fn(),
     redirectTo: vi.fn(),
+    showModal: vi.fn(async () => ({ confirm: true, cancel: false })),
     setKeepScreenOn: vi.fn(() => Promise.resolve()),
     saveFile: vi.fn(),
     getVideoInfo: vi.fn(),
@@ -372,6 +373,16 @@ function findButtonByText(node: unknown, text: string): ReactElement {
   const button = findAll(node, (element) => element.type === 'Button' && textContent(element).includes(text))[0]
   if (!button) throw new Error(`Button not found: ${text}; rendered: ${textContent(node)}`)
   return button
+}
+
+function clickButtonByText(node: unknown, text: string) {
+  const onClick = findButtonByText(node, text).props.onClick
+  if (typeof onClick === 'function') onClick()
+}
+
+function initializeCamera(node: unknown) {
+  const onInitDone = findFirstByType(node, 'Camera').props.onInitDone
+  if (typeof onInitDone === 'function') onInitDone()
 }
 
 function findFirstByType(node: unknown, type: string): ReactElement {
@@ -743,7 +754,7 @@ describe('shoulder press pages', () => {
 
       expect(recorder.finish).toHaveBeenCalledTimes(1)
       expect(textContent(page.element)).toContain('正在录像')
-      expect(findButtonByText(page.element, '完成训练')).toBeTruthy()
+      expect(findButtonByText(page.element, '结束训练')).toBeTruthy()
 
       vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
       await recorder.options.onSegment('wxfile://temp/retained-start.mp4', 15_000)
@@ -798,6 +809,46 @@ describe('shoulder press pages', () => {
     }
   })
 
+  it('allows an early manual finish only after confirmation', async () => {
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+    page.rerender()
+
+    const finishButton = findButtonByText(page.element, '结束训练')
+    expect(finishButton.props.disabled).toBe(false)
+    clickButtonByText(page.element, '结束训练')
+    await flushPromises()
+
+    expect(taroHarness.taroMock.showModal).toHaveBeenCalledWith(expect.objectContaining({
+      title: '结束训练？',
+      confirmText: '结束训练'
+    }))
+    expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues recording when the patient cancels manual finish', async () => {
+    taroHarness.taroMock.showModal.mockResolvedValueOnce({ confirm: false, cancel: true })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+    page.rerender()
+
+    clickButtonByText(page.element, '结束训练')
+    await flushPromises()
+
+    expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('正在录像')
+  })
+
   it('persists end before recorder finalization and upload work', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
@@ -816,7 +867,7 @@ describe('shoulder press pages', () => {
       recorderHarness.instances[0].finish.mockReturnValueOnce(finish.promise)
       vi.setSystemTime(new Date('2026-08-06T01:41:27Z'))
       page.rerender()
-      findButtonByText(page.element, '完成训练').props.onClick?.()
+      findButtonByText(page.element, '结束训练').props.onClick?.()
       await flushPromises()
 
       expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
@@ -859,7 +910,7 @@ describe('shoulder press pages', () => {
         throw new Error('结束时间写入失败')
       })
 
-      findButtonByText(page.element, '完成训练').props.onClick?.()
+      findButtonByText(page.element, '结束训练').props.onClick?.()
       await flushPromises(20)
 
       expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
@@ -1310,7 +1361,7 @@ describe('shoulder press pages', () => {
     page.rerender()
     expect(events).toEqual(['upload:0'])
 
-    findButtonByText(page.element, '完成训练').props.onClick?.()
+    findButtonByText(page.element, '结束训练').props.onClick?.()
     await flushPromises()
 
     try {
@@ -1409,7 +1460,7 @@ describe('shoulder press pages', () => {
     page.rerender()
 
     recorderHarness.instances[0].finish.mockReturnValueOnce(finish.promise)
-    findButtonByText(page.element, '完成训练').props.onClick?.()
+    findButtonByText(page.element, '结束训练').props.onClick?.()
     await flushPromises()
     await taroHarness.hideCallbacks[0]()
     await flushPromises()
@@ -1446,15 +1497,15 @@ describe('shoulder press pages', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('还需约 30 秒')
-    expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(true)
+    expect(findButtonByText(page.element, '结束训练').props.disabled).toBe(false)
 
     vi.setSystemTime(startAt + 90_000)
     page.rerender()
 
-    expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(false)
+    expect(findButtonByText(page.element, '结束训练').props.disabled).toBe(false)
   })
 
-  it('counts resume duration from the saved base after hide pause before enabling completion', async () => {
+  it('counts resume duration from the saved base after hide pause without gating manual finish', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
@@ -1489,22 +1540,22 @@ describe('shoulder press pages', () => {
 
     expect(textContent(page.element)).toContain('00:50')
     expect(textContent(page.element)).toContain('还需约 10 秒')
-    expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(true)
+    expect(findButtonByText(page.element, '结束训练').props.disabled).toBe(false)
 
     vi.setSystemTime(startAt + 70_000)
     page.rerender()
 
     expect(textContent(page.element)).toContain('01:00')
-    expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(false)
+    expect(findButtonByText(page.element, '结束训练').props.disabled).toBe(false)
   })
 
-  it('automatically finishes when the current session reaches its prescription duration', async () => {
+  it('auto finishes once at the prescription duration without a confirmation', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
     requestMock.mockResolvedValueOnce({
       ...PRESCRIPTION,
-      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 1 }]
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 1 / 60 }]
     })
 
     const page = renderPage(ShoulderPressCameraPage)
@@ -1516,9 +1567,10 @@ describe('shoulder press pages', () => {
     await flushPromises()
     page.rerender()
 
-    vi.advanceTimersByTime(60_000)
+    await vi.advanceTimersByTimeAsync(1_100)
     await flushPromises()
 
+    expect(taroHarness.taroMock.showModal).not.toHaveBeenCalled()
     expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
   })
 
