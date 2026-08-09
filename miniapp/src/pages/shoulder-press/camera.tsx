@@ -23,6 +23,7 @@ import {
   type ShoulderPressAction
 } from './pageState'
 import { ShoulderPressRecorder } from './recorder'
+import { ShoulderPressTrainingOverlay } from './trainingOverlay'
 import {
   appendUploadableShoulderPressSegment,
   buildShoulderPressSessionUrl,
@@ -788,6 +789,11 @@ export default function ShoulderPressCameraPage() {
                 setCameraReady(false)
                 setError('请开启摄像头权限，摄像头可用后才能开始录像')
               }}
+            />
+            <ShoulderPressTrainingOverlay
+              videoUrl={action?.video_url ?? null}
+              elapsedMs={elapsedMs}
+              expectedDurationSeconds={session?.expectedDurationSeconds ?? 1}
             />
           </View>
         </View>

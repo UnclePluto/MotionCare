@@ -7,7 +7,12 @@ import {
 
 type ReactElement = {
   type: string
-  props: Record<string, unknown> & { children?: unknown }
+  props: Record<string, unknown> & {
+    children?: unknown
+    onError?: () => unknown
+    onTouchStart?: (event: { touches: Array<{ clientX: number; clientY: number }> }) => unknown
+    onTouchEnd?: (event: { changedTouches: Array<{ clientX: number; clientY: number }> }) => unknown
+  }
 }
 
 type HookEntry = unknown
@@ -250,6 +255,7 @@ import {
 import ShoulderPressCameraPage from './camera'
 import ShoulderPressGuidePage from './index'
 import ShoulderPressPreviewPage from './preview'
+import { ShoulderPressTrainingOverlay } from './trainingOverlay'
 import ShoulderPressUploadPage from './upload'
 
 const PRESCRIPTION = {
@@ -518,6 +524,47 @@ describe('shoulder press pages', () => {
 
     expect(textContent(guide.element)).not.toContain('动作预览')
     expect(findButtonByText(guide.element, '开始训练')).toBeTruthy()
+  })
+
+  it('keeps the timer fixed while the muted preview hides and restores', () => {
+    const overlay = renderPage(ShoulderPressTrainingOverlay, {
+      videoUrl: 'https://cdn.example.com/demo.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180
+    })
+
+    expect(textContent(overlay.element)).toContain('已训练00:24')
+    expect(textContent(overlay.element)).toContain('剩余02:36')
+    const timerBefore = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-timer'
+    ))[0]
+    const preview = findFirstByType(overlay.element, 'Video')
+    expect(preview.props).toMatchObject({ autoplay: true, loop: true, muted: true, controls: false })
+
+    preview.props.onTouchStart?.({ touches: [{ clientX: 10, clientY: 10 }] })
+    preview.props.onTouchEnd?.({ changedTouches: [{ clientX: 60, clientY: 12 }] })
+    overlay.rerender()
+
+    expect(findAll(overlay.element, (element) => element.type === 'Video')).toHaveLength(0)
+    expect(textContent(overlay.element)).toContain('向左滑恢复示范')
+    const timerAfter = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-timer'
+    ))[0]
+    expect(timerAfter.props.className).toBe(timerBefore.props.className)
+  })
+
+  it('degrades preview playback without changing timer content', () => {
+    const overlay = renderPage(ShoulderPressTrainingOverlay, {
+      videoUrl: 'https://cdn.example.com/demo.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180
+    })
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    overlay.rerender()
+
+    expect(textContent(overlay.element)).toContain('示范视频暂时无法播放')
+    expect(textContent(overlay.element)).toContain('已训练00:24')
+    expect(textContent(overlay.element)).toContain('剩余02:36')
   })
 
   it('records with the low camera resolution and forty-minute safety boundary', async () => {
