@@ -722,7 +722,10 @@ export default function ShoulderPressCameraPage() {
     const timer = setInterval(() => {
       const elapsedMs = currentElapsedMs()
       setLiveTick(Date.now())
-      if (shouldAutoFinishShoulderPressTraining(elapsedMs)) {
+      if (shouldAutoFinishShoulderPressTraining({
+        actualDurationMs: elapsedMs,
+        expectedDurationSeconds: sessionRef.current?.expectedDurationSeconds ?? 1
+      })) {
         void finishTraining(true)
       }
     }, 1000)

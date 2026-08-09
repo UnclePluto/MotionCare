@@ -1451,6 +1451,30 @@ describe('shoulder press pages', () => {
     expect(findButtonByText(page.element, '完成训练').props.disabled).toBe(false)
   })
 
+  it('automatically finishes when the current session reaches its prescription duration', async () => {
+    vi.useFakeTimers()
+    const startAt = 1783692000000
+    vi.setSystemTime(startAt)
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 1 }]
+    })
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onInitDone?.()
+    page.rerender()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises()
+    page.rerender()
+
+    vi.advanceTimersByTime(60_000)
+    await flushPromises()
+
+    expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
+  })
+
   it('stops at the safe boundary before 2400 seconds after automatic segment splits', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
