@@ -191,40 +191,51 @@ describe('ShoulderPressRecorder', () => {
     const recorder = new ShoulderPressRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 15_000,
+      maxDurationMs: 12_000,
       onMaxDuration,
       onSegment
     })
 
     await recorder.start()
-    now = 14_900
+    now = 5_000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-0.mp4' })
+    await flushPromises()
+    expect(camera.startRecord).toHaveBeenCalledTimes(2)
+    now = 10_000
+    startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-1.mp4' })
+    await flushPromises()
+    expect(camera.startRecord).toHaveBeenCalledTimes(3)
+
+    now = 11_900
     const firstFinish = recorder.finish()
     const firstFinishResult = firstFinish.catch((error: unknown) => error)
     expect(camera.stopRecord).toHaveBeenCalledTimes(1)
 
-    now = 15_000
-    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
+    now = 12_000
+    startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
 
-    expect(onMaxDuration).toHaveBeenCalledWith(15_000)
+    expect(onMaxDuration).toHaveBeenCalledWith(12_000)
     expect(camera.stopRecord).toHaveBeenCalledTimes(1)
     await flushPromises()
-    expect(onSegment).toHaveBeenCalledWith('wxfile://temp/timeout-tail.mp4', 15_000)
+    expect(onSegment).toHaveBeenNthCalledWith(3, 'wxfile://temp/timeout-tail.mp4', 2_000)
 
     stopOptions[0].fail?.()
     await expect(firstFinishResult).resolves.toEqual(
       expect.objectContaining({ message: '录像停止失败，请稍后重试' })
     )
 
-    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
-    now = 16_000
+    startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
+    now = 13_000
     const retriedFinish = recorder.finish()
     expect(camera.stopRecord).toHaveBeenCalledTimes(2)
     stopOptions[1].success?.({ tempVideoPath: 'wxfile://temp/stop-duplicate.mp4' })
 
     await expect(retriedFinish).resolves.toEqual([
-      { savedFilePath: 'wxfile://temp/timeout-tail.mp4', durationMs: 15_000 }
+      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/timeout-tail.mp4', durationMs: 2_000 }
     ])
-    expect(onSegment).toHaveBeenCalledTimes(1)
+    expect(onSegment).toHaveBeenCalledTimes(3)
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
 
@@ -274,16 +285,24 @@ describe('ShoulderPressRecorder', () => {
     const recorder = new ShoulderPressRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 15_000,
+      maxDurationMs: 12_000,
       onMaxDuration,
       onSegment: async () => segmentPending
     })
 
     await recorder.start()
-    now = 16_000
-    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
+    now = 6_000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-0.mp4' })
+    await flushPromises()
+    expect(camera.startRecord).toHaveBeenCalledTimes(2)
+    now = 11_000
+    startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-1.mp4' })
+    await flushPromises()
+    expect(camera.startRecord).toHaveBeenCalledTimes(3)
+    now = 13_000
+    startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
 
-    expect(onMaxDuration).toHaveBeenCalledWith(16_000)
+    expect(onMaxDuration).toHaveBeenCalledWith(13_000)
 
     let finishSettled = false
     const finishPromise = recorder.finish().finally(() => {
@@ -292,10 +311,12 @@ describe('ShoulderPressRecorder', () => {
     await flushPromises()
     expect(finishSettled).toBe(false)
 
-    now = 30_000
+    now = 14_000
     releaseSegment()
     await expect(finishPromise).resolves.toEqual([
-      { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 15_000 }
+      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 2_000 }
     ])
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
@@ -476,37 +497,48 @@ describe('ShoulderPressRecorder', () => {
   it('keeps a failed final path retryable and only delivers it after retry succeeds', async () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
-    let saveAttempt = 0
+    let finalSegmentSaveAttempt = 0
     const onMaxDuration = vi.fn()
-    const onSegment = vi.fn(async () => {
-      saveAttempt += 1
-      if (saveAttempt === 1) throw new Error('尾段保存失败')
+    const onSegment = vi.fn(async (path: string) => {
+      if (path !== 'wxfile://temp/final.mp4') return
+      finalSegmentSaveAttempt += 1
+      if (finalSegmentSaveAttempt === 1) throw new Error('尾段保存失败')
     })
     const recorder = new ShoulderPressRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 30_000,
+      maxDurationMs: 12_000,
       onMaxDuration,
       onSegment
     })
 
     await recorder.start()
-    now = 30_000
-    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
+    now = 5_000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-0.mp4' })
+    await flushPromises()
+    expect(camera.startRecord).toHaveBeenCalledTimes(2)
+    now = 10_000
+    startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-1.mp4' })
+    await flushPromises()
+    expect(camera.startRecord).toHaveBeenCalledTimes(3)
+    now = 12_000
+    startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
     await flushPromises()
 
-    expect(onMaxDuration).toHaveBeenCalledWith(30_000)
+    expect(onMaxDuration).toHaveBeenCalledWith(12_000)
     await expect(recorder.finish()).rejects.toThrow('尾段保存失败')
     expect(recorder.hasFailedSegment()).toBe(true)
 
     await expect(recorder.retryFailedSegment()).resolves.toEqual({
       savedFilePath: 'wxfile://temp/final.mp4',
-      durationMs: 30_000
+      durationMs: 2_000
     })
     expect(recorder.hasFailedSegment()).toBe(false)
     await expect(recorder.finish()).resolves.toEqual([
-      { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 30_000 }
+      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 2_000 }
     ])
-    expect(onSegment).toHaveBeenCalledTimes(2)
+    expect(onSegment).toHaveBeenCalledTimes(4)
   })
 })
