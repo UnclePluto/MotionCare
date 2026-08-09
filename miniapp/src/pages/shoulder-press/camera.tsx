@@ -1,19 +1,31 @@
 import { Button, Camera, Text, View } from '@tarojs/components'
-import Taro, { useDidHide, useRouter } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 
 import { request } from '../../api/client'
 import { containsSensitiveCredentialText } from '../../api/safeError'
 import type { CurrentPrescription } from '../../types/patientApp'
+import './assets/audio/network_slow_paused.m4a'
+import './assets/audio/upload_recovered.m4a'
+import {
+  createShoulderPressAlertPlayer,
+  SHOULDER_PRESS_ALERT_TEXT,
+  type ShoulderPressAlertKind,
+  type ShoulderPressAlertPlayer
+} from './alertAudio'
+import {
+  canResumeShoulderPressFromBuffer,
+  nextShoulderPressBufferTransition,
+  pendingShoulderPressLocalBytes,
+  type ShoulderPressBufferState
+} from './bufferGuard'
 import { saveTemporaryShoulderPressSegmentForRetry } from './localFile'
 import {
   canStartShoulderPressRecording,
   computeShoulderPressEffectiveDuration,
-  formatShoulderPressTimer,
   loadOwnedPendingShoulderPressSession,
   registerShoulderPressBackgroundUpload,
   reLaunchPendingShoulderPressUploadIfNeeded,
-  remainingShoulderPressSeconds,
   resolveShoulderPressAction,
   saveOwnedPendingShoulderPressSession,
   shoulderPressUploadCounters,
@@ -38,7 +50,6 @@ import {
   normalizeShoulderPressExpectedDurationSeconds,
   requireShoulderPressTrainingStartedAt,
   type CompressedShoulderPressSegment,
-  type PendingShoulderPressSegment,
   type PendingShoulderPressSession
 } from './session'
 import {
@@ -46,11 +57,37 @@ import {
   getVideoSessionStatus,
   uploadVideoSegment
 } from './api'
+import {
+  cleanupAndCheckShoulderPressStorage,
+  type ShoulderPressSavedFile
+} from './storageGuard'
 
 type CameraContext = ReturnType<typeof Taro.createCameraContext>
 type SessionUpdate = (session: PendingShoulderPressSession) => void
+type PreflightState = 'idle' | 'checking' | 'blocked' | 'failed'
 
 let backgroundUploadPromise: Promise<void> | null = null
+
+function listSavedShoulderPressFiles(): Promise<ShoulderPressSavedFile[]> {
+  const fs = Taro.getFileSystemManager()
+  return new Promise((resolve, reject) => {
+    fs.getSavedFileList({
+      success: (result) => resolve(result.fileList ?? []),
+      fail: reject
+    })
+  })
+}
+
+function removeSavedShoulderPressFile(filePath: string): Promise<void> {
+  const fs = Taro.getFileSystemManager()
+  return new Promise((resolve, reject) => {
+    fs.removeSavedFile({
+      filePath,
+      success: () => resolve(),
+      fail: reject
+    })
+  })
+}
 
 function mediaErrorDetail(error: unknown): string {
   let detail = ''
@@ -143,11 +180,27 @@ function mergeServerUploaded(
     ...session,
     segments: session.segments.map((segment) => {
       if (!isCompressedShoulderPressSegment(segment)) return segment
-      if (uploaded.has(segment.index)) return { ...segment, uploadState: 'uploaded' }
+      if (uploaded.has(segment.index)) {
+        return { ...segment, uploadState: 'uploaded' }
+      }
       if (segment.uploadState === 'uploading') return { ...segment, uploadState: 'pending', sha256: undefined }
       return segment
     })
   }
+}
+
+function newlyConfirmedLocalFiles(
+  session: PendingShoulderPressSession,
+  uploadedSegments: number[] | undefined
+): string[] {
+  const uploaded = new Set(uploadedSegments ?? [])
+  return session.segments.flatMap((segment) => (
+    isCompressedShoulderPressSegment(segment) &&
+    segment.uploadState !== 'uploaded' &&
+    uploaded.has(segment.index)
+      ? [segment.savedFilePath]
+      : []
+  ))
 }
 
 async function ensureRemoteSession(
@@ -165,10 +218,13 @@ async function ensureRemoteSession(
   })
   const latest = loadOwnedPendingShoulderPressSession(Taro, session.clientSessionId)
   if (!latest) return null
-  return persistOwnedSession({
+  const confirmedLocalFiles = newlyConfirmedLocalFiles(latest, created.uploaded_segments)
+  const saved = persistOwnedSession({
     ...mergeServerUploaded(latest, created.uploaded_segments),
     videoId: created.video_id
   }, onSession)
+  if (saved) confirmedLocalFiles.forEach(deleteLocalSegmentFile)
+  return saved
 }
 
 async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
@@ -182,11 +238,16 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
   const status = await getVideoSessionStatus(session.videoId)
   const latestAfterStatus = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
   if (!latestAfterStatus) return
+  const confirmedLocalFiles = newlyConfirmedLocalFiles(
+    latestAfterStatus,
+    status.uploaded_segments
+  )
   session = persistOwnedSession(mergeServerUploaded({
     ...latestAfterStatus,
     videoId: session.videoId
   }, status.uploaded_segments), onSession)
   if (!session) return
+  confirmedLocalFiles.forEach(deleteLocalSegmentFile)
 
   for (;;) {
     session = loadOwnedPendingShoulderPressSession(Taro, clientSessionId)
@@ -276,6 +337,8 @@ export default function ShoulderPressCameraPage() {
   const [recording, setRecording] = useState(false)
   const [paused, setPaused] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [preflightState, setPreflightState] = useState<PreflightState>('idle')
+  const [bufferState, setBufferState] = useState<ShoulderPressBufferState>('recording')
   const [tailSaveFailed, setTailSaveFailed] = useState(false)
   const [session, setSession] = useState<PendingShoulderPressSession | null>(null)
   const [error, setError] = useState('')
@@ -286,6 +349,7 @@ export default function ShoulderPressCameraPage() {
   const recordingRef = useRef(false)
   const pausedRef = useRef(false)
   const commandInFlightRef = useRef(false)
+  const preflightInFlightRef = useRef(false)
   const finishInFlightRef = useRef(false)
   const finishPromptInFlightRef = useRef(false)
   const finishAttemptGenerationRef = useRef(0)
@@ -293,16 +357,76 @@ export default function ShoulderPressCameraPage() {
   const tailSaveFailedRef = useRef(false)
   const hidePauseRequestedRef = useRef(false)
   const mountedRef = useRef(true)
+  const bufferStateRef = useRef<ShoulderPressBufferState>('recording')
+  const latestPendingBytesRef = useRef(0)
+  const bufferPauseQueuedRef = useRef(false)
+  const alertPlayerRef = useRef<ShoulderPressAlertPlayer | null>(null)
   const keepScreenOnRef = useRef(false)
   const recordingBaseDurationMsRef = useRef(0)
   const recordingStartedAtRef = useRef(0)
   const segmentSaveChainRef = useRef<Promise<void>>(Promise.resolve())
+
+  if (!alertPlayerRef.current) {
+    alertPlayerRef.current = createShoulderPressAlertPlayer()
+  }
+
+  function playBufferAlert(kind: ShoulderPressAlertKind) {
+    void alertPlayerRef.current?.play(kind).catch(() => false)
+  }
+
+  function queueBufferPause() {
+    if (bufferPauseQueuedRef.current) return
+    bufferPauseQueuedRef.current = true
+    void segmentSaveChainRef.current.finally(() => {
+      if (!mountedRef.current) {
+        bufferPauseQueuedRef.current = false
+        return
+      }
+      void pauseTraining().finally(() => {
+        bufferPauseQueuedRef.current = false
+      })
+    })
+  }
+
+  function enterBufferPaused() {
+    if (bufferStateRef.current !== 'recording') return
+    bufferStateRef.current = 'buffer_paused'
+    setBufferState('buffer_paused')
+    playBufferAlert('pause')
+    queueBufferPause()
+  }
+
+  function coordinateBuffer(nextSession: PendingShoulderPressSession) {
+    if (!mountedRef.current) return
+    const pendingBytes = pendingShoulderPressLocalBytes(nextSession.segments)
+    latestPendingBytesRef.current = pendingBytes
+    const hasFailedLocalFile = nextSession.segments.some((segment) => (
+      isCompressedShoulderPressSegment(segment) &&
+      segment.uploadState !== 'uploaded' &&
+      segment.localFileState === 'save_failed'
+    ))
+    if (hasFailedLocalFile && bufferStateRef.current === 'recording') {
+      enterBufferPaused()
+      return
+    }
+
+    const transition = nextShoulderPressBufferTransition({
+      state: bufferStateRef.current,
+      pendingBytes
+    })
+    if (transition.state === bufferStateRef.current) return
+    bufferStateRef.current = transition.state
+    setBufferState(transition.state)
+    if (transition.alert) playBufferAlert(transition.alert)
+    if (transition.state === 'buffer_paused') queueBufferPause()
+  }
 
   function syncSession(nextSession: PendingShoulderPressSession) {
     sessionRef.current = nextSession
     if (!mountedRef.current) return
     setSession(nextSession)
     if (nextSession.lastError) setError(nextSession.lastError)
+    coordinateBuffer(nextSession)
   }
 
   function saveCurrentSession(nextSession: PendingShoulderPressSession) {
@@ -416,7 +540,10 @@ export default function ShoulderPressCameraPage() {
       await write
     } catch (saveError) {
       const message = segmentPersistenceErrorMessage(saveError)
-      setError(message)
+      if (mountedRef.current) {
+        setError(message)
+        enterBufferPaused()
+      }
       throw new Error(message)
     }
   }
@@ -445,7 +572,7 @@ export default function ShoulderPressCameraPage() {
     return recorderRef.current
   }
 
-  async function startTraining() {
+  async function startRecordingForCurrentSession() {
     const canStart = canStartShoulderPressRecording({
       actionReady: action !== null && sessionRef.current !== null,
       cameraReady,
@@ -502,11 +629,13 @@ export default function ShoulderPressCameraPage() {
       }
       recordingRef.current = true
       pausedRef.current = false
+      bufferStateRef.current = 'recording'
       recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
       recordingStartedAtRef.current = startedAtMs
       setTrainingScreenAwake(true)
       setRecording(true)
       setPaused(false)
+      setBufferState('recording')
     } catch (startError) {
       if (!recordingRef.current) setTrainingScreenAwake(false)
       setError(startError instanceof Error ? startError.message : '摄像头录像启动失败，请检查权限后重试')
@@ -519,9 +648,82 @@ export default function ShoulderPressCameraPage() {
     }
   }
 
+  async function prepareAndStartTraining() {
+    if (preflightInFlightRef.current || commandInFlightRef.current || finishInFlightRef.current) return
+    if (!action || !cameraReady) {
+      setError(action ? '摄像头尚未就绪，请开启权限后再继续训练' : '当前动作不可用，请返回处方重新进入')
+      return
+    }
+
+    preflightInFlightRef.current = true
+    setProcessing(true)
+    setPreflightState('checking')
+    setError('')
+    try {
+      const result = await cleanupAndCheckShoulderPressStorage({
+        hasPendingSession: () => Boolean(loadPendingShoulderPressSession(Taro)),
+        listSavedFiles: listSavedShoulderPressFiles,
+        removeSavedFile: removeSavedShoulderPressFile,
+        isActive: () => mountedRef.current
+      })
+      if (!mountedRef.current || result.kind === 'cancelled') return
+      if (result.kind === 'pending_session') {
+        await Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
+        return
+      }
+      if (result.kind === 'blocked') {
+        setPreflightState('blocked')
+        return
+      }
+
+      const reusableSession = sessionRef.current?.trainingStartedAt
+        ? sessionRef.current
+        : null
+      const nextSession = reusableSession ?? createPendingShoulderPressSession({
+        actionId,
+        expectedDurationSeconds: expectedDurationSeconds(action),
+        trainingDate: todayTrainingDate()
+      })
+      sessionRef.current = nextSession
+      setSession(nextSession)
+      setPreflightState('idle')
+      setProcessing(false)
+      await startRecordingForCurrentSession()
+    } catch {
+      if (!mountedRef.current) return
+      setPreflightState('failed')
+      setError('无法检查录像空间，请重试')
+    } finally {
+      preflightInFlightRef.current = false
+      if (mountedRef.current) {
+        setProcessing(false)
+        if (hidePauseRequestedRef.current && !commandInFlightRef.current && !finishInFlightRef.current) {
+          void pauseTraining()
+        }
+      }
+    }
+  }
+
+  async function resumeTrainingAfterBufferReady() {
+    if (bufferStateRef.current === 'buffer_paused') return
+    if (bufferStateRef.current === 'buffer_ready') {
+      const latest = loadPendingShoulderPressSession(Taro) ?? sessionRef.current
+      if (!latest) return
+      const pendingBytes = pendingShoulderPressLocalBytes(latest.segments)
+      latestPendingBytesRef.current = pendingBytes
+      if (!canResumeShoulderPressFromBuffer(pendingBytes)) {
+        bufferStateRef.current = 'buffer_paused'
+        setBufferState('buffer_paused')
+        return
+      }
+      syncSession(latest)
+    }
+    await startRecordingForCurrentSession()
+  }
+
   async function pauseTraining() {
     if (finishInFlightRef.current) return
-    if (commandInFlightRef.current) {
+    if (preflightInFlightRef.current || commandInFlightRef.current) {
       hidePauseRequestedRef.current = true
       return
     }
@@ -729,13 +931,6 @@ export default function ShoulderPressCameraPage() {
           setError('动作已失效或处方已更新，请返回当前处方重新进入')
           return
         }
-        const nextSession = createPendingShoulderPressSession({
-          actionId,
-          expectedDurationSeconds: expectedDurationSeconds(currentAction),
-          trainingDate: todayTrainingDate()
-        })
-        sessionRef.current = nextSession
-        setSession(nextSession)
       } catch (loadError) {
         if (cancelled) return
         setError(loadError instanceof Error ? loadError.message : '当前动作加载失败，请稍后重试')
@@ -752,6 +947,7 @@ export default function ShoulderPressCameraPage() {
 
   useEffect(() => () => {
     mountedRef.current = false
+    alertPlayerRef.current?.dispose()
     setTrainingScreenAwake(false)
   }, [])
 
@@ -783,150 +979,184 @@ export default function ShoulderPressCameraPage() {
     void pauseTraining()
   })
 
+  useDidShow(() => {
+    if (
+      bufferStateRef.current !== 'buffer_paused' &&
+      bufferStateRef.current !== 'buffer_ready'
+    ) return
+    const latest = loadPendingShoulderPressSession(Taro)
+    if (latest) syncSession(latest)
+  })
+
   const elapsedMs = currentElapsedMs()
   const counters = shoulderPressUploadCounters(session?.segments ?? [])
-  const timerText = formatShoulderPressTimer(elapsedMs)
-  const remainingSeconds = remainingShoulderPressSeconds(
-    elapsedMs,
-    session?.expectedDurationSeconds ?? 1
-  )
-  const canStart = canStartShoulderPressRecording({
-    actionReady: action !== null && session !== null,
+  const canStartInitial = canStartShoulderPressRecording({
+    actionReady: action !== null,
     cameraReady,
-    busy: processing || recording
+    busy: processing || recording || preflightState === 'checking'
   })
-  const statusText = recording
-    ? '正在录像，保持动作完整入镜。'
-    : paused || pausedRef.current
-      ? '训练已暂停，点击继续训练后再录像。'
-      : tailSaveFailed
-        ? '尾段尚未保存，不能提交当前录像。'
-        : '准备好后点击开始训练。'
+  const preflightMessage = preflightState === 'checking'
+    ? '正在清理录像空间，请稍候…'
+    : preflightState === 'blocked'
+      ? '录像空间不足，至少需要 65 MB 可用空间。'
+      : preflightState === 'failed'
+        ? '无法检查录像空间，请重试'
+        : ''
+  const bufferMessage = bufferState === 'buffer_paused'
+    ? SHOULDER_PRESS_ALERT_TEXT.pause
+    : bufferState === 'buffer_ready'
+      ? SHOULDER_PRESS_ALERT_TEXT.ready
+      : ''
+  const bufferPaused = bufferState === 'buffer_paused'
+  const bufferReady = bufferState === 'buffer_ready'
 
   return (
-    <View className='page shoulder-press-page'>
-      <View className='page-hero shoulder-press-hero'>
-        <Text className='eyebrow'>抗阻训练</Text>
-        <Text className='title'>{action?.action_name ?? '肩部推举'}</Text>
-        <Text className='muted'>前置摄像头会记录动作，请跟随示例缓慢完成。</Text>
-      </View>
+    <View className='training-camera-page'>
+      <Camera
+        className='training-camera-fullscreen'
+        devicePosition='front'
+        resolution='low'
+        flash='off'
+        mode='normal'
+        onInitDone={() => {
+          setCameraReady(true)
+        }}
+        onError={() => {
+          setCameraReady(false)
+          setError('请开启摄像头权限，摄像头可用后才能开始录像')
+        }}
+      />
 
-      <View className='camera-training-stage'>
-        <View className='training-media-slot'>
-          <Text className='training-media-label'>我的画面</Text>
-          <Text className='camera-training-guidance'>请将手机竖直固定，确保上半身和双臂完整入镜。</Text>
-          <View className='camera-training-frame'>
-            <Camera
-              className='camera-preview'
-              devicePosition='front'
-              resolution='low'
-              flash='off'
-              mode='normal'
-              onInitDone={() => {
-                setCameraReady(true)
-              }}
-              onError={() => {
-                setCameraReady(false)
-                setError('请开启摄像头权限，摄像头可用后才能开始录像')
-              }}
-            />
-            <ShoulderPressTrainingOverlay
-              videoUrl={action?.video_url ?? null}
-              elapsedMs={elapsedMs}
-              expectedDurationSeconds={session?.expectedDurationSeconds ?? 1}
-              started={Boolean(session?.trainingStartedAt)}
-            />
-          </View>
+      <View className='training-camera-safe-top'>
+        <View className='training-camera-back' onClick={() => Taro.navigateBack({ delta: 1 })}>
+          ‹
         </View>
       </View>
 
-      <View className='recording-dashboard'>
-        <View className='recording-metric'>
-          <Text className='label'>录像计时</Text>
-          <Text className='recording-timer'>{timerText}</Text>
-        </View>
-        <View className='recording-metric'>
-          <Text className='label'>分段上传</Text>
-          <Text className='recording-count'>{counters.uploaded}/{counters.total}</Text>
-        </View>
-        <View className='recording-metric recording-metric-wide'>
-          <Text className='label'>当前状态</Text>
-          <Text className='recording-state-text'>{statusText}</Text>
-        </View>
-      </View>
+      <ShoulderPressTrainingOverlay
+        videoUrl={action?.video_url ?? null}
+        elapsedMs={elapsedMs}
+        expectedDurationSeconds={session?.expectedDurationSeconds ?? (
+          action ? expectedDurationSeconds(action) : 1
+        )}
+        started={Boolean(session?.trainingStartedAt)}
+      />
 
-      {!loaded ? <Text className='muted loading-text'>正在加载当前动作</Text> : null}
-      {remainingSeconds > 0 && session?.segments.length ? (
-        <Text className='recording-status'>
-          处方建议剩余约 {remainingSeconds} 秒，可按需提前结束训练。
-        </Text>
+      {preflightMessage ? (
+        <View className='training-preflight-overlay'>
+          <Text className='training-preflight-message'>{preflightMessage}</Text>
+          {preflightState === 'blocked' || preflightState === 'failed' ? (
+            <View className='training-preflight-actions'>
+              <Button
+                className='camera-start-button'
+                disabled={processing}
+                onClick={() => void prepareAndStartTraining()}
+              >
+                重新清理
+              </Button>
+              <Button
+                className='training-preflight-back'
+                onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
+              >
+                返回处方
+              </Button>
+            </View>
+          ) : null}
+        </View>
       ) : null}
-      {error ? <Text className='error'>{error}</Text> : null}
 
-      {!action && loaded ? (
-        <Button
-          className='secondary-button full-button'
-          onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
-        >
-          返回当前处方
-        </Button>
-      ) : tailSaveFailed ? (
-        <View className='button-row shoulder-press-action-row'>
-          <Button
-            className='primary-button'
-            loading={processing}
-            disabled={processing}
-            onClick={() => void retryTailSegment()}
-          >
-            重试保存尾段
-          </Button>
-          <Button
-            className='secondary-button'
-            loading={processing}
-            disabled={processing}
-            onClick={() => void restartAfterTailFailure()}
-          >
-            重新训练
-          </Button>
+      {bufferMessage ? (
+        <View className='training-buffer-banner'>
+          <Text>{bufferMessage}</Text>
         </View>
-      ) : recording ? (
-        <Button
-          className='primary-button full-button shoulder-finish-button'
-          loading={processing}
-          disabled={processing || !session?.trainingStartedAt}
-          onClick={() => void requestManualFinishTraining()}
-        >
-          结束训练
-        </Button>
-      ) : paused ? (
-        <View className='button-row shoulder-press-action-row'>
+      ) : null}
+
+      {session?.segments.length ? (
+        <View className='training-upload-status'>
+          <Text>分段上传 {counters.uploaded}/{counters.total}</Text>
+        </View>
+      ) : null}
+
+      {!loaded ? <Text className='training-camera-loading'>正在加载当前动作</Text> : null}
+      {error ? <Text className='camera-error'>{error}</Text> : null}
+
+      <View className='training-camera-bottom-action'>
+        {!action && loaded ? (
           <Button
-            className='primary-button'
-            loading={processing}
-            disabled={!canStart}
-            onClick={() => void startTraining()}
+            className='training-secondary-button'
+            onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
           >
-            继续训练
+            返回当前处方
           </Button>
+        ) : tailSaveFailed ? (
+          <>
+            <Button
+              className='camera-start-button'
+              loading={processing}
+              disabled={processing}
+              onClick={() => void retryTailSegment()}
+            >
+              重试保存尾段
+            </Button>
+            <Button
+              className='training-secondary-button'
+              loading={processing}
+              disabled={processing}
+              onClick={() => void restartAfterTailFailure()}
+            >
+              重新训练
+            </Button>
+          </>
+        ) : bufferPaused ? (
+          <>
+            <Button className='camera-start-button' disabled>等待上传</Button>
+            <Button
+              className='camera-stop-button'
+              disabled={processing || !session?.trainingStartedAt}
+              onClick={() => void requestManualFinishTraining()}
+            >
+              结束训练
+            </Button>
+          </>
+        ) : bufferReady || paused ? (
+          <>
+            <Button
+              className='camera-start-button'
+              loading={processing}
+              disabled={processing || !cameraReady}
+              onClick={() => void resumeTrainingAfterBufferReady()}
+            >
+              继续训练
+            </Button>
+            <Button
+              className='camera-stop-button'
+              loading={processing}
+              disabled={processing || !session?.trainingStartedAt}
+              onClick={() => void requestManualFinishTraining()}
+            >
+              结束训练
+            </Button>
+          </>
+        ) : recording ? (
           <Button
-            className='primary-button full-button shoulder-finish-button'
+            className='camera-stop-button'
             loading={processing}
             disabled={processing || !session?.trainingStartedAt}
             onClick={() => void requestManualFinishTraining()}
           >
             结束训练
           </Button>
-        </View>
-      ) : (
-        <Button
-          className='primary-button full-button'
-          loading={processing}
-          disabled={!canStart}
-          onClick={() => void startTraining()}
-        >
-          开始训练
-        </Button>
-      )}
+        ) : (
+          <Button
+            className='camera-start-button'
+            loading={processing}
+            disabled={!canStartInitial}
+            onClick={() => void prepareAndStartTraining()}
+          >
+            开始训练
+          </Button>
+        )}
+      </View>
     </View>
   )
 }
