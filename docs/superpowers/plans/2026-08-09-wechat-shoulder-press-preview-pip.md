@@ -75,7 +75,9 @@ navigateBack: vi.fn(),
 redirectTo: vi.fn(),
 ```
 
-导入预览页，并用现有 `renderPage`、`findAll`、`findButtonByText` 辅助函数增加以下测试：
+导入预览页，并用现有 `renderPage`、`findAll`、`findButtonByText` 辅助函数把旧的
+`separates the example video from the native camera recording page` 用例替换为以下测试；不能保留
+旧用例中“动作介绍页包含一个 `Video`”的断言：
 
 ```ts
 it('offers direct training and a separate muted looping preview', async () => {
@@ -766,6 +768,10 @@ it('continues recording when the patient cancels manual finish', async () => {
   expect(textContent(page.element)).toContain('正在录像')
 })
 ```
+
+同一文件中所有面向录像控制的旧断言和点击目标都要从“完成训练”更新为“结束训练”。原先断言
+“未达到处方时长时按钮禁用”的用例改为断言按钮可点击，但只有确认弹窗返回 `confirm: true`
+后才调用录像器 `finish()`；不得同时保留新旧两套完成门槛。
 
 把处方测试动作时长改为可控值或建立 1 秒处方夹具，再增加自动结束断言：
 
