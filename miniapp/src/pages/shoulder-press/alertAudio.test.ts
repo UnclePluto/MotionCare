@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import {
+  createShoulderPressAlertPlayer,
+  SHOULDER_PRESS_ALERT_SRC,
+  SHOULDER_PRESS_ALERT_TEXT,
+} from './alertAudio'
+
 const taroMock = vi.hoisted(() => ({
   createInnerAudioContext: vi.fn(),
 }))
@@ -7,12 +13,6 @@ const taroMock = vi.hoisted(() => ({
 vi.mock('@tarojs/taro', () => ({
   default: taroMock,
 }))
-
-import {
-  createShoulderPressAlertPlayer,
-  SHOULDER_PRESS_ALERT_SRC,
-  SHOULDER_PRESS_ALERT_TEXT,
-} from './alertAudio'
 
 function audioContextHarness() {
   const callbacks: { ended?: () => void; error?: () => void } = {}

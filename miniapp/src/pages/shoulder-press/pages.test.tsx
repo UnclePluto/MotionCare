@@ -2875,7 +2875,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
     page.rerender()
 
-    findButtonByText(page.element, '继续训练').props.onClick?.()
+    clickButtonByText(page.element, '继续训练')
 
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
       url: '/pages/shoulder-press/index?actionId=42'
