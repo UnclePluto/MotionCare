@@ -890,6 +890,57 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances).toHaveLength(0)
   })
 
+  it('cancels an unresolved preflight after the page enters the background', async () => {
+    const before = deferred<Array<{ filePath: string; size: number }>>()
+    taroHarness.getSavedFileListMock
+      .mockImplementationOnce((options) => void before.promise.then((fileList) => options.success?.({ fileList })))
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+
+    await taroHarness.hideCallbacks[0]()
+    before.resolve([])
+    await flushPromises(20)
+
+    expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(recorderHarness.instances).toHaveLength(0)
+  })
+
+  it('does not persist a start time when the page hides while the recorder is starting', async () => {
+    const starting = deferred<void>()
+    recorderHarness.setNextStartPromise(starting.promise)
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+
+    expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
+    recorderHarness.instances[0].pause.mockImplementationOnce(async () => {
+      await recorderHarness.instances[0].options.onSegment(
+        'wxfile://temp/background-start.mp4',
+        3_000
+      )
+      return null
+    })
+    await taroHarness.hideCallbacks[0]()
+    starting.resolve()
+    await flushPromises(20)
+
+    expect(recorderHarness.instances[0].pause).toHaveBeenCalledTimes(1)
+    expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://temp/background-start.mp4'
+    }))
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+  })
+
   it('pauses once at 65MB and only becomes manually resumable below 10MB', async () => {
     const upload0 = deferred<{ index: number; sha256: string }>()
     const upload1 = deferred<{ index: number; sha256: string }>()
@@ -1070,6 +1121,47 @@ describe('shoulder press pages', () => {
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toHaveProperty('trainingStartedAt')
   })
 
+  it('persists an unreadable temporary segment and keeps the upload retry route available', async () => {
+    taroHarness.taroMock.getFileInfo.mockRejectedValueOnce(new Error('missing local file info'))
+    taroHarness.taroMock.getVideoInfo.mockResolvedValueOnce({
+      duration: 5,
+      size: 2048,
+      width: 1080,
+      height: 1920
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+
+    await expect(
+      recorderHarness.instances[0].options.onSegment('wxfile://temp/unknown-size.mp4', 5_000)
+    ).rejects.toThrow('missing local file info')
+    await flushPromises(20)
+    page.rerender()
+
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        segments: [expect.objectContaining({
+          compressionState: 'compression_failed',
+          rawSavedFilePath: 'wxfile://temp/unknown-size.mp4',
+          durationMs: 5_000
+        })]
+      })
+    )
+    expect(textContent(page.element)).toContain('网络较慢，训练已暂停，请保持页面打开，等待视频上传。')
+    expect(findButtonByText(page.element, '结束训练')).toBeTruthy()
+
+    clickButtonByText(page.element, '结束训练')
+    await flushPromises(20)
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/upload'
+    })
+  })
+
   it('fails safe into buffer pause when retry persistence cannot save the local segment', async () => {
     apiMocks.uploadVideoSegment.mockRejectedValueOnce(new Error('network unavailable'))
     taroHarness.taroMock.saveFile.mockRejectedValueOnce(new Error('storage full'))
@@ -1098,6 +1190,107 @@ describe('shoulder press pages', () => {
       })
     )
     expect(textContent(page.element)).toContain('网络较慢，训练已暂停，请保持页面打开，等待视频上传。')
+  })
+
+  it('keeps a small save-failed segment blocked until foreground retry uploads it', async () => {
+    const retryUpload = deferred<{ index: number; sha256: string }>()
+    apiMocks.uploadVideoSegment
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockReturnValueOnce(retryUpload.promise)
+    taroHarness.taroMock.saveFile.mockRejectedValueOnce(new Error('storage full'))
+    taroHarness.taroMock.getFileInfo.mockResolvedValueOnce({ size: 1024 })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+
+    await recorderHarness.instances[0].options.onSegment('wxfile://temp/retry-on-show.mp4', 5_000)
+    await flushPromises(30)
+    page.rerender()
+    expect(textContent(page.element)).toContain('网络较慢，训练已暂停，请保持页面打开，等待视频上传。')
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({
+        segments: [expect.objectContaining({
+          savedFilePath: 'wxfile://temp/retry-on-show.mp4',
+          localFileState: 'save_failed',
+          uploadState: 'pending'
+        })]
+      })
+    )
+
+    await taroHarness.hideCallbacks[0]()
+    await taroHarness.showCallbacks[0]()
+    await flushPromises(20)
+    page.rerender()
+
+    const retryCallCount = apiMocks.uploadVideoSegment.mock.calls.length
+    const textDuringRetry = textContent(page.element)
+
+    retryUpload.resolve({ index: 0, sha256: 'sha-0' })
+    await flushPromises(30)
+    page.rerender()
+
+    expect(retryCallCount).toBe(2)
+    expect(textDuringRetry).toContain('网络较慢，训练已暂停，请保持页面打开，等待视频上传。')
+    expect(textDuringRetry).not.toContain('视频上传已恢复，可以继续训练。')
+    expect(textContent(page.element)).toContain('视频上传已恢复，可以继续训练。')
+  })
+
+  it('rechecks failed local state before continuing from buffer ready', async () => {
+    const upload = deferred<{ index: number; sha256: string }>()
+    apiMocks.uploadVideoSegment.mockReturnValueOnce(upload.promise)
+    taroHarness.taroMock.getFileInfo.mockResolvedValueOnce({ size: 65 * 1024 * 1024 })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+    await recorderHarness.instances[0].options.onSegment('wxfile://temp/late-failure.mp4', 5_000)
+    await flushPromises(20)
+
+    const pausedSession = taroHarness.storage.get(
+      PENDING_SHOULDER_PRESS_SESSION_KEY
+    ) as PendingShoulderPressSession
+    saveStorageSession({
+      ...pausedSession,
+      segments: pausedSession.segments.map((segment) => ({
+        ...segment,
+        sizeBytes: 1024,
+        localFileState: 'temporary' as const
+      }))
+    })
+    await taroHarness.showCallbacks[0]()
+    await flushPromises(20)
+    page.rerender()
+    expect(findButtonByText(page.element, '继续训练')).toBeTruthy()
+
+    const readySession = taroHarness.storage.get(
+      PENDING_SHOULDER_PRESS_SESSION_KEY
+    ) as PendingShoulderPressSession
+    saveStorageSession({
+      ...readySession,
+      segments: readySession.segments.map((segment) => ({
+        ...segment,
+        localFileState: 'save_failed' as const
+      }))
+    })
+    clickButtonByText(page.element, '继续训练')
+    await flushPromises(20)
+    page.rerender()
+
+    const startCallCount = recorderHarness.instances[0].start.mock.calls.length
+    const textAfterContinue = textContent(page.element)
+
+    upload.resolve({ index: 0, sha256: 'sha-0' })
+    await flushPromises(20)
+
+    expect(startCallCount).toBe(1)
+    expect(textAfterContinue).toContain('网络较慢，训练已暂停，请保持页面打开，等待视频上传。')
   })
 
   it('recomputes a low buffer after background return without auto-resuming', async () => {
@@ -1318,6 +1511,7 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).toContain('继续训练')
     expect(recorder.start).toHaveBeenCalledTimes(1)
 
+    await taroHarness.showCallbacks[0]()
     findButtonByText(page.element, '继续训练').props.onClick?.()
     await flushPromises()
 
@@ -1770,6 +1964,7 @@ describe('shoulder press pages', () => {
       keepScreenOn: false
     })
 
+    await taroHarness.showCallbacks[0]()
     findButtonByText(page.element, '继续训练').props.onClick?.()
     await flushPromises()
     expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
@@ -1792,13 +1987,24 @@ describe('shoulder press pages', () => {
 
     recorderHarness.setNextStartPromise(start.promise)
     findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises(20)
+    expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
     await taroHarness.hideCallbacks[0]()
     start.resolve()
     await flushPromises()
     page.rerender()
 
     expect(recorderHarness.instances[0].pause).toHaveBeenCalledTimes(1)
-    expect(textContent(page.element)).toContain('继续训练')
+    expect(textContent(page.element)).toContain('开始训练')
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+
+    await taroHarness.showCallbacks[0]()
+    findButtonByText(page.element, '开始训练').props.onClick?.()
+    await flushPromises(20)
+    expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(2)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toHaveProperty(
+      'trainingStartedAt'
+    )
   })
 
   it('uploads a raw camera segment without compression or persistent save', async () => {
@@ -2369,6 +2575,7 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).toContain('继续训练')
 
     vi.setSystemTime(startAt + 40_000)
+    await taroHarness.showCallbacks[0]()
     findButtonByText(page.element, '继续训练').props.onClick?.()
     await flushPromises()
 
@@ -2531,7 +2738,11 @@ describe('shoulder press pages', () => {
     ).rejects.toThrow('getFileInfo:fail tempFilePath file not exist')
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
       expect.objectContaining({
-        segments: [],
+        segments: [expect.objectContaining({
+          compressionState: 'compression_failed',
+          rawSavedFilePath: 'wxfile://temp/missing-size.mp4',
+          compressionError: expect.stringContaining('getFileInfo:fail tempFilePath file not exist')
+        })],
         trainingStartedAt: expect.stringMatching(
           /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/
         )

@@ -46,6 +46,7 @@ import {
   loadPendingShoulderPressSession,
   markShoulderPressTrainingEnded,
   markShoulderPressTrainingStarted,
+  promoteLegacyShoulderPressSegment,
   savePendingShoulderPressSession,
   normalizeShoulderPressExpectedDurationSeconds,
   requireShoulderPressTrainingStartedAt,
@@ -203,6 +204,16 @@ function newlyConfirmedLocalFiles(
   ))
 }
 
+function hasUnresolvedShoulderPressLocalSegment(
+  session: PendingShoulderPressSession
+): boolean {
+  return session.segments.some((segment) => (
+    !isCompressedShoulderPressSegment(segment) || (
+      segment.uploadState !== 'uploaded' && segment.localFileState === 'save_failed'
+    )
+  ))
+}
+
 async function ensureRemoteSession(
   session: PendingShoulderPressSession,
   onSession?: SessionUpdate
@@ -357,9 +368,12 @@ export default function ShoulderPressCameraPage() {
   const tailSaveFailedRef = useRef(false)
   const hidePauseRequestedRef = useRef(false)
   const mountedRef = useRef(true)
+  const pageVisibleRef = useRef(true)
+  const foregroundGenerationRef = useRef(0)
   const bufferStateRef = useRef<ShoulderPressBufferState>('recording')
   const latestPendingBytesRef = useRef(0)
   const bufferPauseQueuedRef = useRef(false)
+  const discardRecorderSegmentsRef = useRef(false)
   const alertPlayerRef = useRef<ShoulderPressAlertPlayer | null>(null)
   const keepScreenOnRef = useRef(false)
   const recordingBaseDurationMsRef = useRef(0)
@@ -400,13 +414,14 @@ export default function ShoulderPressCameraPage() {
     if (!mountedRef.current) return
     const pendingBytes = pendingShoulderPressLocalBytes(nextSession.segments)
     latestPendingBytesRef.current = pendingBytes
-    const hasFailedLocalFile = nextSession.segments.some((segment) => (
-      isCompressedShoulderPressSegment(segment) &&
-      segment.uploadState !== 'uploaded' &&
-      segment.localFileState === 'save_failed'
-    ))
-    if (hasFailedLocalFile && bufferStateRef.current === 'recording') {
-      enterBufferPaused()
+    const hasUnresolvedLocalSegment = hasUnresolvedShoulderPressLocalSegment(nextSession)
+    if (hasUnresolvedLocalSegment) {
+      if (bufferStateRef.current === 'recording') {
+        enterBufferPaused()
+      } else if (bufferStateRef.current === 'buffer_ready') {
+        bufferStateRef.current = 'buffer_paused'
+        setBufferState('buffer_paused')
+      }
       return
     }
 
@@ -489,11 +504,53 @@ export default function ShoulderPressCameraPage() {
     }
   }
 
+  function isForegroundAttemptActive(generation: number): boolean {
+    return mountedRef.current &&
+      pageVisibleRef.current &&
+      foregroundGenerationRef.current === generation
+  }
+
+  function appendUnreadableTemporarySegment(
+    currentSession: PendingShoulderPressSession,
+    tempFilePath: string,
+    durationMs: number,
+    failure: unknown
+  ): PendingShoulderPressSession {
+    const checked = appendUploadableShoulderPressSegment(currentSession, {
+      filePath: tempFilePath,
+      durationMs,
+      sizeBytes: 1,
+      localFileState: 'save_failed'
+    })
+    const failedIndex = checked.segments.length - 1
+    const message = segmentPersistenceErrorMessage(failure)
+    return {
+      ...checked,
+      segments: checked.segments.map((segment) => (
+        segment.index === failedIndex
+          ? {
+              index: failedIndex,
+              compressionState: 'compression_failed' as const,
+              rawSavedFilePath: tempFilePath,
+              durationMs,
+              compressionError: message
+            }
+          : segment
+      )),
+      lastError: message
+    }
+  }
+
   async function persistRecordedSegment(
     tempFilePath: string,
     recordedDurationMs: number
   ): Promise<void> {
+    const discardSegment = discardRecorderSegmentsRef.current
     const write = segmentSaveChainRef.current.then(async () => {
+      if (discardSegment) {
+        deleteOrphanedSavedFile(tempFilePath)
+        return
+      }
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
       const expectedClientSessionId = currentSession.clientSessionId
@@ -507,10 +564,33 @@ export default function ShoulderPressCameraPage() {
       } catch {
         // iOS 偶尔返回无效媒体时长；录像器计时仍可作为分段时长。
       }
-      const fileInfo = await Taro.getFileInfo({ filePath: tempFilePath })
-      const sizeBytes = Number(fileInfo.size)
-      if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
-        throw new Error('无法读取录像分段实际大小，请重试')
+      let sizeBytes: number
+      try {
+        const fileInfo = await Taro.getFileInfo({ filePath: tempFilePath })
+        sizeBytes = Number('size' in fileInfo ? fileInfo.size : Number.NaN)
+        if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
+          throw new Error('无法读取录像分段实际大小，请重试')
+        }
+      } catch (fileInfoError) {
+        const writeBase = resolveOwnedSegmentWriteBase(expectedClientSessionId)
+        if (!writeBase) {
+          deleteOrphanedSavedFile(tempFilePath)
+          return
+        }
+        const existingSegment = writeBase.segments.find((segment) => (
+          isCompressedShoulderPressSegment(segment)
+            ? segment.savedFilePath === tempFilePath
+            : segment.rawSavedFilePath === tempFilePath
+        ))
+        if (!existingSegment) {
+          saveCurrentSession(appendUnreadableTemporarySegment(
+            writeBase,
+            tempFilePath,
+            durationMs,
+            fileInfoError
+          ))
+        }
+        throw fileInfoError
       }
 
       let writeBase = resolveOwnedSegmentWriteBase(expectedClientSessionId)
@@ -520,10 +600,19 @@ export default function ShoulderPressCameraPage() {
       }
 
       const existingSegment = writeBase.segments.find((segment) => (
-        isCompressedShoulderPressSegment(segment) &&
-        segment.savedFilePath === tempFilePath
+        isCompressedShoulderPressSegment(segment)
+          ? segment.savedFilePath === tempFilePath
+          : segment.rawSavedFilePath === tempFilePath
       ))
-      if (!existingSegment) {
+      if (existingSegment && !isCompressedShoulderPressSegment(existingSegment)) {
+        writeBase = promoteLegacyShoulderPressSegment(writeBase, existingSegment.index, {
+          savedFilePath: tempFilePath,
+          durationMs,
+          sizeBytes,
+          localFileState: 'temporary'
+        })
+        saveCurrentSession(writeBase)
+      } else if (!existingSegment) {
         writeBase = appendUploadableShoulderPressSegment(writeBase, {
           filePath: tempFilePath,
           durationMs,
@@ -572,7 +661,8 @@ export default function ShoulderPressCameraPage() {
     return recorderRef.current
   }
 
-  async function startRecordingForCurrentSession() {
+  async function startRecordingForCurrentSession(foregroundGeneration: number) {
+    if (!isForegroundAttemptActive(foregroundGeneration)) return
     const canStart = canStartShoulderPressRecording({
       actionReady: action !== null && sessionRef.current !== null,
       cameraReady,
@@ -589,6 +679,23 @@ export default function ShoulderPressCameraPage() {
     try {
       const recorder = ensureRecorder()
       await recorder.start()
+      if (!isForegroundAttemptActive(foregroundGeneration)) {
+        discardRecorderSegmentsRef.current = true
+        try {
+          await recorder.pause()
+        } catch {
+          // 页面已进入后台时以不写入训练开始时间为最高优先级。
+        } finally {
+          discardRecorderSegmentsRef.current = false
+        }
+        recordingRef.current = false
+        pausedRef.current = false
+        recordingStartedAtRef.current = 0
+        setTrainingScreenAwake(false)
+        setRecording(false)
+        setPaused(false)
+        return
+      }
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
       const startedAtMs = Date.now()
@@ -655,6 +762,7 @@ export default function ShoulderPressCameraPage() {
       return
     }
 
+    const foregroundGeneration = foregroundGenerationRef.current
     preflightInFlightRef.current = true
     setProcessing(true)
     setPreflightState('checking')
@@ -664,9 +772,9 @@ export default function ShoulderPressCameraPage() {
         hasPendingSession: () => Boolean(loadPendingShoulderPressSession(Taro)),
         listSavedFiles: listSavedShoulderPressFiles,
         removeSavedFile: removeSavedShoulderPressFile,
-        isActive: () => mountedRef.current
+        isActive: () => isForegroundAttemptActive(foregroundGeneration)
       })
-      if (!mountedRef.current || result.kind === 'cancelled') return
+      if (!isForegroundAttemptActive(foregroundGeneration) || result.kind === 'cancelled') return
       if (result.kind === 'pending_session') {
         await Taro.reLaunch({ url: buildShoulderPressUploadUrl() })
         return
@@ -688,7 +796,8 @@ export default function ShoulderPressCameraPage() {
       setSession(nextSession)
       setPreflightState('idle')
       setProcessing(false)
-      await startRecordingForCurrentSession()
+      if (!isForegroundAttemptActive(foregroundGeneration)) return
+      await startRecordingForCurrentSession(foregroundGeneration)
     } catch {
       if (!mountedRef.current) return
       setPreflightState('failed')
@@ -711,14 +820,17 @@ export default function ShoulderPressCameraPage() {
       if (!latest) return
       const pendingBytes = pendingShoulderPressLocalBytes(latest.segments)
       latestPendingBytesRef.current = pendingBytes
-      if (!canResumeShoulderPressFromBuffer(pendingBytes)) {
+      if (
+        hasUnresolvedShoulderPressLocalSegment(latest) ||
+        !canResumeShoulderPressFromBuffer(pendingBytes)
+      ) {
         bufferStateRef.current = 'buffer_paused'
         setBufferState('buffer_paused')
         return
       }
       syncSession(latest)
     }
-    await startRecordingForCurrentSession()
+    await startRecordingForCurrentSession(foregroundGenerationRef.current)
   }
 
   async function pauseTraining() {
@@ -974,18 +1086,24 @@ export default function ShoulderPressCameraPage() {
   }, [recording])
 
   useDidHide(() => {
+    pageVisibleRef.current = false
+    foregroundGenerationRef.current += 1
     if (finishInFlightRef.current) return
     hidePauseRequestedRef.current = true
     void pauseTraining()
   })
 
   useDidShow(() => {
+    pageVisibleRef.current = true
     if (
       bufferStateRef.current !== 'buffer_paused' &&
       bufferStateRef.current !== 'buffer_ready'
     ) return
     const latest = loadPendingShoulderPressSession(Taro)
-    if (latest) syncSession(latest)
+    if (latest) {
+      syncSession(latest)
+      void uploadPendingSegmentsInBackground(syncSession)
+    }
   })
 
   const elapsedMs = currentElapsedMs()
