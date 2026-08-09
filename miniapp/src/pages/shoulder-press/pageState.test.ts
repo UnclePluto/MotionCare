@@ -7,7 +7,10 @@ import {
   computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
   isServerSafeFinalizeStatus,
+  nextShoulderPressPreviewVisibility,
+  remainingShoulderPressSeconds,
   resolveShoulderPressAction,
+  SHOULDER_PRESS_RECORDING_STOP_MS,
   shoulderPressUploadCounters,
   shouldAutoFinishShoulderPressTraining
 } from './pageState'
@@ -71,9 +74,41 @@ describe('shoulder press page state', () => {
     })).toBe(true)
   })
 
-  it('auto finishes with a safety margin before the hard forty minute limit', () => {
-    expect(shouldAutoFinishShoulderPressTraining(2_396_999)).toBe(false)
-    expect(shouldAutoFinishShoulderPressTraining(2_397_000)).toBe(true)
+  it('computes a clamped prescription countdown from effective recording time', () => {
+    expect(remainingShoulderPressSeconds(0, 120)).toBe(120)
+    expect(remainingShoulderPressSeconds(30_001, 120)).toBe(90)
+    expect(remainingShoulderPressSeconds(120_000, 120)).toBe(0)
+    expect(remainingShoulderPressSeconds(150_000, 120)).toBe(0)
+  })
+
+  it('auto finishes at the prescription duration and retains the camera safety stop', () => {
+    expect(shouldAutoFinishShoulderPressTraining({
+      actualDurationMs: 119_999,
+      expectedDurationSeconds: 120
+    })).toBe(false)
+    expect(shouldAutoFinishShoulderPressTraining({
+      actualDurationMs: 120_000,
+      expectedDurationSeconds: 120
+    })).toBe(true)
+    expect(shouldAutoFinishShoulderPressTraining({
+      actualDurationMs: SHOULDER_PRESS_RECORDING_STOP_MS,
+      expectedDurationSeconds: 2400
+    })).toBe(true)
+  })
+
+  it('only changes preview visibility for a dominant horizontal swipe', () => {
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'visible', deltaX: 45, deltaY: 5
+    })).toBe('hidden')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'hidden', deltaX: -45, deltaY: 5
+    })).toBe('visible')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'visible', deltaX: 20, deltaY: 0
+    })).toBe('visible')
+    expect(nextShoulderPressPreviewVisibility({
+      visibility: 'visible', deltaX: 45, deltaY: 60
+    })).toBe('visible')
   })
 
   it('computes effective duration from the continuous recording anchor without double counting saved segments', () => {

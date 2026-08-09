@@ -24,6 +24,8 @@ export type TrainingVideoStatus = (
 export const SHOULDER_PRESS_HARD_LIMIT_MS = 2_400_000
 export const SHOULDER_PRESS_RECORDING_STOP_MS = 2_397_000
 
+export type ShoulderPressPreviewVisibility = 'visible' | 'hidden'
+
 type ShoulderPressStorage = {
   getStorageSync: (key: string) => unknown
   setStorageSync: (key: string, value: unknown) => void
@@ -61,8 +63,38 @@ export function canCompleteShoulderPressTraining(input: {
   return input.actualDurationMs >= Math.max(1, Math.round(input.expectedDurationSeconds)) * 1000
 }
 
-export function shouldAutoFinishShoulderPressTraining(actualDurationMs: number): boolean {
-  return Number.isFinite(actualDurationMs) && actualDurationMs >= SHOULDER_PRESS_RECORDING_STOP_MS
+export function remainingShoulderPressSeconds(
+  actualDurationMs: number,
+  expectedDurationSeconds: number
+): number {
+  const elapsedSeconds = Math.max(0, Math.floor(actualDurationMs / 1000))
+  const expectedSeconds = Math.max(1, Math.round(expectedDurationSeconds))
+  return Math.max(0, expectedSeconds - elapsedSeconds)
+}
+
+export function shouldAutoFinishShoulderPressTraining(input: {
+  actualDurationMs: number
+  expectedDurationSeconds: number
+}): boolean {
+  if (!Number.isFinite(input.actualDurationMs)) return false
+  const expectedMs = Math.max(1, Math.round(input.expectedDurationSeconds)) * 1000
+  return input.actualDurationMs >= expectedMs ||
+    input.actualDurationMs >= SHOULDER_PRESS_RECORDING_STOP_MS
+}
+
+export function nextShoulderPressPreviewVisibility(input: {
+  visibility: ShoulderPressPreviewVisibility
+  deltaX: number
+  deltaY: number
+  threshold?: number
+}): ShoulderPressPreviewVisibility {
+  const threshold = input.threshold ?? 40
+  if (Math.abs(input.deltaX) < threshold || Math.abs(input.deltaX) <= Math.abs(input.deltaY)) {
+    return input.visibility
+  }
+  if (input.visibility === 'visible' && input.deltaX > 0) return 'hidden'
+  if (input.visibility === 'hidden' && input.deltaX < 0) return 'visible'
+  return input.visibility
 }
 
 export function computeShoulderPressEffectiveDuration(input: {
