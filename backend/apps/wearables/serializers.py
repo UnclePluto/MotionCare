@@ -8,6 +8,13 @@ from .services.short_codes import ShortCodeExhausted, generate_device_short_code
 
 
 class WearableDeviceSerializer(serializers.ModelSerializer):
+    imei = serializers.RegexField(
+        r"^[0-9]{15}$",
+        write_only=True,
+        required=False,
+        trim_whitespace=True,
+        error_messages={"invalid": "IMEI 必须是 15 位数字。"},
+    )
     is_bound = serializers.SerializerMethodField()
     current_patient_name = serializers.SerializerMethodField()
     last_sync_at = serializers.SerializerMethodField()
@@ -17,6 +24,7 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
         "external_device_id",
         "identifier_type",
         "short_code",
+        "imei",
     }
     UPDATEABLE_FIELDS = {"model", "enabled"}
 
@@ -27,6 +35,7 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
             "provider",
             "external_device_id",
             "identifier_type",
+            "imei",
             "model",
             "short_code",
             "enabled",
@@ -54,6 +63,12 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         validators = []
+        extra_kwargs = {
+            "provider": {"required": False},
+            "external_device_id": {"required": False},
+            "identifier_type": {"required": False},
+            "model": {"required": False},
+        }
 
     def get_is_bound(self, instance):
         return bool(getattr(instance, "_is_bound", False))
@@ -69,10 +84,13 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         provided_fields = set(self.initial_data.keys())
         if self.instance is None:
-            if "short_code" in provided_fields:
+            rejected_fields = provided_fields - {"imei"}
+            if rejected_fields:
                 raise serializers.ValidationError(
-                    {"short_code": "设备固定简码由系统生成，不能提交。"}
+                    {field: "新增设备只允许提交 IMEI。" for field in rejected_fields}
                 )
+            if "imei" not in attrs:
+                raise serializers.ValidationError({"imei": "请输入 IMEI。"})
             return attrs
 
         rejected_fields = provided_fields - self.UPDATEABLE_FIELDS
@@ -82,22 +100,36 @@ class WearableDeviceSerializer(serializers.ModelSerializer):
                 if field in self.IDENTITY_FIELDS:
                     errors[field] = "设备真实身份字段创建后不可修改。"
                 else:
-                    errors[field] = "该字段不可通过设备台账接口修改。"
+                    errors[field] = "该字段不可通过设备管理接口修改。"
             raise serializers.ValidationError(errors)
         return attrs
 
     def create(self, validated_data):
+        imei = validated_data.pop("imei")
+        if WearableDevice.objects.filter(
+            identifier_type="imei",
+            external_device_id=imei,
+        ).exists():
+            raise IntegrityError("duplicate IMEI")
+        device_values = {
+            "provider": "miwitracker",
+            "external_device_id": imei,
+            "identifier_type": "imei",
+            "model": "",
+            "enabled": True,
+        }
         for _ in range(32):
             try:
                 with transaction.atomic():
-                    short_code = generate_device_short_code()
-                    return WearableDevice.objects.create(short_code=short_code, **validated_data)
+                    return WearableDevice.objects.create(
+                        short_code=generate_device_short_code(),
+                        **device_values,
+                    )
             except IntegrityError:
-                external_identity_exists = WearableDevice.objects.filter(
-                    provider=validated_data["provider"],
-                    external_device_id=validated_data["external_device_id"],
-                ).exists()
-                if external_identity_exists:
+                if WearableDevice.objects.filter(
+                    provider="miwitracker",
+                    external_device_id=imei,
+                ).exists():
                     raise
         raise ShortCodeExhausted("设备固定简码生成冲突，请重试。")
 

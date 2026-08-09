@@ -133,6 +133,97 @@ def test_unknown_model_can_check_safe_status_without_returning_location(wearable
 
 
 @pytest.mark.django_db
+def test_status_check_persists_detected_model_and_enables_verified_capability(
+    wearable_device, monkeypatch
+):
+    wearable_device.model = ""
+    wearable_device.save(update_fields=["model", "updated_at"])
+    monkeypatch.setitem(MODEL_CAPABILITIES, ("miwitracker", "DETECTED-MODEL"), TEST_PROFILE)
+    provider = StubProvider(
+        status=ProviderDeviceStatus(
+            external_device_id=wearable_device.external_device_id,
+            model="DETECTED-MODEL",
+            status="online",
+            battery_level=82,
+            last_communication_at=datetime(2026, 7, 24, 2, tzinfo=UTC),
+            raw_payload={},
+        )
+    )
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+
+    status_result = check_device_status(wearable_device)
+    command = send_device_command(wearable_device, "ring", actor=None)
+
+    wearable_device.refresh_from_db()
+    assert wearable_device.model == "DETECTED-MODEL"
+    assert status_result["model"] == "DETECTED-MODEL"
+    assert status_result["capabilities"] == {"ring": True}
+    assert command.status == WearableCommandLog.Status.SUCCEEDED
+
+
+@pytest.mark.django_db
+def test_status_check_rejects_mismatched_device_identity_without_updating_device(
+    wearable_device, monkeypatch
+):
+    wearable_device.model = ""
+    wearable_device.last_device_status = "offline"
+    wearable_device.last_battery_level = 12
+    wearable_device.save(
+        update_fields=["model", "last_device_status", "last_battery_level", "updated_at"]
+    )
+    provider = StubProvider(
+        status=ProviderDeviceStatus(
+            external_device_id="different-device",
+            model="DETECTED-MODEL",
+            status="online",
+            battery_level=82,
+            last_communication_at=datetime(2026, 7, 24, 2, tzinfo=UTC),
+            raw_payload={},
+        )
+    )
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+
+    with pytest.raises(ProviderError):
+        check_device_status(wearable_device)
+
+    wearable_device.refresh_from_db()
+    assert wearable_device.model == ""
+    assert wearable_device.last_device_status == "offline"
+    assert wearable_device.last_battery_level == 12
+
+
+@pytest.mark.django_db
+def test_status_check_rejects_oversized_model_without_updating_device(
+    wearable_device, monkeypatch
+):
+    wearable_device.model = ""
+    wearable_device.last_device_status = "offline"
+    wearable_device.last_battery_level = 12
+    wearable_device.save(
+        update_fields=["model", "last_device_status", "last_battery_level", "updated_at"]
+    )
+    provider = StubProvider(
+        status=ProviderDeviceStatus(
+            external_device_id=wearable_device.external_device_id,
+            model="M" * 129,
+            status="online",
+            battery_level=82,
+            last_communication_at=datetime(2026, 7, 24, 2, tzinfo=UTC),
+            raw_payload={},
+        )
+    )
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+
+    with pytest.raises(ProviderError):
+        check_device_status(wearable_device)
+
+    wearable_device.refresh_from_db()
+    assert wearable_device.model == ""
+    assert wearable_device.last_device_status == "offline"
+    assert wearable_device.last_battery_level == 12
+
+
+@pytest.mark.django_db
 def test_status_api_returns_only_the_safe_status_summary(api_client, doctor, wearable_device, monkeypatch):
     api_client.force_authenticate(doctor)
     monkeypatch.setattr(
@@ -590,20 +681,29 @@ def test_queued_measurement_marks_offline_when_history_request_reports_offline(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    ("path", "payload"),
+    ("path", "payload", "expected_status"),
     [
-        ("/api/wearables/devices/{device_id}/check-status/", {}),
-        ("/api/wearables/devices/{device_id}/ring/", {}),
-        ("/api/wearables/patients/{patient_id}/measure/", {"metric_type": "heart_rate"}),
+        ("/api/wearables/devices/{device_id}/check-status/", {}, 200),
+        ("/api/wearables/devices/{device_id}/ring/", {}, 200),
+        (
+            "/api/wearables/patients/{patient_id}/measure/",
+            {"metric_type": "heart_rate"},
+            200,
+        ),
         (
             "/api/wearables/patients/{patient_id}/configure/",
             {"setting": "step_switch", "enabled": True},
+            200,
         ),
-        ("/api/wearables/patients/{patient_id}/sync/", {"metric_type": "heart_rate"}),
+        (
+            "/api/wearables/patients/{patient_id}/sync/",
+            {"metric_type": "heart_rate"},
+            202,
+        ),
     ],
 )
-def test_command_apis_enforce_patient_row_level_access(
-    api_client, doctor, wearable_device, path, payload
+def test_command_apis_allow_any_doctor_to_manage_enrolled_patient(
+    api_client, doctor, wearable_device, path, payload, expected_status, monkeypatch
 ):
     api_client.force_authenticate(doctor)
     foreign_doctor = User.objects.create_user(
@@ -621,7 +721,7 @@ def test_command_apis_enforce_patient_row_level_access(
     )
     foreign_project = StudyProject.objects.create(name="外部研究", created_by=foreign_doctor)
     foreign_group = StudyGroup.objects.create(project=foreign_project, name="对照组", target_ratio=1)
-    ProjectPatient.objects.create(
+    project_patient = ProjectPatient.objects.create(
         project=foreign_project,
         patient=foreign_patient,
         group=foreign_group,
@@ -632,13 +732,38 @@ def test_command_apis_enforce_patient_row_level_access(
         bound_at=timezone.now(),
         bound_by=doctor,
     )
+    monkeypatch.setattr(
+        "apps.wearables.views.check_device_status",
+        lambda device: {
+            "device_id": device.id,
+            "model": device.model,
+            "online": True,
+            "battery_level": 80,
+            "last_communication_at": None,
+            "capabilities": {"ring": False},
+        },
+    )
+    monkeypatch.setattr(
+        "apps.wearables.views.send_device_command",
+        lambda device, command_type, actor, **kwargs: Mock(
+            id=1,
+            command_type=command_type,
+            status=WearableCommandLog.Status.SUCCEEDED,
+            provider_code="0",
+            completed_at=None,
+        ),
+    )
+    dispatched = Mock()
+    monkeypatch.setattr("apps.wearables.views.sync_device_metric.delay", dispatched)
+
+    assert project_patient.patient_id == foreign_patient.id
     response = api_client.post(
         path.format(device_id=wearable_device.id, patient_id=foreign_patient.id),
         payload,
         format="json",
     )
 
-    assert response.status_code == 404
+    assert response.status_code == expected_status, response.data
 
 
 @pytest.mark.django_db

@@ -8,10 +8,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAdminOrDoctor
-from apps.training.tracking import accessible_project_patients
 from apps.wearables.models import WearableBinding, WearableDevice, WearableSyncRun
 from apps.wearables.tasks import METRIC_TYPES, sync_device_metric
 
+from .permissions import manageable_project_patients
 from .serializers import (
     BindDeviceSerializer,
     UnbindDeviceSerializer,
@@ -42,7 +42,7 @@ from .services.queries import daily_summaries, measurements, project_summary, sy
 
 
 def _active_patient_binding(request, patient_id):
-    if not accessible_project_patients(request.user).filter(patient_id=patient_id).exists():
+    if not manageable_project_patients(request.user).filter(patient_id=patient_id).exists():
         raise Http404
     return get_object_or_404(
         WearableBinding.objects.select_related("device").filter(
@@ -54,7 +54,7 @@ def _active_patient_binding(request, patient_id):
 
 def _device_queryset_for_user(user):
     accessible_patient_ids = (
-        accessible_project_patients(user).order_by().values("patient_id")
+        manageable_project_patients(user).order_by().values("patient_id")
     )
     active_bindings = WearableBinding.objects.filter(
         device_id=OuterRef("pk"),
@@ -91,7 +91,7 @@ def _device_for_management(request, pk):
         .first()
     )
     if binding:
-        if not accessible_project_patients(request.user).filter(
+        if not manageable_project_patients(request.user).filter(
             patient_id=binding["patient_id"]
         ).exists():
             raise Http404
@@ -131,7 +131,7 @@ class WearableDeviceListCreateView(ListCreateAPIView):
         except ShortCodeExhausted as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
         except IntegrityError:
-            return Response({"detail": "设备厂商标识已存在。"}, status=status.HTTP_409_CONFLICT)
+            return Response({"detail": "该 IMEI 已存在。"}, status=status.HTTP_409_CONFLICT)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -148,7 +148,7 @@ class ProjectPatientBindingStatusView(APIView):
 
     def get(self, request, project_patient_id):
         project_patient = get_object_or_404(
-            accessible_project_patients(request.user),
+            manageable_project_patients(request.user),
             pk=project_patient_id,
         )
         binding = (
@@ -170,7 +170,7 @@ class ProjectPatientBindView(APIView):
 
     def post(self, request, project_patient_id):
         project_patient = get_object_or_404(
-            accessible_project_patients(request.user),
+            manageable_project_patients(request.user),
             pk=project_patient_id,
         )
         serializer = BindDeviceSerializer(data=request.data)
@@ -187,7 +187,7 @@ class ProjectPatientBindView(APIView):
             detail = str(exc)
             if exc.conflicting_patient_id is not None:
                 patient_name = (
-                    accessible_project_patients(request.user)
+                    manageable_project_patients(request.user)
                     .filter(patient_id=exc.conflicting_patient_id)
                     .order_by()
                     .values_list("patient__name", flat=True)
@@ -206,7 +206,7 @@ class WearableBindingUnbindView(APIView):
     permission_classes = [IsAdminOrDoctor]
 
     def post(self, request, binding_id):
-        accessible_patient_ids = accessible_project_patients(request.user).values("patient_id")
+        accessible_patient_ids = manageable_project_patients(request.user).values("patient_id")
         binding = get_object_or_404(
             WearableBinding.objects.select_related("device").filter(patient_id__in=accessible_patient_ids),
             pk=binding_id,

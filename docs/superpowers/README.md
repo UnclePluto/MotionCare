@@ -31,6 +31,7 @@ docs/superpowers/
 | `specs/2026-07-14-segmented-training-video-pipeline-design.md` | 肩部推举 30 秒连续分片、服务端合并与七牛发布 | approved |
 | `specs/2026-07-23-wearable-openapi-integration-design.md` | 穿戴设备 OpenAPI 接入、患者绑定与训练健康分析 | approved |
 | `specs/2026-08-07-training-video-fixed-health-window-design.md` | 训练视频固定健康观察窗口 | implemented |
+| `specs/2026-08-09-wearable-management-permission-design.md` | 穿戴设备管理权限 + IMEI 单字段录入 | implementing |
 
 ## 实施计划（plans/）当前清单
 
@@ -50,6 +51,7 @@ docs/superpowers/
 | `plans/2026-07-14-segmented-training-video-pipeline.md` | 肩部推举分片录像、服务端合并、七牛自动上传与清理 | implementing | `specs/2026-07-14-segmented-training-video-pipeline-design.md` |
 | `plans/2026-07-23-wearable-openapi-integration.md` | 穿戴设备 OpenAPI 接入、患者绑定与训练健康分析 | approved | `specs/2026-07-23-wearable-openapi-integration-design.md` |
 | `plans/2026-08-07-training-video-fixed-health-window.md` | 训练视频固定健康观察窗口 | implemented | `specs/2026-08-07-training-video-fixed-health-window-design.md` |
+| `plans/2026-08-09-wearable-management-permission-and-imei-entry.md` | 穿戴设备管理权限 + IMEI 单字段录入 | implementing | `specs/2026-08-09-wearable-management-permission-design.md` |
 
 ## 状态语义
 

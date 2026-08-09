@@ -606,7 +606,7 @@ describe("App", () => {
       </QueryClientProvider>,
     );
 
-    expect((await screen.findAllByText("设备台账")).length).toBeGreaterThanOrEqual(2);
+    expect((await screen.findAllByText("设备管理")).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole("button", { name: "新增设备" })).toBeInTheDocument();
   });
 });

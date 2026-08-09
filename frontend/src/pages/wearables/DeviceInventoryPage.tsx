@@ -7,7 +7,7 @@ import { useMemo, useRef, useState } from "react";
 import { apiClient } from "../../api/client";
 import type { WearableDevice, WearableStatus } from "./types";
 
-type DeviceFormValues = Pick<WearableDevice, "provider" | "external_device_id" | "identifier_type" | "model">;
+type DeviceFormValues = { imei: string };
 type DeviceFilter = "all" | "bound" | "unbound" | "disabled";
 type StatusRequest = {
   deviceId: number;
@@ -49,10 +49,7 @@ export function DeviceInventoryPage() {
     mutationFn: async (values: DeviceFormValues) =>
       (
         await apiClient.post<WearableDevice>("/wearables/devices/", {
-          provider: values.provider.trim(),
-          external_device_id: values.external_device_id.trim(),
-          identifier_type: values.identifier_type.trim(),
-          model: values.model.trim(),
+          imei: values.imei.trim(),
         })
       ).data,
     onSuccess: (device) => {
@@ -111,7 +108,7 @@ export function DeviceInventoryPage() {
 
   return (
     <Card
-      title="设备台账"
+      title="设备管理"
       extra={
         <Button type="primary" onClick={() => setCreateOpen(true)}>
           新增设备
@@ -121,8 +118,8 @@ export function DeviceInventoryPage() {
       <Space wrap style={{ marginBottom: 16 }}>
         <Input
           allowClear
-          aria-label="搜索固定简码或厂商标识"
-          placeholder="搜索固定简码或厂商标识"
+          aria-label="搜索固定简码或 IMEI"
+          placeholder="搜索固定简码或 IMEI"
           style={{ width: 260 }}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -161,7 +158,7 @@ export function DeviceInventoryPage() {
       ) : null}
 
       {devicesQuery.isError ? (
-        <Alert type="error" showIcon message={errorMessage(devicesQuery.error, "设备台账加载失败")} />
+        <Alert type="error" showIcon message="设备管理加载失败" />
       ) : (
         <Table<WearableDevice>
           rowKey="id"
@@ -172,6 +169,12 @@ export function DeviceInventoryPage() {
           locale={{ emptyText: "暂无设备，请先录入设备。" }}
           columns={[
             { title: "固定简码", dataIndex: "short_code", width: 110, render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
+            {
+              title: "IMEI",
+              dataIndex: "external_device_id",
+              width: 180,
+              render: (value: string, device) => device.identifier_type === "imei" ? value : "—",
+            },
             { title: "型号", dataIndex: "model", width: 150, render: (value: string) => value || "—" },
             {
               title: "当前患者",
@@ -216,17 +219,19 @@ export function DeviceInventoryPage() {
 
       <Modal title="新增设备" open={createOpen} footer={null} destroyOnHidden onCancel={() => setCreateOpen(false)}>
         <Form form={form} layout="vertical" onFinish={(values) => createDevice.mutate(values)}>
-          <Form.Item label="厂商" name="provider" rules={[{ required: true, message: "请输入厂商" }]}>
-            <Input placeholder="例如 miwitracker" />
-          </Form.Item>
-          <Form.Item label="厂商设备标识" name="external_device_id" rules={[{ required: true, message: "请输入厂商设备标识" }]}>
-            <Input placeholder="设备在厂商平台中的标识" />
-          </Form.Item>
-          <Form.Item label="标识类型" name="identifier_type" rules={[{ required: true, message: "请输入标识类型" }]}>
-            <Input placeholder="例如 device_id、sn 或 imei" />
-          </Form.Item>
-          <Form.Item label="设备型号" name="model" rules={[{ required: true, message: "请输入设备型号" }]}>
-            <Input placeholder="设备型号" />
+          <Form.Item
+            label="IMEI"
+            name="imei"
+            rules={[
+              { required: true, message: "请输入 IMEI" },
+              {
+                transform: (value: string) => value.trim(),
+                pattern: /^\d{15}$/,
+                message: "IMEI 必须是 15 位数字",
+              },
+            ]}
+          >
+            <Input inputMode="numeric" placeholder="请输入设备的 15 位 IMEI" />
           </Form.Item>
           {createDevice.isError ? <Alert type="error" showIcon message={errorMessage(createDevice.error, "设备录入失败")} style={{ marginBottom: 16 }} /> : null}
           <Space>
