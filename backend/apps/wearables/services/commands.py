@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.wearables.capabilities import get_capability_profile
 from apps.wearables.models import WearableBinding, WearableCommandLog, WearableDevice
-from apps.wearables.providers import MiwitrackerClient
+from apps.wearables.providers import MiwitrackerClient, ProviderError
 
 
 class UnsupportedCapability(Exception):
@@ -146,21 +146,29 @@ def check_device_status(device: WearableDevice) -> dict[str, Any]:
         result = provider.get_device_status(device.external_device_id)
     finally:
         _close_provider(provider)
+    if result.external_device_id != device.external_device_id:
+        raise ProviderError("厂商返回的设备标识不匹配")
+    detected_model = result.model.strip() if isinstance(result.model, str) else ""
+    model_max_length = WearableDevice._meta.get_field("model").max_length
+    if detected_model and len(detected_model) > model_max_length:
+        raise ProviderError("厂商返回的设备型号超出长度限制")
     online = _is_online(result.status)
     checked_at = timezone.now()
+    update_fields = [
+        "last_device_status",
+        "last_battery_level",
+        "last_communication_at",
+        "last_status_checked_at",
+        "updated_at",
+    ]
+    if not device.model.strip() and detected_model:
+        device.model = detected_model
+        update_fields.append("model")
     device.last_device_status = "online" if online else "offline"
     device.last_battery_level = result.battery_level
     device.last_communication_at = result.last_communication_at
     device.last_status_checked_at = checked_at
-    device.save(
-        update_fields=[
-            "last_device_status",
-            "last_battery_level",
-            "last_communication_at",
-            "last_status_checked_at",
-            "updated_at",
-        ]
-    )
+    device.save(update_fields=update_fields)
     capability = get_capability_profile(device.provider, device.model)
     return {
         "device_id": device.id,

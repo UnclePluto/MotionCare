@@ -11,23 +11,25 @@ from apps.wearables.models import WearableBinding, WearableDevice, WearableSyncR
 
 
 def _device_payload(**overrides):
-    payload = {
-        "provider": "miwitracker",
-        "external_device_id": "dev-created-001",
-        "identifier_type": "device_id",
-        "model": "TEST-MODEL",
-    }
+    payload = {"imei": "860123456789012"}
     payload.update(overrides)
     return payload
 
 
 @pytest.mark.django_db
-def test_device_crud_assigns_four_digit_short_code(api_client, doctor):
+def test_device_create_from_imei_fills_identity_defaults_and_short_code(
+    api_client, doctor
+):
     api_client.force_authenticate(doctor)
 
     created = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
 
     assert created.status_code == 201, created.data
+    assert created.data["provider"] == "miwitracker"
+    assert created.data["external_device_id"] == "860123456789012"
+    assert created.data["identifier_type"] == "imei"
+    assert created.data["model"] == ""
+    assert created.data["enabled"] is True
     assert re.fullmatch(r"\d{4}", created.data["short_code"])
     device_id = created.data["id"]
 
@@ -43,6 +45,20 @@ def test_device_crud_assigns_four_digit_short_code(api_client, doctor):
     assert patched.status_code == 200, patched.data
     assert patched.data["enabled"] is False
     assert patched.data["model"] == "UPDATED-MODEL"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "imei",
+    ["", "12345678901234", "1234567890123456", "12345678901234A", "１２３４５６７８９０１２３４５"],
+)
+def test_device_create_rejects_invalid_imei(api_client, doctor, imei):
+    api_client.force_authenticate(doctor)
+
+    response = api_client.post("/api/wearables/devices/", {"imei": imei}, format="json")
+
+    assert response.status_code == 400, response.data
+    assert "imei" in response.data
 
 
 @pytest.mark.django_db
@@ -208,7 +224,7 @@ def test_device_list_returns_permission_safe_binding_and_successful_sync_contrac
     assert devices["1003"]["is_bound"] is True
     assert devices["1003"]["current_patient_name"] == "王*"
     assert devices["1004"]["is_bound"] is True
-    assert devices["1004"]["current_patient_name"] is None
+    assert devices["1004"]["current_patient_name"] == "赵*"
 
     admin = User.objects.create_user(
         phone="13800006666",
@@ -265,15 +281,33 @@ def test_device_patch_rejects_identity_fields(api_client, doctor, wearable_devic
 
 
 @pytest.mark.django_db
-def test_device_create_reports_external_identity_conflict_as_409(api_client, doctor):
+def test_device_create_reports_duplicate_imei(api_client, doctor):
     api_client.force_authenticate(doctor)
     first = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
 
-    response = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
+    duplicate = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
 
     assert first.status_code == 201, first.data
+    assert duplicate.status_code == 409, duplicate.data
+    assert duplicate.data == {"detail": "该 IMEI 已存在。"}
+
+
+@pytest.mark.django_db
+def test_device_create_rejects_existing_imei_from_another_provider(api_client, doctor):
+    WearableDevice.objects.create(
+        provider="legacy-provider",
+        external_device_id="860123456789012",
+        identifier_type="imei",
+        model="LEGACY-MODEL",
+        short_code="4321",
+    )
+    api_client.force_authenticate(doctor)
+
+    response = api_client.post("/api/wearables/devices/", _device_payload(), format="json")
+
     assert response.status_code == 409, response.data
-    assert "厂商标识" in str(response.data)
+    assert response.data == {"detail": "该 IMEI 已存在。"}
+    assert WearableDevice.objects.filter(external_device_id="860123456789012").count() == 1
 
 
 @pytest.mark.django_db
@@ -451,7 +485,7 @@ def test_rebound_device_does_not_overlap_previous_patient(
 
 
 @pytest.mark.django_db
-def test_device_binding_conflict_includes_masked_name_only_when_patient_is_accessible(
+def test_device_binding_conflict_includes_masked_name_for_any_enrolled_patient(
     api_client,
     doctor,
     project,
@@ -521,15 +555,14 @@ def test_device_binding_conflict_includes_masked_name_only_when_patient_is_acces
         bound_by=foreign_doctor,
     )
 
-    hidden_response = api_client.post(
+    foreign_response = api_client.post(
         f"/api/wearables/project-patients/{project_patient.id}/bind/",
         {"short_code": wearable_device.short_code},
         format="json",
     )
 
-    assert hidden_response.status_code == 409, hidden_response.data
-    assert hidden_response.data == {"detail": "设备已绑定至其他患者。"}
-    assert "赵" not in str(hidden_response.data)
+    assert foreign_response.status_code == 409, foreign_response.data
+    assert foreign_response.data == {"detail": "设备已绑定患者赵*。"}
 
 
 @pytest.mark.django_db
@@ -637,7 +670,9 @@ def test_unbind_service_rejects_non_positive_binding_interval(
 
 
 @pytest.mark.django_db
-def test_doctor_cannot_unbind_inaccessible_binding(api_client, doctor, project_patient, wearable_device):
+def test_doctor_can_unbind_other_doctors_enrolled_patient_binding(
+    api_client, doctor, project_patient, wearable_device
+):
     api_client.force_authenticate(doctor)
     created = api_client.post(
         f"/api/wearables/project-patients/{project_patient.id}/bind/",
@@ -654,13 +689,13 @@ def test_doctor_cannot_unbind_inaccessible_binding(api_client, doctor, project_p
 
     response = api_client.post(f"/api/wearables/bindings/{created.data['id']}/unbind/")
 
-    assert response.status_code == 404
+    assert response.status_code == 200, response.data
     binding = WearableBinding.objects.get(id=created.data["id"])
-    assert binding.unbound_at is None
+    assert binding.unbound_at is not None
 
 
 @pytest.mark.django_db
-def test_doctor_cannot_access_other_doctors_project_patient(api_client, project_patient, wearable_device):
+def test_doctor_can_bind_other_doctors_enrolled_patient(api_client, project_patient, wearable_device):
     another_doctor = User.objects.create_user(
         phone="13800009999",
         password="pass123456",
@@ -675,8 +710,80 @@ def test_doctor_cannot_access_other_doctors_project_patient(api_client, project_
         format="json",
     )
 
+    assert response.status_code == 201, response.data
+    assert WearableBinding.objects.filter(patient=project_patient.patient).exists()
+
+
+@pytest.mark.django_db
+def test_any_doctor_can_manage_wearable_for_enrolled_patient(
+    api_client, doctor, wearable_device, monkeypatch
+):
+    owner = User.objects.create_user(
+        phone="13800008888",
+        password="pass123456",
+        name="项目医生",
+        role=User.Role.DOCTOR,
+    )
+    patient = Patient.objects.create(
+        name="跨医生患者",
+        gender=Patient.Gender.UNKNOWN,
+        age=66,
+        phone="13900008888",
+        primary_doctor=owner,
+    )
+    project = StudyProject.objects.create(name="跨医生项目", created_by=owner)
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    project_patient = ProjectPatient.objects.create(
+        project=project,
+        patient=patient,
+        group=group,
+        created_by=owner,
+    )
+    monkeypatch.setattr(
+        "apps.wearables.views.check_device_status",
+        lambda device: {
+            "device_id": device.id,
+            "model": device.model,
+            "online": True,
+            "battery_level": 80,
+            "last_communication_at": None,
+            "capabilities": {"ring": False},
+        },
+    )
+    api_client.force_authenticate(doctor)
+
+    status_response = api_client.get(
+        f"/api/wearables/project-patients/{project_patient.id}/binding/"
+    )
+    assert status_response.status_code == 200, status_response.data
+
+    bind_response = api_client.post(
+        f"/api/wearables/project-patients/{project_patient.id}/bind/",
+        {"short_code": wearable_device.short_code},
+        format="json",
+    )
+    assert bind_response.status_code == 201, bind_response.data
+
+    check_response = api_client.post(
+        f"/api/wearables/devices/{wearable_device.id}/check-status/",
+        format="json",
+    )
+    assert check_response.status_code == 200, check_response.data
+
+    unbind_response = api_client.post(
+        f"/api/wearables/bindings/{bind_response.data['id']}/unbind/",
+        format="json",
+    )
+    assert unbind_response.status_code == 200, unbind_response.data
+
+
+@pytest.mark.django_db
+def test_wearable_binding_status_rejects_missing_project_patient(api_client, doctor):
+    api_client.force_authenticate(doctor)
+
+    response = api_client.get("/api/wearables/project-patients/999999/binding/")
+
     assert response.status_code == 404
-    assert not WearableBinding.objects.exists()
 
 
 @pytest.mark.django_db

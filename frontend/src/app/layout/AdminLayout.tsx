@@ -43,7 +43,7 @@ export function AdminLayout() {
             { key: "/prescriptions", icon: <MedicineBoxOutlined />, label: "处方管理" },
             { key: "/training", icon: <HeartOutlined />, label: "训练记录" },
             { key: "/training-tracking", icon: <LineChartOutlined />, label: "训练与健康" },
-            { key: "/wearable-devices", icon: <HddOutlined />, label: "设备台账" },
+            { key: "/wearable-devices", icon: <HddOutlined />, label: "设备管理" },
             { key: "/crf", icon: <FileTextOutlined />, label: "CRF 报告" },
             { key: "/doctors", icon: <UserOutlined />, label: "医生管理" },
           ]}

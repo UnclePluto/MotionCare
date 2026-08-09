@@ -58,26 +58,80 @@ describe("DeviceInventoryPage", () => {
 
   afterEach(() => cleanup());
 
-  it("录入设备后保留固定四位简码的前导零", async () => {
+  it("只填写十五位IMEI即可录入并展示系统固定简码", async () => {
     mockPost.mockResolvedValue({
-      data: device(),
+      data: device({ external_device_id: "860123456789012", identifier_type: "imei" }),
     });
     renderPage();
 
+    expect(await screen.findByText("设备管理")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "新增设备" }));
-    fireEvent.change(screen.getByLabelText("厂商"), { target: { value: "miwitracker" } });
-    fireEvent.change(screen.getByLabelText("厂商设备标识"), { target: { value: "device-001" } });
-    fireEvent.change(screen.getByLabelText("标识类型"), { target: { value: "device_id" } });
-    fireEvent.change(screen.getByLabelText("设备型号"), { target: { value: "M1" } });
+    expect(screen.queryByLabelText("厂商")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("标识类型")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("设备型号")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("IMEI"), {
+      target: { value: "860123456789012" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "录入设备" }));
 
     expect(await screen.findByText("0826")).toBeInTheDocument();
+    expect(screen.getByText("860123456789012")).toBeInTheDocument();
     expect(mockPost).toHaveBeenCalledWith("/wearables/devices/", {
-      provider: "miwitracker",
-      external_device_id: "device-001",
-      identifier_type: "device_id",
-      model: "M1",
+      imei: "860123456789012",
     });
+  });
+
+  it("拒绝非十五位数字IMEI", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "新增设备" }));
+    fireEvent.change(screen.getByLabelText("IMEI"), { target: { value: "1234A" } });
+    fireEvent.click(screen.getByRole("button", { name: "录入设备" }));
+
+    expect(await screen.findByText("IMEI 必须是 15 位数字")).toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("允许粘贴带首尾空格的十五位 IMEI 并按去空格值提交", async () => {
+    mockPost.mockResolvedValue({
+      data: device({ external_device_id: "860123456789012", identifier_type: "imei" }),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "新增设备" }));
+    const imeiInput = screen.getByLabelText("IMEI");
+
+    expect(imeiInput).not.toHaveAttribute("maxLength");
+    fireEvent.change(imeiInput, { target: { value: " 860123456789012 " } });
+    fireEvent.click(screen.getByRole("button", { name: "录入设备" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith("/wearables/devices/", {
+        imei: "860123456789012",
+      });
+    });
+    expect(screen.queryByText("IMEI 必须是 15 位数字")).not.toBeInTheDocument();
+  });
+
+  it("历史非 IMEI 标识在 IMEI 列显示为空", async () => {
+    mockGet.mockResolvedValue({
+      data: [device({ external_device_id: "legacy-device-001", identifier_type: "device_id" })],
+    });
+    renderPage();
+
+    const row = (await screen.findByText("0826")).closest("tr");
+    expect(row).not.toBeNull();
+    expect(row!.querySelectorAll("td")[1]).toHaveTextContent("—");
+    expect(screen.queryByText("legacy-device-001")).not.toBeInTheDocument();
+  });
+
+  it("设备列表加载失败时展示固定提示", async () => {
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      response: { data: { detail: "服务暂时不可用。" } },
+    });
+    renderPage();
+
+    expect(await screen.findByText("设备管理加载失败")).toBeInTheDocument();
+    expect(screen.queryByText("服务暂时不可用。")).not.toBeInTheDocument();
   });
 
   it("使用后端权威绑定状态筛选并区分无患者访问权限的绑定", async () => {

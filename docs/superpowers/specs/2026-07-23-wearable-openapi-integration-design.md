@@ -5,6 +5,7 @@
 > 范围：穿戴设备台账与患者绑定、厂商 OpenAPI 同步与远程操作、原始测量及日汇总、训练与健康页面升级、移除手工健康录入
 > 关联：`docs/other/通信协议.pdf`、`docs/other/OpenAPI接口说明_V1.6.9.docx`、`specs/patient-rehab-system/prd.md`
 > 明确不关联：CRF 模板、CRF registry、CRF 预览与导出
+> 后续覆盖说明（2026-08-09）：设备入口名称与新建设备录入规则已由 `docs/superpowers/specs/2026-08-09-wearable-management-permission-design.md` 覆盖；入口统一为“设备管理”，新增设备只录入 15 位 IMEI，历史设备字段和数据继续保留。
 
 ## 1. 背景与目标
 
