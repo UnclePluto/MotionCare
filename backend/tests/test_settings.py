@@ -1,5 +1,61 @@
+import pytest
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import dotenv_values
+
+from config.environment import env_bool
+
+
+def test_env_bool_defaults_to_false_when_variable_is_unset(monkeypatch):
+    monkeypatch.delenv("TRAINING_HEALTH_ENFORCE_ROW_SCOPE", raising=False)
+
+    assert env_bool("TRAINING_HEALTH_ENFORCE_ROW_SCOPE") is False
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("  TrUe  ", True),
+        ("false", False),
+        ("FALSE", False),
+        ("  FaLsE  ", False),
+    ],
+)
+def test_env_bool_accepts_trimmed_case_insensitive_boolean_values(
+    monkeypatch,
+    raw_value,
+    expected,
+):
+    monkeypatch.setenv("TRAINING_HEALTH_ENFORCE_ROW_SCOPE", raw_value)
+
+    assert env_bool("TRAINING_HEALTH_ENFORCE_ROW_SCOPE") is expected
+
+
+@pytest.mark.parametrize("raw_value", ["", "   ", "tru", "1", "yes"])
+def test_env_bool_rejects_unknown_values(monkeypatch, raw_value):
+    variable_name = "TRAINING_HEALTH_ENFORCE_ROW_SCOPE"
+    monkeypatch.setenv(variable_name, raw_value)
+
+    with pytest.raises(ImproperlyConfigured) as exc_info:
+        env_bool(variable_name)
+
+    message = str(exc_info.value)
+    assert variable_name in message
+    assert "true" in message
+    assert "false" in message
+
+
+def test_env_bool_does_not_echo_unknown_environment_value(monkeypatch):
+    variable_name = "TRAINING_HEALTH_ENFORCE_ROW_SCOPE"
+    sensitive_value = "secret-looking-value"
+    monkeypatch.setenv(variable_name, sensitive_value)
+
+    with pytest.raises(ImproperlyConfigured) as exc_info:
+        env_bool(variable_name)
+
+    assert sensitive_value not in str(exc_info.value)
 
 
 def test_local_vite_origins_are_trusted_for_csrf():

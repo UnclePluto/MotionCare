@@ -41,8 +41,8 @@ def _measurement(*, patient, device, metric_type, measured_at, **values):
 
 @pytest.mark.django_db
 @override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
-def test_measurements_require_accessible_patient_and_matching_project_patient(
-    doctor, project_patient, other_project_patient, wearable_device
+def test_health_queries_require_accessible_patient_and_matching_project_patient(
+    doctor, project_patient, other_project_patient
 ):
     other_doctor = User.objects.create_user(
         phone="13800009999", password="pass123456", name="其他医生", role=User.Role.DOCTOR
@@ -56,20 +56,43 @@ def test_measurements_require_accessible_patient_and_matching_project_patient(
         project=hidden_project, patient=hidden_patient, group=hidden_group
     )
 
-    hidden = _client(doctor).get(
+    hidden_measurements = _client(doctor).get(
         f"/api/wearables/patients/{hidden_patient.id}/measurements/",
         {"project_patient": hidden_pp.id, "metric_type": "heart_rate", "start": "2026-07-01", "end": "2026-07-02"},
+    )
+    hidden_daily_summaries = _client(doctor).get(
+        f"/api/wearables/patients/{hidden_patient.id}/daily-summaries/",
+        {
+            "project_patient": hidden_pp.id,
+            "start": "2026-07-01",
+            "end": "2026-07-02",
+        },
+    )
+    hidden_sync_status = _client(doctor).get(
+        f"/api/wearables/patients/{hidden_patient.id}/sync-status/"
+    )
+    hidden_project_summary = _client(doctor).get(
+        f"/api/wearables/projects/{hidden_project.id}/summary/",
+        {
+            "metric_type": "heart_rate",
+            "start": "2026-07-01",
+            "end": "2026-07-02",
+        },
     )
     mismatched = _client(doctor).get(
         f"/api/wearables/patients/{project_patient.patient_id}/measurements/",
         {"project_patient": other_project_patient.id, "metric_type": "heart_rate", "start": "2026-07-01", "end": "2026-07-02"},
     )
 
-    assert hidden.status_code == 404
+    assert hidden_measurements.status_code == 404
+    assert hidden_daily_summaries.status_code == 404
+    assert hidden_sync_status.status_code == 404
+    assert hidden_project_summary.status_code == 404
     assert mismatched.status_code == 404
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False)
 def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(
     doctor,
     wearable_device,

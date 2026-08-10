@@ -126,6 +126,7 @@ def test_inaccessible_doctor_receives_404_for_all_video_endpoints(
 
 @pytest.mark.django_db
 @override_settings(
+    TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False,
     QINIU_ACCESS_KEY="ak-test",
     QINIU_SECRET_KEY="sk-test",
     QINIU_DOWNLOAD_DOMAIN="https://cdn.example.com",

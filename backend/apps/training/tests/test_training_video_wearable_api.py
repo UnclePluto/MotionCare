@@ -426,6 +426,7 @@ def test_wearable_window_is_hidden_from_inaccessible_doctor(
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False)
 def test_wearable_window_is_visible_to_other_doctor_by_default(
     project_patient,
     active_prescription,

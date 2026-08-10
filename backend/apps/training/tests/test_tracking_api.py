@@ -562,6 +562,7 @@ def test_tracking_list_query_count_is_constant_and_excludes_hidden_patient(
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False)
 def test_tracking_is_global_for_doctors_by_default_and_excludes_unenrolled_patient(doctor):
     other_doctor = _doctor(phone="13800008881", name="其他主管医生")
     enrolled_patient = _patient(
