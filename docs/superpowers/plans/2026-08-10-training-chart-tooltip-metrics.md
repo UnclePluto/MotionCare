@@ -215,6 +215,13 @@ Expected: 测试 0 失败；ESLint 0 error；TypeScript 与 Vite 生产构建成
 
 切换为“按周”后确认折线项显示“周汇总 3 次”；再执行“训练跟踪 → 穿戴健康 → 训练跟踪”，确认两张图表仍占满内容区。
 
+可复核浏览器证据：
+
+- [完成情况浮窗](../evidence/2026-08-10-training-chart-tooltip-metrics/completion-tooltip.png)：显示“完成次数 12 次”“完成率 75%”，且无十六进制颜色文本。
+- [日趋势浮窗](../evidence/2026-08-10-training-chart-tooltip-metrics/daily-trend-tooltip.png)：显示“7 日移动平均 1.4 次”“完成次数 3 次”，且无十六进制颜色文本。
+- [按周趋势浮窗](../evidence/2026-08-10-training-chart-tooltip-metrics/weekly-trend-tooltip.png)：显示“周汇总 3 次”“完成次数 3 次”，且无十六进制颜色文本。
+- [页签回切宽度](../evidence/2026-08-10-training-chart-tooltip-metrics/tab-switch-width.png)：Playwright 同步记录切换前后两张 canvas 均为 `962px` 宽；穿戴健康页签期间 canvas 数量为 `0`。
+
 - [x] **Step 7: 提交源代码与测试**
 
 ```bash
