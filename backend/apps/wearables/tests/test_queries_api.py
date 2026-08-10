@@ -70,7 +70,10 @@ def test_measurements_require_accessible_patient_and_matching_project_patient(
 
 
 @pytest.mark.django_db
-def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(doctor):
+def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(
+    doctor,
+    wearable_device,
+):
     owner = User.objects.create_user(
         phone="13800009991",
         password="pass123456",
@@ -91,6 +94,30 @@ def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(doctor
         patient=patient,
         group=group,
         created_by=owner,
+    )
+    ProjectPatient.objects.filter(pk=project_patient.pk).update(
+        enrolled_at=datetime(2026, 6, 30, 16, tzinfo=UTC)
+    )
+    binding = WearableBinding.objects.create(
+        patient=patient,
+        device=wearable_device,
+        bound_at=datetime(2026, 6, 30, 16, tzinfo=UTC),
+        bound_by=owner,
+    )
+    _measurement(
+        patient=patient,
+        device=wearable_device,
+        metric_type="heart_rate",
+        measured_at=datetime(2026, 7, 1, 2, tzinfo=UTC),
+        heart_rate=76,
+    )
+    WearableDailySummary.objects.create(
+        patient=patient,
+        record_date=date(2026, 7, 2),
+        heart_rate_avg=Decimal("78"),
+        heart_rate_min=68,
+        heart_rate_max=88,
+        heart_rate_count=4,
     )
     common = {
         "project_patient": project_patient.id,
@@ -119,13 +146,24 @@ def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(doctor
     )
 
     assert measurements_response.status_code == 200
-    assert measurements_response.data["items"] == []
+    assert measurements_response.data["items"] == [
+        {
+            "measured_at": "2026-07-01T10:00:00+08:00",
+            "heart_rate": 76,
+        }
+    ]
     assert daily_response.status_code == 200
-    assert daily_response.data["items"] == []
+    assert daily_response.data["items"][1]["record_date"] == "2026-07-02"
+    assert daily_response.data["items"][1]["heart_rate_avg"] == 78.0
+    assert daily_response.data["items"][1]["heart_rate_count"] == 4
     assert sync_response.status_code == 200
-    assert sync_response.data["binding_id"] is None
+    assert sync_response.data["binding_id"] == binding.id
     assert project_response.status_code == 200
-    assert project_response.data["groups"][0]["patient_count"] == 1
+    project_group = project_response.data["groups"][0]
+    assert project_group["patient_count"] == 1
+    assert project_group["valid_data_days"] == 1
+    assert project_group["mean"] == 76.0
+    assert project_group["measurement_count"] == 1
 
 
 @pytest.mark.django_db
