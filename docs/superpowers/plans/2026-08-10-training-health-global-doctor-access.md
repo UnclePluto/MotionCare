@@ -6,6 +6,7 @@
 > 日期：2026-08-10
 > 关联：`docs/superpowers/specs/2026-08-10-training-health-global-doctor-access-design.md`
 > 执行记录（2026-08-10, Codex）：Task 1 已落地于 `27db6dd`；Task 2 已落地并经审查强化于 `d160d89`、`ba5e52c`。Task 3 全量验证：后端 `693 passed`，Ruff 返回 `All checks passed!`，`makemigrations --check --dry-run` 返回 `No changes detected`；管理端 `256 passed`，lint 为 `0 errors, 5 warnings`，生产 build 成功；小程序 `354 passed`，开发配置及 `TARO_APP_API_BASE_URL=https://mcare-wx.whestsun.com/api` 生产 API 配置两次微信构建均成功。最终 `git diff --check` 通过；提交 `4f73864` 前工作树仅包含本计划执行记录，提交后 `git status --short` 为空。
+> 执行记录（2026-08-10, Codex 最终审查修复）：严格布尔配置解析、默认开放测试环境隔离与穿戴旧权限非披露覆盖已落地于 `8a3fe51`。新配置测试与四个直接受影响测试文件共 `81 passed`，外部环境强制开启行级权限时四个默认开放用例 `4 passed`；后端全量 `706 passed`，Ruff 返回 `All checks passed!`，`makemigrations --check --dry-run` 返回 `No changes detected`，`git diff --check` 通过。
 
 **Goal:** 让所有医生和管理员默认查看全部已入组患者的训练、视频、分析与穿戴健康数据，同时通过配置开关保留原有医生行级过滤策略。
 
