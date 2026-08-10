@@ -6,6 +6,8 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
+from config.environment import env_bool
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 ROOT_DIR = BASE_DIR.parent
 load_dotenv(ROOT_DIR / ".env")
@@ -22,6 +24,7 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = os.getenv("DJANGO_SESSION_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
 CSRF_COOKIE_SECURE = os.getenv("DJANGO_CSRF_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
+TRAINING_HEALTH_ENFORCE_ROW_SCOPE = env_bool("TRAINING_HEALTH_ENFORCE_ROW_SCOPE")
 
 INSTALLED_APPS = [
     "django.contrib.admin",

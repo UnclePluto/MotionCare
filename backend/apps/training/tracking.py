@@ -2,6 +2,7 @@ from collections import defaultdict
 from decimal import Decimal
 from statistics import mean
 
+from django.conf import settings
 from django.db.models import Count, F, Max, Prefetch, Q
 from django.http import Http404
 from django.utils import timezone
@@ -27,13 +28,19 @@ def _is_admin(user) -> bool:
     return user.role in {User.Role.SUPER_ADMIN, User.Role.ADMIN}
 
 
+def _doctor_scoped_project_patients(qs, user):
+    return qs.filter(
+        Q(patient__primary_doctor=user)
+        | Q(project__created_by=user)
+        | Q(created_by=user)
+    )
+
+
 def accessible_project_patients(user):
     qs = ProjectPatient.objects.select_related("patient", "project", "group")
-    if _is_admin(user):
+    if _is_admin(user) or not settings.TRAINING_HEALTH_ENFORCE_ROW_SCOPE:
         return qs
-    return qs.filter(
-        Q(patient__primary_doctor=user) | Q(project__created_by=user) | Q(created_by=user)
-    )
+    return _doctor_scoped_project_patients(qs, user)
 
 
 def serialize_patient(patient) -> dict:

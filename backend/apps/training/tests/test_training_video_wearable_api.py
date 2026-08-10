@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -406,6 +407,7 @@ def test_wearable_window_filters_invalid_attribution_and_other_patient(
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
 def test_wearable_window_is_hidden_from_inaccessible_doctor(
     project_patient, doctor, active_prescription
 ):
@@ -421,6 +423,28 @@ def test_wearable_window_is_hidden_from_inaccessible_doctor(
 
     assert response.status_code == 404
     assert response.headers["Content-Type"].startswith("application/json")
+
+
+@pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False)
+def test_wearable_window_is_visible_to_other_doctor_by_default(
+    project_patient,
+    active_prescription,
+):
+    started_at = datetime(2026, 8, 6, 1, 32, 14, tzinfo=UTC)
+    video = _video(
+        project_patient,
+        active_prescription,
+        started_at=started_at,
+        ended_at=started_at + timedelta(minutes=10),
+    )
+
+    response = _client(_other_doctor()).get(
+        f"/api/training/videos/{video.id}/wearable-window/"
+    )
+
+    assert response.status_code == 200
+    assert response.data == {"available": False}
 
 
 @pytest.mark.django_db

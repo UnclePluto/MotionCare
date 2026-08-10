@@ -99,6 +99,7 @@ def test_doctor_gets_short_private_url_only_for_attached_video(
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
 @pytest.mark.parametrize(
     ("method", "suffix"),
     [
@@ -121,6 +122,47 @@ def test_inaccessible_doctor_receives_404_for_all_video_endpoints(
     response = getattr(_client(_other_doctor()), method)(path)
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(
+    TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False,
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_DOWNLOAD_DOMAIN="https://cdn.example.com",
+)
+def test_doctor_can_access_other_doctors_video_endpoints_by_default(
+    project_patient,
+    active_prescription,
+    django_capture_on_commit_callbacks,
+):
+    action = _shoulder_press_action(active_prescription)
+    video = _video(project_patient, active_prescription, action)
+    other_doctor = _other_doctor()
+
+    download = _client(other_doctor).get(
+        f"/api/training/videos/{video.id}/download-url/"
+    )
+    latest = _client(other_doctor).get(
+        f"/api/training/videos/{video.id}/analysis-jobs/latest/"
+    )
+    with patch("apps.training.tasks.run_motion_analysis_job.delay") as delay:
+        with django_capture_on_commit_callbacks(execute=False) as callbacks:
+            created = _client(other_doctor).post(
+                f"/api/training/videos/{video.id}/analysis-jobs/"
+            )
+
+    assert download.status_code == 200
+    assert download.data["url"].startswith(
+        f"https://cdn.example.com/{video.object_key}?e="
+    )
+    assert latest.status_code == 200
+    assert latest.data is None
+    assert created.status_code == 201
+    job = MotionAnalysisJob.objects.get(pk=created.data["id"])
+    assert job.requested_by == other_doctor
+    assert len(callbacks) == 1
+    delay.assert_not_called()
 
 
 @pytest.mark.django_db
