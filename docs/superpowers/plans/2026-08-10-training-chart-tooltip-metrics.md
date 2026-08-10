@@ -1,6 +1,6 @@
 # 训练图表悬浮指标实施计划
 
-执行记录（2026-08-10, Codex）：Task 1 的源代码、自动化回归与页签尺寸修复已落地于 commit `8374438`；真实浏览器悬浮验证受本机 8000 端口的非本项目服务阻塞，详见同目录 Task 1 报告。
+执行记录（2026-08-10, Codex）：Task 1 已完成。初始 tooltip、自动化回归与页签尺寸修复落地于 `8374438`，执行记录落地于 `cc4ca43`，真实浏览器验证发现的固定颜色系列名修复落地于 `e86070e`；验证证据见同目录 Task 1 报告。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -202,7 +202,7 @@ npm run build
 
 Expected: 测试 0 失败；ESLint 0 error；TypeScript 与 Vite 生产构建成功。允许保留仓库既有的 Fast Refresh warning 和 Vite 大包提示，但不得新增告警。
 
-- [ ] **Step 6: 使用真实浏览器验证悬浮浮窗**
+- [x] **Step 6: 使用真实浏览器验证悬浮浮窗**
 
 启动本地前端并使用 Playwright 打开训练与健康详情页，依次悬停两个图表的柱状和折线数据点。确认浮窗不再出现 `#1677ff`、`#52c41a` 或 `#fa8c16` 文本，并分别显示：
 
@@ -215,7 +215,7 @@ Expected: 测试 0 失败；ESLint 0 error；TypeScript 与 Vite 生产构建成
 
 切换为“按周”后确认折线项显示“周汇总 3 次”；再执行“训练跟踪 → 穿戴健康 → 训练跟踪”，确认两张图表仍占满内容区。
 
-- [ ] **Step 7: 提交源代码与测试**
+- [x] **Step 7: 提交源代码与测试**
 
 ```bash
 git add frontend/src/pages/training-tracking/TrainingTrackingDetailPage.tsx \
