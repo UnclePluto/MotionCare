@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
@@ -39,6 +40,7 @@ def _measurement(*, patient, device, metric_type, measured_at, **values):
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
 def test_measurements_require_accessible_patient_and_matching_project_patient(
     doctor, project_patient, other_project_patient, wearable_device
 ):
@@ -65,6 +67,65 @@ def test_measurements_require_accessible_patient_and_matching_project_patient(
 
     assert hidden.status_code == 404
     assert mismatched.status_code == 404
+
+
+@pytest.mark.django_db
+def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(doctor):
+    owner = User.objects.create_user(
+        phone="13800009991",
+        password="pass123456",
+        name="健康主管医生",
+        role=User.Role.DOCTOR,
+    )
+    patient = Patient.objects.create(
+        name="跨医生健康患者",
+        gender=Patient.Gender.UNKNOWN,
+        age=70,
+        phone="13900009991",
+        primary_doctor=owner,
+    )
+    project = StudyProject.objects.create(name="跨医生健康研究", created_by=owner)
+    group = StudyGroup.objects.create(project=project, name="干预组", target_ratio=1)
+    project_patient = ProjectPatient.objects.create(
+        project=project,
+        patient=patient,
+        group=group,
+        created_by=owner,
+    )
+    common = {
+        "project_patient": project_patient.id,
+        "start": "2026-07-01",
+        "end": "2026-07-02",
+    }
+
+    measurements_response = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/measurements/",
+        {**common, "metric_type": "heart_rate"},
+    )
+    daily_response = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/daily-summaries/",
+        common,
+    )
+    sync_response = _client(doctor).get(
+        f"/api/wearables/patients/{patient.id}/sync-status/"
+    )
+    project_response = _client(doctor).get(
+        f"/api/wearables/projects/{project.id}/summary/",
+        {
+            "metric_type": "heart_rate",
+            "start": "2026-07-01",
+            "end": "2026-07-02",
+        },
+    )
+
+    assert measurements_response.status_code == 200
+    assert measurements_response.data["items"] == []
+    assert daily_response.status_code == 200
+    assert daily_response.data["items"] == []
+    assert sync_response.status_code == 200
+    assert sync_response.data["binding_id"] is None
+    assert project_response.status_code == 200
+    assert project_response.data["groups"][0]["patient_count"] == 1
 
 
 @pytest.mark.django_db
