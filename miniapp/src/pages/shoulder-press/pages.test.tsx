@@ -117,6 +117,23 @@ const taroHarness = vi.hoisted(() => {
     })),
     createVideoContext: vi.fn(() => ({ play: vi.fn() })),
     createInnerAudioContext: vi.fn(),
+    getMenuButtonBoundingClientRect: vi.fn(() => ({
+      top: 26,
+      bottom: 58,
+      height: 32,
+      left: 279,
+      right: 367,
+      width: 88
+    })),
+    getWindowInfo: vi.fn(() => ({
+      safeArea: { top: 34, bottom: 778, left: 0, right: 375, width: 375, height: 744 },
+      statusBarHeight: 20,
+      windowWidth: 375,
+      windowHeight: 812,
+      screenWidth: 375,
+      screenHeight: 812,
+      pixelRatio: 3
+    })),
     getFileSystemManager: vi.fn(() => ({
       getSavedFileList: getSavedFileListMock,
       removeSavedFile: removeSavedFileMock,
@@ -624,6 +641,122 @@ describe('shoulder press pages', () => {
       element.props.className === 'shoulder-training-timer'
     ))).toHaveLength(0)
     expect(findFirstByType(overlay.element, 'Video')).toBeTruthy()
+  })
+
+  it('keeps every training overlay control below its supplied safe top inset', () => {
+    const overlay = renderPage(ShoulderPressTrainingOverlay, {
+      videoUrl: 'https://cdn.example.com/demo.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180,
+      started: true,
+      topInset: 70
+    })
+
+    const timer = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-timer'
+    ))[0]
+    expect(timer.props.style).toMatchObject({ top: '70px' })
+    expect(findFirstByType(overlay.element, 'Video').props.style).toMatchObject({ top: '70px' })
+
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    overlay.rerender()
+    const failedPreview = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-preview-error'
+    ))[0]
+    expect(failedPreview.props.style).toMatchObject({ top: '70px' })
+
+    failedPreview.props.onTouchStart?.({ touches: [{ clientX: 10, clientY: 10 }] })
+    failedPreview.props.onTouchEnd?.({ changedTouches: [{ clientX: 60, clientY: 10 }] })
+    overlay.rerender()
+    const restore = findAll(overlay.element, (element) => (
+      element.props.className === 'shoulder-training-preview-restore'
+    ))[0]
+    expect(restore.props.style).toMatchObject({ top: '70px' })
+  })
+
+  it('places the overlay below the lower left return area when it extends below the menu button', async () => {
+    taroHarness.taroMock.getMenuButtonBoundingClientRect.mockReturnValueOnce({
+      top: 26,
+      bottom: 58,
+      height: 32,
+      left: 279,
+      right: 367,
+      width: 88
+    })
+    taroHarness.taroMock.getWindowInfo.mockReturnValueOnce({
+      safeArea: { top: 34, bottom: 778, left: 0, right: 375, width: 375, height: 744 },
+      statusBarHeight: 20,
+      windowWidth: 375,
+      windowHeight: 812,
+      screenWidth: 375,
+      screenHeight: 812,
+      pixelRatio: 3
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.getMenuButtonBoundingClientRect).toHaveBeenCalledTimes(1)
+    expect(findTrainingOverlay(page.element).props.topInset).toBe(90)
+  })
+
+  it('falls back to the safe-area top when menu button measurement throws', async () => {
+    taroHarness.taroMock.getMenuButtonBoundingClientRect.mockImplementationOnce(() => {
+      throw new Error('menu button unavailable')
+    })
+    taroHarness.taroMock.getWindowInfo.mockReturnValueOnce({
+      safeArea: { top: 34, bottom: 778, left: 0, right: 375, width: 375, height: 744 },
+      statusBarHeight: 20,
+      windowWidth: 375,
+      windowHeight: 812,
+      screenWidth: 375,
+      screenHeight: 812,
+      pixelRatio: 3
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.getWindowInfo).toHaveBeenCalledTimes(1)
+    expect(findTrainingOverlay(page.element).props.topInset).toBe(90)
+  })
+
+  it('keeps the left return area below a valid menu button when window information throws', async () => {
+    taroHarness.taroMock.getWindowInfo.mockImplementationOnce(() => {
+      throw new Error('window information unavailable')
+    })
+    taroHarness.taroMock.getMenuButtonBoundingClientRect.mockReturnValueOnce({
+      top: 26,
+      bottom: 58,
+      height: 32,
+      left: 279,
+      right: 367,
+      width: 88
+    })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.getMenuButtonBoundingClientRect).toHaveBeenCalledTimes(1)
+    expect(findTrainingOverlay(page.element).props.topInset).toBe(114)
+  })
+
+  it('places upload status below the width-scaled picture-in-picture preview', async () => {
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+    await recorderHarness.instances[0].options.onSegment('wxfile://temp/upload-status.mp4', 5_000)
+    await flushPromises(20)
+    page.rerender()
+
+    const uploadStatus = findAll(page.element, (element) => (
+      element.props.className === 'training-upload-status'
+    ))[0]
+    expect(uploadStatus.props.style).toMatchObject({ top: '252px' })
   })
 
   it('disables native progress gestures on the swipeable training preview', () => {

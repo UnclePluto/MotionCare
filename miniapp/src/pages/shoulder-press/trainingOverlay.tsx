@@ -22,6 +22,7 @@ export type ShoulderPressTrainingOverlayProps = {
   elapsedMs: number
   expectedDurationSeconds: number
   started: boolean
+  topInset?: number
 }
 
 export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlayProps) {
@@ -57,11 +58,12 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
   const hiddenClassName = visibility === 'hidden'
     ? ' shoulder-training-preview-hidden'
     : ''
+  const topInset = `${props.topInset ?? 24}px`
 
   return (
     <View className='shoulder-training-overlay'>
       {props.started ? (
-        <View className='shoulder-training-timer'>
+        <View className='shoulder-training-timer' style={{ top: topInset }}>
           <View><Text>已训练</Text><Text>{formatShoulderPressTimer(props.elapsedMs)}</Text></View>
           <View><Text>剩余</Text><Text>{formatShoulderPressTimer(remainingSeconds * 1000)}</Text></View>
         </View>
@@ -76,6 +78,7 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
           controls={false}
           enableProgressGesture={false}
           objectFit='contain'
+          style={{ top: topInset }}
           onError={() => setVideoError(true)}
           onTouchStart={visibility === 'visible' ? startSwipe : undefined}
           onTouchEnd={visibility === 'visible' ? endSwipe : undefined}
@@ -84,6 +87,7 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
       {props.videoUrl && visibility === 'hidden' ? (
         <View
           className='shoulder-training-preview-restore'
+          style={{ top: topInset }}
           onTouchStart={(event) => {
             const point = touchPointFromEvent(event, 'touches')
             if (point) touchStartRef.current = point
@@ -99,6 +103,7 @@ export function ShoulderPressTrainingOverlay(props: ShoulderPressTrainingOverlay
       {videoError ? (
         <View
           className={`shoulder-training-preview-error${hiddenClassName}`}
+          style={{ top: topInset }}
           onTouchStart={visibility === 'visible' ? startSwipe : undefined}
           onTouchEnd={visibility === 'visible' ? endSwipe : undefined}
         >

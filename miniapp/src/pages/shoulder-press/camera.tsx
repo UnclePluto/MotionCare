@@ -69,6 +69,73 @@ type PreflightState = 'idle' | 'checking' | 'blocked' | 'failed'
 
 let backgroundUploadPromise: Promise<void> | null = null
 
+const TRAINING_TOP_GAP_PX = 12
+const DEFAULT_TRAINING_TOP_INSET_PX = 24
+const DESIGN_WIDTH_RPX = 750
+const DEFAULT_WINDOW_WIDTH_PX = 375
+const TRAINING_BACK_CONTROL_HEIGHT_RPX = 88
+const TRAINING_PREVIEW_HEIGHT_RPX = 300
+
+type TrainingTopLayout = {
+  topInset: number
+  uploadStatusTop: number
+}
+
+function positivePixelValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null
+}
+
+function designPixels(rpx: number, windowWidth: number): number {
+  return rpx * windowWidth / DESIGN_WIDTH_RPX
+}
+
+function resolveTrainingTopLayout(): TrainingTopLayout {
+  let hasWindowInfo = false
+  let windowWidth = DEFAULT_WINDOW_WIDTH_PX
+  let safeTop = 0
+
+  try {
+    const windowInfo = Taro.getWindowInfo()
+    hasWindowInfo = true
+    windowWidth = positivePixelValue(windowInfo.windowWidth)
+      ?? positivePixelValue(windowInfo.screenWidth)
+      ?? DEFAULT_WINDOW_WIDTH_PX
+    safeTop = Math.max(
+      positivePixelValue(windowInfo.safeArea?.top) ?? 0,
+      positivePixelValue(windowInfo.statusBarHeight) ?? 0
+    )
+  } catch {
+    // 窗口信息不可用时，保留默认宽度以放置画中画。
+  }
+
+  let menuBottom = 0
+  try {
+    menuBottom = positivePixelValue(Taro.getMenuButtonBoundingClientRect().bottom) ?? 0
+  } catch {
+    // 非微信环境或菜单测量暂不可用时，继续使用窗口安全区回退。
+  }
+
+  const backControlHeight = designPixels(TRAINING_BACK_CONTROL_HEIGHT_RPX, windowWidth)
+  const backControlBottom = hasWindowInfo
+    ? safeTop + backControlHeight
+    : menuBottom > 0
+      ? menuBottom + backControlHeight
+      : 0
+  const highestTopObstacle = Math.max(menuBottom, backControlBottom)
+  const topInset = highestTopObstacle > 0
+    ? Math.ceil(highestTopObstacle + TRAINING_TOP_GAP_PX)
+    : DEFAULT_TRAINING_TOP_INSET_PX
+
+  return {
+    topInset,
+    uploadStatusTop: Math.ceil(
+      topInset + designPixels(TRAINING_PREVIEW_HEIGHT_RPX, windowWidth) + TRAINING_TOP_GAP_PX
+    )
+  }
+}
+
 function listSavedShoulderPressFiles(): Promise<ShoulderPressSavedFile[]> {
   const fs = Taro.getFileSystemManager()
   return new Promise((resolve, reject) => {
@@ -353,6 +420,7 @@ export default function ShoulderPressCameraPage() {
   const [tailSaveFailed, setTailSaveFailed] = useState(false)
   const [session, setSession] = useState<PendingShoulderPressSession | null>(null)
   const [error, setError] = useState('')
+  const [trainingTopLayout] = useState(resolveTrainingTopLayout)
   const [, setLiveTick] = useState(Date.now())
   const cameraContextRef = useRef<CameraContext | null>(null)
   const recorderRef = useRef<ShoulderPressRecorder | null>(null)
@@ -1158,6 +1226,7 @@ export default function ShoulderPressCameraPage() {
           action ? expectedDurationSeconds(action) : 1
         )}
         started={Boolean(session?.trainingStartedAt)}
+        topInset={trainingTopLayout.topInset}
       />
 
       {preflightMessage ? (
@@ -1190,7 +1259,10 @@ export default function ShoulderPressCameraPage() {
       ) : null}
 
       {session?.segments.length ? (
-        <View className='training-upload-status'>
+        <View
+          className='training-upload-status'
+          style={{ top: `${trainingTopLayout.uploadStatusTop}px` }}
+        >
           <Text>分段上传 {counters.uploaded}/{counters.total}</Text>
         </View>
       ) : null}
