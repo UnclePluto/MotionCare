@@ -215,7 +215,7 @@ function makeTrendChartConfig(data: ChartTrendPoint[], range: TrainingTrackingRa
       {
         type: "interval",
         yField: "completed_count",
-        colorField: () => "#1677ff",
+        style: { fill: "#1677ff" },
         axis: { y: { title: "完成次数" } },
         tooltip: {
           channel: "y",
@@ -257,7 +257,7 @@ function makeCompletionChartConfig(rows: TrackingPrescriptionCompletionRow[]): D
       {
         type: "interval",
         yField: "completion_rate",
-        colorField: () => "#52c41a",
+        style: { fill: "#52c41a" },
         axis: { y: { title: "完成率" } },
         tooltip: {
           channel: "y",

@@ -481,6 +481,11 @@ describe("TrainingTrackingDetailPage", () => {
     const completionChildren = completion?.children as Array<{ tooltip: TooltipConfig }>;
     const trendChildren = trend?.children as Array<{ tooltip: TooltipConfig }>;
 
+    expect(trendChildren[0]).not.toHaveProperty("colorField");
+    expect(trendChildren[0]).toMatchObject({ style: { fill: "#1677ff" } });
+    expect(completionChildren[0]).not.toHaveProperty("colorField");
+    expect(completionChildren[0]).toMatchObject({ style: { fill: "#52c41a" } });
+
     expect(completionChildren[0].tooltip.name).toBe("完成率");
     expect(completionChildren[0].tooltip.valueFormatter(75)).toBe("75%");
     expect(completionChildren[1].tooltip.name).toBe("完成次数");
