@@ -22,6 +22,9 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = os.getenv("DJANGO_SESSION_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
 CSRF_COOKIE_SECURE = os.getenv("DJANGO_CSRF_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
+TRAINING_HEALTH_ENFORCE_ROW_SCOPE = (
+    os.getenv("TRAINING_HEALTH_ENFORCE_ROW_SCOPE", "false").lower() == "true"
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",

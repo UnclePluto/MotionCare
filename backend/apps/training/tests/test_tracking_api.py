@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -470,6 +471,7 @@ def test_tracking_summary_isolates_last_sync_when_device_switches_from_patient_a
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
 def test_tracking_list_query_count_is_constant_and_excludes_hidden_patient(
     doctor, project_patient
 ):
@@ -557,6 +559,84 @@ def test_tracking_list_query_count_is_constant_and_excludes_hidden_patient(
     assert hidden_patient.id not in returned_ids
     assert len(one_patient_queries) == len(many_patient_queries)
     assert len(many_patient_queries) <= 5
+
+
+@pytest.mark.django_db
+def test_tracking_is_global_for_doctors_by_default_and_excludes_unenrolled_patient(doctor):
+    other_doctor = _doctor(phone="13800008881", name="其他主管医生")
+    enrolled_patient = _patient(
+        other_doctor,
+        name="跨医生可见患者",
+        phone="13900008881",
+    )
+    other_pp = _project_patient(
+        other_doctor,
+        enrolled_patient,
+        project_name="跨医生研究",
+    )
+    second_pp = _project_patient(
+        other_doctor,
+        enrolled_patient,
+        project_name="跨医生第二研究",
+    )
+    unenrolled_patient = _patient(
+        other_doctor,
+        name="未入组患者",
+        phone="13900008882",
+    )
+
+    list_response = _client(doctor).get(
+        "/api/training/tracking/patients/",
+        {"q": "跨医生可见患者"},
+    )
+    detail_response = _client(doctor).get(
+        f"/api/training/tracking/patients/{enrolled_patient.id}/"
+    )
+    unenrolled_list = _client(doctor).get(
+        "/api/training/tracking/patients/",
+        {"q": "未入组患者"},
+    )
+    unenrolled_detail = _client(doctor).get(
+        f"/api/training/tracking/patients/{unenrolled_patient.id}/"
+    )
+
+    assert list_response.status_code == 200
+    assert [row["patient"]["id"] for row in list_response.data] == [enrolled_patient.id]
+    assert list_response.data[0]["project_count"] == 2
+    assert detail_response.status_code == 200
+    assert {
+        item["id"] for item in detail_response.data["project_patients"]
+    } == {other_pp.id, second_pp.id}
+    assert unenrolled_list.data == []
+    assert unenrolled_detail.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
+def test_tracking_row_scope_can_be_reenabled_without_changing_callers(doctor):
+    other_doctor = _doctor(phone="13800008883", name="受限主管医生")
+    patient = _patient(other_doctor, name="恢复受限患者", phone="13900008883")
+    project_patient = _project_patient(
+        other_doctor,
+        patient,
+        project_name="恢复权限研究",
+    )
+
+    list_response = _client(doctor).get(
+        "/api/training/tracking/patients/",
+        {"q": "恢复受限患者"},
+    )
+    detail_response = _client(doctor).get(
+        f"/api/training/tracking/patients/{patient.id}/"
+    )
+    admin_response = _client(_admin()).get(
+        f"/api/training/tracking/patients/{patient.id}/",
+        {"project_patient": project_patient.id},
+    )
+
+    assert list_response.data == []
+    assert detail_response.status_code == 404
+    assert admin_response.status_code == 200
 
 
 @pytest.mark.django_db
@@ -904,6 +984,7 @@ def test_tracking_detail_switches_project_patient_and_defaults_by_recent_trainin
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
 def test_tracking_detail_hides_inaccessible_patient_and_rejects_invalid_project_patient(
     doctor,
     project_patient,
@@ -932,6 +1013,7 @@ def test_tracking_detail_hides_inaccessible_patient_and_rejects_invalid_project_
 
 
 @pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
 def test_tracking_allows_project_patient_creator_to_access_patient(doctor):
     owner_doctor = _doctor(phone="13800007771", name="主管医生")
     enrolling_doctor = _doctor(phone="13800007772", name="入组医生")
