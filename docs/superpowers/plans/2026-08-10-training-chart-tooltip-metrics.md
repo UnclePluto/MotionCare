@@ -1,5 +1,7 @@
 # 训练图表悬浮指标实施计划
 
+执行记录（2026-08-10, Codex）：Task 1 的源代码、自动化回归与页签尺寸修复已落地于 commit `8374438`；真实浏览器悬浮验证受本机 8000 端口的非本项目服务阻塞，详见同目录 Task 1 报告。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将训练与健康详情页两个训练图表的悬浮提示改为业务指标名称，并按百分比或次数格式展示数值。
