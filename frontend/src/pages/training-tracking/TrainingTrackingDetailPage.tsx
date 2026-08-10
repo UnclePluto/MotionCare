@@ -158,6 +158,11 @@ function formatNumber(value: number | null | undefined) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+function formatCount(value: number | null | undefined) {
+  const formatted = formatNumber(value);
+  return formatted === "—" ? formatted : `${formatted} 次`;
+}
+
 function renderPendingVideoStatus(status: TrackingPendingVideo["status"]) {
   if (PENDING_VIDEO_PROCESSING_STATUSES.has(status)) {
     return <Tag color="processing">视频处理中</Tag>;
@@ -210,8 +215,13 @@ function makeTrendChartConfig(data: ChartTrendPoint[], range: TrainingTrackingRa
       {
         type: "interval",
         yField: "completed_count",
-        colorField: () => "#1677ff",
+        style: { fill: "#1677ff" },
         axis: { y: { title: "完成次数" } },
+        tooltip: {
+          channel: "y",
+          name: "完成次数",
+          valueFormatter: formatCount,
+        },
       },
       {
         type: "line",
@@ -219,6 +229,11 @@ function makeTrendChartConfig(data: ChartTrendPoint[], range: TrainingTrackingRa
         shapeField: "smooth",
         style: { lineWidth: 2, stroke: "#fa8c16" },
         axis: { y: { position: "right", title: range === "weekly" ? "周汇总" : "7 日移动平均" } },
+        tooltip: {
+          channel: "y",
+          name: range === "weekly" ? "周汇总" : "7 日移动平均",
+          valueFormatter: formatCount,
+        },
       },
     ],
     tooltip: { shared: true },
@@ -242,14 +257,24 @@ function makeCompletionChartConfig(rows: TrackingPrescriptionCompletionRow[]): D
       {
         type: "interval",
         yField: "completion_rate",
-        colorField: () => "#52c41a",
+        style: { fill: "#52c41a" },
         axis: { y: { title: "完成率" } },
+        tooltip: {
+          channel: "y",
+          name: "完成率",
+          valueFormatter: formatPercent,
+        },
       },
       {
         type: "line",
         yField: "completed_count",
         style: { lineWidth: 2, stroke: "#1677ff" },
         axis: { y: { position: "right", title: "完成次数" } },
+        tooltip: {
+          channel: "y",
+          name: "完成次数",
+          valueFormatter: formatCount,
+        },
       },
     ],
     tooltip: { shared: true },
@@ -516,6 +541,7 @@ export function TrainingTrackingDetailPage() {
         items={[
           {
             key: "training",
+            destroyOnHidden: true,
             label: (
               <Space size={8}>
                 <LineChartOutlined aria-hidden="true" />

@@ -9,7 +9,17 @@ import type {
   TrainingVideoWearableWindowResponse,
 } from "./types";
 
-const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
+const { mockGet, mockPost, mockDualAxesProps } = vi.hoisted(() => ({
+  mockGet: vi.fn(),
+  mockPost: vi.fn(),
+  mockDualAxesProps: [] as Array<Record<string, unknown>>,
+}));
+
+type TooltipConfig = {
+  channel: string;
+  name: string;
+  valueFormatter: (value: number) => string;
+};
 
 vi.mock("../../api/client", () => ({
   apiClient: {
@@ -19,9 +29,14 @@ vi.mock("../../api/client", () => ({
 }));
 
 vi.mock("@ant-design/charts", () => ({
-  DualAxes: (props: Record<string, unknown>) => (
-    <pre data-testid="dual-axes-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
-  ),
+  DualAxes: (props: Record<string, unknown>) => {
+    mockDualAxesProps.push(props);
+    return (
+      <pre data-testid="dual-axes-chart">
+        {JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}
+      </pre>
+    );
+  },
   Line: (props: Record<string, unknown>) => (
     <pre data-testid="line-chart">{JSON.stringify(props, (_key, value) => (typeof value === "function" ? "[function]" : value))}</pre>
   ),
@@ -393,6 +408,7 @@ async function waitForWearableQueryToSettle(
 
 describe("TrainingTrackingDetailPage", () => {
   beforeEach(() => {
+    mockDualAxesProps.length = 0;
     mockGet.mockReset();
     mockPost.mockReset();
     mockGet.mockImplementation((url: string) => {
@@ -451,6 +467,48 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.queryByText("不应展示")).not.toBeInTheDocument();
   });
 
+  it("图表悬浮提示使用业务指标名称和格式化数值", async () => {
+    renderAt("/training-tracking/patients/201");
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+
+    const configs = mockDualAxesProps.filter((props) => Array.isArray(props.children));
+    const completion = configs.find((props) =>
+      Array.isArray(props.data) && (props.data[0] as { action_name?: string } | undefined)?.action_name,
+    );
+    const trend = configs.find((props) =>
+      Array.isArray(props.data) && (props.data[0] as { label?: string } | undefined)?.label,
+    );
+    const completionChildren = completion?.children as Array<{ tooltip: TooltipConfig }>;
+    const trendChildren = trend?.children as Array<{ tooltip: TooltipConfig }>;
+
+    expect(trendChildren[0]).not.toHaveProperty("colorField");
+    expect(trendChildren[0]).toMatchObject({ style: { fill: "#1677ff" } });
+    expect(completionChildren[0]).not.toHaveProperty("colorField");
+    expect(completionChildren[0]).toMatchObject({ style: { fill: "#52c41a" } });
+
+    expect(completionChildren[0].tooltip.name).toBe("完成率");
+    expect(completionChildren[0].tooltip.valueFormatter(75)).toBe("75%");
+    expect(completionChildren[1].tooltip.name).toBe("完成次数");
+    expect(completionChildren[1].tooltip.valueFormatter(12)).toBe("12 次");
+    expect(trendChildren[0].tooltip.name).toBe("完成次数");
+    expect(trendChildren[0].tooltip.valueFormatter(3)).toBe("3 次");
+    expect(trendChildren[1].tooltip.name).toBe("7 日移动平均");
+    expect(trendChildren[1].tooltip.valueFormatter(1.4)).toBe("1.4 次");
+
+    fireEvent.click(screen.getByText("按周"));
+
+    await waitFor(() => {
+      const latestTrend = [...mockDualAxesProps]
+        .reverse()
+        .find((props) =>
+          Array.isArray(props.data) && (props.data[0] as { label?: string } | undefined)?.label,
+        );
+      const children = latestTrend?.children as Array<{ tooltip: TooltipConfig }>;
+      expect(children[1].tooltip.name).toBe("周汇总");
+      expect(children[1].tooltip.valueFormatter(3)).toBe("3 次");
+    });
+  });
+
   it("可在训练跟踪与穿戴健康页签间切换并保留训练功能", async () => {
     renderAt("/training-tracking/patients/201");
 
@@ -469,9 +527,11 @@ describe("TrainingTrackingDetailPage", () => {
     expect(trainingTab).toHaveAttribute("aria-selected", "false");
     expect(await screen.findByText("穿戴健康面板：201/9001")).toBeInTheDocument();
     expect(screen.getByRole("tabpanel")).toHaveTextContent("穿戴健康面板：201/9001");
+    expect(screen.queryAllByTestId("dual-axes-chart")).toHaveLength(0);
 
     fireEvent.click(trainingTab);
     expect(await screen.findByRole("tabpanel")).toHaveTextContent("处方完成情况");
+    expect(screen.getAllByTestId("dual-axes-chart")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "播放训练视频" })).toBeInTheDocument();
   });
 
