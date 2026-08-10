@@ -2,9 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> 状态：approved
+> 状态：implemented
 > 日期：2026-08-10
 > 关联：`docs/superpowers/specs/2026-08-10-training-health-global-doctor-access-design.md`
+> 执行记录（2026-08-10, Codex）：Task 1 已落地于 `27db6dd`；Task 2 已落地并经审查强化于 `d160d89`、`ba5e52c`；Task 3 已完成全量验证：后端 693 passed、管理端 37 文件/256 tests passed、小程序 26 文件/354 tests passed，双配置微信构建成功。
 
 **Goal:** 让所有医生和管理员默认查看全部已入组患者的训练、视频、分析与穿戴健康数据，同时通过配置开关保留原有医生行级过滤策略。
 
@@ -37,7 +38,7 @@
 - Consumes: `User.role`、`ProjectPatient.objects.select_related("patient", "project", "group")`、环境变量 `TRAINING_HEALTH_ENFORCE_ROW_SCOPE`。
 - Produces: `accessible_project_patients(user) -> QuerySet[ProjectPatient]`，函数签名与调用方不变；默认返回全部项目患者，配置开启时返回既有行级过滤结果。
 
-- [ ] **Step 1: 为默认开放、未入组排除和权限恢复编写失败测试**
+- [x] **Step 1: 为默认开放、未入组排除和权限恢复编写失败测试**
 
 在 `test_tracking_api.py` 增加 `override_settings` 导入，并增加以下测试。使用现有 `_doctor`、`_patient`、`_project_patient` 和 `_client` helper，不创建新的测试工厂：
 
@@ -129,7 +130,7 @@ def test_tracking_row_scope_can_be_reenabled_without_changing_callers(doctor):
 - `test_tracking_detail_hides_inaccessible_patient_and_rejects_invalid_project_patient`
 - `test_tracking_allows_project_patient_creator_to_access_patient`
 
-- [ ] **Step 2: 运行训练追踪测试并确认默认开放用例失败**
+- [x] **Step 2: 运行训练追踪测试并确认默认开放用例失败**
 
 Run:
 
@@ -142,7 +143,7 @@ pytest apps/training/tests/test_tracking_api.py \
 
 Expected: 新增默认开放用例失败，医生查询其他医生患者仍返回空列表或 404；所有标记为开关开启的旧权限测试继续通过。
 
-- [ ] **Step 3: 增加配置和最小权限策略实现**
+- [x] **Step 3: 增加配置和最小权限策略实现**
 
 在 `backend/config/settings.py` 的 Cookie/安全配置附近加入：
 
@@ -181,7 +182,7 @@ def accessible_project_patients(user):
 TRAINING_HEALTH_ENFORCE_ROW_SCOPE=false
 ```
 
-- [ ] **Step 4: 运行训练追踪完整测试并确认通过**
+- [x] **Step 4: 运行训练追踪完整测试并确认通过**
 
 Run:
 
@@ -192,7 +193,7 @@ pytest apps/training/tests/test_tracking_api.py -q
 
 Expected: 所有训练追踪测试通过；默认开放、未入组排除、旧权限恢复、管理员全局可见和恒定查询数均被覆盖。
 
-- [ ] **Step 5: 检查迁移和差异质量**
+- [x] **Step 5: 检查迁移和差异质量**
 
 Run:
 
@@ -206,7 +207,7 @@ git diff --check
 
 Expected: `No changes detected`；Ruff 和差异检查均返回 0。
 
-- [ ] **Step 6: 提交统一权限策略**
+- [x] **Step 6: 提交统一权限策略**
 
 ```bash
 git add \
@@ -230,7 +231,7 @@ git commit -m "feat(training): 增加训练健康数据范围策略"
 - Consumes: Task 1 的 `accessible_project_patients(user)` 和 `TRAINING_HEALTH_ENFORCE_ROW_SCOPE`。
 - Produces: 默认跨医生访问与开关开启后旧权限恢复的端到端 API 回归测试；不新增生产函数。
 
-- [ ] **Step 1: 运行受影响的旧测试，观察权限断言失败**
+- [x] **Step 1: 运行受影响的旧测试，观察权限断言失败**
 
 Run:
 
@@ -245,7 +246,7 @@ pytest \
 
 Expected: 旧测试失败，因为默认配置下其他医生已能越过原行级过滤；失败必须发生在原来的 404 断言。
 
-- [ ] **Step 2: 更新视频端点测试，分别覆盖默认开放和权限恢复**
+- [x] **Step 2: 更新视频端点测试，分别覆盖默认开放和权限恢复**
 
 保留 `test_inaccessible_doctor_receives_404_for_all_video_endpoints` 的参数化结构，在它上方增加：
 
@@ -297,7 +298,7 @@ def test_doctor_can_access_other_doctors_video_endpoints_by_default(
     delay.assert_not_called()
 ```
 
-- [ ] **Step 3: 更新训练视频健康时间窗测试**
+- [x] **Step 3: 更新训练视频健康时间窗测试**
 
 在 `test_training_video_wearable_api.py` 导入 `override_settings`。给现有
 `test_wearable_window_is_hidden_from_inaccessible_doctor` 增加：
@@ -330,7 +331,7 @@ def test_wearable_window_is_visible_to_other_doctor_by_default(
     assert response.data == {"available": False}
 ```
 
-- [ ] **Step 4: 更新穿戴健康查询测试**
+- [x] **Step 4: 更新穿戴健康查询测试**
 
 在 `test_queries_api.py` 导入 `override_settings`。给现有
 `test_measurements_require_accessible_patient_and_matching_project_patient` 增加：
@@ -404,7 +405,7 @@ def test_doctor_can_read_other_doctors_enrolled_patient_health_by_default(doctor
 现有测试中的“项目患者属于另一个患者”仍必须返回 404，因为这是资源归属校验，不是医生权限；
 不要把该断言改为 200。
 
-- [ ] **Step 5: 运行所有直接受影响的后端测试**
+- [x] **Step 5: 运行所有直接受影响的后端测试**
 
 Run:
 
@@ -420,7 +421,7 @@ pytest \
 
 Expected: 四个文件全部通过；默认开放测试返回 200，配置开启的旧权限测试返回空列表或 404。
 
-- [ ] **Step 6: 提交下游权限契约测试**
+- [x] **Step 6: 提交下游权限契约测试**
 
 ```bash
 git add \
@@ -441,7 +442,7 @@ git commit -m "test(training): 覆盖跨医生训练与健康访问"
 - Consumes: Tasks 1–2 的配置、统一查询策略和权限回归测试。
 - Produces: 可发布的验证证据和带执行记录的已完成计划；不新增运行时代码。
 
-- [ ] **Step 1: 运行后端全量测试和静态检查**
+- [x] **Step 1: 运行后端全量测试和静态检查**
 
 Run:
 
@@ -454,7 +455,7 @@ python manage.py makemigrations --check --dry-run
 
 Expected: 后端全量测试通过；Ruff 返回 `All checks passed!`；Django 返回 `No changes detected`。
 
-- [ ] **Step 2: 运行管理端验证**
+- [x] **Step 2: 运行管理端验证**
 
 Run:
 
@@ -467,7 +468,7 @@ npm run build
 
 Expected: Vitest 全部通过；lint 没有新增 error；生产构建成功。既有警告必须记录但不得把它们描述为本任务新增问题。
 
-- [ ] **Step 3: 运行小程序验证和生产配置构建**
+- [x] **Step 3: 运行小程序验证和生产配置构建**
 
 Run:
 
@@ -480,7 +481,7 @@ TARO_APP_API_BASE_URL=https://mcare-wx.whestsun.com/api npm run build:weapp
 
 Expected: 小程序测试全部通过；开发与生产 API 配置的微信构建均成功。
 
-- [ ] **Step 4: 执行最终差异检查**
+- [x] **Step 4: 执行最终差异检查**
 
 Run:
 
@@ -493,7 +494,7 @@ git log --oneline -5
 
 Expected: `git diff --check` 返回 0；工作树只包含本计划执行记录的待提交改动；最近提交包含 Tasks 1–2 的中文提交。
 
-- [ ] **Step 5: 更新计划执行记录并提交**
+- [x] **Step 5: 更新计划执行记录并提交**
 
 先读取 Tasks 1–2 的实际短 SHA：
 
@@ -511,7 +512,7 @@ git add docs/superpowers/plans/2026-08-10-training-health-global-doctor-access.m
 git commit -m "docs(training): 标记全医生可见策略完成"
 ```
 
-- [ ] **Step 6: 交付实施结果但不自动发布**
+- [x] **Step 6: 交付实施结果但不自动发布**
 
 报告以下内容：
 
