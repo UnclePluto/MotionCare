@@ -29,7 +29,7 @@
 - Consumes: `DualAxesConfig.children[].tooltip`，支持 `{ channel: "y", name: string, valueFormatter: (value) => string }`。
 - Produces: 两张图表四条序列的业务指标名称与格式化结果；不导出新的公共接口。
 
-- [ ] **Step 1: 捕获 DualAxes 的真实配置并写失败测试**
+- [x] **Step 1: 捕获 DualAxes 的真实配置并写失败测试**
 
 在测试文件的 hoisted mock 中增加配置捕获数组，并在每次测试前清空：
 
@@ -101,7 +101,7 @@ type TooltipConfig = {
 };
 ```
 
-- [ ] **Step 2: 运行目标测试并确认 RED**
+- [x] **Step 2: 运行目标测试并确认 RED**
 
 Run:
 
@@ -112,7 +112,7 @@ npm run test -- src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx 
 
 Expected: FAIL，因为现有四条子序列没有业务 tooltip 配置。
 
-- [ ] **Step 3: 为四条序列添加最小 tooltip 配置**
+- [x] **Step 3: 为四条序列添加最小 tooltip 配置**
 
 在 `TrainingTrackingDetailPage.tsx` 增加次数格式化函数：
 
@@ -159,7 +159,7 @@ tooltip: {
 },
 ```
 
-- [ ] **Step 4: 补充周趋势名称断言并确认 GREEN**
+- [x] **Step 4: 补充周趋势名称断言并确认 GREEN**
 
 在同一测试中点击“按周”，读取最新趋势配置并断言：
 
@@ -187,7 +187,7 @@ npm run test -- src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx
 
 Expected: 目标测试文件全部 PASS，包含现有页签切换后卸载并重建两张图表的断言。
 
-- [ ] **Step 5: 运行前端全量验证**
+- [x] **Step 5: 运行前端全量验证**
 
 Run:
 
