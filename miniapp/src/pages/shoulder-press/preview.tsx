@@ -26,7 +26,7 @@ export default function ShoulderPressPreviewPage() {
       const redirected = await reLaunchPendingShoulderPressUploadIfNeeded(Taro)
       if (cancelled || redirected) return
       if (!Number.isInteger(actionId) || actionId <= 0) {
-        setError('训练动作无效，请返回当前处方重新进入')
+        setError('训练动作无效，请返回当前运动计划重新进入')
         setLoaded(true)
         return
       }
@@ -35,7 +35,7 @@ export default function ShoulderPressPreviewPage() {
         if (cancelled) return
         const currentAction = resolveShoulderPressAction(prescription, actionId)
         if (!currentAction?.video_url) {
-          setError('当前动作暂无可播放的示范视频，请返回当前处方')
+          setError('当前动作暂无可播放的示范视频，请返回当前运动计划')
         } else {
           setAction(currentAction)
         }
@@ -101,7 +101,7 @@ export default function ShoulderPressPreviewPage() {
           className='secondary-button full-button'
           onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
         >
-          返回当前处方
+          返回当前运动计划
         </Button>
       )}
     </View>

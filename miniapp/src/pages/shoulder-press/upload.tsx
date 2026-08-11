@@ -402,13 +402,13 @@ export default function ShoulderPressUploadPage() {
         <View className='page-hero'>
           <Text className='eyebrow'>录像信息失效</Text>
           <Text className='title'>无法继续上传</Text>
-          <Text className='muted'>本地录像信息缺失，请返回当前处方重新开始训练。</Text>
+          <Text className='muted'>本地录像信息缺失，请返回当前运动计划重新开始训练。</Text>
         </View>
         <Button
           className='secondary-button full-button'
           onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
         >
-          返回当前处方
+          返回当前运动计划
         </Button>
       </View>
     )
@@ -419,7 +419,7 @@ export default function ShoulderPressUploadPage() {
       <View className='page-hero upload-hero'>
         <Text className='eyebrow'>训练上传</Text>
         <Text className='title'>请保持小程序打开</Text>
-        <Text className='muted'>分段视频提交完成后，将自动返回当前处方。</Text>
+        <Text className='muted'>分段视频提交完成后，将自动返回当前运动计划。</Text>
       </View>
 
       <View className='upload-progress-panel segment-upload-panel'>

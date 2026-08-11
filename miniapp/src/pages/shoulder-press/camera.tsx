@@ -620,7 +620,7 @@ export default function ShoulderPressCameraPage() {
         return
       }
       const currentSession = sessionRef.current
-      if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
+      if (!currentSession) throw new Error('训练会话未准备好，请返回运动计划重新进入')
       const expectedClientSessionId = currentSession.clientSessionId
 
       let durationMs = Math.max(1, Math.round(recordedDurationMs))
@@ -737,7 +737,7 @@ export default function ShoulderPressCameraPage() {
       busy: commandInFlightRef.current || finishInFlightRef.current || recordingRef.current
     })
     if (!canStart) {
-      setError(action ? '摄像头尚未就绪，请开启权限后再继续训练' : '当前动作不可用，请返回处方重新进入')
+      setError(action ? '摄像头尚未就绪，请开启权限后再继续训练' : '当前动作不可用，请返回运动计划重新进入')
       return
     }
 
@@ -765,7 +765,7 @@ export default function ShoulderPressCameraPage() {
         return
       }
       const currentSession = sessionRef.current
-      if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
+      if (!currentSession) throw new Error('训练会话未准备好，请返回运动计划重新进入')
       const startedAtMs = Date.now()
       const startedSession = markShoulderPressTrainingStarted(currentSession, startedAtMs)
       syncSession(startedSession)
@@ -826,7 +826,7 @@ export default function ShoulderPressCameraPage() {
   async function prepareAndStartTraining() {
     if (preflightInFlightRef.current || commandInFlightRef.current || finishInFlightRef.current) return
     if (!action || !cameraReady) {
-      setError(action ? '摄像头尚未就绪，请开启权限后再继续训练' : '当前动作不可用，请返回处方重新进入')
+      setError(action ? '摄像头尚未就绪，请开启权限后再继续训练' : '当前动作不可用，请返回运动计划重新进入')
       return
     }
 
@@ -950,7 +950,7 @@ export default function ShoulderPressCameraPage() {
     setError('')
     try {
       const currentSession = sessionRef.current
-      if (!currentSession) throw new Error('训练会话未准备好，请返回处方重新进入')
+      if (!currentSession) throw new Error('训练会话未准备好，请返回运动计划重新进入')
       try {
         const endedSession = markShoulderPressTrainingEnded(currentSession, endedAtMs)
         syncSession(endedSession)
@@ -1097,7 +1097,7 @@ export default function ShoulderPressCameraPage() {
       if (cancelled || redirected) return
 
       if (!Number.isInteger(actionId) || actionId <= 0) {
-        setError('训练动作无效，请返回当前处方重新进入')
+        setError('训练动作无效，请返回当前运动计划重新进入')
         setLoaded(true)
         return
       }
@@ -1108,7 +1108,7 @@ export default function ShoulderPressCameraPage() {
         const currentAction = resolveShoulderPressAction(prescription, actionId)
         setAction(currentAction)
         if (!currentAction) {
-          setError('动作已失效或处方已更新，请返回当前处方重新进入')
+          setError('动作已失效或运动计划已更新，请返回当前运动计划重新进入')
           return
         }
       } catch (loadError) {
@@ -1245,7 +1245,7 @@ export default function ShoulderPressCameraPage() {
                 className='training-preflight-back'
                 onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
               >
-                返回处方
+                返回运动计划
               </Button>
             </View>
           ) : null}
@@ -1276,7 +1276,7 @@ export default function ShoulderPressCameraPage() {
             className='training-secondary-button'
             onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
           >
-            返回当前处方
+            返回当前运动计划
           </Button>
         ) : tailSaveFailed ? (
           <>

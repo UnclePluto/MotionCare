@@ -527,7 +527,7 @@ describe('shoulder press pages', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('肩部推举（更新）')
-    expect(textContent(page.element)).toContain('当前处方 v2')
+    expect(textContent(page.element)).toContain('当前运动计划 v2')
   })
 
   it('keeps cached actions visible when the background refresh fails', async () => {
@@ -625,8 +625,8 @@ describe('shoulder press pages', () => {
     preview.rerender()
 
     expect(findAll(preview.element, (element) => element.type === 'Video')).toHaveLength(0)
-    expect(textContent(preview.element)).toContain('返回当前处方')
-    expect(findButtonByText(preview.element, '返回当前处方')).toBeTruthy()
+    expect(textContent(preview.element)).toContain('返回当前运动计划')
+    expect(findButtonByText(preview.element, '返回当前运动计划')).toBeTruthy()
   })
 
   it('does not show the training timer before recording has started', () => {
@@ -942,11 +942,11 @@ describe('shoulder press pages', () => {
 
     expect(textContent(page.element)).toContain('录像空间不足，至少需要 65 MB 可用空间。')
     expect(findButtonByText(page.element, '重新清理')).toBeTruthy()
-    expect(findButtonByText(page.element, '返回处方')).toBeTruthy()
+    expect(findButtonByText(page.element, '返回运动计划')).toBeTruthy()
     expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
     expect(recorderHarness.instances).toHaveLength(0)
 
-    clickButtonByText(page.element, '返回处方')
+    clickButtonByText(page.element, '返回运动计划')
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
       url: '/pages/prescription/index'
     })

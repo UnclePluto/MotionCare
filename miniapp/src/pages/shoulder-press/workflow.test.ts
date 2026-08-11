@@ -75,7 +75,7 @@ async function flushPromises(times = 6) {
 describe('shoulder press pending segment upload workflow', () => {
   it('keeps clear Chinese business errors and hides unsafe transport details', () => {
     expect(shoulderPressUploadErrorMessage(new Error('处方已更新，请重新进入')))
-      .toBe('处方已更新，请重新进入')
+      .toBe('运动计划已更新，请重新进入')
     expect(shoulderPressUploadErrorMessage(new Error('Failed to fetch Authorization: Bearer secret')))
       .toBe('上传失败，请检查网络后重试')
     for (const secret of [

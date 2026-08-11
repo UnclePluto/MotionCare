@@ -1,4 +1,5 @@
 import { containsSensitiveCredentialText } from '../../api/safeError'
+import { neutralizeMiniappMessage } from '../../copy/neutralTerminology'
 import type { UploadedVideoSegment, VideoSessionStatus } from './api'
 import {
   isCompressedShoulderPressSegment,
@@ -78,7 +79,7 @@ export function shoulderPressUploadErrorMessage(error: unknown): string {
   if (!message || containsSensitiveCredentialText(message) || !/[\u3400-\u9fff]/.test(message)) {
     return '上传失败，请检查网络后重试'
   }
-  return message
+  return neutralizeMiniappMessage(message)
 }
 
 function uploadedIndexes(status: VideoSessionStatus, segmentCount: number): number[] {

@@ -29,7 +29,7 @@ export default function ShoulderPressPage() {
       if (cancelled || redirected) return
 
       if (!Number.isInteger(actionId) || actionId <= 0) {
-        setError('训练动作无效，请返回当前处方重新进入')
+        setError('训练动作无效，请返回当前运动计划重新进入')
         setLoaded(true)
         return
       }
@@ -40,7 +40,7 @@ export default function ShoulderPressPage() {
         const currentAction = resolveShoulderPressAction(prescription, actionId)
         setAction(currentAction)
         if (!currentAction) {
-          setError('动作已失效或处方已更新，请返回当前处方重新进入')
+          setError('动作已失效或运动计划已更新，请返回当前运动计划重新进入')
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -92,7 +92,7 @@ export default function ShoulderPressPage() {
           className='secondary-button full-button'
           onClick={() => Taro.reLaunch({ url: '/pages/prescription/index' })}
         >
-          返回当前处方
+          返回当前运动计划
         </Button>
       ) : action ? (
         <View className='button-row shoulder-guide-actions'>
