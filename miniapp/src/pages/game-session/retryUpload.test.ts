@@ -88,6 +88,24 @@ afterEach(() => {
 })
 
 describe('pending game upload retry state', () => {
+  it.each([
+    ['detail', 'Authorization: Bearer patient-token'],
+    ['message', 'token=patient-token secret=server-secret access_key=key credential_id=id AK=ak SK=sk'],
+  ] as const)('does not expose sensitive API %s errors', async (field, sensitiveMessage) => {
+    vi.mocked(Taro.request).mockResolvedValueOnce({
+      statusCode: 400,
+      data: { [field]: sensitiveMessage },
+    } as never)
+
+    await expect(postGameTrainingRecord(payload())).rejects.toThrow('请求失败')
+  })
+
+  it('does not expose a sensitive network Error.message', async () => {
+    vi.mocked(Taro.request).mockRejectedValueOnce(new Error('request:fail Authorization: Bearer patient-token'))
+
+    await expect(postGameTrainingRecord(payload())).rejects.toThrow('网络异常，稍后自动补传')
+  })
+
   it('neutralizes medical terms returned by the training upload API', async () => {
     vi.mocked(Taro.request).mockResolvedValueOnce({
       statusCode: 400,
@@ -345,6 +363,39 @@ describe('pending game upload retry state', () => {
     expect(pendingUpload?.total_retry_count).toBe(13)
     expect(pendingUpload?.last_error).toBe('服务器错误')
     expect(pendingUpload?.retry_paused_until_next_launch).toBe(true)
+  })
+
+  it('does not persist a sensitive retryable custom uploader error', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const uploader = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Authorization: Bearer patient-token'), { retryable: true, statusCode: 500 })
+    )
+
+    await expect(tryUploadPendingGameRecord(storage, 1000, uploader)).resolves.toBe('failed')
+
+    expect(loadPendingGameUpload(storage)?.last_error).toBe('上传失败，稍后自动补传')
+  })
+
+  it('filters sensitive text at the last_error write boundary', () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending())
+
+    markRetryFailure(storage, 'credential_id=id AK=ak SK=sk', 1000)
+
+    expect(loadPendingGameUpload(storage)?.last_error).toBe('上传失败，稍后自动补传')
+  })
+
+  it('neutralizes safe medical text persisted from a custom uploader error', async () => {
+    const storage = memoryStorage()
+    storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending({ next_retry_at: 1000 }))
+    const uploader = vi.fn().mockRejectedValue(
+      Object.assign(new Error('患者处方已更新，请联系医护'), { retryable: true, statusCode: 500 })
+    )
+
+    await expect(tryUploadPendingGameRecord(storage, 1000, uploader)).resolves.toBe('failed')
+
+    expect(loadPendingGameUpload(storage)?.last_error).toBe('用户运动计划已更新，请联系指导老师')
   })
 
   it('clears pending upload and returns rejected for non-retryable status errors', async () => {

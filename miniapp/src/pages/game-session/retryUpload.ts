@@ -1,6 +1,7 @@
 import Taro from '@tarojs/taro'
 
 import { resolveApiBaseUrl } from '../../api/baseUrl'
+import { containsSensitiveCredentialText } from '../../api/safeError'
 import { clearPatientAppToken, getPatientAppToken } from '../../auth/token'
 import { neutralizeMiniappMessage } from '../../copy/neutralTerminology'
 import type { GameTrainingPayload } from './gameTypes'
@@ -67,18 +68,30 @@ function hasGameTrainingRawDetail(value: unknown): value is GameTrainingPayload 
   return isRecord(value) && isRecord(value.form_data) && isRecord(value.form_data.raw_detail)
 }
 
+function safeGameUploadErrorMessage(message: string, sensitiveFallback: string): string {
+  if (containsSensitiveCredentialText(message)) {
+    return neutralizeMiniappMessage(sensitiveFallback)
+  }
+  return neutralizeMiniappMessage(message)
+}
+
 function resolveErrorMessage(data: unknown): string {
   if (data && typeof data === 'object') {
     const detail = (data as { detail?: unknown }).detail
     const message = (data as { message?: unknown }).message
-    if (typeof detail === 'string') return neutralizeMiniappMessage(detail)
-    if (typeof message === 'string') return neutralizeMiniappMessage(message)
+    if (typeof detail === 'string') return safeGameUploadErrorMessage(detail, '请求失败')
+    if (typeof message === 'string') return safeGameUploadErrorMessage(message, '请求失败')
   }
   return neutralizeMiniappMessage('请求失败')
 }
 
-function createUploadError(message: string, retryable: boolean, statusCode?: number): TrainingRecordUploadError {
-  const error = new Error(neutralizeMiniappMessage(message)) as TrainingRecordUploadError
+function createUploadError(
+  message: string,
+  retryable: boolean,
+  statusCode?: number,
+  sensitiveFallback = '上传失败，稍后自动补传'
+): TrainingRecordUploadError {
+  const error = new Error(safeGameUploadErrorMessage(message, sensitiveFallback)) as TrainingRecordUploadError
   error.retryable = retryable
   if (statusCode !== undefined) {
     error.statusCode = statusCode
@@ -156,7 +169,7 @@ export function markRetryFailure(storage: StorageLike, error: string, now: numbe
     retry_count: retryCount,
     total_retry_count: pending.total_retry_count + 1,
     next_retry_at: now + RETRY_DELAYS_SECONDS[delayIndex] * 1000,
-    last_error: error,
+    last_error: safeGameUploadErrorMessage(error, '上传失败，稍后自动补传'),
     retry_paused_until_next_launch: retryCount >= MAX_RETRY_PER_LAUNCH,
   }
   storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, updated)
@@ -192,7 +205,12 @@ export async function postGameTrainingRecord(payload: GameTrainingPayload): Prom
       },
     })
   } catch (err) {
-    throw createUploadError(err instanceof Error ? err.message : '网络异常，稍后自动补传', true)
+    throw createUploadError(
+      err instanceof Error ? err.message : '网络异常，稍后自动补传',
+      true,
+      undefined,
+      '网络异常，稍后自动补传'
+    )
   }
 
   const statusCode = Number(response.statusCode)
@@ -235,7 +253,10 @@ function retryableFromUploadError(err: unknown): boolean {
 }
 
 function messageFromUploadError(err: unknown): string {
-  return neutralizeMiniappMessage(err instanceof Error ? err.message : '上传失败，稍后自动补传')
+  return safeGameUploadErrorMessage(
+    err instanceof Error ? err.message : '上传失败，稍后自动补传',
+    '上传失败，稍后自动补传'
+  )
 }
 
 export async function tryUploadPendingGameRecord(

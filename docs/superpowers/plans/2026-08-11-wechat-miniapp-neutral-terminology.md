@@ -492,4 +492,3 @@ git status --short
 ```
 
 Expected: 发布记录提交并推送成功，最终工作区无输出。
-
