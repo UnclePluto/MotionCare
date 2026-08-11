@@ -10,7 +10,7 @@
 
 **Goal:** 将 MotionCare 微信小程序永久切换到指定的新 AppID，连接现有线上 API，并上传版本 `2026.08.11.1` 到新小程序的开发版。
 
-**Architecture:** 仅修改 Taro 微信项目的源 AppID 配置，生产构建时显式注入现有线上 API。构建产物通过静态断言核对后，提交并推送 `main`，最后使用微信开发者工具 CLI 上传开发版。
+**Architecture:** 仅修改 Taro 微信项目的源 AppID 配置，生产构建时显式注入现有线上 API。构建产物通过静态断言、逐任务复审和发布前全分支复审后，才推送 `main`，最后使用微信开发者工具 CLI 上传开发版。
 
 **Tech Stack:** Taro 4、React 18、Vitest、微信开发者工具 CLI、Git
 
@@ -136,14 +136,14 @@ rg -F "https://mcare-wx.whestsun.com/api" miniapp/dist -g '*.js'
 
 Expected: 第一条命令输出新 AppID；第二条命令至少命中一个构建后的 JavaScript 文件。
 
-### Task 3: 提交并推送永久配置
+### Task 3: 提交永久配置并完成发布前复审
 
 **Files:**
 - Modify: `miniapp/project.config.json`
 
 **Interfaces:**
 - Consumes: Task 2 已验证的源码和构建结果。
-- Produces: 包含设计、计划和新 AppID 配置的远端 `main`。
+- Produces: 包含设计、计划和新 AppID 配置的本地 `main` 提交，等待发布前复审。
 
 - [ ] **Step 1: 确认待提交范围**
 
@@ -168,15 +168,16 @@ git commit -m "chore(miniapp): 永久切换微信小程序AppID"
 
 Expected: 生成一个仅包含 AppID 配置变更的提交。
 
-- [ ] **Step 3: 推送 main**
+- [ ] **Step 3: 确认提交内容与工作区**
 
 Run:
 
 ```bash
-git push origin main
+git show --stat --oneline HEAD
+git status --short
 ```
 
-Expected: 远端 `main` 快进到包含设计、计划和 AppID 配置的最新提交。
+Expected: 最新提交仅包含 AppID 配置变更，工作区无输出。Controller 必须完成 Task 1–3 的逐任务复审和发布前全分支复审，才能进入 Task 4。
 
 ### Task 4: 上传微信开发版并记录结果
 
@@ -184,10 +185,20 @@ Expected: 远端 `main` 快进到包含设计、计划和 AppID 配置的最新�
 - Modify: `docs/superpowers/plans/2026-08-11-wechat-miniapp-appid-migration.md`
 
 **Interfaces:**
-- Consumes: Task 2 产生的 `miniapp/dist`、微信开发者工具登录态和新 AppID 开发权限。
+- Consumes: Task 2 产生的 `miniapp/dist`、Task 3 已通过的发布前全分支复审、微信开发者工具登录态和新 AppID 开发权限。
 - Produces: 新 AppID 下的开发版 `2026.08.11.1` 及可追溯执行记录。
 
-- [ ] **Step 1: 使用微信开发者工具 CLI 上传开发版**
+- [ ] **Step 1: 推送已复审的 main**
+
+Run:
+
+```bash
+git push origin main
+```
+
+Expected: 远端 `main` 快进到已通过发布前复审的最新配置提交。
+
+- [ ] **Step 2: 使用微信开发者工具 CLI 上传开发版**
 
 Run:
 
@@ -201,7 +212,7 @@ Run:
 
 Expected: CLI 明确输出上传成功；若提示未登录、无权限、AppID 不匹配或平台拒绝，停止并报告原始错误。
 
-- [ ] **Step 2: 核对上传版本**
+- [ ] **Step 3: 核对上传版本**
 
 在微信开发者工具或微信公众平台的新 AppID 项目中核对：
 
@@ -212,7 +223,7 @@ Expected: CLI 明确输出上传成功；若提示未登录、无权限、AppID 
 
 Expected: 开发版本列表出现上述版本；未出现则不得标记完成。
 
-- [ ] **Step 3: 更新计划执行记录**
+- [ ] **Step 4: 更新计划执行记录**
 
 在本文顶部追加：
 
@@ -222,7 +233,7 @@ Expected: 开发版本列表出现上述版本；未出现则不得标记完成�
 
 随后运行 `git rev-parse --short HEAD`，读取 Task 3 生成的七位配置提交号，并使用 `apply_patch` 将该输出原样写入“实施提交”一行。同时将状态改为 `implemented`、所有已完成步骤改为 `[x]`。
 
-- [ ] **Step 4: 提交并推送执行记录**
+- [ ] **Step 5: 提交并推送执行记录**
 
 Run:
 
