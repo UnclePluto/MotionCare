@@ -2,7 +2,7 @@
   "miniprogramRoot": "dist/",
   "projectname": "miniapp",
   "description": "MotionCare 患者端小程序",
-  "appid": "wx235eef23281228d6",
+  "appid": "wx095c9a6c41b60112",
   "setting": {
     "urlCheck": false,
     "es6": true,
