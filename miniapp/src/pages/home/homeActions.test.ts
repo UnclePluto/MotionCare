@@ -38,6 +38,7 @@ describe('patient app home capabilities', () => {
     const gameContext: HomeActionContext = { actionId: 42, internalType: 'game' }
     const byKey = Object.fromEntries(HOME_ACTIONS.map((item) => [item.key, item]))
 
+    expect(byKey.prescription.label()).toBe('查看运动计划')
     expect(byKey.prescription.url(null)).toBe('/pages/prescription/index')
     expect(byKey.training.url(motionContext)).toBe('/pages/training/index?actionId=42')
     expect(byKey.training.url(gameContext)).toBe('/pages/game-session/index?actionId=42')

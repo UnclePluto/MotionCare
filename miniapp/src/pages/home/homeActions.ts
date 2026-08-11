@@ -16,7 +16,7 @@ export type HomeAction = {
 
 function requireAction(context: HomeActionContext | null): HomeActionContext {
   if (!context) {
-    throw new Error('该首页操作需要有效的处方动作')
+    throw new Error('该首页操作需要有效的运动计划动作')
   }
   return context
 }
@@ -26,7 +26,7 @@ export const HOME_ACTIONS: readonly HomeAction[] = [
     key: 'prescription',
     className: 'primary-button',
     requiresAction: false,
-    label: () => '查看处方',
+    label: () => '查看运动计划',
     url: () => '/pages/prescription/index'
   },
   {

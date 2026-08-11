@@ -107,8 +107,8 @@ export default function HomePage() {
     <View className='page home-page'>
       <View className='page-hero home-hero'>
         <Text className='eyebrow'>MotionCare</Text>
-        <Text className='title'>今日康复</Text>
-        <Text className='muted'>按处方完成训练，查看本周进度与历史记录。</Text>
+        <Text className='title'>今日运动</Text>
+        <Text className='muted'>按运动计划完成训练，查看本周进度与历史记录。</Text>
       </View>
       {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
       {error ? <Text className='error'>{error}</Text> : null}
@@ -123,7 +123,7 @@ export default function HomePage() {
             <View className='stat-card'>
               <Text className='label'>本周训练</Text>
               <Text className='value'>
-                {currentPrescription ? `${completed}/${target} 次` : '暂无处方'}
+                {currentPrescription ? `${completed}/${target} 次` : '暂无运动计划'}
               </Text>
             </View>
           </View>
@@ -142,8 +142,8 @@ export default function HomePage() {
             })}
             {!currentPrescription ? (
               <View className='empty-state full-button'>
-                <Text className='value'>暂无生效处方</Text>
-                <Text className='muted'>医生开具处方后，这里会显示训练入口和本周进度。</Text>
+                <Text className='value'>暂无生效运动计划</Text>
+                <Text className='muted'>指导老师开具运动计划后，这里会显示训练入口和本周进度。</Text>
               </View>
             ) : null}
           </View>
@@ -151,10 +151,10 @@ export default function HomePage() {
       ) : loaded ? (
         <View className='state-card'>
           <Text className='value'>首页暂时无法加载</Text>
-          <Text className='muted'>请稍后返回重试，或联系医生确认绑定状态。</Text>
+          <Text className='muted'>请稍后返回重试，或联系指导老师确认绑定状态。</Text>
         </View>
       ) : (
-        <Text className='muted loading-text'>正在加载今日康复安排</Text>
+        <Text className='muted loading-text'>正在加载今日运动安排</Text>
       )}
     </View>
   )

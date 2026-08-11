@@ -57,11 +57,11 @@ export default function BindPage() {
       <View className='page-hero bind-hero'>
         <Text className='eyebrow'>欢迎使用</Text>
         <Text className='title'>绑定 MotionCare</Text>
-        <Text className='muted'>输入医生提供的绑定码，开始你的康复训练。</Text>
+        <Text className='muted'>输入指导老师提供的绑定码，开始你的运动训练。</Text>
       </View>
       <View className='panel bind-card'>
         <Text className='label'>绑定码</Text>
-        <Text className='muted'>请输入医生提供的 4 位数字绑定码</Text>
+        <Text className='muted'>请输入指导老师提供的 4 位数字绑定码</Text>
         <View className='code-input-wrap' onClick={() => setInputFocused(true)}>
           <Input
             className='code-input'

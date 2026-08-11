@@ -87,7 +87,7 @@ export default function ActionHistoryPage() {
       ) : loaded ? (
         <View className='state-card'>
           <Text className='value'>训练历史暂时无法加载</Text>
-          <Text className='muted'>请稍后从处方页重新进入。</Text>
+          <Text className='muted'>请稍后从运动计划页重新进入。</Text>
         </View>
       ) : (
         <Text className='muted loading-text'>正在加载训练历史</Text>

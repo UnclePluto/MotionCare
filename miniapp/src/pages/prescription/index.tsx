@@ -126,11 +126,11 @@ export default function PrescriptionPage() {
     return (
       <View className='page prescription-page'>
         <View className='page-hero'>
-          <Text className='eyebrow'>康复安排</Text>
-          <Text className='title'>当前处方</Text>
+          <Text className='eyebrow'>运动安排</Text>
+          <Text className='title'>当前运动计划</Text>
         </View>
         {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
-        <Text className='muted loading-text'>正在加载当前处方</Text>
+        <Text className='muted loading-text'>正在加载当前运动计划</Text>
       </View>
     )
   }
@@ -139,16 +139,16 @@ export default function PrescriptionPage() {
     return (
       <View className='page prescription-page'>
         <View className='page-hero'>
-          <Text className='eyebrow'>康复安排</Text>
-          <Text className='title'>当前处方</Text>
+          <Text className='eyebrow'>运动安排</Text>
+          <Text className='title'>当前运动计划</Text>
         </View>
         {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
         {error ? (
           <Text className='error'>{error}</Text>
         ) : (
           <View className='empty-state'>
-            <Text className='value'>暂无生效处方</Text>
-            <Text className='muted'>医生开具处方后，这里会展示动作、本周目标和训练入口。</Text>
+            <Text className='value'>暂无生效运动计划</Text>
+            <Text className='muted'>指导老师开具运动计划后，这里会展示动作、本周目标和训练入口。</Text>
           </View>
         )}
       </View>
@@ -158,8 +158,8 @@ export default function PrescriptionPage() {
   return (
     <View className='page prescription-page'>
       <View className='page-hero prescription-hero'>
-        <Text className='eyebrow'>康复安排</Text>
-        <Text className='title'>当前处方 v{data.version}</Text>
+        <Text className='eyebrow'>运动安排</Text>
+        <Text className='title'>当前运动计划 v{data.version}</Text>
         <Text className='muted'>
           本周：{data.week_start} 至 {data.week_end}
         </Text>
@@ -180,8 +180,8 @@ export default function PrescriptionPage() {
       ) : null}
       {data.actions.length === 0 ? (
         <View className='empty-state'>
-          <Text className='value'>处方暂未配置动作</Text>
-          <Text className='muted'>请联系医生补充训练动作后再开始训练。</Text>
+          <Text className='value'>运动计划暂未配置动作</Text>
+          <Text className='muted'>请联系指导老师补充训练动作后再开始训练。</Text>
         </View>
       ) : null}
       {data.actions.map((action) => {
