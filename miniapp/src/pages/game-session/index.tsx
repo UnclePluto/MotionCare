@@ -102,7 +102,7 @@ function suggestedDurationMinutes(action: GameActionSummary): number {
 }
 
 function textForEndReason(reason: GameEndReason): string {
-  return reason === 'timer' ? '已按处方建议时长完成' : '已提前结束，本次记录为部分完成'
+  return reason === 'timer' ? '已按运动计划建议时长完成' : '已提前结束，本次记录为部分完成'
 }
 
 function formatNumber(value: number | null | undefined, fallback = '-'): string {
@@ -779,11 +779,11 @@ export default function GameSessionPage() {
   async function startIntro() {
     if (phaseRef.current !== 'setup') return
     if (!actionIsGame || !action) {
-      setError('游戏动作无效，请返回当前处方重新进入')
+      setError('游戏动作无效，请返回当前运动计划重新进入')
       return
     }
     if (!gameCode) {
-      setError('该游戏暂未上线，请返回当前处方选择已上线游戏')
+      setError('该游戏暂未上线，请返回当前运动计划选择已上线游戏')
       return
     }
     if (adjustedDifficulty && !difficultyReason.trim()) {
@@ -1182,7 +1182,7 @@ export default function GameSessionPage() {
         }
       } catch {
         setUploadState('upload_save_failed')
-        setError('上传失败，且本地待补传保存失败，请联系医护确认记录')
+        setError('上传失败，且本地待补传保存失败，请联系指导老师确认记录')
       }
     }
   }
@@ -1231,7 +1231,7 @@ export default function GameSessionPage() {
       },
       prescription_action: currentAction.id,
       training_date: todayLocalDate(),
-      note: reason === 'manual' ? '患者提前结束本次游戏训练' : '',
+      note: reason === 'manual' ? '用户提前结束本次游戏训练' : '',
     }
     elapsedSecondsRef.current = finalDurationSeconds
     setElapsedSeconds(finalDurationSeconds)
@@ -1535,7 +1535,7 @@ export default function GameSessionPage() {
     return (
       <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
-        <Text className='muted'>加载当前处方中</Text>
+        <Text className='muted'>加载当前运动计划中</Text>
       </View>
     )
   }
@@ -1553,7 +1553,7 @@ export default function GameSessionPage() {
     return (
       <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
-        <Text className='muted'>暂无生效处方，暂时无法开始游戏训练</Text>
+        <Text className='muted'>暂无生效运动计划，暂时无法开始游戏训练</Text>
       </View>
     )
   }
@@ -1562,7 +1562,7 @@ export default function GameSessionPage() {
     return (
       <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>游戏训练</Text>
-        <Text className='error'>游戏动作无效，请返回当前处方重新进入</Text>
+        <Text className='error'>游戏动作无效，请返回当前运动计划重新进入</Text>
       </View>
     )
   }
@@ -1571,7 +1571,7 @@ export default function GameSessionPage() {
     return (
       <View className='page game-session-page hainan-game-page game-state-page'>
         <Text className='title'>{action.action_name}</Text>
-        <Text className='error'>该游戏暂未上线，请返回当前处方选择已上线游戏</Text>
+        <Text className='error'>该游戏暂未上线，请返回当前运动计划选择已上线游戏</Text>
       </View>
     )
   }
@@ -1593,11 +1593,11 @@ export default function GameSessionPage() {
             </Text>
           </View>
           <View className='row'>
-            <Text className='label'>处方建议时长</Text>
+            <Text className='label'>运动计划建议时长</Text>
             <Text className='value'>{formatNumber(suggestedDurationMinutes(action), '10')} 分钟</Text>
           </View>
           <View className='row'>
-            <Text className='label'>处方默认难度</Text>
+            <Text className='label'>运动计划默认难度</Text>
             <Text className='value'>{prescribedDifficulty}</Text>
           </View>
         </View>
@@ -1617,7 +1617,7 @@ export default function GameSessionPage() {
         {adjustedDifficulty ? (
           <View className='field-card'>
             <Text className='label'>调整难度原因</Text>
-            <Text className='muted'>请填写原因，医生端可见</Text>
+            <Text className='muted'>请填写原因，指导老师端可见</Text>
             <Input
               className='input'
               value={difficultyReason}
@@ -1725,7 +1725,7 @@ export default function GameSessionPage() {
         </View>
 
         <Button className='primary-button full-button' onClick={() => Taro.navigateBack()}>
-          返回处方
+          返回运动计划
         </Button>
       </View>
     )
@@ -1734,7 +1734,7 @@ export default function GameSessionPage() {
   return (
     <View className='page game-session-page hainan-game-page game-state-page'>
       <Text className='title'>游戏训练</Text>
-      <Text className='error'>当前训练状态异常，请返回当前处方重新进入</Text>
+      <Text className='error'>当前训练状态异常，请返回当前运动计划重新进入</Text>
     </View>
   )
 }

@@ -9,6 +9,8 @@ vi.mock('@tarojs/taro', () => ({
   },
 }))
 
+import Taro from '@tarojs/taro'
+
 import type { GameTrainingPayload } from './gameTypes'
 import {
   PENDING_GAME_UPLOAD_KEY,
@@ -17,6 +19,7 @@ import {
   clearPendingGameUpload,
   loadPendingGameUpload,
   markRetryFailure,
+  postGameTrainingRecord,
   resetRetryWindowForLaunch,
   savePendingGameUploadAfterActiveRetry,
   savePendingGameUpload,
@@ -85,6 +88,15 @@ afterEach(() => {
 })
 
 describe('pending game upload retry state', () => {
+  it('neutralizes medical terms returned by the training upload API', async () => {
+    vi.mocked(Taro.request).mockResolvedValueOnce({
+      statusCode: 400,
+      data: { detail: '患者处方已更新，请联系医护' },
+    } as never)
+
+    await expect(postGameTrainingRecord(payload())).rejects.toThrow('用户运动计划已更新，请联系指导老师')
+  })
+
   it('stores one pending upload and clears it after success', () => {
     const storage = memoryStorage()
 

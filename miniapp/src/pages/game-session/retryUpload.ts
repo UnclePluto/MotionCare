@@ -2,6 +2,7 @@ import Taro from '@tarojs/taro'
 
 import { resolveApiBaseUrl } from '../../api/baseUrl'
 import { clearPatientAppToken, getPatientAppToken } from '../../auth/token'
+import { neutralizeMiniappMessage } from '../../copy/neutralTerminology'
 import type { GameTrainingPayload } from './gameTypes'
 
 export const PENDING_GAME_UPLOAD_KEY = 'motioncare.pendingGameUpload'
@@ -70,14 +71,14 @@ function resolveErrorMessage(data: unknown): string {
   if (data && typeof data === 'object') {
     const detail = (data as { detail?: unknown }).detail
     const message = (data as { message?: unknown }).message
-    if (typeof detail === 'string') return detail
-    if (typeof message === 'string') return message
+    if (typeof detail === 'string') return neutralizeMiniappMessage(detail)
+    if (typeof message === 'string') return neutralizeMiniappMessage(message)
   }
-  return '请求失败'
+  return neutralizeMiniappMessage('请求失败')
 }
 
 function createUploadError(message: string, retryable: boolean, statusCode?: number): TrainingRecordUploadError {
-  const error = new Error(message) as TrainingRecordUploadError
+  const error = new Error(neutralizeMiniappMessage(message)) as TrainingRecordUploadError
   error.retryable = retryable
   if (statusCode !== undefined) {
     error.statusCode = statusCode
@@ -234,7 +235,7 @@ function retryableFromUploadError(err: unknown): boolean {
 }
 
 function messageFromUploadError(err: unknown): string {
-  return err instanceof Error ? err.message : '上传失败，稍后自动补传'
+  return neutralizeMiniappMessage(err instanceof Error ? err.message : '上传失败，稍后自动补传')
 }
 
 export async function tryUploadPendingGameRecord(
