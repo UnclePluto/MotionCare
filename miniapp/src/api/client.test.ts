@@ -15,7 +15,7 @@ const prescriptionCacheMocks = vi.hoisted(() => ({
 vi.mock('@tarojs/taro', () => ({ default: taroMocks }))
 vi.mock('../pages/prescription/cache', () => prescriptionCacheMocks)
 
-import { request } from './client'
+import { request, safeApiErrorMessage } from './client'
 import { resolveApiBaseUrl } from './baseUrl'
 import * as safeError from './safeError'
 import { clearPatientAppToken, setPatientAppToken } from '../auth/token'
@@ -44,6 +44,20 @@ describe('小程序网络错误', () => {
     expect(safeError.networkRequestErrorMessage({
       errMsg: 'request:fail url not in domain list',
     })).toBe('网络请求失败：request:fail url not in domain list')
+  })
+
+  it('转换网络错误中的医疗相关提示词', () => {
+    expect(safeError.networkRequestErrorMessage({
+      errMsg: 'request:fail 医疗诊疗医嘱治疗医院疾病病人康复',
+    })).toBe('网络请求失败：request:fail 运动服务运动指导运动说明训练服务机构身体情况用户运动')
+  })
+})
+
+describe('小程序 API 错误', () => {
+  it('转换安全 API 错误中的医疗相关提示词', () => {
+    expect(safeApiErrorMessage({
+      detail: '患者处方已更新，请联系医生或医护',
+    })).toBe('用户运动计划已更新，请联系指导老师或指导老师')
   })
 })
 

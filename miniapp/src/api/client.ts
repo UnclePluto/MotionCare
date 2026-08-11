@@ -1,6 +1,7 @@
 import Taro from '@tarojs/taro'
 
 import { clearPatientAppToken, getPatientAppToken } from '../auth/token'
+import { neutralizeMiniappMessage } from '../copy/neutralTerminology'
 import { resolveApiBaseUrl } from './baseUrl'
 import {
   containsSensitiveCredentialText,
@@ -54,7 +55,7 @@ export function handlePatientUnauthorized(): never {
 export function safeApiErrorMessage(data: unknown): string {
   const message = resolveErrorMessage(data)
   if (containsSensitiveCredentialText(message)) return '请求失败'
-  return message
+  return neutralizeMiniappMessage(message)
 }
 
 
