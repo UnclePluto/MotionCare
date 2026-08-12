@@ -1,4 +1,4 @@
-> 状态：implementing
+> 状态：implemented
 > 日期：2026-08-12
 > 范围：实现微信小程序审核用游戏演示模式，并上传开发版
 > 关联：`docs/superpowers/specs/2026-08-12-wechat-miniapp-demo-mode-design.md`；`CONTEXT.md`
@@ -8,7 +8,8 @@
 > 执行记录（2026-08-12, Codex）：Task 2 已落地于 commits `de38d4f`、`6609e49`。
 > 执行记录（2026-08-12, Codex）：Task 3 已落地于 commits `3249c47`、`22d1cd6`。
 > 执行记录（2026-08-12, Codex）：Task 4 已落地于 commit `118d9ab`。
-> 执行记录（2026-08-12, Codex）：Task 5 的静态收口与测试框架修正已落地于 commits `d609b87`、`6a5cf13`；推送、上传及平台人工确认尚未执行。
+> 执行记录（2026-08-13, Codex）：Task 5 的静态收口、测试框架修正与最终复审修复已落地于 commits `d609b87`、`6a5cf13`、`f289638`；最终复审已批准，全量测试 415/415 通过，开发与生产构建通过。
+> 执行记录（2026-08-13, Codex）：演示模式实现已推送至 `main`；微信开发版 `2026.08.12.1` 已通过 CLI 上传成功，AppID `wx095c9a6c41b60112`，描述“性能优化”；平台开发版本列表待人工确认，未提交审核、未发布正式版。
 
 # 微信小程序游戏演示模式实施计划
 
@@ -690,7 +691,7 @@ git diff --check
 
 Expected: 输出正确 AppID；产物至少命中一次线上 API；敏感信息扫描无命中；`git diff --check` 通过。
 
-- [ ] **Step 5: 执行代码复审**
+- [x] **Step 5: 执行代码复审**
 
 使用 `superpowers:requesting-code-review` 对实施基线 `a86641e` 到当前 HEAD 进行复审，逐项核对：
 
@@ -706,7 +707,7 @@ Expected: 输出正确 AppID；产物至少命中一次线上 API；敏感信息
 
 Expected: 无 Critical 或 Important finding；如有则先按 `superpowers:receiving-code-review` 验证并修复，再重跑 Task 5 全部步骤。
 
-- [ ] **Step 6: 确认提交和工作区状态**
+- [x] **Step 6: 确认提交和工作区状态**
 
 Run:
 
@@ -726,7 +727,7 @@ Expected: 只包含演示模式相关中文提交；构建产物未进入 Git；
 - Consumes: Task 5 已通过复审的源码、生产构建产物、微信开发者工具登录态和上传权限。
 - Produces: 远端 `main`、微信开发版 `2026.08.12.1` 和可追溯执行记录。
 
-- [ ] **Step 1: 同步并核对远端 main**
+- [x] **Step 1: 同步并核对远端 main**
 
 Run:
 
@@ -738,7 +739,7 @@ git status --short
 
 Expected: 远端 `main` 是当前 HEAD 的祖先，工作区无输出；若远端已前进则停止，先集成并重新执行 Task 5。
 
-- [ ] **Step 2: 推送已复审的 main**
+- [x] **Step 2: 推送已复审的 main**
 
 Run:
 
@@ -748,7 +749,7 @@ git push origin main
 
 Expected: 远端 `main` 快进到当前已复审提交。
 
-- [ ] **Step 3: 上传微信开发版**
+- [x] **Step 3: 上传微信开发版**
 
 Run:
 
@@ -774,7 +775,7 @@ AppID：wx095c9a6c41b60112
 
 Expected: 开发版本列表出现上述版本；不点击“提交审核”或“发布”。若无法自动读取平台列表，明确标记为“CLI 上传成功，平台列表待人工确认”。
 
-- [ ] **Step 5: 更新计划执行记录**
+- [x] **Step 5: 更新计划执行记录**
 
 将本文顶部状态改为 `implemented`，把完成步骤改为 `[x]`，并追加：
 
@@ -784,7 +785,7 @@ Expected: 开发版本列表出现上述版本；不点击“提交审核”或�
 
 同时用 `git log --oneline a86641e..HEAD` 的实际提交号替换执行记录中的实现提交清单，不手写猜测提交号。
 
-- [ ] **Step 6: 提交并推送发布记录**
+- [x] **Step 6: 提交并推送发布记录**
 
 Run:
 
