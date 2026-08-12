@@ -2,7 +2,8 @@ import { Button, Image, Input, Picker, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { request } from '../../api/client'
+import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
+import { isDemoSession } from '../../demo/session'
 import type { CurrentPrescription } from '../../types/patientApp'
 import { todayLocalDate } from '../../utils/date'
 import {
@@ -68,6 +69,7 @@ type UnitResult = {
 
 type UploadState =
   | 'idle'
+  | 'demo_local'
   | 'uploading'
   | 'uploaded'
   | 'upload_rejected'
@@ -118,6 +120,7 @@ function formatClock(totalSeconds: number): string {
 }
 
 function uploadStateText(uploadState: UploadState): string {
+  if (uploadState === 'demo_local') return '本次演示不保存'
   if (uploadState === 'uploading') return '正在上传'
   if (uploadState === 'uploaded') return '已上传'
   if (uploadState === 'upload_rejected') return '上传失败'
@@ -138,6 +141,7 @@ function wait(ms: number): Promise<void> {
 export default function GameSessionPage() {
   const router = useRouter()
   const actionId = Number(router.params.actionId)
+  const demoMode = isDemoSession()
   const [phase, setPhase] = useState<SessionPhase>('loading')
   const [prescription, setPrescription] = useState<CurrentPrescription>(null)
   const [loaded, setLoaded] = useState(false)
@@ -313,7 +317,7 @@ export default function GameSessionPage() {
     setDifficultyReason('')
     resetSessionState()
 
-    request<CurrentPrescription>('/patient-app/current-prescription/')
+    fetchCurrentPrescriptionData()
       .then((body) => {
         const nextAction = body?.actions.find((item) => item.id === actionId)
         setPrescription(body)
@@ -1239,7 +1243,11 @@ export default function GameSessionPage() {
     setFeedback('')
     setSessionPhase('result')
     void playGameAudio(reason === 'manual' ? 'manual_end' : 'complete')
-    void uploadResult(payload)
+    if (demoMode) {
+      setUploadState('demo_local')
+    } else {
+      void uploadResult(payload)
+    }
   }
 
   function renderGameTopBar() {
@@ -1724,7 +1732,12 @@ export default function GameSessionPage() {
           </View>
         </View>
 
-        <Button className='primary-button full-button' onClick={() => Taro.navigateBack()}>
+        <Button
+          className='primary-button full-button'
+          onClick={() => demoMode
+            ? Taro.redirectTo({ url: '/pages/prescription/index' })
+            : Taro.navigateBack()}
+        >
           返回运动计划
         </Button>
       </View>

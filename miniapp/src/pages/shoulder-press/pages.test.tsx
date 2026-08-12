@@ -183,6 +183,8 @@ const apiMocks = vi.hoisted(() => ({
   finalizeVideoSession: vi.fn()
 }))
 const retryMocks = vi.hoisted(() => ({
+  postGameTrainingRecord: vi.fn(),
+  savePendingGameUploadAfterActiveRetry: vi.fn(),
   resetRetryWindowForLaunch: vi.fn(),
   startPendingGameUploadRetryLoop: vi.fn(),
   stopPendingGameUploadRetryLoop: vi.fn(),
@@ -261,6 +263,7 @@ vi.mock('react', async (importOriginal) => {
   return {
     ...actual,
     useEffect: reactHarness.useEffect,
+    useMemo: (factory: () => unknown) => factory(),
     useRef: reactHarness.useRef,
     useState: reactHarness.useState
   }
@@ -269,7 +272,9 @@ vi.mock('react', async (importOriginal) => {
 vi.mock('@tarojs/components', () => ({
   Button: 'Button',
   Camera: 'Camera',
+  Image: 'Image',
   Input: 'Input',
+  Picker: 'Picker',
   Text: 'Text',
   Video: 'Video',
   View: 'View'
@@ -304,6 +309,7 @@ import * as session from '../../demo/session'
 import BindPage from '../bind'
 import HomePage from '../home'
 import PrescriptionPage from '../prescription'
+import GameSessionPage from '../game-session'
 import {
   clearCurrentPrescriptionCache,
   readCurrentPrescriptionCache,
@@ -343,6 +349,20 @@ const PRESCRIPTION = {
     recent_record: null
   }]
 }
+
+const expectedGames = [
+  { actionId: 888801, name: '颜色顺序记忆' },
+  { actionId: 888802, name: '图案顺序记忆' },
+  { actionId: 888803, name: '反应抑制' },
+  { actionId: 888804, name: '分类切换' },
+  { actionId: 888805, name: '声音辨别' },
+  { actionId: 888806, name: '拼图' }
+] as const
+
+const demoGameEndCases = expectedGames.flatMap((game) => [
+  { ...game, endMode: 'timer' as const },
+  { ...game, endMode: 'manual' as const }
+])
 
 function pendingSession(segmentCount = 2) {
   return {
@@ -403,6 +423,28 @@ function renderPage<T>(Component: (props?: T) => ReactElement, props?: T) {
       reactHarness.cleanup()
     }
   }
+}
+
+type RenderedPage = ReturnType<typeof renderPage>
+
+async function renderDemoGame(actionId: number): Promise<RenderedPage> {
+  taroHarness.routerParams.actionId = String(actionId)
+  const page = renderPage(GameSessionPage)
+  await taroHarness.showCallbacks[0]()
+  await flushPromises()
+  page.rerender()
+  return page
+}
+
+async function enterDemoGamePlaying(page: RenderedPage): Promise<void> {
+  clickButtonByText(page.element, '开始游戏')
+  page.rerender()
+  for (const durationMs of [1200, 700, 700, 700, 700]) {
+    await vi.advanceTimersByTimeAsync(durationMs)
+    await flushPromises()
+  }
+  page.rerender()
+  findButtonByText(page.element, '提前结束')
 }
 
 function childrenOf(node: unknown): unknown[] {
@@ -469,6 +511,8 @@ beforeEach(async () => {
   clearCurrentPrescriptionCache()
   requestMock.mockResolvedValue(PRESCRIPTION)
   retryMocks.loadPendingGameUpload.mockReturnValue(null)
+  retryMocks.postGameTrainingRecord.mockResolvedValue(undefined)
+  retryMocks.savePendingGameUploadAfterActiveRetry.mockImplementation(async (_storage, payload) => ({ payload }))
   retryMocks.tryUploadPendingGameRecord.mockResolvedValue('idle')
   apiMocks.createVideoSession.mockResolvedValue({ video_id: 9, status: 'recording', uploaded_segments: [] })
   apiMocks.getVideoSessionStatus.mockResolvedValue({ video_id: 9, status: 'recording', uploaded_segments: [] })
@@ -3242,4 +3286,56 @@ describe('审核演示模式', () => {
       })
     }
   })
+
+  it.each(expectedGames)('演示游戏 $name 能从本地运动计划加载', async ({ actionId, name }) => {
+    session.startDemoSession()
+
+    const page = await renderDemoGame(actionId)
+    const content = textContent(page.element)
+    page.unmount()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(content).toContain(name)
+    expect(content).not.toContain('当前游戏动作不存在')
+  })
+
+  it.each(demoGameEndCases)(
+    '演示游戏 $name 通过 $endMode 结束后只展示本地结果并返回运动计划',
+    async ({ actionId, endMode }) => {
+      session.startDemoSession()
+      vi.useFakeTimers()
+      const page = await renderDemoGame(actionId)
+      await enterDemoGamePlaying(page)
+
+      if (endMode === 'timer') {
+        for (let second = 0; second < 60; second += 1) {
+          await vi.advanceTimersByTimeAsync(1000)
+        }
+      } else {
+        clickButtonByText(page.element, '提前结束')
+      }
+      await flushPromises()
+      page.rerender()
+
+      expect(textContent(page.element)).toContain('得分')
+      expect(textContent(page.element)).toContain('正确率')
+      expect(textContent(page.element)).toContain('本次演示不保存')
+      expect(retryMocks.postGameTrainingRecord).not.toHaveBeenCalled()
+      expect(retryMocks.savePendingGameUploadAfterActiveRetry).not.toHaveBeenCalled()
+      expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+      expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalledWith(
+        'motioncare.pendingGameUpload',
+        expect.anything()
+      )
+
+      clickButtonByText(page.element, '返回运动计划')
+      expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
+        url: '/pages/prescription/index'
+      })
+      expect(taroHarness.taroMock.navigateBack).not.toHaveBeenCalled()
+
+      page.unmount()
+      await flushPromises()
+    }
+  )
 })
