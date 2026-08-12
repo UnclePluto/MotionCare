@@ -91,6 +91,18 @@ const reactHarness = vi.hoisted(() => {
       }
       return hookEntries[index]
     },
+    useCallback(callback: unknown, deps: unknown[]) {
+      const index = hookCursor
+      hookCursor += 1
+      const previous = hookEntries[index] as {
+        callback: unknown
+        deps: unknown[]
+      } | undefined
+      if (!previous || depsChanged(previous.deps, deps)) {
+        hookEntries[index] = { callback, deps }
+      }
+      return (hookEntries[index] as { callback: unknown }).callback
+    },
     useEffect(callback: () => unknown, deps?: unknown[]) {
       const index = hookCursor
       hookCursor += 1
@@ -201,16 +213,20 @@ const apiMocks = vi.hoisted(() => ({
   uploadVideoSegment: vi.fn(),
   finalizeVideoSession: vi.fn()
 }))
-const retryMocks = vi.hoisted(() => ({
-  postGameTrainingRecord: vi.fn(),
-  savePendingGameUploadAfterActiveRetry: vi.fn(),
-  resetRetryWindowForLaunch: vi.fn(),
-  startPendingGameUploadRetryLoop: vi.fn(),
-  stopPendingGameUploadRetryLoop: vi.fn(),
-  loadPendingGameUpload: vi.fn(),
-  subscribePendingGameUploadRetryLoop: vi.fn(() => vi.fn()),
-  tryUploadPendingGameRecord: vi.fn()
-}))
+const retryMocks = vi.hoisted(() => {
+  const subscriptionCleanup = vi.fn()
+  return {
+    postGameTrainingRecord: vi.fn(),
+    savePendingGameUploadAfterActiveRetry: vi.fn(),
+    resetRetryWindowForLaunch: vi.fn(),
+    startPendingGameUploadRetryLoop: vi.fn(),
+    stopPendingGameUploadRetryLoop: vi.fn(),
+    loadPendingGameUpload: vi.fn(),
+    subscriptionCleanup,
+    subscribePendingGameUploadRetryLoop: vi.fn(() => subscriptionCleanup),
+    tryUploadPendingGameRecord: vi.fn()
+  }
+})
 const recorderHarness = vi.hoisted(() => {
   let nextStartPromise: Promise<void> | null = null
   let nextFinishError: Error | null = null
@@ -281,7 +297,7 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>()
   return {
     ...actual,
-    useCallback: (callback: unknown) => callback,
+    useCallback: reactHarness.useCallback,
     useEffect: reactHarness.useEffect,
     useMemo: (factory: () => unknown) => factory(),
     useRef: reactHarness.useRef,
@@ -545,6 +561,38 @@ afterEach(async () => {
 })
 
 describe('shoulder press pages', () => {
+  it('keeps the real home retry subscription stable across rerenders and cleans up on unmount', () => {
+    retryMocks.subscriptionCleanup.mockClear()
+    const page = renderPage(HomePage)
+
+    expect(retryMocks.subscribePendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+    expect(retryMocks.subscriptionCleanup).not.toHaveBeenCalled()
+
+    page.rerender()
+
+    expect(retryMocks.subscribePendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+    expect(retryMocks.subscriptionCleanup).not.toHaveBeenCalled()
+
+    page.unmount()
+    expect(retryMocks.subscriptionCleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the real prescription retry subscription stable across rerenders and cleans up on unmount', () => {
+    retryMocks.subscriptionCleanup.mockClear()
+    const page = renderPage(PrescriptionPage)
+
+    expect(retryMocks.subscribePendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+    expect(retryMocks.subscriptionCleanup).not.toHaveBeenCalled()
+
+    page.rerender()
+
+    expect(retryMocks.subscribePendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+    expect(retryMocks.subscriptionCleanup).not.toHaveBeenCalled()
+
+    page.unmount()
+    expect(retryMocks.subscriptionCleanup).toHaveBeenCalledTimes(1)
+  })
+
   it('writes the home prescription response into the process cache', async () => {
     requestMock.mockResolvedValueOnce({
       patient: { name: '王阿姨' },
