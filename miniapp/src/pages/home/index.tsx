@@ -116,7 +116,11 @@ export default function HomePage() {
       <View className='page-hero home-hero'>
         <Text className='eyebrow'>MotionCare</Text>
         <Text className='title'>今日运动</Text>
-        <Text className='muted'>按运动计划完成训练，查看本周进度与历史记录。</Text>
+        <Text className='muted'>
+          {demoMode
+            ? '体验运动计划中的全部游戏功能。'
+            : '按运动计划完成训练，查看本周进度与历史记录。'}
+        </Text>
       </View>
       {demoMode ? (
         <Text className='pending-upload-banner demo-mode-banner'>演示模式，仅供功能体验，数据不会保存。</Text>

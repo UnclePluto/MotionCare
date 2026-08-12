@@ -3178,6 +3178,8 @@ describe('审核演示模式', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('演示模式，仅供功能体验，数据不会保存。')
+    expect(textContent(page.element)).toContain('体验运动计划中的全部游戏功能。')
+    expect(textContent(page.element)).not.toContain('历史记录')
     expect(textContent(page.element)).toContain('用户01')
     expect(textContent(page.element)).toContain('功能展示')
     expect(textContent(page.element)).not.toContain('肩部推举')
