@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createDemoHomeData } from './data'
+import { createDemoCurrentPrescription, createDemoHomeData } from './data'
 
 const expectedGames = [
   ['game-memory-color-sequence', '颜色顺序记忆'],
@@ -12,6 +12,18 @@ const expectedGames = [
 ] as const
 
 describe('固定演示数据', () => {
+  it('每次创建完全独立的运动计划与动作对象', () => {
+    const first = createDemoCurrentPrescription()
+    const second = createDemoCurrentPrescription()
+
+    expect(first).not.toBe(second)
+    expect(first.actions).not.toBe(second.actions)
+    expect(first.actions).toHaveLength(second.actions.length)
+    first.actions.forEach((action, index) => {
+      expect(action).not.toBe(second.actions[index])
+    })
+  })
+
   it('每次创建独立的六游戏体验计划', () => {
     const first = createDemoHomeData()
     const second = createDemoHomeData()

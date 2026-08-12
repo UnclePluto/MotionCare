@@ -1,11 +1,8 @@
+import type { GameCode } from '../../game/catalog'
+
+export type { GameCode } from '../../game/catalog'
+
 export type GameDifficulty = '简单' | '中等' | '困难'
-export type GameCode =
-  | 'game-memory-color-sequence'
-  | 'game-memory-pattern-sequence'
-  | 'game-executive-inhibition'
-  | 'game-executive-category-switch'
-  | 'game-audiovisual-sound-discrimination'
-  | 'game-audiovisual-puzzle'
 export type GameEndReason = 'timer' | 'manual'
 export type GameUploadMode = 'direct' | 'retry'
 export type TrainingStatus = 'completed' | 'partial' | 'missed'

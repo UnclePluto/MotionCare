@@ -1,5 +1,5 @@
-import { GAME_CATALOG } from '../pages/game-session/gameCatalog'
-import type { GameCode } from '../pages/game-session/gameTypes'
+import { GAME_CATALOG } from '../game/catalog'
+import type { GameCode } from '../game/catalog'
 import type { CurrentPrescription, HomeData } from '../types/patientApp'
 import { todayLocalDate } from '../utils/date'
 

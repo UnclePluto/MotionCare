@@ -1,13 +1,26 @@
-import type { GameAudioKey } from './gameAudio'
-import type { GameCode } from './gameTypes'
+export type GameCode =
+  | 'game-memory-color-sequence'
+  | 'game-memory-pattern-sequence'
+  | 'game-executive-inhibition'
+  | 'game-executive-category-switch'
+  | 'game-audiovisual-sound-discrimination'
+  | 'game-audiovisual-puzzle'
 
 export type GameKind = 'color' | 'pattern' | 'inhibition' | 'category' | 'sound' | 'puzzle'
+
+export type GameIntroAudioKey =
+  | 'color_intro'
+  | 'pattern_intro'
+  | 'inhibition_intro'
+  | 'category_intro'
+  | 'sound_intro'
+  | 'puzzle_intro'
 
 export type GameCatalogItem = {
   code: GameCode
   kind: GameKind
   name: string
-  introAudioKey: GameAudioKey
+  introAudioKey: GameIntroAudioKey
 }
 
 export const GAME_CATALOG: Record<GameCode, GameCatalogItem> = {

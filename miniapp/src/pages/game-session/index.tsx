@@ -13,7 +13,7 @@ import {
 } from './colorSequence'
 import { createCategorySwitchRound, evaluateCategorySwitchAttempt, type CategoryRule, type CategorySwitchRound } from './categorySwitch'
 import { createGameIntroSteps } from './gameIntro'
-import { GAME_CATALOG, gameCodeForActionSource } from './gameCatalog'
+import { GAME_CATALOG, gameCodeForActionSource } from '../../game/catalog'
 import {
   GAME_AUDIO_TEXT,
   isGameAudioMuted,

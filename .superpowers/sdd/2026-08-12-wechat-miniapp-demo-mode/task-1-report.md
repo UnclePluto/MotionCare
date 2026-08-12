@@ -51,3 +51,81 @@ npx vitest run \
 ## 关注点
 
 - 额外运行 `cd miniapp && npx tsc --noEmit` 未通过，错误位于既有 Taro 依赖声明、现有 `api/client.ts`、`shoulder-press` 等多个非本任务文件；输出中没有 `src/demo` 报错。任务指定的 Vitest GREEN 与中性术语门禁均已通过。
+
+---
+
+## 修复轮次 1/5（2026-08-12）
+
+### 修复内容
+
+- 将 `GameCode`、六游戏代码/名称/类型/引导音频键目录元数据，以及 `gameCodeForActionSource()` 提取到主包共享模块 `miniapp/src/game/catalog.ts`。
+- `miniapp/src/demo/data.ts` 与分包 `miniapp/src/pages/game-session/index.tsx` 均改为依赖共享目录；删除原分包 `gameCatalog.ts`，消除演示主包到游戏分包的运行时依赖。
+- `gameTypes.ts` 从共享目录导入并继续导出 `GameCode`，保持现有分包内调用方的类型契约不变。
+- 扩展演示数据测试，直接调用两次 `createDemoCurrentPrescription()`，逐层验证计划对象、actions 数组以及六个对应 action 对象均不共享引用。
+
+### RED 与保护性测试
+
+边界 RED 命令：
+
+```bash
+cd miniapp
+npx vitest run src/game/catalog.test.ts
+```
+
+首次架构扫描发现 4 条主包到游戏分包的运行时导入，其中本轮目标为 `demo/data.ts -> ../pages/game-session/gameCatalog`，另 3 条是既有 `retryUpload` 跨分包依赖。由于后者涉及本任务明确不修改的 App、首页和运动计划页，测试随后收窄到本轮演示主包源码；再次运行仍按预期失败：
+
+```text
+demo/data.ts -> ../pages/game-session/gameCatalog
+Cannot find module './catalog'
+Test Files  1 failed (1)
+Tests       2 failed (2)
+```
+
+深独立性保护测试命令：
+
+```bash
+cd miniapp
+npx vitest run src/demo/data.test.ts
+```
+
+结果：`1 passed` 测试文件、`2 passed` 测试。当前工厂通过 `map(createDemoAction)` 已天然逐项新建 action，因此新增断言没有真实缺口可触发；按要求保留为保护性测试，未通过临时篡改生产代码伪造 RED。
+
+### GREEN 与回归验证
+
+目标 GREEN 命令：
+
+```bash
+cd miniapp
+npx vitest run src/game/catalog.test.ts src/demo/session.test.ts src/demo/data.test.ts src/demo/patientAppData.test.ts src/copy/neutralTerminologySource.test.ts
+```
+
+结果：`5 passed` 测试文件、`8 passed` 测试。
+
+全量小程序测试命令：
+
+```bash
+cd miniapp
+npx vitest run
+```
+
+结果：`32 passed` 测试文件、`384 passed` 测试，包含全部现有 game-session 单元测试。
+
+微信小程序构建命令：
+
+```bash
+cd miniapp
+npm run build:weapp
+```
+
+结果：最终复验 Webpack `Compiled successfully in 1.87s`。
+
+### 修复自审
+
+- 共享 `GAME_CATALOG` 的六项顺序、代码、名称、kind 与 introAudioKey 均保持原值；来源映射函数对已知、未知和空来源的契约由测试覆盖。
+- 演示数据仅依赖主包共享目录，边界测试会扫描 `src/demo` 全部生产 TypeScript 文件并拒绝运行时相对导入至 `app.config.ts` 声明的分包根目录；纯类型导入不会误报。
+- 分包游戏页依赖方向改为分包到主包共享目录，符合微信小程序分包边界；原分包目录文件已删除，无残留 `gameCatalog` 引用。
+- `git diff --check` 通过；未修改绑定页、App、首页、运动计划页或其他游戏行为实现。
+
+### 修复关注点
+
+- 全仓架构扫描暴露 3 条本任务前已存在的主包到游戏分包 `retryUpload` 运行时依赖：`app.ts`、`pages/home/index.tsx`、`pages/prescription/index.tsx`。它们不属于本轮游戏目录修复，并涉及明确禁止修改的文件，因此未在本提交处理；建议另立任务迁移 `retryUpload` 到主包共享目录。
