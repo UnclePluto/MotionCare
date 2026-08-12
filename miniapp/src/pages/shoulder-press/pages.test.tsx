@@ -3070,6 +3070,29 @@ describe('审核演示模式', () => {
     expect(retryMocks.startPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
   })
 
+  it('已有真实身份进入演示时仍保留原 token', async () => {
+    setPatientAppToken('real-token')
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
+
+    const tokenWriteCountBeforeSubmit = taroHarness.taroMock.setStorageSync.mock.calls.length
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '8888' } })
+    page.rerender()
+
+    clickButtonByText(page.element, '绑定账号')
+    await flushPromises()
+
+    expect(getPatientAppToken()).toBe('real-token')
+    expect(taroHarness.taroMock.setStorageSync).toHaveBeenCalledTimes(tokenWriteCountBeforeSubmit)
+    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
+    expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
+    expect(session.isDemoSession()).toBe(true)
+  })
+
   it('演示绑定 8888 不请求真实鉴权并进入首页', async () => {
     const page = renderPage(BindPage)
     const onInput = findFirstByType(page.element, 'Input').props.onInput
