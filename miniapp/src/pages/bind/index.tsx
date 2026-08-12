@@ -4,7 +4,9 @@ import { useState } from 'react'
 
 import { request } from '../../api/client'
 import { getPatientAppToken, setPatientAppToken } from '../../auth/token'
+import { DEMO_BINDING_CODE, startDemoSession } from '../../demo/session'
 import type { BoundIdentity } from '../../types/patientApp'
+import { stopPendingGameUploadRetryLoop } from '../game-session/retryUpload'
 
 type BindResponse = BoundIdentity & {
   token: string
@@ -33,6 +35,13 @@ export default function BindPage() {
 
     const normalizedCode = normalizeBindingCode(code)
     if (normalizedCode.length !== 4) return
+
+    if (normalizedCode === DEMO_BINDING_CODE) {
+      startDemoSession()
+      stopPendingGameUploadRetryLoop()
+      Taro.redirectTo({ url: '/pages/home/index' })
+      return
+    }
 
     setLoading(true)
     setError('')

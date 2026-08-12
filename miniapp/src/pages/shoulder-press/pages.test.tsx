@@ -97,6 +97,7 @@ const taroHarness = vi.hoisted(() => {
   const getSavedFileListMock = vi.fn((options) => options.success?.({ fileList: [] }))
   const removeSavedFileMock = vi.fn((options) => options.success?.())
   const taroMock = {
+    login: vi.fn(),
     getStorageSync: vi.fn((key: string) => storage.get(key)),
     setStorageSync: vi.fn((key: string, value: unknown) => storage.set(key, value)),
     removeStorageSync: vi.fn((key: string) => storage.delete(key)),
@@ -184,6 +185,7 @@ const apiMocks = vi.hoisted(() => ({
 const retryMocks = vi.hoisted(() => ({
   resetRetryWindowForLaunch: vi.fn(),
   startPendingGameUploadRetryLoop: vi.fn(),
+  stopPendingGameUploadRetryLoop: vi.fn(),
   loadPendingGameUpload: vi.fn(),
   subscribePendingGameUploadRetryLoop: vi.fn(() => vi.fn()),
   tryUploadPendingGameRecord: vi.fn()
@@ -267,6 +269,7 @@ vi.mock('react', async (importOriginal) => {
 vi.mock('@tarojs/components', () => ({
   Button: 'Button',
   Camera: 'Camera',
+  Input: 'Input',
   Text: 'Text',
   Video: 'Video',
   View: 'View'
@@ -296,6 +299,9 @@ vi.mock('./alertAudio', () => ({
 }))
 
 import App from '../../app'
+import { getPatientAppToken, setPatientAppToken } from '../../auth/token'
+import * as session from '../../demo/session'
+import BindPage from '../bind'
 import HomePage from '../home'
 import PrescriptionPage from '../prescription'
 import {
@@ -2545,6 +2551,7 @@ describe('shoulder press pages', () => {
   })
 
   it('redirects on app cold start before ordinary retry work when a manifest is pending', async () => {
+    setPatientAppToken('real-token')
     saveStorageSession(pendingSession(1))
 
     renderPage(App, { children: null })
@@ -2557,6 +2564,7 @@ describe('shoulder press pages', () => {
   })
 
   it('keeps the active camera session on app foreground after page-hide pause', async () => {
+    setPatientAppToken('real-token')
     taroHarness.setCurrentRoute('pages/shoulder-press/camera')
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
@@ -2601,6 +2609,7 @@ describe('shoulder press pages', () => {
   })
 
   it('does not relaunch the forced upload page when app show already happens on that route', async () => {
+    setPatientAppToken('real-token')
     saveStorageSession(pendingSession(1))
     taroHarness.setCurrentRoute('pages/shoulder-press/upload')
 
@@ -3013,5 +3022,93 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
       url: '/pages/shoulder-press/index?actionId=42'
     })
+  })
+})
+
+describe('审核演示模式', () => {
+  it('普通绑定码仍执行真实绑定', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'wx-code' })
+    requestMock.mockResolvedValueOnce({
+      token: 'real-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    const page = renderPage(BindPage)
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '1234' } })
+    page.rerender()
+
+    clickButtonByText(page.element, '绑定账号')
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_openid: 'wx-code' }
+    })
+    expect(getPatientAppToken()).toBe('real-token')
+  })
+
+  it('应用演示生命周期在未登录时不恢复真实上传任务', async () => {
+    renderPage(App, { children: null })
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+  })
+
+  it('应用演示生命周期在真实登录时恢复真实上传任务', async () => {
+    setPatientAppToken('real-token')
+    renderPage(App, { children: null })
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+  })
+
+  it('演示绑定 8888 不请求真实鉴权并进入首页', async () => {
+    const page = renderPage(BindPage)
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '8888' } })
+    page.rerender()
+
+    clickButtonByText(page.element, '绑定账号')
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
+    expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
+    expect(getPatientAppToken()).toBeUndefined()
+    expect(retryMocks.stopPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
+    expect(session.isDemoSession()).toBe(true)
+  })
+
+  it('应用演示生命周期保持演示状态并隔离真实上传恢复', async () => {
+    session.startDemoSession()
+    const manifest = pendingSession(1)
+    saveStorageSession(manifest)
+    renderPage(App, { children: null })
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(retryMocks.stopPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
+    expect(session.isDemoSession()).toBe(true)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(manifest)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(session.isDemoSession()).toBe(true)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(manifest)
   })
 })
