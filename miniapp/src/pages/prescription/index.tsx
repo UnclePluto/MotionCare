@@ -1,6 +1,6 @@
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
 import { isDemoSession } from '../../demo/session'
@@ -49,7 +49,7 @@ export default function PrescriptionPage() {
     setPendingUploadBanner(pendingGameUploadBannerText())
   }
 
-  function loadPrescriptionData() {
+  const loadPrescriptionData = useCallback(() => {
     fetchCurrentPrescriptionData()
       .then((body) => {
         if (!demoMode) writeCurrentPrescriptionCache(body)
@@ -63,7 +63,7 @@ export default function PrescriptionPage() {
         setError(err instanceof Error ? err.message : '加载失败')
         setLoaded(true)
       })
-  }
+  }, [demoMode])
 
   async function startAction(action: NonNullable<CurrentPrescription>['actions'][number]) {
     setGameLoadError('')
@@ -102,7 +102,7 @@ export default function PrescriptionPage() {
         loadPrescriptionData()
       }
     })
-  }, [demoMode])
+  }, [demoMode, loadPrescriptionData])
 
   useDidShow(() => {
     setError('')

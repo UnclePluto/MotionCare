@@ -1,15 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import App from '../../app'
+import { getPatientAppToken, setPatientAppToken } from '../../auth/token'
+import * as session from '../../demo/session'
+import type { CurrentPrescription } from '../../types/patientApp'
+import BindPage from '../bind'
+import GameSessionPage from '../game-session'
+import HomePage from '../home'
+import PrescriptionPage from '../prescription'
+import {
+  clearCurrentPrescriptionCache,
+  readCurrentPrescriptionCache,
+  writeCurrentPrescriptionCache
+} from '../prescription/cache'
+import ShoulderPressCameraPage from './camera'
+import ShoulderPressGuidePage from './index'
+import ShoulderPressPreviewPage from './preview'
 import {
   PENDING_SHOULDER_PRESS_SESSION_KEY,
   type PendingShoulderPressSession
 } from './session'
+import { ShoulderPressTrainingOverlay } from './trainingOverlay'
+import ShoulderPressUploadPage from './upload'
 
 type ReactElement = {
   type: string
   props: Record<string, unknown> & {
     children?: unknown
     onError?: () => unknown
+    onClick?: () => unknown
     onTouchStart?: (event: { touches: Array<{ clientX: number; clientY: number }> }) => unknown
     onTouchEnd?: (event: { changedTouches: Array<{ clientX: number; clientY: number }> }) => unknown
   }
@@ -262,6 +281,7 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>()
   return {
     ...actual,
+    useCallback: (callback: unknown) => callback,
     useEffect: reactHarness.useEffect,
     useMemo: (factory: () => unknown) => factory(),
     useRef: reactHarness.useRef,
@@ -303,25 +323,7 @@ vi.mock('./alertAudio', () => ({
   }
 }))
 
-import App from '../../app'
-import { getPatientAppToken, setPatientAppToken } from '../../auth/token'
-import * as session from '../../demo/session'
-import BindPage from '../bind'
-import HomePage from '../home'
-import PrescriptionPage from '../prescription'
-import GameSessionPage from '../game-session'
-import {
-  clearCurrentPrescriptionCache,
-  readCurrentPrescriptionCache,
-  writeCurrentPrescriptionCache
-} from '../prescription/cache'
-import ShoulderPressCameraPage from './camera'
-import ShoulderPressGuidePage from './index'
-import ShoulderPressPreviewPage from './preview'
-import { ShoulderPressTrainingOverlay } from './trainingOverlay'
-import ShoulderPressUploadPage from './upload'
-
-const PRESCRIPTION = {
+const PRESCRIPTION: NonNullable<CurrentPrescription> = {
   id: 1,
   version: 1,
   status: 'active',
@@ -497,8 +499,8 @@ function findTrainingOverlay(node: unknown): ReactElement {
   return overlay
 }
 
-function saveStorageSession(session: unknown) {
-  taroHarness.storage.set(PENDING_SHOULDER_PRESS_SESSION_KEY, session)
+function saveStorageSession(storedSession: unknown) {
+  taroHarness.storage.set(PENDING_SHOULDER_PRESS_SESSION_KEY, storedSession)
 }
 
 beforeEach(async () => {

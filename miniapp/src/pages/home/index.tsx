@@ -1,6 +1,6 @@
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { fetchPatientHomeData } from '../../demo/patientAppData'
 import { isDemoSession } from '../../demo/session'
@@ -35,7 +35,7 @@ export default function HomePage() {
     setPendingUploadBanner(pendingGameUploadBannerText())
   }
 
-  function loadHomeData() {
+  const loadHomeData = useCallback(() => {
     fetchPatientHomeData()
       .then((body) => {
         if (!demoMode) writeCurrentPrescriptionCache(body.current_prescription)
@@ -48,7 +48,7 @@ export default function HomePage() {
         setError(err instanceof Error ? err.message : '加载失败')
         setLoaded(true)
       })
-  }
+  }, [demoMode])
 
   useEffect(() => () => {
     mountedRef.current = false
@@ -63,7 +63,7 @@ export default function HomePage() {
         loadHomeData()
       }
     })
-  }, [demoMode])
+  }, [demoMode, loadHomeData])
 
   useDidShow(() => {
     setError('')

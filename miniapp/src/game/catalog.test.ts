@@ -1,10 +1,9 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const SRC_ROOT = resolve(process.cwd(), 'src')
 
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -30,7 +29,7 @@ describe('游戏目录主包边界', () => {
     const violations: string[] = []
 
     for (const file of sourceFiles(resolve(SRC_ROOT, 'demo'))) {
-      const sourceRelativePath = relative(SRC_ROOT, file).replaceAll('\\', '/')
+      const sourceRelativePath = relative(SRC_ROOT, file).split('\\').join('/')
       if (subpackageRoots.some((root) => sourceRelativePath.startsWith(`${root}/`))) continue
 
       const source = ts.createSourceFile(
@@ -45,7 +44,7 @@ describe('游戏目录主包边界', () => {
         if (!ts.isStringLiteral(node.moduleSpecifier) || !node.moduleSpecifier.text.startsWith('.')) continue
 
         const target = relative(SRC_ROOT, resolve(dirname(file), node.moduleSpecifier.text))
-          .replaceAll('\\', '/')
+          .split('\\').join('/')
         if (subpackageRoots.some((root) => target === root || target.startsWith(`${root}/`))) {
           violations.push(`${sourceRelativePath} -> ${node.moduleSpecifier.text}`)
         }
