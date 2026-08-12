@@ -1,8 +1,14 @@
-> 状态：approved
+> 状态：implementing
 > 日期：2026-08-12
 > 范围：实现微信小程序审核用游戏演示模式，并上传开发版
 > 关联：`docs/superpowers/specs/2026-08-12-wechat-miniapp-demo-mode-design.md`；`CONTEXT.md`
 > 实施基线 commit：`a86641e`
+>
+> 执行记录（2026-08-12, Codex）：Task 1 已落地于 commits `ef0d705`、`b8eb196`。
+> 执行记录（2026-08-12, Codex）：Task 2 已落地于 commits `de38d4f`、`6609e49`。
+> 执行记录（2026-08-12, Codex）：Task 3 已落地于 commits `3249c47`、`22d1cd6`。
+> 执行记录（2026-08-12, Codex）：Task 4 已落地于 commit `118d9ab`。
+> 执行记录（2026-08-12, Codex）：Task 5 的静态收口与测试框架修正已落地于 commits `d609b87`、`6a5cf13`；推送、上传及平台人工确认尚未执行。
 
 # 微信小程序游戏演示模式实施计划
 
@@ -65,7 +71,7 @@
 - Produces: `fetchPatientHomeData(): Promise<HomeData>`、`fetchCurrentPrescriptionData(): Promise<CurrentPrescription>`。
 - Consumes: `GAME_CATALOG`、`request<T>()`、`HomeData`、`CurrentPrescription`。
 
-- [ ] **Step 1: 写会话生命周期失败测试**
+- [x] **Step 1: 写会话生命周期失败测试**
 
 创建 `session.test.ts`：
 
@@ -89,7 +95,7 @@ describe('演示会话', () => {
 })
 ```
 
-- [ ] **Step 2: 写演示数据和数据源失败测试**
+- [x] **Step 2: 写演示数据和数据源失败测试**
 
 在 `data.test.ts` 断言：
 
@@ -151,7 +157,7 @@ expect(requestMock).toHaveBeenNthCalledWith(1, '/patient-app/home/')
 expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/current-prescription/')
 ```
 
-- [ ] **Step 3: 运行目标测试并观察 RED**
+- [x] **Step 3: 运行目标测试并观察 RED**
 
 Run:
 
@@ -162,7 +168,7 @@ npx vitest run src/demo/session.test.ts src/demo/data.test.ts src/demo/patientAp
 
 Expected: FAIL，三个生产模块尚不存在。
 
-- [ ] **Step 4: 实现最小进程内会话**
+- [x] **Step 4: 实现最小进程内会话**
 
 在 `session.ts` 实现：
 
@@ -182,7 +188,7 @@ export function isDemoSession(): boolean {
 
 不得添加 Storage 调用或生产用重置函数。
 
-- [ ] **Step 5: 实现固定演示数据工厂**
+- [x] **Step 5: 实现固定演示数据工厂**
 
 在 `data.ts` 声明以下固定顺序，并用稳定 ID `888800`（运动计划）和 `888801`–`888806`（动作）逐项创建动作：
 
@@ -248,7 +254,7 @@ const DEMO_GAME_CODES: readonly GameCode[] = [
 }
 ```
 
-- [ ] **Step 6: 实现显式数据源选择**
+- [x] **Step 6: 实现显式数据源选择**
 
 在 `patientAppData.ts` 实现：
 
@@ -266,7 +272,7 @@ export function fetchCurrentPrescriptionData(): Promise<CurrentPrescription> {
 
 不得修改通用 `request` 实现或伪造 token。
 
-- [ ] **Step 7: 运行 GREEN 和中性术语门禁**
+- [x] **Step 7: 运行 GREEN 和中性术语门禁**
 
 Run:
 
@@ -281,7 +287,7 @@ npx vitest run \
 
 Expected: 全部通过；演示数据无受限展示词。
 
-- [ ] **Step 8: 提交演示基础模块**
+- [x] **Step 8: 提交演示基础模块**
 
 Run:
 
@@ -304,7 +310,7 @@ git commit -m "feat(miniapp): 建立隔离演示数据源"
 
 本 Task 扩展现有测试 harness：在 Taro mock 增加 `login: vi.fn()`，在组件 mock 增加 `Input: 'Input'`，在 `retryMocks` 增加 `stopPendingGameUploadRetryLoop: vi.fn()`；导入 `BindPage`、`getPatientAppToken`、`setPatientAppToken` 和 `* as session`。在现有主 `describe` 之后新建文件末尾的 `describe('审核演示模式', ...)`，真实流程用例必须写在第一个 `startDemoSession()` 调用之前；首次演示用例之后的演示测试各自再次调用 `startDemoSession()`，该调用是幂等的。
 
-- [ ] **Step 1: 写绑定入口失败测试**
+- [x] **Step 1: 写绑定入口失败测试**
 
 在现有页面测试框架中导入 `BindPage`，输入 `8888` 并点击“绑定账号”，断言：
 
@@ -339,7 +345,7 @@ page.rerender()
 
 真实绑定测试将 `login` mock 为 `{ code: 'wx-code' }`，并将 `requestMock` mock 为含 `token: 'real-token'` 的完整绑定响应。
 
-- [ ] **Step 2: 写应用生命周期失败测试**
+- [x] **Step 2: 写应用生命周期失败测试**
 
 覆盖三种状态：
 
@@ -363,7 +369,7 @@ expect(session.isDemoSession()).toBe(true)
 
 每种状态单独渲染 `App` 并执行对应 `showCallbacks[0]`。演示用例预先写入一份 `PENDING_SHOULDER_PRESS_SESSION_KEY` manifest，连续执行两次前台回调，确认演示状态仍为 true、不跳录像上传页且 manifest 保持不变；这样同时验证后台返回保持演示以及真实上传隔离，不为整份页面测试 mock 掉肩部推举模块。
 
-- [ ] **Step 3: 运行目标测试并观察 RED**
+- [x] **Step 3: 运行目标测试并观察 RED**
 
 Run:
 
@@ -374,7 +380,7 @@ npx vitest run src/pages/shoulder-press/pages.test.tsx -t "演示绑定|应用�
 
 Expected: FAIL；`8888` 仍调用真实绑定，应用仍无条件恢复上传。
 
-- [ ] **Step 4: 在绑定页增加最前置演示分支**
+- [x] **Step 4: 在绑定页增加最前置演示分支**
 
 在 `submit()` 完成四位校验后、设置真实 `loading` 和调用 `Taro.login` 前加入：
 
@@ -389,7 +395,7 @@ if (normalizedCode === DEMO_BINDING_CODE) {
 
 保留现有 `useDidShow` 的真实 token 优先跳转行为。不得写入或清除 token、运动计划缓存、待补传记录。
 
-- [ ] **Step 5: 收紧应用前台恢复条件**
+- [x] **Step 5: 收紧应用前台恢复条件**
 
 在 `app.ts` 的 `useDidShow` 开头按以下顺序判断：
 
@@ -406,7 +412,7 @@ if (!getPatientAppToken()) {
 
 只有真实 token 存在时才执行原有肩部推举恢复、`resetRetryWindowForLaunch(Taro)` 和 `startPendingGameUploadRetryLoop(Taro)`。
 
-- [ ] **Step 6: 运行 GREEN 和真实绑定回归**
+- [x] **Step 6: 运行 GREEN 和真实绑定回归**
 
 Run:
 
@@ -417,7 +423,7 @@ npx vitest run src/pages/shoulder-press/pages.test.tsx -t "演示绑定|应用�
 
 Expected: 新增演示测试和既有真实绑定测试全部通过。
 
-- [ ] **Step 7: 提交入口与生命周期**
+- [x] **Step 7: 提交入口与生命周期**
 
 Run:
 
@@ -437,7 +443,7 @@ git commit -m "feat(miniapp): 接入审核演示入口"
 - Consumes: `isDemoSession()`、`fetchPatientHomeData()`、`fetchCurrentPrescriptionData()`。
 - Produces: 无网络的演示首页和完整六游戏运动计划。
 
-- [ ] **Step 1: 写演示首页失败测试**
+- [x] **Step 1: 写演示首页失败测试**
 
 开启演示后渲染 `HomePage`，触发 `useDidShow` 并等待 Promise，断言：
 
@@ -457,7 +463,7 @@ expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
 
 测试开始前用 `writeCurrentPrescriptionCache(PRESCRIPTION)` 放入真实缓存；渲染后断言页面仍展示演示数据，且 `readCurrentPrescriptionCache()` 仍严格等于 `PRESCRIPTION`，证明演示首页既不采用也不覆盖真实缓存。点击“开始训练”后还要断言进入动作 `888801` 的现有游戏路由。
 
-- [ ] **Step 2: 写演示运动计划失败测试**
+- [x] **Step 2: 写演示运动计划失败测试**
 
 开启演示后渲染 `PrescriptionPage`，断言：
 
@@ -476,7 +482,7 @@ expect(retryMocks.tryUploadPendingGameRecord).not.toHaveBeenCalled()
 
 测试开始前同样放入真实 `PRESCRIPTION` 缓存，渲染后断言六游戏数据未被真实缓存替换，且缓存仍保持原引用。逐个取得六个“开始游戏”按钮并点击，在每次点击前清理导航 mock，断言路由中的 `actionId` 依次为 `888801`–`888806`。
 
-- [ ] **Step 3: 运行目标测试并观察 RED**
+- [x] **Step 3: 运行目标测试并观察 RED**
 
 Run:
 
@@ -487,7 +493,7 @@ npx vitest run src/pages/shoulder-press/pages.test.tsx -t "演示首页|演示�
 
 Expected: FAIL；页面仍请求真实接口、显示历史入口且没有演示横幅。
 
-- [ ] **Step 4: 修改首页数据和副作用边界**
+- [x] **Step 4: 修改首页数据和副作用边界**
 
 在 `HomePage` 渲染时读取一次 `const demoMode = isDemoSession()`：
 
@@ -500,7 +506,7 @@ Expected: FAIL；页面仍请求真实接口、显示历史入口且没有演示
 
 真实模式继续执行原有数据加载、缓存、补传和三个首页入口。
 
-- [ ] **Step 5: 修改运动计划数据和副作用边界**
+- [x] **Step 5: 修改运动计划数据和副作用边界**
 
 在 `PrescriptionPage` 渲染时读取一次 `const demoMode = isDemoSession()`：
 
@@ -510,7 +516,7 @@ Expected: FAIL；页面仍请求真实接口、显示历史入口且没有演示
 - 演示模式不渲染补传横幅、最近记录文本和“查看历史”按钮。
 - 六个游戏仍调用现有 `loadGameSessionSubpackage` 与 `actionEntryUrl(action)`，不得复制游戏路由规则。
 
-- [ ] **Step 6: 运行 GREEN 与真实页面回归**
+- [x] **Step 6: 运行 GREEN 与真实页面回归**
 
 Run:
 
@@ -521,7 +527,7 @@ npx vitest run src/pages/shoulder-press/pages.test.tsx -t "演示首页|演示�
 
 Expected: 演示和真实页面目标测试全部通过。
 
-- [ ] **Step 7: 提交演示页面**
+- [x] **Step 7: 提交演示页面**
 
 Run:
 
@@ -542,7 +548,7 @@ git commit -m "feat(miniapp): 展示六游戏演示计划"
 
 本 Task 将 `GameSessionPage` 导入现有页面测试，并补齐测试 harness：组件 mock 增加 `Image: 'Image'` 和 `Picker: 'Picker'`；React mock 增加 `useMemo: (factory) => factory()`；`retryMocks` 增加 `postGameTrainingRecord: vi.fn()` 和 `savePendingGameUploadAfterActiveRetry: vi.fn()`。`Input` 已由 Task 2 提供。
 
-- [ ] **Step 1: 写六游戏可加载失败测试**
+- [x] **Step 1: 写六游戏可加载失败测试**
 
 对动作 ID `888801`–`888806` 参数化渲染 `GameSessionPage`，触发 `useDidShow` 并等待加载，断言：
 
@@ -554,7 +560,7 @@ expect(textContent(page.element)).not.toContain('当前游戏动作不存在')
 
 六个期望名称与 Task 1 的 `expectedGames` 顺序相同。
 
-- [ ] **Step 2: 写六游戏正常和提前结束的本地结果失败测试**
+- [x] **Step 2: 写六游戏正常和提前结束的本地结果失败测试**
 
 用六个动作 ID 与 `timer` / `manual` 两种结束方式构成 12 组参数化用例。每组都重新渲染页面、进入 playing 并断言：
 
@@ -578,7 +584,7 @@ expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/pres
 expect(taroHarness.taroMock.navigateBack).not.toHaveBeenCalled()
 ```
 
-- [ ] **Step 3: 运行目标测试并观察 RED**
+- [x] **Step 3: 运行目标测试并观察 RED**
 
 Run:
 
@@ -589,7 +595,7 @@ npx vitest run src/pages/shoulder-press/pages.test.tsx -t "演示游戏"
 
 Expected: FAIL；游戏仍请求真实运动计划并尝试上传结果。
 
-- [ ] **Step 4: 切换游戏数据源并增加本地结果状态**
+- [x] **Step 4: 切换游戏数据源并增加本地结果状态**
 
 在 `GameSessionPage` 中：
 
@@ -603,7 +609,7 @@ Expected: FAIL；游戏仍请求真实运动计划并尝试上传结果。
 
 结果计算继续复用 `buildGameTrainingResult`，不得新增一套演示计分规则。
 
-- [ ] **Step 5: 运行 GREEN 与真实上传回归**
+- [x] **Step 5: 运行 GREEN 与真实上传回归**
 
 Run:
 
@@ -617,7 +623,7 @@ npx vitest run \
 
 Expected: 演示闭环通过；真实直接上传、失败补传、计分和肩部推举页面回归全部通过。
 
-- [ ] **Step 6: 提交演示游戏闭环**
+- [x] **Step 6: 提交演示游戏闭环**
 
 Run:
 
@@ -636,7 +642,7 @@ git commit -m "feat(miniapp): 隔离演示游戏结果"
 - Consumes: Tasks 1–4 的全部实现提交。
 - Produces: 可发布且未破坏真实流程的微信小程序生产构建。
 
-- [ ] **Step 1: 运行小程序全量测试**
+- [x] **Step 1: 运行小程序全量测试**
 
 Run:
 
@@ -647,7 +653,7 @@ npm test
 
 Expected: Vitest 全量通过，无未处理 Promise rejection 或失败测试。
 
-- [ ] **Step 2: 运行开发构建**
+- [x] **Step 2: 运行开发构建**
 
 Run:
 
@@ -658,7 +664,7 @@ npm run build:weapp
 
 Expected: Taro 开发构建退出码为 0。
 
-- [ ] **Step 3: 运行生产构建**
+- [x] **Step 3: 运行生产构建**
 
 Run:
 
@@ -671,7 +677,7 @@ npm run build:weapp:prod
 
 Expected: Taro 生产构建退出码为 0，生成 `miniapp/dist`。
 
-- [ ] **Step 4: 静态核对 AppID、线上 API 与敏感信息**
+- [x] **Step 4: 静态核对 AppID、线上 API 与敏感信息**
 
 Run:
 

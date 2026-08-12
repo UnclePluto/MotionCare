@@ -368,6 +368,35 @@ const PRESCRIPTION: NonNullable<CurrentPrescription> = {
   }]
 }
 
+const REAL_GAME_PRESCRIPTION: NonNullable<CurrentPrescription> = {
+  id: 2,
+  version: 1,
+  status: 'active',
+  effective_at: '2026-08-12T00:00:00+08:00',
+  week_start: '2026-08-10',
+  week_end: '2026-08-16',
+  actions: [{
+    id: 84,
+    action_library_item: 84,
+    source_key: 'game-memory-color-sequence',
+    action_name: '颜色顺序记忆',
+    training_type: '游戏训练',
+    internal_type: 'game',
+    action_type: '益智游戏',
+    action_instruction: '请按亮起顺序选择颜色',
+    video_url: '',
+    has_ai_supervision: false,
+    weekly_frequency: '1',
+    duration_minutes: 1,
+    weekly_target_count: 1,
+    weekly_completed_count: 0,
+    difficulty: '简单',
+    notes: '',
+    sort_order: 1,
+    recent_record: null
+  }]
+}
+
 const expectedGames = [
   { actionId: 888801, name: '颜色顺序记忆' },
   { actionId: 888802, name: '图案顺序记忆' },
@@ -447,6 +476,16 @@ type RenderedPage = ReturnType<typeof renderPage>
 
 async function renderDemoGame(actionId: number): Promise<RenderedPage> {
   taroHarness.routerParams.actionId = String(actionId)
+  const page = renderPage(GameSessionPage)
+  await taroHarness.showCallbacks[0]()
+  await flushPromises()
+  page.rerender()
+  return page
+}
+
+async function renderRealGame(actionId: number): Promise<RenderedPage> {
+  taroHarness.routerParams.actionId = String(actionId)
+  requestMock.mockResolvedValueOnce(REAL_GAME_PRESCRIPTION)
   const page = renderPage(GameSessionPage)
   await taroHarness.showCallbacks[0]()
   await flushPromises()
@@ -3197,7 +3236,7 @@ describe('审核演示模式', () => {
     expect(retryMocks.tryUploadPendingGameRecord).toHaveBeenCalledTimes(1)
   })
 
-  it('已有真实身份进入演示时仍保留原 token', async () => {
+  it('已有真实身份提交 8888 时仅进入真实首页', async () => {
     setPatientAppToken('real-token')
     const page = renderPage(BindPage)
 
@@ -3217,7 +3256,38 @@ describe('审核演示模式', () => {
     expect(taroHarness.taroMock.setStorageSync).toHaveBeenCalledTimes(tokenWriteCountBeforeSubmit)
     expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
     expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
-    expect(session.isDemoSession()).toBe(true)
+    expect(retryMocks.stopPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(session.isDemoSession()).toBe(false)
+  })
+
+  it('真实游戏提前结束仍播放保存部分记录提示并展示原说明', async () => {
+    setPatientAppToken('real-token')
+    vi.useFakeTimers()
+    const page = await renderRealGame(84)
+    await enterDemoGamePlaying(page)
+
+    let finishAudio: () => void = () => undefined
+    const audio = {
+      src: '',
+      onEnded: vi.fn((callback: () => void) => { finishAudio = callback }),
+      onError: vi.fn(),
+      onStop: vi.fn(),
+      onPause: vi.fn(),
+      play: vi.fn(() => finishAudio()),
+      stop: vi.fn(),
+      destroy: vi.fn()
+    }
+    taroHarness.taroMock.createInnerAudioContext.mockClear()
+    taroHarness.taroMock.createInnerAudioContext.mockReturnValueOnce(audio)
+
+    clickButtonByText(page.element, '提前结束')
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.createInnerAudioContext).toHaveBeenCalledTimes(1)
+    expect(audio.src).toBe('/pages/game-session/assets/audio/game-session/manual_end.m4a')
+    expect(textContent(page.element)).toContain('已提前结束，本次记录为部分完成')
+    page.unmount()
   })
 
   it('演示绑定 8888 不请求真实鉴权并进入首页', async () => {
@@ -3362,6 +3432,7 @@ describe('审核演示模式', () => {
           await vi.advanceTimersByTimeAsync(1000)
         }
       } else {
+        taroHarness.taroMock.createInnerAudioContext.mockClear()
         clickButtonByText(page.element, '提前结束')
       }
       await flushPromises()
@@ -3370,6 +3441,11 @@ describe('审核演示模式', () => {
       expect(textContent(page.element)).toContain('得分')
       expect(textContent(page.element)).toContain('正确率')
       expect(textContent(page.element)).toContain('本次演示不保存')
+      if (endMode === 'manual') {
+        expect(textContent(page.element)).toContain('本次体验已提前结束，结果不会保存。')
+        expect(textContent(page.element)).not.toContain('本次记录为部分完成')
+        expect(taroHarness.taroMock.createInnerAudioContext).not.toHaveBeenCalled()
+      }
       expect(retryMocks.postGameTrainingRecord).not.toHaveBeenCalled()
       expect(retryMocks.savePendingGameUploadAfterActiveRetry).not.toHaveBeenCalled()
       expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()

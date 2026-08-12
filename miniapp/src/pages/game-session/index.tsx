@@ -103,7 +103,8 @@ function suggestedDurationMinutes(action: GameActionSummary): number {
   return action.duration_minutes && action.duration_minutes > 0 ? action.duration_minutes : 10
 }
 
-function textForEndReason(reason: GameEndReason): string {
+function textForEndReason(reason: GameEndReason, demoMode = false): string {
+  if (reason === 'manual' && demoMode) return '本次体验已提前结束，结果不会保存。'
   return reason === 'timer' ? '已按运动计划建议时长完成' : '已提前结束，本次记录为部分完成'
 }
 
@@ -1242,7 +1243,9 @@ export default function GameSessionPage() {
     setResultPayload(payload)
     setFeedback('')
     setSessionPhase('result')
-    void playGameAudio(reason === 'manual' ? 'manual_end' : 'complete')
+    if (!demoMode || reason !== 'manual') {
+      void playGameAudio(reason === 'manual' ? 'manual_end' : 'complete')
+    }
     if (demoMode) {
       setUploadState('demo_local')
     } else {
@@ -1687,7 +1690,7 @@ export default function GameSessionPage() {
         <View className='game-hero'>
           <Text className='eyebrow'>训练结果</Text>
           <Text className='title'>{resultPayload?.status === 'completed' ? '本次训练已完成' : '本次训练已提前结束'}</Text>
-          <Text className='paragraph'>{textForEndReason(rawDetail?.ended_by ?? 'manual')}</Text>
+          <Text className='paragraph'>{textForEndReason(rawDetail?.ended_by ?? 'manual', demoMode)}</Text>
         </View>
 
         {uploadState === 'pending_retry' ? (
@@ -1718,7 +1721,7 @@ export default function GameSessionPage() {
           </View>
           <View className='row'>
             <Text className='label'>结束方式</Text>
-            <Text className='value'>{textForEndReason(rawDetail?.ended_by ?? 'manual')}</Text>
+            <Text className='value'>{textForEndReason(rawDetail?.ended_by ?? 'manual', demoMode)}</Text>
           </View>
           <View className='row'>
             <Text className='label'>完成题数</Text>

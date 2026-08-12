@@ -36,6 +36,11 @@ export default function BindPage() {
     const normalizedCode = normalizeBindingCode(code)
     if (normalizedCode.length !== 4) return
 
+    if (getPatientAppToken()) {
+      Taro.redirectTo({ url: '/pages/home/index' })
+      return
+    }
+
     if (normalizedCode === DEMO_BINDING_CODE) {
       startDemoSession()
       stopPendingGameUploadRetryLoop()
