@@ -3070,6 +3070,39 @@ describe('审核演示模式', () => {
     expect(retryMocks.startPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
   })
 
+  it('真实首页继续请求接口、缓存运动计划并保留三个入口', async () => {
+    const homeData = {
+      patient: { name: '王阿姨' },
+      project: { name: '康复研究' },
+      current_prescription: PRESCRIPTION
+    }
+    requestMock.mockResolvedValueOnce(homeData)
+
+    const page = renderPage(HomePage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/home/')
+    expect(readCurrentPrescriptionCache()).toBe(PRESCRIPTION)
+    expect(findButtonByText(page.element, '查看运动计划')).toBeTruthy()
+    expect(findButtonByText(page.element, '继续训练')).toBeTruthy()
+    expect(findButtonByText(page.element, '查看训练历史')).toBeTruthy()
+  })
+
+  it('真实当前运动计划继续读取缓存并刷新真实接口', async () => {
+    writeCurrentPrescriptionCache(PRESCRIPTION)
+    const page = renderPage(PrescriptionPage)
+
+    expect(textContent(page.element)).toContain('肩部推举')
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/current-prescription/')
+    expect(retryMocks.tryUploadPendingGameRecord).toHaveBeenCalledTimes(1)
+  })
+
   it('已有真实身份进入演示时仍保留原 token', async () => {
     setPatientAppToken('real-token')
     const page = renderPage(BindPage)
@@ -3133,5 +3166,78 @@ describe('审核演示模式', () => {
     expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
     expect(session.isDemoSession()).toBe(true)
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(manifest)
+  })
+
+  it('演示首页隔离真实缓存与上传副作用并从首个游戏开始训练', async () => {
+    session.startDemoSession()
+    writeCurrentPrescriptionCache(PRESCRIPTION)
+
+    const page = renderPage(HomePage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('演示模式，仅供功能体验，数据不会保存。')
+    expect(textContent(page.element)).toContain('用户01')
+    expect(textContent(page.element)).toContain('功能展示')
+    expect(textContent(page.element)).not.toContain('肩部推举')
+    expect(findButtonByText(page.element, '查看运动计划')).toBeTruthy()
+    expect(findButtonByText(page.element, '开始训练')).toBeTruthy()
+    expect(findAll(page.element, (element) => (
+      element.type === 'Button' && textContent(element).includes('查看训练历史')
+    ))).toHaveLength(0)
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(retryMocks.loadPendingGameUpload).not.toHaveBeenCalled()
+    expect(retryMocks.subscribePendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(retryMocks.tryUploadPendingGameRecord).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(readCurrentPrescriptionCache()).toBe(PRESCRIPTION)
+
+    clickButtonByText(page.element, '开始训练')
+
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/game-session/index?actionId=888801'
+    })
+  })
+
+  it('演示运动计划隔离真实缓存与上传副作用并路由到六个游戏', async () => {
+    session.startDemoSession()
+    writeCurrentPrescriptionCache(PRESCRIPTION)
+
+    const page = renderPage(PrescriptionPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    for (const name of ['颜色顺序记忆', '图案顺序记忆', '反应抑制', '分类切换', '声音辨别', '拼图']) {
+      expect(textContent(page.element)).toContain(name)
+    }
+    const gameButtons = findAll(page.element, (element) => (
+      element.type === 'Button' && textContent(element).includes('开始游戏')
+    ))
+    expect(gameButtons).toHaveLength(6)
+    expect(textContent(page.element)).not.toContain('查看历史')
+    expect(textContent(page.element)).not.toContain('最近：')
+    expect(textContent(page.element)).not.toContain('待补传')
+    expect(textContent(page.element)).not.toContain('肩部推举')
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(retryMocks.loadPendingGameUpload).not.toHaveBeenCalled()
+    expect(retryMocks.subscribePendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(retryMocks.tryUploadPendingGameRecord).not.toHaveBeenCalled()
+    expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
+    expect(readCurrentPrescriptionCache()).toBe(PRESCRIPTION)
+
+    const actionIds = [888801, 888802, 888803, 888804, 888805, 888806]
+    for (const [index, button] of gameButtons.entries()) {
+      taroHarness.taroMock.navigateTo.mockClear()
+      button.props.onClick?.()
+      await flushPromises()
+
+      expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+        url: `/pages/game-session/index?actionId=${actionIds[index]}`
+      })
+    }
   })
 })

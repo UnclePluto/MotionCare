@@ -2,7 +2,8 @@ import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 
-import { request } from '../../api/client'
+import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
+import { isDemoSession } from '../../demo/session'
 import type { CurrentPrescription } from '../../types/patientApp'
 import {
   loadPendingGameUpload,
@@ -30,12 +31,13 @@ function pendingGameUploadBannerText(): string {
 }
 
 export default function PrescriptionPage() {
+  const demoMode = isDemoSession()
   const [data, setData] = useState<CurrentPrescription>(() => (
-    readCurrentPrescriptionCache() ?? null
+    demoMode ? null : readCurrentPrescriptionCache() ?? null
   ))
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(() => (
-    readCurrentPrescriptionCache() !== undefined
+    demoMode ? false : readCurrentPrescriptionCache() !== undefined
   ))
   const [pendingUploadBanner, setPendingUploadBanner] = useState('')
   const [gameLoadingActionId, setGameLoadingActionId] = useState<number | null>(null)
@@ -48,9 +50,9 @@ export default function PrescriptionPage() {
   }
 
   function loadPrescriptionData() {
-    request<CurrentPrescription>('/patient-app/current-prescription/')
+    fetchCurrentPrescriptionData()
       .then((body) => {
-        writeCurrentPrescriptionCache(body)
+        if (!demoMode) writeCurrentPrescriptionCache(body)
         if (!mountedRef.current) return
         setData(body)
         setError('')
@@ -92,6 +94,7 @@ export default function PrescriptionPage() {
   }, [])
 
   useEffect(() => {
+    if (demoMode) return undefined
     return subscribePendingGameUploadRetryLoop((result) => {
       if (!mountedRef.current) return
       refreshPendingUploadBanner()
@@ -99,11 +102,16 @@ export default function PrescriptionPage() {
         loadPrescriptionData()
       }
     })
-  }, [])
+  }, [demoMode])
 
   useDidShow(() => {
     setError('')
     setGameLoadError('')
+    if (demoMode) {
+      setPendingUploadBanner('')
+      loadPrescriptionData()
+      return
+    }
     void reLaunchPendingShoulderPressUploadIfNeeded(Taro).then((redirected) => {
       if (!mountedRef.current) return
       if (redirected) return
@@ -129,7 +137,7 @@ export default function PrescriptionPage() {
           <Text className='eyebrow'>运动安排</Text>
           <Text className='title'>当前运动计划</Text>
         </View>
-        {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
+        {!demoMode && pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
         <Text className='muted loading-text'>正在加载当前运动计划</Text>
       </View>
     )
@@ -142,7 +150,7 @@ export default function PrescriptionPage() {
           <Text className='eyebrow'>运动安排</Text>
           <Text className='title'>当前运动计划</Text>
         </View>
-        {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
+        {!demoMode && pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
         {error ? (
           <Text className='error'>{error}</Text>
         ) : (
@@ -164,7 +172,7 @@ export default function PrescriptionPage() {
           本周：{data.week_start} 至 {data.week_end}
         </Text>
       </View>
-      {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
+      {!demoMode && pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
       {error ? <Text className='muted prescription-refresh-error'>{error}</Text> : null}
       {gameLoadError ? <Text className='error'>{gameLoadError}</Text> : null}
       {gameLoadingActionId !== null ? (
@@ -211,7 +219,9 @@ export default function PrescriptionPage() {
                 <View className='progress-fill' style={{ width: `${progressPercent}%` }} />
               </View>
             </View>
-            <Text className='muted'>最近：{action.recent_record?.training_date ?? '暂无记录'}</Text>
+            {!demoMode ? (
+              <Text className='muted'>最近：{action.recent_record?.training_date ?? '暂无记录'}</Text>
+            ) : null}
             <View className='button-row'>
               <Button
                 className='primary-button'
@@ -223,13 +233,15 @@ export default function PrescriptionPage() {
               >
                 {actionButtonLabel(action)}
               </Button>
-              <Button
-                className='secondary-button'
-                disabled={gameLoadingActionId !== null}
-                onClick={() => Taro.navigateTo({ url: `/pages/action-history/index?actionId=${action.id}` })}
-              >
-                查看历史
-              </Button>
+              {!demoMode ? (
+                <Button
+                  className='secondary-button'
+                  disabled={gameLoadingActionId !== null}
+                  onClick={() => Taro.navigateTo({ url: `/pages/action-history/index?actionId=${action.id}` })}
+                >
+                  查看历史
+                </Button>
+              ) : null}
             </View>
           </View>
         )

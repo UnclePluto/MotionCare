@@ -2,7 +2,8 @@ import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 
-import { request } from '../../api/client'
+import { fetchPatientHomeData } from '../../demo/patientAppData'
+import { isDemoSession } from '../../demo/session'
 import type { HomeData } from '../../types/patientApp'
 import {
   loadPendingGameUpload,
@@ -23,6 +24,7 @@ function pendingGameUploadBannerText(): string {
 }
 
 export default function HomePage() {
+  const demoMode = isDemoSession()
   const [data, setData] = useState<HomeData | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
@@ -34,9 +36,9 @@ export default function HomePage() {
   }
 
   function loadHomeData() {
-    request<HomeData>('/patient-app/home/')
+    fetchPatientHomeData()
       .then((body) => {
-        writeCurrentPrescriptionCache(body.current_prescription)
+        if (!demoMode) writeCurrentPrescriptionCache(body.current_prescription)
         if (!mountedRef.current) return
         setData(body)
         setLoaded(true)
@@ -53,6 +55,7 @@ export default function HomePage() {
   }, [])
 
   useEffect(() => {
+    if (demoMode) return undefined
     return subscribePendingGameUploadRetryLoop((result) => {
       if (!mountedRef.current) return
       refreshPendingUploadBanner()
@@ -60,10 +63,15 @@ export default function HomePage() {
         loadHomeData()
       }
     })
-  }, [])
+  }, [demoMode])
 
   useDidShow(() => {
     setError('')
+    if (demoMode) {
+      setPendingUploadBanner('')
+      loadHomeData()
+      return
+    }
     setLoaded(false)
     setData(null)
     void reLaunchPendingShoulderPressUploadIfNeeded(Taro).then((redirected) => {
@@ -110,7 +118,12 @@ export default function HomePage() {
         <Text className='title'>今日运动</Text>
         <Text className='muted'>按运动计划完成训练，查看本周进度与历史记录。</Text>
       </View>
-      {pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
+      {demoMode ? (
+        <Text className='pending-upload-banner demo-mode-banner'>演示模式，仅供功能体验，数据不会保存。</Text>
+      ) : null}
+      {!demoMode && pendingUploadBanner ? (
+        <Text className='pending-upload-banner'>{pendingUploadBanner}</Text>
+      ) : null}
       {error ? <Text className='error'>{error}</Text> : null}
       {data ? (
         <View className='home-content'>
@@ -129,6 +142,7 @@ export default function HomePage() {
           </View>
           <View className='action-stack'>
             {HOME_ACTIONS.map((action) => {
+              if (demoMode && action.key === 'history') return null
               if (action.requiresAction && !actionContext) return null
               return (
                 <Button
@@ -136,7 +150,9 @@ export default function HomePage() {
                   className={action.className}
                   onClick={() => Taro.navigateTo({ url: action.url(actionContext) })}
                 >
-                  {action.label(actionContext)}
+                  {demoMode && action.key === 'training'
+                    ? '开始训练'
+                    : action.label(actionContext)}
                 </Button>
               )
             })}
