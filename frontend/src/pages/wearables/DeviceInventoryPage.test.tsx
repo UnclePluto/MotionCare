@@ -346,4 +346,16 @@ describe("DeviceInventoryPage", () => {
     expect(screen.getByText("设备 1002 通信正常")).toBeInTheDocument();
     expect(screen.queryByText("前一台设备通信失败。")).not.toBeInTheDocument();
   });
+
+  it("响铃按钮调用设备响铃接口", async () => {
+    mockGet.mockResolvedValue({ data: [device()] });
+    mockPost.mockResolvedValue({ data: {} });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "响铃" }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith("/wearables/devices/7/ring/");
+    });
+  });
 });

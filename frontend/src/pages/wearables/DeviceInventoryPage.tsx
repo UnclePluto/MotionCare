@@ -1,5 +1,6 @@
+import { BellOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
 import { isAxiosError } from "axios";
 import dayjs from "dayjs";
 import { useMemo, useRef, useState } from "react";
@@ -75,6 +76,13 @@ export function DeviceInventoryPage() {
       if (statusRequestGeneration.current !== variables.generation) return;
       setStatusFeedback({ ...variables, result: null, error });
     },
+  });
+
+  const ring = useMutation({
+    mutationFn: async ({ deviceId }: { deviceId: number }) =>
+      apiClient.post(`/wearables/devices/${deviceId}/ring/`),
+    onSuccess: () => message.success("响铃指令已下发"),
+    onError: (error) => message.error(errorMessage(error, "设备响铃失败")),
   });
 
   const runStatusCheck = (device: WearableDevice) => {
@@ -165,7 +173,7 @@ export function DeviceInventoryPage() {
           loading={devicesQuery.isLoading}
           dataSource={dataSource}
           pagination={{ pageSize: 20, showSizeChanger: false }}
-          scroll={{ x: 920 }}
+          scroll={{ x: 980 }}
           locale={{ emptyText: "暂无设备，请先录入设备。" }}
           columns={[
             { title: "固定简码", dataIndex: "short_code", width: 110, render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
@@ -196,21 +204,34 @@ export function DeviceInventoryPage() {
             {
               title: "操作",
               key: "actions",
-              width: 120,
+              width: 180,
               render: (_: unknown, device) => (
-                <Button
-                  type="link"
-                  style={{ paddingInline: 0 }}
-                  disabled={!device.enabled}
-                  loading={
-                    statusCheck.isPending &&
-                    statusCheck.variables?.deviceId === device.id &&
-                    statusCheck.variables.generation === statusRequestGeneration.current
-                  }
-                  onClick={() => runStatusCheck(device)}
-                >
-                  通信测试
-                </Button>
+                <Space size={0}>
+                  <Button
+                    type="link"
+                    style={{ paddingInline: 0 }}
+                    disabled={!device.enabled}
+                    loading={
+                      statusCheck.isPending &&
+                      statusCheck.variables?.deviceId === device.id &&
+                      statusCheck.variables.generation === statusRequestGeneration.current
+                    }
+                    onClick={() => runStatusCheck(device)}
+                  >
+                    通信测试
+                  </Button>
+                  <Button
+                    type="link"
+                    aria-label="响铃"
+                    icon={<BellOutlined />}
+                    style={{ paddingInline: 0 }}
+                    disabled={!device.enabled}
+                    loading={ring.isPending && ring.variables?.deviceId === device.id}
+                    onClick={() => ring.mutate({ deviceId: device.id })}
+                  >
+                    响铃
+                  </Button>
+                </Space>
               ),
             },
           ]}

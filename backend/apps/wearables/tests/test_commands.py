@@ -125,7 +125,7 @@ def test_unknown_model_can_check_safe_status_without_returning_location(wearable
         "online": True,
         "battery_level": 82,
         "last_communication_at": "2026-07-24T02:00:00+00:00",
-        "capabilities": {"ring": False},
+        "capabilities": {"ring": True},
     }
     wearable_device.refresh_from_db()
     assert wearable_device.last_device_status == "online"
@@ -253,27 +253,17 @@ def test_status_api_returns_only_the_safe_status_summary(api_client, doctor, wea
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("model", "verified", "expected_ring"),
-    [
-        ("UNKNOWN", False, False),
-        ("TEST-MODEL", True, True),
-    ],
-)
-def test_status_api_returns_only_boolean_ring_capability_for_verified_and_unverified_models(
+@pytest.mark.parametrize("model", ["UNKNOWN", "TEST-MODEL"])
+def test_status_api_returns_only_boolean_ring_capability_without_command_code(
     api_client,
     doctor,
     wearable_device,
     model,
-    verified,
-    expected_ring,
     monkeypatch,
 ):
     api_client.force_authenticate(doctor)
     wearable_device.model = model
     wearable_device.save(update_fields=["model", "updated_at"])
-    if verified:
-        monkeypatch.setitem(MODEL_CAPABILITIES, ("miwitracker", model), TEST_PROFILE)
     provider = StubProvider(
         status=ProviderDeviceStatus(
             external_device_id=wearable_device.external_device_id,
@@ -297,7 +287,7 @@ def test_status_api_returns_only_boolean_ring_capability_for_verified_and_unveri
         "last_communication_at",
         "capabilities",
     }
-    assert response.data["capabilities"] == {"ring": expected_ring}
+    assert response.data["capabilities"] == {"ring": True}
     assert set(response.data["capabilities"]) == {"ring"}
     assert "9018" not in str(response.data)
 
@@ -306,7 +296,6 @@ def test_status_api_returns_only_boolean_ring_capability_for_verified_and_unveri
 @pytest.mark.parametrize(
     "command_type",
     [
-        "ring",
         "measure_heart_rate",
         "configure_heart_rate_interval",
         "configure_step_switch",
@@ -317,6 +306,21 @@ def test_unverified_model_rejects_all_remote_commands(wearable_device, command_t
 
     with pytest.raises(UnsupportedCapability):
         send_device_command(wearable_device, command_type, actor=None)
+
+
+@pytest.mark.django_db
+def test_unverified_model_can_send_ring_command(wearable_device, monkeypatch):
+    wearable_device.model = "UNKNOWN"
+    provider = StubProvider()
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
+
+    command = send_device_command(wearable_device, "ring", actor=None)
+
+    assert command.command_code == "9018"
+    assert command.status == WearableCommandLog.Status.SUCCEEDED
+    assert provider.commands == [
+        (wearable_device.external_device_id, "9018", "", str(command.id))
+    ]
 
 
 @pytest.mark.django_db
@@ -793,15 +797,14 @@ def test_sync_endpoint_only_dispatches_whitelisted_metrics(
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    ("model", "inject_misconfigured_profile"),
-    [(None, True), ("", True), ("   ", True), ("UNKNOWN", False)],
+    "model",
+    [None, "", "   "],
 )
-def test_blank_or_unknown_model_cannot_send_even_if_mapping_is_misconfigured(
-    wearable_device, model, inject_misconfigured_profile, monkeypatch
+def test_blank_model_cannot_send_ring_even_if_mapping_is_configured(
+    wearable_device, model, monkeypatch
 ):
     wearable_device.model = model
-    if inject_misconfigured_profile:
-        monkeypatch.setitem(MODEL_CAPABILITIES, ("miwitracker", model), TEST_PROFILE)
+    monkeypatch.setitem(MODEL_CAPABILITIES, ("miwitracker", model), TEST_PROFILE)
 
     with pytest.raises(UnsupportedCapability):
         send_device_command(wearable_device, "ring", actor=None)
