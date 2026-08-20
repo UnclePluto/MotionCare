@@ -4,6 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.prescriptions.motion_videos import MotionVideoResolution
 from apps.prescriptions.services import lock_open_project_patient_for_prescription
 from apps.studies.models import StudyProject
 
@@ -65,7 +66,17 @@ def _payload(action, *, expected_active_version=None, action_overrides=None):
 
 
 @pytest.mark.django_db
-def test_activate_now_creates_active_prescription_and_snapshots(project_patient, doctor):
+def test_activate_now_creates_active_prescription_and_snapshots(
+    project_patient, doctor, monkeypatch
+):
+    signed_video_url = "https://signed.example.test/video.mp4"
+    monkeypatch.setattr(
+        "apps.prescriptions.serializers.resolve_motion_video_url",
+        lambda *args, **kwargs: MotionVideoResolution(
+            url=signed_video_url,
+            unavailable=False,
+        ),
+    )
     action = _action()
 
     response = _client(doctor).post(
@@ -92,13 +103,18 @@ def test_activate_now_creates_active_prescription_and_snapshots(project_patient,
 
     assert len(body["actions"]) == 1
     snapshot = body["actions"][0]
+    persisted_snapshot = prescription.actions.get()
     assert snapshot["action_library_item"] == action.id
     assert snapshot["action_name_snapshot"] == action.name
     assert snapshot["training_type_snapshot"] == action.training_type
     assert snapshot["internal_type_snapshot"] == action.internal_type
     assert snapshot["action_type_snapshot"] == action.action_type
     assert snapshot["action_instruction_snapshot"] == action.instruction_text
-    assert snapshot["video_url_snapshot"] == action.video_url
+    assert persisted_snapshot.video_object_key_snapshot == (
+        "motion-action-videos/v1/motion-aerobic-high-knee.mp4"
+    )
+    assert persisted_snapshot.video_url_snapshot == ""
+    assert snapshot["video_url_snapshot"] == signed_video_url
     assert snapshot["has_ai_supervision_snapshot"] is True
     assert snapshot["weekly_frequency"] == "3 次/周"
     assert snapshot["weekly_target_count"] == 3
