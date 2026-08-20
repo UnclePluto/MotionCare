@@ -16,15 +16,16 @@ class CapabilityProfile:
 # 生产环境默认安全关闭：仅经现场验证的型号才能在部署配置中加入能力映射。
 MODEL_CAPABILITIES: dict[tuple[str, str], CapabilityProfile] = {}
 
-# miwitracker 平台通用的“寻找设备 / 响铃”指令码，不依赖具体型号。
+# miwitracker 平台级“寻找设备 / 响铃”指令，不依赖设备型号。
 MIWITRACKER_RING_COMMAND_CODE = "9018"
 
 
 def get_capability_profile(provider: str, model: str | None) -> CapabilityProfile:
-    if not isinstance(model, str) or not model.strip():
-        return CapabilityProfile()
-    configured = MODEL_CAPABILITIES.get((provider, model), CapabilityProfile())
-    if provider == "miwitracker" and not configured.ring:
-        # 响铃（寻找设备）是 miwitracker 全平台通用指令；其余能力仍按型号验证。
+    configured = (
+        MODEL_CAPABILITIES.get((provider, model), CapabilityProfile())
+        if isinstance(model, str) and model.strip()
+        else CapabilityProfile()
+    )
+    if provider == "miwitracker":
         return replace(configured, ring=MIWITRACKER_RING_COMMAND_CODE)
     return configured

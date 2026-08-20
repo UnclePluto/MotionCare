@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> 后续覆盖说明（2026-08-20）：Task 6 中“未验证型号禁用响铃”已被需求方确认的新决策覆盖；miwitracker `9018` 是不依赖型号或设备启停状态的平台级指令。下文保留为历史执行记录。
+>
 > 执行记录（2026-07-23, codex）：Task 1 已落地于 commits `6b46942`、`b73bab7`，任务审查通过。
 >
 > 执行记录（2026-07-23, codex）：Task 2 已落地于 commits `d5f0050`、`e785522`、`1495a04`，任务审查通过。

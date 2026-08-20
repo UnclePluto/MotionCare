@@ -254,7 +254,7 @@ def test_status_api_returns_only_the_safe_status_summary(api_client, doctor, wea
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("model", ["UNKNOWN", "TEST-MODEL"])
-def test_status_api_returns_only_boolean_ring_capability_without_command_code(
+def test_status_api_returns_only_boolean_platform_ring_capability(
     api_client,
     doctor,
     wearable_device,
@@ -301,26 +301,11 @@ def test_status_api_returns_only_boolean_ring_capability_without_command_code(
         "configure_step_switch",
     ],
 )
-def test_unverified_model_rejects_all_remote_commands(wearable_device, command_type):
+def test_unverified_model_rejects_model_gated_remote_commands(wearable_device, command_type):
     wearable_device.model = "UNKNOWN"
 
     with pytest.raises(UnsupportedCapability):
         send_device_command(wearable_device, command_type, actor=None)
-
-
-@pytest.mark.django_db
-def test_unverified_model_can_send_ring_command(wearable_device, monkeypatch):
-    wearable_device.model = "UNKNOWN"
-    provider = StubProvider()
-    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
-
-    command = send_device_command(wearable_device, "ring", actor=None)
-
-    assert command.command_code == "9018"
-    assert command.status == WearableCommandLog.Status.SUCCEEDED
-    assert provider.commands == [
-        (wearable_device.external_device_id, "9018", "", str(command.id))
-    ]
 
 
 @pytest.mark.django_db
@@ -493,7 +478,7 @@ def test_command_log_keeps_only_safe_parameter_summary(wearable_device, verified
 
 
 @pytest.mark.django_db
-def test_unknown_command_and_disabled_device_never_call_provider(
+def test_unknown_command_and_disabled_non_ring_command_never_call_provider(
     wearable_device, verified_capability, monkeypatch
 ):
     provider = StubProvider()
@@ -503,7 +488,7 @@ def test_unknown_command_and_disabled_device_never_call_provider(
         send_device_command(wearable_device, "restart", actor=None)
     wearable_device.enabled = False
     with pytest.raises(DisabledDevice):
-        send_device_command(wearable_device, "ring", actor=None)
+        send_device_command(wearable_device, "measure_heart_rate", actor=None)
 
     assert provider.commands == []
     assert WearableCommandLog.objects.count() == 0
@@ -796,18 +781,33 @@ def test_sync_endpoint_only_dispatches_whitelisted_metrics(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    "model",
-    [None, "", "   "],
-)
-def test_blank_model_cannot_send_ring_even_if_mapping_is_configured(
-    wearable_device, model, monkeypatch
+@pytest.mark.parametrize("model", [None, "", "   ", "UNKNOWN"])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_miwitracker_ring_does_not_require_model_or_enabled_device(
+    wearable_device, model, enabled, monkeypatch
 ):
     wearable_device.model = model
-    monkeypatch.setitem(MODEL_CAPABILITIES, ("miwitracker", model), TEST_PROFILE)
+    wearable_device.enabled = enabled
+    provider = StubProvider()
+    monkeypatch.setattr("apps.wearables.services.commands._get_provider", lambda _: provider)
 
-    with pytest.raises(UnsupportedCapability):
-        send_device_command(wearable_device, "ring", actor=None)
+    command = send_device_command(wearable_device, "ring", actor=None)
+
+    assert command.command_code == "9018"
+    assert command.status == WearableCommandLog.Status.SUCCEEDED
+    assert provider.commands == [
+        (wearable_device.external_device_id, "9018", "", str(command.id))
+    ]
+
+
+@pytest.mark.django_db
+def test_disabled_device_still_rejects_non_ring_command(
+    wearable_device, verified_capability
+):
+    wearable_device.enabled = False
+
+    with pytest.raises(DisabledDevice):
+        send_device_command(wearable_device, "measure_heart_rate", actor=None)
 
 
 @pytest.mark.django_db
