@@ -6,13 +6,17 @@ import {
   computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
   isServerSafeFinalizeStatus,
+  loadOwnedPendingShoulderPressSession,
   nextShoulderPressPreviewVisibility,
   remainingShoulderPressSeconds,
   resolveShoulderPressAction,
+  saveOwnedPendingShoulderPressSession,
   SHOULDER_PRESS_RECORDING_STOP_MS,
   shoulderPressUploadCounters,
   shouldAutoFinishShoulderPressTraining
 } from './pageState'
+import { PENDING_MOTION_TRAINING_SESSION_KEY } from '../../features/motion-training/session'
+import { createPendingShoulderPressSession } from './session'
 
 function prescription(): NonNullable<CurrentPrescription> {
   return {
@@ -64,6 +68,28 @@ describe('shoulder press compatibility page state', () => {
     expect(canStartShoulderPressRecording({ actionReady: false, cameraReady: true, busy: false })).toBe(false)
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: false, busy: false })).toBe(false)
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
+  })
+
+  it('keeps old owned-session aliases compatible with get/set storage only', () => {
+    const pending = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 120,
+      trainingDate: '2026-08-06',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    })
+    const values = new Map<string, unknown>([[PENDING_MOTION_TRAINING_SESSION_KEY, pending]])
+    const storage = {
+      getStorageSync: (key: string) => values.get(key),
+      setStorageSync: (key: string, value: unknown) => values.set(key, value)
+    }
+
+    expect(storage).not.toHaveProperty('removeStorageSync')
+    expect(loadOwnedPendingShoulderPressSession(storage, pending.clientSessionId)).toEqual(pending)
+    expect(saveOwnedPendingShoulderPressSession(storage, {
+      ...pending,
+      lastError: '等待网络恢复'
+    })).toMatchObject({ lastError: '等待网络恢复' })
   })
 
   it('computes a clamped prescription countdown from effective recording time', () => {

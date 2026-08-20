@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY,
+  LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY,
   PENDING_MOTION_TRAINING_SESSION_KEY,
   appendUploadableMotionTrainingSegment,
   appendPendingSegment,
@@ -30,6 +30,27 @@ function memoryStorage(initial?: unknown) {
     getStorageSync: vi.fn((key: string) => store.get(key)),
     setStorageSync: vi.fn((key: string, value: unknown) => store.set(key, value)),
     removeStorageSync: vi.fn((key: string) => store.delete(key))
+  }
+}
+
+function historicalRecordedSession(actualDurationMs: number) {
+  return {
+    clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+    actionId: 42,
+    trainingDate: '2026-08-06',
+    expectedDurationSeconds: 2400,
+    actualDurationMs,
+    segments: [{
+      index: 0,
+      compressionState: 'compressed' as const,
+      savedFilePath: 'wxfile://store/historical.mp4',
+      durationMs: actualDurationMs,
+      sizeBytes: 1,
+      uploadState: 'pending' as const,
+      localFileState: 'saved' as const
+    }],
+    finalized: false,
+    createdAt: 1783692000000
   }
 }
 
@@ -290,6 +311,31 @@ describe('shoulder press segmented session helpers', () => {
       sizeBytes: 1,
       localFileState: 'temporary'
     })).toThrow('录像总时长超过限制')
+  })
+
+  it.each([
+    ['new key at 1800001ms', PENDING_MOTION_TRAINING_SESSION_KEY, 1_800_001],
+    ['new key at 2400000ms', PENDING_MOTION_TRAINING_SESSION_KEY, 2_400_000],
+    ['legacy key at 1800001ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 1_800_001],
+    ['legacy key at 2400000ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 2_400_000]
+  ])('restores a historical session from the %s boundary', (_caseName, key, durationMs) => {
+    const storage = memoryStorage()
+    storage.setStorageSync(key, historicalRecordedSession(durationMs))
+
+    expect(loadPendingMotionTrainingSession(storage)).toMatchObject({
+      actualDurationMs: durationMs,
+      expectedDurationSeconds: 2400
+    })
+  })
+
+  it.each([
+    ['new key', PENDING_MOTION_TRAINING_SESSION_KEY],
+    ['legacy key', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY]
+  ])('rejects a historical session above 2400000ms from the %s', (_caseName, key) => {
+    const storage = memoryStorage()
+    storage.setStorageSync(key, historicalRecordedSession(2_400_001))
+
+    expect(loadPendingMotionTrainingSession(storage)).toBeNull()
   })
 
   it('promotes a legacy pending-compression segment without changing its index', () => {
@@ -573,11 +619,11 @@ describe('shoulder press segmented session helpers', () => {
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       createdAt: 1787193600000
     })
-    storage.setStorageSync(LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY, pendingSession)
+    storage.setStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, pendingSession)
 
     expect(loadPendingMotionTrainingSession(storage)).toMatchObject({ actionId: 42 })
     expect(storage.getStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY)).toMatchObject({ actionId: 42 })
-    expect(storage.getStorageSync(LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY)).toMatchObject({ actionId: 42 })
+    expect(storage.getStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({ actionId: 42 })
   })
 
   it('clears both session keys after a completed or abandoned motion training session', () => {
@@ -586,6 +632,6 @@ describe('shoulder press segmented session helpers', () => {
     clearPendingMotionTrainingSession(storage)
 
     expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_MOTION_TRAINING_SESSION_KEY)
-    expect(storage.removeStorageSync).toHaveBeenCalledWith(LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY)
+    expect(storage.removeStorageSync).toHaveBeenCalledWith(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)
   })
 })

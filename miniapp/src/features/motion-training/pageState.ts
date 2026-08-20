@@ -30,7 +30,6 @@ export type MotionTrainingPreviewVisibility = 'visible' | 'hidden'
 type MotionTrainingStorage = {
   getStorageSync: (key: string) => unknown
   setStorageSync: (key: string, value: unknown) => void
-  removeStorageSync: (key: string) => void
 }
 
 type MotionTrainingNavigator = MotionTrainingStorage & {

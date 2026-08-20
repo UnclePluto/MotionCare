@@ -3,6 +3,7 @@ export const LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY = 'motioncare.pendingShou
 export const LEGACY_SHOULDER_PRESS_SOURCE_KEY = 'motion-resistance-shoulder-press'
 export const LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY = LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY
 export const PENDING_MOTION_TRAINING_UPLOAD_KEY = PENDING_MOTION_TRAINING_SESSION_KEY
+export const MOTION_TRAINING_LEGACY_RESTORE_LIMIT_MS = 2_400_000
 
 export type LegacyPendingCompressionMotionTrainingSegment = {
   index: number
@@ -54,6 +55,13 @@ export type StorageLike = {
   setStorageSync: (key: string, value: unknown) => void
   removeStorageSync: (key: string) => void
 }
+
+type MotionTrainingSessionReadStorage = Pick<
+  StorageLike,
+  'getStorageSync' | 'setStorageSync'
+>
+
+type MotionTrainingSessionWriteStorage = Pick<StorageLike, 'setStorageSync'>
 
 type VideoInfo = {
   duration: number
@@ -122,6 +130,14 @@ function parseOffsetIsoTimestamp(value: unknown): number | null {
 export function normalizeMotionTrainingExpectedDurationSeconds(value: number): number {
   if (!Number.isFinite(value)) return 1
   return Math.min(1800, Math.max(1, Math.round(value)))
+}
+
+function normalizeRestoredExpectedDurationSeconds(value: number): number {
+  if (!Number.isFinite(value)) return 1
+  return Math.min(
+    MOTION_TRAINING_LEGACY_RESTORE_LIMIT_MS / 1000,
+    Math.max(1, Math.round(value))
+  )
 }
 
 export function isCompressedMotionTrainingSegment(
@@ -205,7 +221,7 @@ function normalizePendingMotionTrainingSession(value: unknown): PendingMotionTra
   const actualDurationMs = normalizedSegments.reduce((total, segment) => total + segment.durationMs, 0)
   if (
     session.actualDurationMs !== actualDurationMs ||
-    actualDurationMs > MAX_MOTION_TRAINING_MANIFEST_DURATION_MS
+    actualDurationMs > MOTION_TRAINING_LEGACY_RESTORE_LIMIT_MS
   ) return null
   if (
     session.finalized &&
@@ -221,7 +237,7 @@ function normalizePendingMotionTrainingSession(value: unknown): PendingMotionTra
     trainingDate: session.trainingDate,
     ...(session.trainingStartedAt ? { trainingStartedAt: session.trainingStartedAt } : {}),
     ...(session.trainingEndedAt ? { trainingEndedAt: session.trainingEndedAt } : {}),
-    expectedDurationSeconds: normalizeMotionTrainingExpectedDurationSeconds(session.expectedDurationSeconds),
+    expectedDurationSeconds: normalizeRestoredExpectedDurationSeconds(session.expectedDurationSeconds),
     actualDurationMs,
     segments: normalizedSegments,
     finalized: session.finalized,
@@ -231,14 +247,14 @@ function normalizePendingMotionTrainingSession(value: unknown): PendingMotionTra
 }
 
 export function savePendingMotionTrainingSession(
-  storage: StorageLike,
+  storage: MotionTrainingSessionWriteStorage,
   payload: PendingMotionTrainingSession
 ): void {
   storage.setStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY, payload)
 }
 
 export function loadPendingMotionTrainingSession(
-  storage: StorageLike
+  storage: MotionTrainingSessionReadStorage
 ): PendingMotionTrainingSession | null {
   const current = normalizePendingMotionTrainingSession(
     storage.getStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY)
@@ -527,14 +543,14 @@ export function buildPendingMotionTrainingUpload(input: {
 }
 
 export function savePendingMotionTrainingUpload(
-  storage: StorageLike,
+  storage: MotionTrainingSessionWriteStorage,
   payload: PendingMotionTrainingUpload
 ): void {
   savePendingMotionTrainingSession(storage, payload)
 }
 
 export function loadPendingMotionTrainingUpload(
-  storage: StorageLike
+  storage: MotionTrainingSessionReadStorage
 ): PendingMotionTrainingUpload | null {
   const session = loadPendingMotionTrainingSession(storage)
   if (!session) return null

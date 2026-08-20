@@ -6,13 +6,19 @@ import {
   computeMotionTrainingEffectiveDuration,
   formatMotionTrainingTimer,
   isServerSafeFinalizeStatus,
+  loadOwnedPendingMotionTrainingSession,
   nextMotionTrainingPreviewVisibility,
   remainingMotionTrainingSeconds,
   resolveMotionTrainingAction,
+  saveOwnedPendingMotionTrainingSession,
   MOTION_TRAINING_RECORDING_STOP_MS,
   motionTrainingUploadCounters,
   shouldAutoFinishMotionTraining
 } from './pageState'
+import {
+  PENDING_MOTION_TRAINING_SESSION_KEY,
+  createPendingMotionTrainingSession
+} from './session'
 
 function prescription(): NonNullable<CurrentPrescription> {
   return {
@@ -64,6 +70,30 @@ describe('motion training page state', () => {
     expect(canStartMotionTrainingRecording({ actionReady: false, cameraReady: true, busy: false })).toBe(false)
     expect(canStartMotionTrainingRecording({ actionReady: true, cameraReady: false, busy: false })).toBe(false)
     expect(canStartMotionTrainingRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
+  })
+
+  it('loads and saves an owned session with get/set storage only', () => {
+    const pending = createPendingMotionTrainingSession({
+      actionId: 42,
+      expectedDurationSeconds: 120,
+      trainingDate: '2026-08-06',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    })
+    const values = new Map<string, unknown>([[PENDING_MOTION_TRAINING_SESSION_KEY, pending]])
+    const storage = {
+      getStorageSync: (key: string) => values.get(key),
+      setStorageSync: (key: string, value: unknown) => values.set(key, value)
+    }
+
+    expect(storage).not.toHaveProperty('removeStorageSync')
+    expect(loadOwnedPendingMotionTrainingSession(storage, pending.clientSessionId)).toEqual(pending)
+    expect(saveOwnedPendingMotionTrainingSession(storage, {
+      ...pending,
+      lastError: '等待网络恢复'
+    })).toMatchObject({ lastError: '等待网络恢复' })
+    expect(values.get(PENDING_MOTION_TRAINING_SESSION_KEY))
+      .toMatchObject({ lastError: '等待网络恢复' })
   })
 
   it('computes a clamped prescription countdown from effective recording time', () => {
