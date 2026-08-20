@@ -69,13 +69,13 @@ def test_reverse_proxy_and_static_settings_are_production_ready():
     assert settings.STATIC_ROOT.name == "staticfiles"
 
 
-def test_training_video_limits_support_raw_five_second_forty_minute_sessions():
+def test_training_video_limits_support_raw_five_second_thirty_minute_sessions():
     assert settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES == 80 * 1024 * 1024
-    assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 2400
-    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 600
+    assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 1800
+    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 360
+    assert settings.TRAINING_VIDEO_MAX_SIZE_BYTES == 536_870_912
     assert settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS == 900
     assert settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS == 7200
-    assert not hasattr(settings, "TRAINING_VIDEO_MAX_SIZE_BYTES")
 
 
 def test_motion_action_video_delivery_settings_are_safe_and_rate_limited():

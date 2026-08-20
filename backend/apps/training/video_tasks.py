@@ -330,6 +330,9 @@ def mark_uploading_qiniu(
     canonical_key=None,
     upload_deadline_at=None,
 ):
+    if result.size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
+        raise ValidationError("训练视频合并结果大小超过限制")
+
     video, job = _lock_training_video_then_job(job_id)
     if (
         job.status != VideoAssemblyJob.Status.RUNNING

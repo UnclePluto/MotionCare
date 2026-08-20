@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
@@ -9,9 +10,11 @@ from rest_framework.test import APIClient
 
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
 from apps.patients.models import Patient
+from apps.prescriptions.action_library import OFFICIAL_MOTION_ACTION_SOURCE_KEYS
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 from apps.training.models import TrainingVideo, TrainingVideoSegment, VideoAssemblyJob
+from apps.training.video_services import create_training_video_session
 from apps.training.video_staging import segment_path
 
 CLIENT_SESSION_ID = "8cf99c30-9b03-4bda-b4d3-b492f3a2db12"
@@ -164,8 +167,50 @@ def _assert_no_partial_files(root: Path):
     assert list(root.rglob("*.part")) == []
 
 
-def test_default_training_video_segment_limit_supports_forty_minute_sessions(settings):
-    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 600
+def test_default_training_video_limits_support_thirty_minute_sessions(settings):
+    assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 1_800
+    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 360
+    assert settings.TRAINING_VIDEO_MAX_SIZE_BYTES == 536_870_912
+
+
+@pytest.mark.parametrize("source_key", sorted(OFFICIAL_MOTION_ACTION_SOURCE_KEYS))
+@pytest.mark.django_db
+def test_every_official_motion_action_can_create_video_session(
+    source_key, project_patient, active_prescription
+):
+    action = ActionLibraryItem.objects.get(source_key=source_key)
+    prescription_action = active_prescription.add_action_snapshot(
+        action, duration_minutes=10
+    )
+
+    video, created = create_training_video_session(
+        project_patient=project_patient,
+        client_session_id=uuid.uuid4(),
+        prescription_action_id=prescription_action.id,
+        training_date=timezone.localdate(),
+        expected_duration_seconds=600,
+        training_started_at=timezone.now(),
+    )
+
+    assert created is True
+    assert video.prescription_action_id == prescription_action.id
+
+
+@pytest.mark.django_db
+def test_create_session_rejects_duration_above_thirty_minutes(
+    project_patient, doctor, active_prescription
+):
+    action = _shoulder_press_action(active_prescription)
+
+    response = _auth_client(project_patient, doctor).post(
+        "/api/patient-app/training-video-sessions/",
+        _session_payload(action, expected_duration_seconds=1_801),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert "时长" in str(response.data)
+    assert not TrainingVideo.objects.exists()
 
 
 @pytest.mark.django_db
@@ -355,7 +400,7 @@ def test_existing_session_rejects_immutable_payload_conflict(
 
 
 @pytest.mark.django_db
-def test_create_session_rejects_non_shoulder_action(
+def test_create_session_rejects_non_official_motion_action(
     project_patient, doctor, active_prescription, prescription_action
 ):
     client = _auth_client(project_patient, doctor)
@@ -367,7 +412,7 @@ def test_create_session_rejects_non_shoulder_action(
     )
 
     assert response.status_code == 400, response.data
-    assert "肩部推举" in str(response.data)
+    assert "不支持录像" in str(response.data)
     assert not TrainingVideo.objects.exists()
 
 
@@ -629,31 +674,40 @@ def test_upload_segment_size_limit_leaves_no_partial_file(
 
 
 @pytest.mark.django_db
-def test_upload_segment_allows_total_size_above_legacy_limit(
+def test_upload_segment_enforces_total_size_limit(
     project_patient, doctor, active_prescription, settings, tmp_path
 ):
     settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = 10
-    if hasattr(settings, "TRAINING_VIDEO_MAX_SIZE_BYTES"):
-        del settings.TRAINING_VIDEO_MAX_SIZE_BYTES
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
     session = _create_session(client, action)
-    first = client.post(
-        _segment_url(session.data["video_id"], 0),
-        _segment_payload(b"123456", duration_ms=1000),
+    video = TrainingVideo.objects.get(pk=session.data["video_id"])
+    TrainingVideoSegment.objects.create(
+        training_video=video,
+        index=10,
+        duration_ms=1_000,
+        size_bytes=536_870_911,
+        sha256="existing",
+        relative_path="existing.mp4",
+        status=TrainingVideoSegment.Status.UPLOADED,
+        uploaded_at=timezone.now(),
     )
 
-    response = client.post(
-        _segment_url(session.data["video_id"], 1),
-        _segment_payload(b"abcdef", duration_ms=1000),
+    exact = client.post(
+        _segment_url(video.id, 0),
+        _segment_payload(b"x", duration_ms=1_000),
+    )
+    over = client.post(
+        _segment_url(video.id, 1),
+        _segment_payload(b"y", duration_ms=1_000),
     )
 
-    assert first.status_code == 201, first.data
-    assert response.status_code == 201, response.data
+    assert exact.status_code == 201, exact.data
+    assert over.status_code == 400, over.data
+    assert "大小" in str(over.data)
     assert TrainingVideoSegment.objects.count() == 2
-    session_root = _staged_segment_path(tmp_path, session.data["video_id"], 0).parent
-    assert (session_root / "000000.mp4").read_bytes() == b"123456"
-    assert (session_root / "000001.mp4").read_bytes() == b"abcdef"
+    assert _staged_segment_path(tmp_path, video.id, 0).read_bytes() == b"x"
+    assert not _staged_segment_path(tmp_path, video.id, 1).exists()
     _assert_no_partial_files(tmp_path)
 
 
@@ -688,7 +742,7 @@ def test_upload_segment_index_boundary_leaves_no_rejected_file(
 
 
 @pytest.mark.django_db
-def test_upload_segment_rejects_index_600_without_file_residue(
+def test_upload_segment_rejects_index_360_without_file_residue(
     project_patient,
     doctor,
     active_prescription,
@@ -699,12 +753,12 @@ def test_upload_segment_rejects_index_600_without_file_residue(
     session = _create_session(client, action)
 
     response = client.post(
-        _segment_url(session.data["video_id"], 600),
+        _segment_url(session.data["video_id"], 360),
         _segment_payload(b"rejected-index", duration_ms=5_000),
     )
 
     assert response.status_code == 400, response.data
-    assert not _staged_segment_path(tmp_path, session.data["video_id"], 600).exists()
+    assert not _staged_segment_path(tmp_path, session.data["video_id"], 360).exists()
     _assert_no_partial_files(tmp_path)
 
 
@@ -1037,13 +1091,19 @@ def test_finalize_missing_end_time_is_idempotent_and_cannot_be_backfilled(
 
 
 @pytest.mark.django_db
-def test_finalize_allows_total_size_above_legacy_limit(
+@pytest.mark.parametrize(
+    ("total_size_bytes", "expected_status"),
+    [(536_870_912, 202), (536_870_913, 400)],
+)
+def test_finalize_enforces_total_size_limit(
     project_patient,
     doctor,
     active_prescription,
     tmp_path,
     monkeypatch,
     django_capture_on_commit_callbacks,
+    total_size_bytes,
+    expected_status,
 ):
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
@@ -1057,7 +1117,7 @@ def test_finalize_allows_total_size_above_legacy_limit(
     )
     _create_uploaded_segments(video, tmp_path, [30000, 30000])
     TrainingVideoSegment.objects.filter(training_video=video, index=0).update(
-        size_bytes=200 * 1024 * 1024
+        size_bytes=total_size_bytes - 1
     )
     TrainingVideoSegment.objects.filter(training_video=video, index=1).update(
         size_bytes=1
@@ -1072,9 +1132,11 @@ def test_finalize_allows_total_size_above_legacy_limit(
             format="json",
         )
 
-    assert response.status_code == 202, response.data
-    assert delay.call_count == 1
-    assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
+    assert response.status_code == expected_status, response.data
+    assert delay.call_count == (1 if expected_status == 202 else 0)
+    assert VideoAssemblyJob.objects.filter(training_video=video).count() == (
+        1 if expected_status == 202 else 0
+    )
 
 
 @pytest.mark.django_db
@@ -1127,7 +1189,7 @@ def test_finalize_rejects_missing_index_and_duration_mismatch(
 
 
 @pytest.mark.django_db
-def test_finalize_accepts_480_five_second_segments(
+def test_finalize_accepts_360_five_second_segments(
     project_patient,
     doctor,
     active_prescription,
@@ -1136,18 +1198,18 @@ def test_finalize_accepts_480_five_second_segments(
     monkeypatch,
     django_capture_on_commit_callbacks,
 ):
-    settings.TRAINING_VIDEO_MAX_SEGMENTS = 600
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 360
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
     session = _create_session(client, action)
     video = TrainingVideo.objects.get(pk=session.data["video_id"])
-    _bulk_create_uploaded_segments(video, tmp_path, 480, 5_000)
+    _bulk_create_uploaded_segments(video, tmp_path, 360, 5_000)
     monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", Mock())
 
     with django_capture_on_commit_callbacks(execute=True):
         response = client.post(
             _finalize_url(video),
-            _finalize_payload(segment_count=480, actual_duration_seconds=2_400),
+            _finalize_payload(segment_count=360, actual_duration_seconds=1_800),
             format="json",
         )
 
@@ -1156,42 +1218,13 @@ def test_finalize_accepts_480_five_second_segments(
 
 
 @pytest.mark.django_db
-def test_finalize_accepts_exactly_600_segments(
-    project_patient,
-    doctor,
-    active_prescription,
-    settings,
-    tmp_path,
-    monkeypatch,
-    django_capture_on_commit_callbacks,
-):
-    settings.TRAINING_VIDEO_MAX_SEGMENTS = 600
-    action = _shoulder_press_action(active_prescription)
-    client = _auth_client(project_patient, doctor)
-    session = _create_session(client, action)
-    video = TrainingVideo.objects.get(pk=session.data["video_id"])
-    _bulk_create_uploaded_segments(video, tmp_path, 600, 4_000)
-    monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", Mock())
-
-    with django_capture_on_commit_callbacks(execute=True):
-        response = client.post(
-            _finalize_url(video),
-            _finalize_payload(segment_count=600, actual_duration_seconds=2_400),
-            format="json",
-        )
-
-    assert response.status_code == 202, response.data
-    assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
-
-
-@pytest.mark.django_db
-def test_finalize_rejects_601_segments_without_creating_job(
+def test_finalize_rejects_361_segments_without_creating_job(
     project_patient,
     doctor,
     active_prescription,
     settings,
 ):
-    settings.TRAINING_VIDEO_MAX_SEGMENTS = 600
+    settings.TRAINING_VIDEO_MAX_SEGMENTS = 360
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
     session = _create_session(client, action)
@@ -1199,7 +1232,7 @@ def test_finalize_rejects_601_segments_without_creating_job(
 
     response = client.post(
         _finalize_url(video),
-        _finalize_payload(segment_count=601, actual_duration_seconds=2_400),
+        _finalize_payload(segment_count=361, actual_duration_seconds=1_800),
         format="json",
     )
 
