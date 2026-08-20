@@ -1,3 +1,6 @@
+import re
+from io import StringIO
+
 import pytest
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -76,6 +79,42 @@ def test_training_video_limits_support_raw_five_second_thirty_minute_sessions():
     assert settings.TRAINING_VIDEO_MAX_SIZE_BYTES == 536_870_912
     assert settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS == 900
     assert settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS == 7200
+
+
+def test_training_video_limit_templates_match_runtime_contract():
+    expected = {
+        "TRAINING_VIDEO_MAX_SIZE_BYTES": "536870912",
+        "TRAINING_VIDEO_MAX_DURATION_SECONDS": "1800",
+        "TRAINING_VIDEO_MAX_SEGMENTS": "360",
+    }
+    root = settings.ROOT_DIR
+
+    for example_path in (
+        root / ".env.example",
+        root / "deploy" / "env.production.example",
+    ):
+        values = dotenv_values(example_path)
+        assert {key: values.get(key) for key in expected} == expected
+
+    development = (root / "docs" / "development.md").read_text()
+    video_environment = (
+        development.split("Segmented training video environment variables:", 1)[1]
+        .split("```bash", 1)[1]
+        .split("```", 1)[0]
+    )
+    documented_values = dotenv_values(stream=StringIO(video_environment))
+    assert {key: documented_values.get(key) for key in expected} == expected
+
+    compose = (root / "deploy" / "docker-compose.prod.yml").read_text()
+    compose_defaults = dict(
+        re.findall(
+            r"^  (TRAINING_VIDEO_MAX_(?:SIZE_BYTES|DURATION_SECONDS|SEGMENTS)): "
+            r"\$\{\1:-(\d+)\}$",
+            compose,
+            flags=re.MULTILINE,
+        )
+    )
+    assert compose_defaults == expected
 
 
 def test_motion_action_video_delivery_settings_are_safe_and_rate_limited():
