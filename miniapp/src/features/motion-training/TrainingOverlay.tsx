@@ -1,5 +1,5 @@
 import { Text, Video, View } from '@tarojs/components'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   formatMotionTrainingTimer,
@@ -23,12 +23,16 @@ export type MotionTrainingOverlayProps = {
   expectedDurationSeconds: number
   started: boolean
   topInset?: number
+  onVideoError?: () => Promise<void> | void
 }
 
 export function MotionTrainingOverlay(props: MotionTrainingOverlayProps) {
   const [visibility, setVisibility] = useState<MotionTrainingPreviewVisibility>('visible')
   const [videoError, setVideoError] = useState(false)
+  const [refreshingVideo, setRefreshingVideo] = useState(false)
   const touchStartRef = useRef<TouchPoint | null>(null)
+  const refreshAttemptedRef = useRef(false)
+  const previousVideoUrlRef = useRef(props.videoUrl)
   const remainingSeconds = remainingMotionTrainingSeconds(
     props.elapsedMs,
     props.expectedDurationSeconds
@@ -60,6 +64,31 @@ export function MotionTrainingOverlay(props: MotionTrainingOverlayProps) {
     : ''
   const topInset = `${props.topInset ?? 24}px`
 
+  useEffect(() => {
+    if (
+      props.videoUrl &&
+      props.videoUrl !== previousVideoUrlRef.current
+    ) {
+      setVideoError(false)
+      setRefreshingVideo(false)
+    }
+    previousVideoUrlRef.current = props.videoUrl
+  }, [props.videoUrl])
+
+  const handleVideoError = () => {
+    setVideoError(true)
+    if (refreshAttemptedRef.current || !props.onVideoError) {
+      setRefreshingVideo(false)
+      return
+    }
+    refreshAttemptedRef.current = true
+    setRefreshingVideo(true)
+    void Promise.resolve()
+      .then(() => props.onVideoError?.())
+      .catch(() => undefined)
+      .finally(() => setRefreshingVideo(false))
+  }
+
   return (
     <View className='shoulder-training-overlay'>
       {props.started ? (
@@ -79,7 +108,7 @@ export function MotionTrainingOverlay(props: MotionTrainingOverlayProps) {
           enableProgressGesture={false}
           objectFit='contain'
           style={{ top: topInset }}
-          onError={() => setVideoError(true)}
+          onError={handleVideoError}
           onTouchStart={visibility === 'visible' ? startSwipe : undefined}
           onTouchEnd={visibility === 'visible' ? endSwipe : undefined}
         />
@@ -107,7 +136,9 @@ export function MotionTrainingOverlay(props: MotionTrainingOverlayProps) {
           onTouchStart={visibility === 'visible' ? startSwipe : undefined}
           onTouchEnd={visibility === 'visible' ? endSwipe : undefined}
         >
-          <Text>示范视频暂时无法播放</Text>
+          <Text>{refreshingVideo
+            ? '正在重新获取示范视频…'
+            : '示范视频暂时无法播放，录像不受影响'}</Text>
         </View>
       ) : null}
     </View>

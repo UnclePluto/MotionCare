@@ -28,17 +28,31 @@ export default function MotionTrainingPreviewPage() {
   const [retryKey, setRetryKey] = useState(0)
   const refreshedAfterVideoErrorRef = useRef(false)
   const mountedRef = useRef(true)
+  const actionIdRef = useRef(actionId)
+  actionIdRef.current = actionId
 
-  const loadAction = useCallback(async (): Promise<MotionTrainingAction | null> => {
-    const prescription = await fetchCurrentPrescriptionData()
-    if (!mountedRef.current) return null
+  const loadAction = useCallback(async (
+    forceMotionVideoRefresh = false
+  ): Promise<MotionTrainingAction | null> => {
+    const requestedActionId = actionId
+    const prescription = await fetchCurrentPrescriptionData({ forceMotionVideoRefresh })
+    if (!mountedRef.current || actionIdRef.current !== requestedActionId) return null
     const currentAction = resolveMotionTrainingAction(prescription, actionId)
     setAction(currentAction)
     return currentAction
   }, [actionId])
 
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
+
   useEffect(() => {
     let cancelled = false
+    refreshedAfterVideoErrorRef.current = false
+    setVideoError(false)
+    setRefreshingVideo(false)
+    setError('')
+    setLoaded(false)
 
     async function bootstrap() {
       if (!demoMode) {
@@ -67,11 +81,11 @@ export default function MotionTrainingPreviewPage() {
     void bootstrap()
     return () => {
       cancelled = true
-      mountedRef.current = false
     }
   }, [actionId, demoMode, loadAction])
 
   async function handleVideoError() {
+    const requestedActionId = actionId
     if (refreshedAfterVideoErrorRef.current) {
       setVideoError(true)
       return
@@ -80,8 +94,8 @@ export default function MotionTrainingPreviewPage() {
     refreshedAfterVideoErrorRef.current = true
     setRefreshingVideo(true)
     try {
-      const refreshedAction = await loadAction()
-      if (!mountedRef.current) return
+      const refreshedAction = await loadAction(true)
+      if (!mountedRef.current || actionIdRef.current !== requestedActionId) return
       if (!refreshedAction) {
         setAction(null)
         setError('动作已失效或运动计划已更新，请返回当前运动计划重新进入')
@@ -90,9 +104,11 @@ export default function MotionTrainingPreviewPage() {
       setVideoError(false)
       setRetryKey((value) => value + 1)
     } catch {
-      if (mountedRef.current) setVideoError(true)
+      if (mountedRef.current && actionIdRef.current === requestedActionId) setVideoError(true)
     } finally {
-      if (mountedRef.current) setRefreshingVideo(false)
+      if (mountedRef.current && actionIdRef.current === requestedActionId) {
+        setRefreshingVideo(false)
+      }
     }
   }
 

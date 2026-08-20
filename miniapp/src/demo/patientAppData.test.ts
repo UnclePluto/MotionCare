@@ -67,4 +67,24 @@ describe('患者端数据源', () => {
     expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/current-prescription/')
     expect(publicRequestMock).not.toHaveBeenCalled()
   })
+
+  it('公开清单失败时保留五个可进入摄像页的演示动作并标记视频不可用', async () => {
+    const session = await import('./session')
+    const dataSource = await import('./patientAppData')
+    session.startDemoSession()
+    publicRequestMock.mockRejectedValueOnce(new Error('manifest unavailable'))
+
+    const prescription = await dataSource.fetchCurrentPrescriptionData({
+      forceMotionVideoRefresh: true
+    })
+    const motionActions = prescription?.actions.filter((action) => (
+      action.internal_type === 'motion'
+    )) ?? []
+
+    expect(motionActions).toHaveLength(5)
+    expect(motionActions.every((action) => (
+      action.video_unavailable === true && action.video_url === ''
+    ))).toBe(true)
+    expect(requestMock).not.toHaveBeenCalled()
+  })
 })

@@ -17,7 +17,16 @@ type CachedManifest = {
 let cachedManifest: CachedManifest | null = null
 
 function isHttpsUrl(value: string): boolean {
-  return /^https:\/\/[^/\s?#]+(?:[/?#][^\s]*)?$/i.test(value)
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:' &&
+      Boolean(parsed.hostname) &&
+      !parsed.username &&
+      !parsed.password &&
+      !/\s/.test(value)
+  } catch {
+    return false
+  }
 }
 
 function parseManifest(response: unknown): Record<MotionSourceKey, string> {
@@ -57,9 +66,12 @@ function parseManifest(response: unknown): Record<MotionSourceKey, string> {
   return manifest
 }
 
-export function fetchDemoMotionVideoManifest(): Promise<Record<MotionSourceKey, string>> {
+export function fetchDemoMotionVideoManifest(
+  options: { forceRefresh?: boolean } = {}
+): Promise<Record<MotionSourceKey, string>> {
   const now = Date.now()
   if (
+    !options.forceRefresh &&
     cachedManifest &&
     now - cachedManifest.createdAt < DEMO_MOTION_VIDEO_MANIFEST_TTL_MS
   ) {

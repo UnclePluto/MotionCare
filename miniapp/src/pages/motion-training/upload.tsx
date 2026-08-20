@@ -9,6 +9,7 @@ import {
   loadOwnedPendingMotionTrainingSession,
   saveOwnedPendingMotionTrainingSession,
   motionTrainingUploadCounters,
+  MOTION_TRAINING_HARD_LIMIT_MS,
   type TrainingVideoStatus
 } from '../../features/motion-training/pageState'
 import {
@@ -350,6 +351,14 @@ export default function MotionTrainingUploadPage() {
     try {
       if (currentPending.segments.length === 0) {
         throw new Error('没有可上传的训练片段，请重新训练')
+      }
+      if (
+        !currentPending.videoId && (
+          currentPending.expectedDurationSeconds * 1000 > MOTION_TRAINING_HARD_LIMIT_MS ||
+          currentPending.actualDurationMs > MOTION_TRAINING_HARD_LIMIT_MS
+        )
+      ) {
+        throw new Error('历史长时录像没有可恢复的服务端会话，请清理后重新录制。')
       }
       let session = await preparePendingSegments(currentPending)
       if (!session) return

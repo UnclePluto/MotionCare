@@ -60,6 +60,37 @@ describe('演示运动视频清单', () => {
     expect(publicRequestMock).toHaveBeenCalledTimes(2)
   })
 
+  it('显式刷新会绕过仍有效的缓存', async () => {
+    publicRequestMock.mockResolvedValue(validResponse)
+    const { fetchDemoMotionVideoManifest } = await import('./motionVideoManifest')
+
+    const first = fetchDemoMotionVideoManifest()
+    await first
+    const refreshed = fetchDemoMotionVideoManifest({ forceRefresh: true })
+
+    expect(refreshed).not.toBe(first)
+    await expect(refreshed).resolves.toEqual(await first)
+    expect(publicRequestMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('旧请求延迟失败不会清除较新的强制刷新缓存', async () => {
+    let rejectOld!: (error: Error) => void
+    const old = new Promise((_, reject) => { rejectOld = reject })
+    publicRequestMock
+      .mockReturnValueOnce(old)
+      .mockResolvedValueOnce(validResponse)
+    const { fetchDemoMotionVideoManifest } = await import('./motionVideoManifest')
+
+    const first = fetchDemoMotionVideoManifest()
+    const refreshed = fetchDemoMotionVideoManifest({ forceRefresh: true })
+    await refreshed
+    rejectOld(new Error('旧请求失败'))
+    await expect(first).rejects.toThrow('旧请求失败')
+
+    expect(fetchDemoMotionVideoManifest()).toBe(refreshed)
+    expect(publicRequestMock).toHaveBeenCalledTimes(2)
+  })
+
   it('请求失败后立即清空缓存并允许重试', async () => {
     publicRequestMock
       .mockRejectedValueOnce(new Error('演示视频暂时不可用'))
@@ -90,6 +121,16 @@ describe('演示运动视频清单', () => {
     ['空地址', {
       videos: validResponse.videos.map((video, index) => (
         index === 0 ? { ...video, video_url: '   ' } : video
+      ))
+    }],
+    ['畸形 HTTPS 地址', {
+      videos: validResponse.videos.map((video, index) => (
+        index === 0 ? { ...video, video_url: 'https://[invalid-host/video.mp4' } : video
+      ))
+    }],
+    ['带凭据 HTTPS 地址', {
+      videos: validResponse.videos.map((video, index) => (
+        index === 0 ? { ...video, video_url: 'https://user:pass@signed.example.com/video.mp4' } : video
       ))
     }],
     ['错误响应形状', { videos: null }],

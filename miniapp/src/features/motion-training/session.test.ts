@@ -701,6 +701,22 @@ describe('shoulder press segmented session helpers', () => {
     expect(storage.getStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({ actionId: 42 })
   })
 
+  it('优先恢复新键会话而不是同时存在的旧肩部会话', () => {
+    const storage = memoryStorage()
+    const current = createPendingMotionTrainingSession({
+      actionId: 43,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-08-20',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1787193600000
+    })
+    const legacy = { ...current, actionId: 42 }
+    storage.setStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY, current)
+    storage.setStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, legacy)
+
+    expect(loadPendingMotionTrainingSession(storage)).toMatchObject({ actionId: 43 })
+  })
+
   it('clears both session keys after a completed or abandoned motion training session', () => {
     const storage = memoryStorage()
 

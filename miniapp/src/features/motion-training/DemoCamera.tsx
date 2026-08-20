@@ -113,6 +113,20 @@ export default function DemoCamera() {
     setRunning(true)
   })
 
+  async function refreshMotionVideo() {
+    const prescription = await fetchCurrentPrescriptionData({
+      forceMotionVideoRefresh: true
+    })
+    const refreshedAction = resolveMotionTrainingAction(prescription, actionId)
+    const refreshedUrl = refreshedAction && !refreshedAction.video_unavailable
+      ? refreshedAction.video_url?.trim()
+      : ''
+    if (!refreshedAction || !refreshedUrl) {
+      throw new Error('示范视频暂时无法播放')
+    }
+    setAction(refreshedAction)
+  }
+
   return (
     <View className='training-camera-page'>
       <Camera
@@ -141,6 +155,7 @@ export default function DemoCamera() {
         elapsedMs={elapsedMs}
         expectedDurationSeconds={DEMO_DURATION_SECONDS}
         started={started}
+        onVideoError={refreshMotionVideo}
       />
 
       {loadError || cameraError ? (

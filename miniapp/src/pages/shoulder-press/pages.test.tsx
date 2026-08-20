@@ -29,6 +29,7 @@ type ReactElement = {
   props: Record<string, unknown> & {
     children?: unknown
     onError?: () => unknown
+    onVideoError?: () => Promise<void> | void
     onClick?: () => unknown
     onTouchStart?: (event: { touches: Array<{ clientX: number; clientY: number }> }) => unknown
     onTouchEnd?: (event: { changedTouches: Array<{ clientX: number; clientY: number }> }) => unknown
@@ -982,6 +983,25 @@ describe('shoulder press pages', () => {
     expect(requestMock).toHaveBeenCalledTimes(2)
   })
 
+  it('reloads preview when the same mounted component receives another action id', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockResolvedValueOnce(prescriptionForMotionAction(MOTION_ACTION_CASES[2]))
+    const preview = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    preview.rerender()
+    expect(findFirstByType(preview.element, 'Video').props.src)
+      .toBe(PRESCRIPTION.actions[0].video_url)
+
+    taroHarness.routerParams.actionId = String(MOTION_ACTION_CASES[2].id)
+    preview.rerender()
+    await flushPromises()
+    preview.rerender()
+
+    expect(findFirstByType(preview.element, 'Video').props.src)
+      .toBe(MOTION_ACTION_CASES[2].videoUrl)
+  })
+
   it('rejects a preview action that is no longer in the current prescription', async () => {
     requestMock.mockResolvedValueOnce({
       ...PRESCRIPTION,
@@ -1194,6 +1214,38 @@ describe('shoulder press pages', () => {
     expect(textContent(overlay.element)).toContain('剩余02:36')
   })
 
+  it('refreshes a failed overlay URL once and clears the failure when the URL changes', async () => {
+    const refresh = vi.fn(async () => undefined)
+    let overlayProps = {
+      videoUrl: 'https://cdn.example.com/expired.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180,
+      started: true,
+      onVideoError: refresh
+    }
+    const OverlayHost = () => ShoulderPressTrainingOverlay(overlayProps)
+    const overlay = renderPage(OverlayHost)
+
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    await flushPromises()
+    overlay.rerender()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(textContent(overlay.element)).toContain('示范视频暂时无法播放')
+
+    overlayProps = {
+      ...overlayProps,
+      videoUrl: 'https://cdn.example.com/refreshed.mp4'
+    }
+    overlay.rerender()
+    overlay.rerender()
+    expect(findFirstByType(overlay.element, 'Video').props.src)
+      .toBe('https://cdn.example.com/refreshed.mp4')
+
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    await flushPromises()
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('lets a failed preview slide away and restore without changing the timer', () => {
     const overlay = renderPage(ShoulderPressTrainingOverlay, {
       videoUrl: 'https://cdn.example.com/demo.mp4',
@@ -1369,6 +1421,113 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
   })
 
+  it('creates and persists the server session before constructing or starting the recorder', async () => {
+    const created = deferred<{ video_id: number; status: 'recording'; uploaded_segments: number[] }>()
+    apiMocks.createVideoSession.mockReturnValueOnce(created.promise)
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+
+    created.resolve({ video_id: 77, status: 'recording', uploaded_segments: [] })
+    await flushPromises(30)
+
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 77,
+      trainingStartedAt: expect.any(String),
+      segments: []
+    })
+    expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
+    expect(apiMocks.createVideoSession.mock.invocationCallOrder[0])
+      .toBeLessThan(taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1))
+    expect(taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(recorderHarness.instances[0].start.mock.invocationCallOrder[0])
+  })
+
+  it('does not construct a recorder, start timers, or persist fragments when session creation fails', async () => {
+    apiMocks.createVideoSession.mockRejectedValueOnce(new Error('服务端会话暂时不可用'))
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+    page.rerender()
+
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('服务端会话暂时不可用')
+    expect(findTrainingOverlay(page.element).props.started).toBe(false)
+  })
+
+  it('refreshes the real camera overlay without touching recorder or upload state', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockResolvedValueOnce({
+        ...PRESCRIPTION,
+        actions: [{
+          ...PRESCRIPTION.actions[0],
+          video_url: 'https://cdn.example.com/camera-refreshed.mp4'
+        }]
+      })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    await findTrainingOverlay(page.element).props.onVideoError?.()
+    await flushPromises(20)
+    page.rerender()
+
+    expect(findTrainingOverlay(page.element).props.videoUrl)
+      .toBe('https://cdn.example.com/camera-refreshed.mp4')
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+  })
+
+  it('keeps recording and segment recovery active when the real overlay refresh fails', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockRejectedValueOnce(new Error('video refresh failed'))
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+    page.rerender()
+    const recorder = recorderHarness.instances[0]
+
+    const refresh = findTrainingOverlay(page.element).props.onVideoError
+    if (!refresh) throw new Error('真实视频刷新回调缺失')
+    await expect(refresh()).rejects.toThrow('video refresh failed')
+
+    expect(recorder.start).toHaveBeenCalledTimes(1)
+    expect(recorder.pause).not.toHaveBeenCalled()
+    expect(recorder.finish).not.toHaveBeenCalled()
+    expect(findTrainingOverlay(page.element).props.started).toBe(true)
+    await recorder.options.onSegment('wxfile://temp/after-refresh-failure.mp4', 5_000)
+    await flushPromises(20)
+    expect(apiMocks.uploadVideoSegment).toHaveBeenCalledTimes(1)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 9,
+      segments: [expect.objectContaining({ uploadState: 'uploaded' })]
+    })
+  })
+
   it('cancels an unresolved preflight after unmount without creating or starting anything', async () => {
     const before = deferred<Array<{ filePath: string; size: number }>>()
     taroHarness.getSavedFileListMock
@@ -1411,7 +1570,7 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances).toHaveLength(0)
   })
 
-  it('does not persist a start time when the page hides while the recorder is starting', async () => {
+  it('keeps the pre-created server session but records no fragment when the page hides during recorder start', async () => {
     const starting = deferred<void>()
     recorderHarness.setNextStartPromise(starting.promise)
     const page = renderPage(ShoulderPressCameraPage)
@@ -1438,7 +1597,11 @@ describe('shoulder press pages', () => {
     expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
       filePath: 'wxfile://temp/background-start.mp4'
     }))
-    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 9,
+      trainingStartedAt: expect.any(String),
+      segments: []
+    })
   })
 
   it('pauses once at 65MB and only becomes manually resumable below 10MB', async () => {
@@ -1571,8 +1734,13 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).toContain('视频上传已恢复，可以继续训练。')
   })
 
-  it('deletes a local segment immediately when server session creation reports it uploaded', async () => {
+  it('deletes a local segment immediately when the pre-created server session status reports it uploaded', async () => {
     apiMocks.createVideoSession.mockResolvedValueOnce({
+      video_id: 9,
+      status: 'recording',
+      uploaded_segments: []
+    })
+    apiMocks.getVideoSessionStatus.mockResolvedValueOnce({
       video_id: 9,
       status: 'recording',
       uploaded_segments: [0]
@@ -2100,7 +2268,7 @@ describe('shoulder press pages', () => {
     }
   })
 
-  it('does not persist start when recorder start fails', async () => {
+  it('keeps the pre-created server session for retry when recorder start fails', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-06T01:32:14Z'))
@@ -2117,18 +2285,20 @@ describe('shoulder press pages', () => {
       start.reject(new Error('camera failed'))
       await flushPromises()
 
-      expect(
-        (taroHarness.storage.get(
-          PENDING_SHOULDER_PRESS_SESSION_KEY
-        ) as PendingShoulderPressSession | undefined)?.trainingStartedAt
-      ).toBeUndefined()
+      expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+        videoId: 9,
+        trainingStartedAt: '2026-08-06T09:32:14+08:00',
+        segments: []
+      })
+      page.rerender()
+      expect(findTrainingOverlay(page.element).props.started).toBe(false)
     } finally {
       page.unmount()
       timezoneOffset.mockRestore()
     }
   })
 
-  it('keeps the first start and recording controls when persistence and compensating stop both fail', async () => {
+  it('never constructs the recorder when pre-created session persistence fails', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     const firstStartMs = new Date('2026-08-06T01:32:14Z').valueOf()
@@ -2143,32 +2313,21 @@ describe('shoulder press pages', () => {
       taroHarness.taroMock.setStorageSync.mockImplementationOnce(() => {
         throw new Error('本地写入失败')
       })
-      recorderHarness.setNextFinishError(new Error('录像停止失败，请稍后重试'))
       findButtonByText(page.element, '开始训练').props.onClick?.()
       await flushPromises()
       page.rerender()
-      const recorder = recorderHarness.instances[0]
 
-      expect(recorder.finish).toHaveBeenCalledTimes(1)
-      expect(findTrainingOverlay(page.element).props.started).toBe(true)
-      expect(findButtonByText(page.element, '结束训练')).toBeTruthy()
-
-      vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
-      await recorder.options.onSegment('wxfile://temp/retained-start.mp4', 15_000)
-      await flushPromises()
-
-      expect(
-        (taroHarness.storage.get(
-          PENDING_SHOULDER_PRESS_SESSION_KEY
-        ) as PendingShoulderPressSession | undefined)?.trainingStartedAt
-      ).toBe('2026-08-06T09:32:14+08:00')
+      expect(recorderHarness.instances).toHaveLength(0)
+      expect(findTrainingOverlay(page.element).props.started).toBe(false)
+      expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+      expect(textContent(page.element)).toContain('本地写入失败')
     } finally {
       page.unmount()
       timezoneOffset.mockRestore()
     }
   })
 
-  it('returns to a retryable non-recording state when compensating stop succeeds', async () => {
+  it('can retry pre-creation after local session persistence fails', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-06T01:32:14Z'))
@@ -2186,15 +2345,15 @@ describe('shoulder press pages', () => {
       await flushPromises()
       page.rerender()
 
-      const recorder = recorderHarness.instances[0]
-      expect(recorder.finish).toHaveBeenCalledTimes(1)
-      expect(findButtonByText(page.element, '开始训练')).toBeTruthy()
+      expect(recorderHarness.instances).toHaveLength(0)
+      expect(findButtonByText(page.element, '重试开始')).toBeTruthy()
 
       vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
-      findButtonByText(page.element, '开始训练').props.onClick?.()
+      findButtonByText(page.element, '重试开始').props.onClick?.()
       await flushPromises()
 
-      expect(recorder.start).toHaveBeenCalledTimes(2)
+      expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
+      expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
       expect(
         (taroHarness.storage.get(
           PENDING_SHOULDER_PRESS_SESSION_KEY
@@ -2500,7 +2659,11 @@ describe('shoulder press pages', () => {
 
     expect(recorderHarness.instances[0].pause).toHaveBeenCalledTimes(1)
     expect(textContent(page.element)).toContain('开始训练')
-    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 9,
+      trainingStartedAt: expect.any(String),
+      segments: []
+    })
 
     await taroHarness.showCallbacks[0]()
     findButtonByText(page.element, '开始训练').props.onClick?.()
@@ -2622,7 +2785,10 @@ describe('shoulder press pages', () => {
   ] as const)(
     'promotes and uploads a historical pending segment from the %s',
     async (_caseName, key, durationMs, compressionState) => {
-      const stored = historicalPendingUpload(durationMs, compressionState)
+      const stored = {
+        ...historicalPendingUpload(durationMs, compressionState),
+        videoId: 9
+      }
       taroHarness.storage.set(key, stored)
 
       renderPage(ShoulderPressUploadPage)
@@ -2644,6 +2810,31 @@ describe('shoulder press pages', () => {
       })
     }
   )
+
+  it('requires cleanup and re-recording for a local-only historical session above 30 minutes', async () => {
+    const stored = historicalPendingUpload(1_800_001, 'compression_failed')
+    taroHarness.storage.set(PENDING_SHOULDER_PRESS_SESSION_KEY, stored)
+    taroHarness.storage.set(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, stored)
+    const page = renderPage(ShoulderPressUploadPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises(20)
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('历史长时录像没有可恢复的服务端会话')
+    expect(taroHarness.taroMock.getFileInfo).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+
+    clickButtonByText(page.element, '重新训练')
+    await flushPromises()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.has(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://store/historical-1800001.mp4'
+    }))
+  })
 
   it.each([
     ['new key', PENDING_SHOULDER_PRESS_SESSION_KEY],
@@ -2748,7 +2939,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(newerSession)
-    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
     expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
   })
 
@@ -2774,7 +2965,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBeUndefined()
-    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
     expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
     expect(taroHarness.unlinkMock).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: 'wxfile://temp/old-cleared.mp4' })
@@ -3614,6 +3805,28 @@ describe('审核演示模式', () => {
     expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
     expect(session.isDemoSession()).toBe(true)
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(manifest)
+  })
+
+  it('示范视频刷新失败不触碰摄像上下文、录像、上传或本地会话', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises(20)
+    page.rerender()
+    const requestsBeforeRefresh = publicRequestMock.mock.calls.length
+    publicRequestMock.mockRejectedValueOnce(new Error('manifest unavailable'))
+
+    const refresh = findTrainingOverlay(page.element).props.onVideoError
+    if (!refresh) throw new Error('示范视频刷新回调缺失')
+    await expect(refresh()).rejects.toThrow('示范视频暂时无法播放')
+    await flushPromises(20)
+
+    expect(publicRequestMock.mock.calls.length).toBe(requestsBeforeRefresh + 1)
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
   })
 
   it('演示首页隔离真实缓存与上传副作用并从首个游戏开始训练', async () => {

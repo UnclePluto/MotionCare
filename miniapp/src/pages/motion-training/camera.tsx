@@ -728,6 +728,37 @@ export function MotionTrainingRecordingCameraPage() {
     return recorderRef.current
   }
 
+  async function createAndPersistServerSession(
+    localSession: PendingMotionTrainingSession
+  ): Promise<PendingMotionTrainingSession> {
+    if (localSession.videoId && localSession.trainingStartedAt) {
+      const stored = loadPendingMotionTrainingSession(Taro)
+      if (stored?.clientSessionId !== localSession.clientSessionId) {
+        savePendingMotionTrainingSession(Taro, localSession)
+      }
+      syncSession(localSession)
+      return localSession
+    }
+    const startedSession = markMotionTrainingStarted(localSession, Date.now())
+    const created = await createVideoSession({
+      actionId: startedSession.actionId,
+      clientSessionId: startedSession.clientSessionId,
+      trainingDate: startedSession.trainingDate,
+      expectedDurationSeconds: startedSession.expectedDurationSeconds,
+      trainingStartedAt: requireMotionTrainingStartedAt(startedSession)
+    })
+    const serverSession = {
+      ...mergeServerUploaded(startedSession, created.uploaded_segments),
+      videoId: created.video_id
+    }
+    // Keep the remote id in memory even if local persistence fails, so a
+    // retry can persist the same server session instead of creating another.
+    sessionRef.current = serverSession
+    savePendingMotionTrainingSession(Taro, serverSession)
+    syncSession(serverSession)
+    return serverSession
+  }
+
   async function startRecordingForCurrentSession(foregroundGeneration: number) {
     if (!isForegroundAttemptActive(foregroundGeneration)) return
     const canStart = canStartMotionTrainingRecording({
@@ -744,6 +775,10 @@ export function MotionTrainingRecordingCameraPage() {
     setProcessing(true)
     setError('')
     try {
+      const preparedSession = sessionRef.current
+      if (!preparedSession?.videoId || !preparedSession.trainingStartedAt) {
+        throw new Error('服务端录像会话未准备好，请重试')
+      }
       const recorder = ensureRecorder()
       await recorder.start()
       if (!isForegroundAttemptActive(foregroundGeneration)) {
@@ -763,44 +798,7 @@ export function MotionTrainingRecordingCameraPage() {
         setPaused(false)
         return
       }
-      const currentSession = sessionRef.current
-      if (!currentSession) throw new Error('训练会话未准备好，请返回运动计划重新进入')
       const startedAtMs = Date.now()
-      const startedSession = markMotionTrainingStarted(currentSession, startedAtMs)
-      syncSession(startedSession)
-      try {
-        savePendingMotionTrainingSession(Taro, startedSession)
-      } catch (persistenceError) {
-        try {
-          await recorder.finish()
-          recordingRef.current = false
-          pausedRef.current = false
-          recordingBaseDurationMsRef.current = sessionRef.current?.actualDurationMs ?? 0
-          recordingStartedAtRef.current = 0
-          setRecording(false)
-          setPaused(false)
-        } catch (compensationError) {
-          if (recorder.hasFailedSegment()) {
-            tailSaveFailedRef.current = true
-            recordingRef.current = false
-            pausedRef.current = false
-            recordingStartedAtRef.current = 0
-            setTailSaveFailed(true)
-            setRecording(false)
-            setPaused(false)
-          } else {
-            recordingRef.current = true
-            pausedRef.current = false
-            recordingBaseDurationMsRef.current = startedSession.actualDurationMs
-            recordingStartedAtRef.current = startedAtMs
-            setTrainingScreenAwake(true)
-            setRecording(true)
-            setPaused(false)
-          }
-          throw compensationError
-        }
-        throw persistenceError
-      }
       recordingRef.current = true
       pausedRef.current = false
       bufferStateRef.current = 'recording'
@@ -835,6 +833,20 @@ export function MotionTrainingRecordingCameraPage() {
     setPreflightState('checking')
     setError('')
     try {
+      const preparedRetrySession = sessionRef.current
+      if (
+        preparedRetrySession?.videoId &&
+        preparedRetrySession.trainingStartedAt &&
+        preparedRetrySession.segments.length === 0 &&
+        !preparedRetrySession.finalized
+      ) {
+        await createAndPersistServerSession(preparedRetrySession)
+        if (!isForegroundAttemptActive(foregroundGeneration)) return
+        setPreflightState('idle')
+        setProcessing(false)
+        await startRecordingForCurrentSession(foregroundGeneration)
+        return
+      }
       const result = await cleanupAndCheckMotionTrainingStorage({
         hasPendingSession: () => Boolean(loadPendingMotionTrainingSession(Taro)),
         listSavedFiles: listSavedMotionTrainingFiles,
@@ -851,7 +863,7 @@ export function MotionTrainingRecordingCameraPage() {
         return
       }
 
-      const reusableSession = sessionRef.current?.trainingStartedAt
+      const reusableSession = sessionRef.current?.trainingStartedAt && sessionRef.current.videoId
         ? sessionRef.current
         : null
       const nextSession = reusableSession ?? createPendingMotionTrainingSession({
@@ -859,16 +871,15 @@ export function MotionTrainingRecordingCameraPage() {
         expectedDurationSeconds: expectedDurationSeconds(action),
         trainingDate: todayTrainingDate()
       })
-      sessionRef.current = nextSession
-      setSession(nextSession)
+      await createAndPersistServerSession(nextSession)
+      if (!isForegroundAttemptActive(foregroundGeneration)) return
       setPreflightState('idle')
       setProcessing(false)
-      if (!isForegroundAttemptActive(foregroundGeneration)) return
       await startRecordingForCurrentSession(foregroundGeneration)
-    } catch {
+    } catch (startError) {
       if (!mountedRef.current) return
       setPreflightState('failed')
-      setError('无法检查录像空间，请重试')
+      setError(startError instanceof Error ? startError.message : '无法建立录像会话，请重试')
     } finally {
       preflightInFlightRef.current = false
       if (mountedRef.current) {
@@ -1124,6 +1135,20 @@ export function MotionTrainingRecordingCameraPage() {
     }
   }, [actionId])
 
+  async function refreshMotionVideo() {
+    const prescription = await fetchCurrentPrescriptionData({
+      forceMotionVideoRefresh: true
+    })
+    const refreshedAction = resolveMotionTrainingAction(prescription, actionId)
+    const refreshedUrl = refreshedAction && !refreshedAction.video_unavailable
+      ? refreshedAction.video_url?.trim()
+      : ''
+    if (!refreshedAction || !refreshedUrl) {
+      throw new Error('示范视频暂时无法播放')
+    }
+    if (mountedRef.current) setAction(refreshedAction)
+  }
+
   useEffect(() => () => {
     mountedRef.current = false
     alertPlayerRef.current?.dispose()
@@ -1185,7 +1210,7 @@ export function MotionTrainingRecordingCameraPage() {
     : preflightState === 'blocked'
       ? '录像空间不足，至少需要 65 MB 可用空间。'
       : preflightState === 'failed'
-        ? '无法检查录像空间，请重试'
+        ? '无法开始录像，请重试'
         : ''
   const bufferMessage = bufferState === 'buffer_paused'
     ? MOTION_TRAINING_ALERT_TEXT.pause
@@ -1224,8 +1249,9 @@ export function MotionTrainingRecordingCameraPage() {
         expectedDurationSeconds={session?.expectedDurationSeconds ?? (
           action ? expectedDurationSeconds(action) : 1
         )}
-        started={Boolean(session?.trainingStartedAt)}
+        started={recording || paused || Boolean(session?.actualDurationMs)}
         topInset={trainingTopLayout.topInset}
+        onVideoError={refreshMotionVideo}
       />
 
       {preflightMessage ? (
@@ -1238,7 +1264,7 @@ export function MotionTrainingRecordingCameraPage() {
                 disabled={processing}
                 onClick={() => void prepareAndStartTraining()}
               >
-                重新清理
+                {preflightState === 'blocked' ? '重新清理' : '重试开始'}
               </Button>
               <Button
                 className='training-preflight-back'
