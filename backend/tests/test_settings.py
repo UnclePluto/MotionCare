@@ -78,6 +78,12 @@ def test_training_video_limits_support_raw_five_second_forty_minute_sessions():
     assert not hasattr(settings, "TRAINING_VIDEO_MAX_SIZE_BYTES")
 
 
+def test_motion_action_video_delivery_settings_are_safe_and_rate_limited():
+    assert settings.MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS == 7200
+    assert settings.MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN == "https://cdn.whestsun.com"
+    assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["demo_motion_videos"] == "60/min"
+
+
 def test_wearable_sync_uses_shanghai_timezone_and_https_provider():
     assert settings.TIME_ZONE == "Asia/Shanghai"
     assert settings.CELERY_TIMEZONE == "Asia/Shanghai"

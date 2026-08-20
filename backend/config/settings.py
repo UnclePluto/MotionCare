@@ -100,6 +100,12 @@ QINIU_SECRET_KEY = os.getenv("QINIU_SECRET_KEY", "")
 QINIU_BUCKET = os.getenv("QINIU_BUCKET", "motioncare-training")
 QINIU_DOWNLOAD_DOMAIN = os.getenv("QINIU_DOWNLOAD_DOMAIN", "")
 QINIU_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv("QINIU_DOWNLOAD_TOKEN_TTL_SECONDS", "600"))
+MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN = os.getenv(
+    "MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN", "https://cdn.whestsun.com"
+)
+MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS = int(
+    os.getenv("MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS", "7200")
+)
 TRAINING_VIDEO_MAX_DURATION_SECONDS = int(
     os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "2400")
 )
@@ -157,6 +163,9 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["apps.common.permissions.IsAuthenticatedAndPasswordChanged"],
+    "DEFAULT_THROTTLE_RATES": {
+        "demo_motion_videos": "60/min",
+    },
 }
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
