@@ -152,6 +152,41 @@ def test_current_prescription_keeps_business_data_when_video_signing_fails(
 
 
 @pytest.mark.django_db
+def test_current_prescription_keeps_other_actions_when_one_video_signing_raises(
+    project_patient, doctor, active_prescription, prescription_action, monkeypatch
+):
+    prescription_action.video_object_key_snapshot = "failing-video-key"
+    prescription_action.save(update_fields=["video_object_key_snapshot", "updated_at"])
+    successful_action = _game_prescription_action(active_prescription)
+    successful_action.video_object_key_snapshot = "working-video-key"
+    successful_action.save(update_fields=["video_object_key_snapshot", "updated_at"])
+    client = _auth_client(project_patient, doctor)
+
+    def resolve_video(object_key, legacy_url):
+        if object_key == "failing-video-key":
+            raise RuntimeError("签名服务不可用")
+        return MotionVideoResolution(
+            url="https://signed.example.com/working.mp4", unavailable=False
+        )
+
+    monkeypatch.setattr(
+        "apps.patient_app.views.resolve_motion_video_url", resolve_video
+    )
+
+    response = client.get("/api/patient-app/current-prescription/")
+
+    assert response.status_code == 200
+    actions = {action["id"]: action for action in response.json()["actions"]}
+    failed_action = actions[prescription_action.id]
+    assert failed_action["action_name"] == prescription_action.action_name_snapshot
+    assert failed_action["weekly_target_count"] == prescription_action.weekly_target_count
+    assert failed_action["video_url"] == ""
+    assert failed_action["video_unavailable"] is True
+    assert actions[successful_action.id]["video_url"] == "https://signed.example.com/working.mp4"
+    assert actions[successful_action.id]["video_unavailable"] is False
+
+
+@pytest.mark.django_db
 def test_demo_motion_manifest_has_no_patient_queries(
     client, django_assert_num_queries, monkeypatch
 ):
@@ -228,6 +263,52 @@ def test_demo_motion_manifest_hides_signing_failure_details(client, monkeypatch)
     assert "token" not in response.content.decode()
     assert "secret-key" not in response.content.decode()
     assert "motion-action-videos" not in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("cache_method", ["get", "set"])
+def test_demo_motion_manifest_hides_cache_failure_details(client, monkeypatch, cache_method):
+    cache.clear()
+    if cache_method == "set":
+        monkeypatch.setattr(
+            "apps.patient_app.views.build_demo_motion_video_manifest",
+            lambda: [
+                {
+                    "source_key": "motion-resistance-row",
+                    "video_url": "https://signed.example.com/row.mp4",
+                }
+            ],
+        )
+
+    def raise_cache_error(*args, **kwargs):
+        if args[0] != "patient-app:demo-motion-videos:v1":
+            return original_cache_method(*args, **kwargs)
+        raise RuntimeError("cache token=secret")
+
+    original_cache_method = getattr(cache, cache_method)
+    monkeypatch.setattr(f"apps.patient_app.views.cache.{cache_method}", raise_cache_error)
+
+    response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "演示视频暂时不可用，请稍后重试"}
+    assert "token" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_hides_throttle_cache_failure_details(client, monkeypatch):
+    cache.clear()
+
+    def raise_cache_error(*args, **kwargs):
+        raise RuntimeError("cache token=secret")
+
+    monkeypatch.setattr("apps.patient_app.views.cache.get", raise_cache_error)
+
+    response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "演示视频暂时不可用，请稍后重试"}
+    assert "token" not in response.content.decode()
 
 
 @pytest.mark.django_db

@@ -189,6 +189,41 @@ def test_doctor_action_serializers_return_signed_urls_and_configuration(
 
 
 @pytest.mark.django_db
+def test_doctor_action_serializers_degrade_when_video_signing_raises(
+    client, doctor, project_patient, monkeypatch
+):
+    client.force_login(doctor)
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    prescription = project_patient.prescriptions.create(version=17, opened_by=doctor)
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
+
+    def raise_signing_error(*args, **kwargs):
+        raise RuntimeError("签名服务不可用")
+
+    monkeypatch.setattr(
+        "apps.prescriptions.serializers.resolve_motion_video_url",
+        raise_signing_error,
+    )
+
+    action_response = client.get("/api/prescriptions/actions/")
+    prescription_response = client.get("/api/prescriptions/prescription-actions/")
+
+    assert action_response.status_code == 200
+    action_row = next(
+        row
+        for row in action_response.json()
+        if row["source_key"] == "motion-resistance-row"
+    )
+    assert action_row["video_url"] == ""
+    assert action_row["video_configured"] is True
+    assert prescription_response.status_code == 200
+    snapshot_row = next(
+        row for row in prescription_response.json() if row["id"] == snapshot.id
+    )
+    assert snapshot_row["video_url_snapshot"] == ""
+
+
+@pytest.mark.django_db
 def test_action_library_endpoint_returns_only_official_seeded_actions(client, doctor):
     client.force_login(doctor)
     ActionLibraryItem.objects.create(

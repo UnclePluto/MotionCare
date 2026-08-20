@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from .action_library import official_action_queryset
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
-from .motion_videos import resolve_motion_video_url
+from .motion_videos import MotionVideoResolution, resolve_motion_video_url
 
 
 def parse_weekly_target_count(value):
@@ -17,12 +17,19 @@ def parse_weekly_target_count(value):
     return count if count > 0 else 1
 
 
+def resolve_motion_video_url_safely(object_key, legacy_url):
+    try:
+        return resolve_motion_video_url(object_key, legacy_url)
+    except Exception:
+        return MotionVideoResolution(url="", unavailable=True)
+
+
 class ActionLibraryItemSerializer(serializers.ModelSerializer):
     video_url = serializers.SerializerMethodField()
     video_configured = serializers.SerializerMethodField()
 
     def get_video_url(self, action):
-        return resolve_motion_video_url(action.video_object_key, action.video_url).url
+        return resolve_motion_video_url_safely(action.video_object_key, action.video_url).url
 
     def get_video_configured(self, action):
         return bool(action.video_object_key or action.video_url)
@@ -52,7 +59,7 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
     video_url_snapshot = serializers.SerializerMethodField()
 
     def get_video_url_snapshot(self, action):
-        return resolve_motion_video_url(
+        return resolve_motion_video_url_safely(
             action.video_object_key_snapshot,
             action.video_url_snapshot,
         ).url

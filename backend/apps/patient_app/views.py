@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.db.models import Count, Prefetch
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import ValidationError as DrfValidationError
+from rest_framework.exceptions import APIException, ValidationError as DrfValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -14,6 +14,7 @@ from rest_framework.views import APIView
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
 from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.prescriptions.motion_videos import (
+    MotionVideoResolution,
     build_demo_motion_video_manifest,
     resolve_motion_video_url,
 )
@@ -47,6 +48,13 @@ def current_week_bounds(today=None):
     start = today - timezone.timedelta(days=today.weekday())
     end = start + timezone.timedelta(days=6)
     return start, end
+
+
+def resolve_motion_video_url_safely(object_key, legacy_url):
+    try:
+        return resolve_motion_video_url(object_key, legacy_url)
+    except Exception:
+        return MotionVideoResolution(url="", unavailable=True)
 
 
 def serialize_me(project_patient):
@@ -129,7 +137,7 @@ def serialize_prescription(project_patient):
 
     serialized_actions = []
     for action in actions:
-        resolution = resolve_motion_video_url(
+        resolution = resolve_motion_video_url_safely(
             action.video_object_key_snapshot,
             action.video_url_snapshot,
         )
@@ -195,17 +203,25 @@ class DemoMotionVideoManifestView(APIView):
     cache_key = "patient-app:demo-motion-videos:v1"
     cache_timeout_seconds = 60
 
+    def handle_exception(self, exc):
+        if isinstance(exc, APIException):
+            return super().handle_exception(exc)
+        return Response(
+            {"detail": "演示视频暂时不可用，请稍后重试"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
     def get(self, request):
-        response_data = cache.get(self.cache_key)
-        if response_data is None:
-            try:
+        try:
+            response_data = cache.get(self.cache_key)
+            if response_data is None:
                 response_data = {"videos": build_demo_motion_video_manifest()}
-            except Exception:
-                return Response(
-                    {"detail": "演示视频暂时不可用，请稍后重试"},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            cache.set(self.cache_key, response_data, self.cache_timeout_seconds)
+                cache.set(self.cache_key, response_data, self.cache_timeout_seconds)
+        except Exception:
+            return Response(
+                {"detail": "演示视频暂时不可用，请稍后重试"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return Response(response_data)
 
 
