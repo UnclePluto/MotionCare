@@ -1,7 +1,12 @@
 import importlib
 
 import pytest
+from django.apps import apps as django_apps
 
+from apps.prescriptions.action_library import (
+    MOTION_ACTION_VIDEO_OBJECT_KEYS,
+    OFFICIAL_MOTION_ACTION_SOURCE_KEYS,
+)
 from apps.prescriptions.models import ActionLibraryItem
 
 
@@ -20,6 +25,56 @@ def test_reverse_instruction_split_handles_leading_key_points_only():
     )
     assert migration.split_instruction_text_for_reverse("步骤一。") == ("步骤一。", "")
     assert migration.split_instruction_text_for_reverse("") == ("", "")
+
+
+def test_official_motion_video_catalog_is_complete():
+    assert OFFICIAL_MOTION_ACTION_SOURCE_KEYS == frozenset(
+        MOTION_ACTION_VIDEO_OBJECT_KEYS
+    )
+    assert set(MOTION_ACTION_VIDEO_OBJECT_KEYS.values()) == {
+        f"motion-action-videos/v1/{source_key}.mp4"
+        for source_key in OFFICIAL_MOTION_ACTION_SOURCE_KEYS
+    }
+
+
+@pytest.mark.django_db
+def test_prescription_snapshot_copies_motion_video_object_key(project_patient, doctor):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    action.video_object_key = MOTION_ACTION_VIDEO_OBJECT_KEYS[action.source_key]
+    action.save(update_fields=["video_object_key", "updated_at"])
+    prescription = project_patient.prescriptions.create(version=19, opened_by=doctor)
+
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
+
+    assert snapshot.video_object_key_snapshot == action.video_object_key
+
+
+@pytest.mark.django_db
+def test_data_migration_replaces_all_official_motion_urls(project_patient, doctor):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
+    action.video_url = "https://old.example.com/shoulder.mp4"
+    action.video_object_key = ""
+    action.save()
+    active = project_patient.prescriptions.create(version=20, opened_by=doctor)
+    archived = project_patient.prescriptions.create(version=21, opened_by=doctor)
+    active_action = active.add_action_snapshot(action, duration_minutes=10)
+    archived_action = archived.add_action_snapshot(action, duration_minutes=10)
+
+    migration = importlib.import_module(
+        "apps.prescriptions.migrations.0012_motion_action_video_object_keys"
+    )
+    migration.backfill_motion_action_video_keys(django_apps, None)
+
+    action.refresh_from_db()
+    active_action.refresh_from_db()
+    archived_action.refresh_from_db()
+    expected = MOTION_ACTION_VIDEO_OBJECT_KEYS[action.source_key]
+    assert action.video_object_key == expected
+    assert action.video_url == ""
+    assert active_action.video_object_key_snapshot == expected
+    assert archived_action.video_object_key_snapshot == expected
+    assert active_action.video_url_snapshot == ""
+    assert archived_action.video_url_snapshot == ""
 
 
 @pytest.mark.django_db

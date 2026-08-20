@@ -21,6 +21,7 @@ class ActionLibraryItem(UserStampedModel):
     suggested_duration_minutes = models.PositiveIntegerField("建议时长", null=True, blank=True)
     default_difficulty = models.CharField("默认难度", max_length=40, blank=True)
     video_url = models.URLField("视频URL", max_length=500, blank=True)
+    video_object_key = models.CharField("视频对象键", max_length=500, blank=True)
     has_ai_supervision = models.BooleanField("是否支持AI监督", default=False)
     is_active = models.BooleanField("是否启用", default=True)
 
@@ -77,6 +78,7 @@ class Prescription(UserStampedModel):
             action_type_snapshot=action.action_type,
             action_instruction_snapshot=action.instruction_text,
             video_url_snapshot=action.video_url,
+            video_object_key_snapshot=action.video_object_key,
             has_ai_supervision_snapshot=action.has_ai_supervision,
             weekly_frequency=weekly_frequency,
             duration_minutes=duration_minutes,
@@ -98,6 +100,7 @@ class PrescriptionAction(UserStampedModel):
     action_type_snapshot = models.CharField("动作类型快照", max_length=80)
     action_instruction_snapshot = models.TextField("动作说明文案快照", blank=True)
     video_url_snapshot = models.URLField("视频URL快照", max_length=500, blank=True)
+    video_object_key_snapshot = models.CharField("视频对象键快照", max_length=500, blank=True)
     has_ai_supervision_snapshot = models.BooleanField("是否支持AI监督快照", default=False)
     weekly_frequency = models.CharField("每周频次", max_length=80, blank=True)
     duration_minutes = models.PositiveIntegerField("时长", null=True, blank=True)
