@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from apps.studies.models import ProjectPatient
 from apps.studies.services.unbind_project_patient import unbind_project_patient
-from apps.training.models import TrainingVideo, VideoAssemblyJob
+from apps.training.models import TrainingVideo, TrainingVideoSegment, VideoAssemblyJob
 from apps.training.tests.test_video_tasks import (
     _assembly_result,
     _remote_metadata,
@@ -91,6 +91,16 @@ def _prepare_running_upload(
         actual_duration_seconds=60,
         finalized_at=timezone.now(),
         status=TrainingVideo.Status.QUEUED,
+    )
+    TrainingVideoSegment.objects.create(
+        training_video=video,
+        index=0,
+        duration_ms=60_000,
+        size_bytes=1,
+        sha256="0" * 64,
+        relative_path="segments/000000.mp4",
+        status=TrainingVideoSegment.Status.UPLOADED,
+        uploaded_at=timezone.now(),
     )
     canonical_key = (
         f"training-videos/{project_patient.id}/{video.training_date:%Y/%m/%d}/"
