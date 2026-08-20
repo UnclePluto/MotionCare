@@ -1,16 +1,22 @@
 from collections.abc import Mapping
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.cache import cache
 from django.db.models import Count, Prefetch
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError as DrfValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
 from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.prescriptions.motion_videos import (
+    build_demo_motion_video_manifest,
+    resolve_motion_video_url,
+)
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
@@ -121,16 +127,13 @@ def serialize_prescription(project_patient):
     ).order_by("prescription_action_id", "-training_date", "-id"):
         recent_records.setdefault(record.prescription_action_id, record)
 
-    return {
-        "id": prescription.id,
-        "version": prescription.version,
-        "status": prescription.status,
-        "effective_at": prescription.effective_at.isoformat()
-        if prescription.effective_at
-        else None,
-        "week_start": week_start.isoformat(),
-        "week_end": week_end.isoformat(),
-        "actions": [
+    serialized_actions = []
+    for action in actions:
+        resolution = resolve_motion_video_url(
+            action.video_object_key_snapshot,
+            action.video_url_snapshot,
+        )
+        serialized_actions.append(
             {
                 "id": action.id,
                 "action_library_item": action.action_library_item_id,
@@ -140,7 +143,8 @@ def serialize_prescription(project_patient):
                 "internal_type": action.internal_type_snapshot,
                 "action_type": action.action_type_snapshot,
                 "action_instruction": action.action_instruction_snapshot,
-                "video_url": action.video_url_snapshot,
+                "video_url": resolution.url,
+                "video_unavailable": resolution.unavailable,
                 "has_ai_supervision": action.has_ai_supervision_snapshot,
                 "weekly_frequency": action.weekly_frequency,
                 "duration_minutes": action.duration_minutes,
@@ -151,8 +155,18 @@ def serialize_prescription(project_patient):
                 "sort_order": action.sort_order,
                 "recent_record": serialize_training_record(recent_records.get(action.id)),
             }
-            for action in actions
-        ],
+        )
+
+    return {
+        "id": prescription.id,
+        "version": prescription.version,
+        "status": prescription.status,
+        "effective_at": prescription.effective_at.isoformat()
+        if prescription.effective_at
+        else None,
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "actions": serialized_actions,
     }
 
 
@@ -171,6 +185,28 @@ class PatientAppBindView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response({"token": token, **serialize_me(session.project_patient)})
+
+
+class DemoMotionVideoManifestView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "demo_motion_videos"
+    cache_key = "patient-app:demo-motion-videos:v1"
+    cache_timeout_seconds = 60
+
+    def get(self, request):
+        response_data = cache.get(self.cache_key)
+        if response_data is None:
+            try:
+                response_data = {"videos": build_demo_motion_video_manifest()}
+            except Exception:
+                return Response(
+                    {"detail": "演示视频暂时不可用，请稍后重试"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            cache.set(self.cache_key, response_data, self.cache_timeout_seconds)
+        return Response(response_data)
 
 
 class PatientAppBaseView(APIView):

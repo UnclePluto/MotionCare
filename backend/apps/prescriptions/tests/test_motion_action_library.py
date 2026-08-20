@@ -8,6 +8,7 @@ from apps.prescriptions.action_library import (
     OFFICIAL_MOTION_ACTION_SOURCE_KEYS,
 )
 from apps.prescriptions.models import ActionLibraryItem
+from apps.prescriptions.motion_videos import MotionVideoResolution
 
 
 def test_reverse_instruction_split_handles_leading_key_points_only():
@@ -151,6 +152,40 @@ def test_action_library_endpoint_uses_motion_fields(client, doctor):
     assert "parameter_mode" not in first
     assert "execution_description" not in first
     assert "key_points" not in first
+
+
+@pytest.mark.django_db
+def test_doctor_action_serializers_return_signed_urls_and_configuration(
+    client, doctor, project_patient, monkeypatch
+):
+    client.force_login(doctor)
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    prescription = project_patient.prescriptions.create(version=18, opened_by=doctor)
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
+    monkeypatch.setattr(
+        "apps.prescriptions.serializers.resolve_motion_video_url",
+        lambda *args, **kwargs: MotionVideoResolution(
+            url="https://signed.example.com/row.mp4", unavailable=False
+        ),
+        raising=False,
+    )
+
+    action_response = client.get("/api/prescriptions/actions/")
+    prescription_response = client.get("/api/prescriptions/prescription-actions/")
+
+    assert action_response.status_code == 200
+    action_row = next(
+        row
+        for row in action_response.json()
+        if row["source_key"] == "motion-resistance-row"
+    )
+    assert action_row["video_url"] == "https://signed.example.com/row.mp4"
+    assert action_row["video_configured"] is True
+    assert prescription_response.status_code == 200
+    snapshot_row = next(
+        row for row in prescription_response.json() if row["id"] == snapshot.id
+    )
+    assert snapshot_row["video_url_snapshot"] == "https://signed.example.com/row.mp4"
 
 
 @pytest.mark.django_db

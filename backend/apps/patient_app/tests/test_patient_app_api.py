@@ -1,9 +1,11 @@
 import pytest
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
 from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.prescriptions.motion_videos import MotionVideoResolution
 from apps.training.models import TrainingRecord
 
 
@@ -128,6 +130,134 @@ def test_current_prescription_includes_action_source_key(
     assert response.status_code == 200, response.data
     action = next(item for item in response.data["actions"] if item["id"] == game_action.id)
     assert action["source_key"] == "game-memory-color-sequence"
+
+
+@pytest.mark.django_db
+def test_current_prescription_keeps_business_data_when_video_signing_fails(
+    project_patient, doctor, prescription_action, monkeypatch
+):
+    client = _auth_client(project_patient, doctor)
+    monkeypatch.setattr(
+        "apps.patient_app.views.resolve_motion_video_url",
+        lambda *args, **kwargs: MotionVideoResolution(url="", unavailable=True),
+        raising=False,
+    )
+
+    response = client.get("/api/patient-app/current-prescription/")
+
+    assert response.status_code == 200
+    action = response.json()["actions"][0]
+    assert action["video_url"] == ""
+    assert action["video_unavailable"] is True
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_has_no_patient_queries(
+    client, django_assert_num_queries, monkeypatch
+):
+    cache.clear()
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        lambda: [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ],
+        raising=False,
+    )
+
+    with django_assert_num_queries(0):
+        response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "videos": [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ]
+    }
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_ignores_object_key_query_parameter(client, monkeypatch):
+    cache.clear()
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        lambda: [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ],
+        raising=False,
+    )
+
+    response = client.get(
+        "/api/patient-app/demo-motion-videos/?object_key=training-videos/private.mp4"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "videos": [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ]
+    }
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_hides_signing_failure_details(client, monkeypatch):
+    cache.clear()
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError("token=secret-key-motion-action-videos/v1/row.mp4")
+        ),
+        raising=False,
+    )
+
+    response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "演示视频暂时不可用，请稍后重试"}
+    assert "token" not in response.content.decode()
+    assert "secret-key" not in response.content.decode()
+    assert "motion-action-videos" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_caches_full_response_for_60_seconds(client, monkeypatch):
+    cache.clear()
+    calls = 0
+
+    def build_manifest():
+        nonlocal calls
+        calls += 1
+        return [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        build_manifest,
+        raising=False,
+    )
+
+    first = client.get("/api/patient-app/demo-motion-videos/")
+    second = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert calls == 1
 
 
 @pytest.mark.django_db

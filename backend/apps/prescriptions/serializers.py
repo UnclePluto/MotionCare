@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from .action_library import official_action_queryset
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
+from .motion_videos import resolve_motion_video_url
 
 
 def parse_weekly_target_count(value):
@@ -17,6 +18,15 @@ def parse_weekly_target_count(value):
 
 
 class ActionLibraryItemSerializer(serializers.ModelSerializer):
+    video_url = serializers.SerializerMethodField()
+    video_configured = serializers.SerializerMethodField()
+
+    def get_video_url(self, action):
+        return resolve_motion_video_url(action.video_object_key, action.video_url).url
+
+    def get_video_configured(self, action):
+        return bool(action.video_object_key or action.video_url)
+
     class Meta:
         model = ActionLibraryItem
         fields = [
@@ -31,6 +41,7 @@ class ActionLibraryItemSerializer(serializers.ModelSerializer):
             "suggested_duration_minutes",
             "default_difficulty",
             "video_url",
+            "video_configured",
             "has_ai_supervision",
             "is_active",
         ]
@@ -38,6 +49,14 @@ class ActionLibraryItemSerializer(serializers.ModelSerializer):
 
 
 class PrescriptionActionSerializer(serializers.ModelSerializer):
+    video_url_snapshot = serializers.SerializerMethodField()
+
+    def get_video_url_snapshot(self, action):
+        return resolve_motion_video_url(
+            action.video_object_key_snapshot,
+            action.video_url_snapshot,
+        ).url
+
     class Meta:
         model = PrescriptionAction
         fields = [
