@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,9 @@ from apps.training.qiniu import (
     upload_local_video,
     validate_object_metadata,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 MOTION_ACTION_VIDEO_SOURCE_PATHS = {
@@ -165,33 +169,38 @@ def upload_motion_action_assets(source_root: Path) -> list[UploadedMotionAsset]:
     uploaded: list[UploadedMotionAsset] = []
     for asset in prepared:
         local_hash = _local_etag(asset.path)
-        metadata = stat_object_metadata_or_none(
-            bucket=settings.QINIU_BUCKET, key=asset.object_key
-        )
-        if metadata is not None:
-            _validate_remote_metadata(
-                metadata,
-                expected_hash=local_hash,
-                expected_size_bytes=asset.probe.size_bytes,
-            )
-            status: Literal["existing", "uploaded"] = "existing"
-        else:
-            upload_local_video(
-                path=asset.path,
+        try:
+            metadata = stat_object_metadata_or_none(
                 bucket=settings.QINIU_BUCKET,
                 key=asset.object_key,
             )
-            metadata = stat_object_metadata_or_none(
-                bucket=settings.QINIU_BUCKET, key=asset.object_key
-            )
-            if metadata is None:
-                raise CommandError("正式动作视频上传后无法读取远端对象")
-            _validate_remote_metadata(
-                metadata,
-                expected_hash=local_hash,
-                expected_size_bytes=asset.probe.size_bytes,
-            )
-            status = "uploaded"
+            if metadata is not None:
+                _validate_remote_metadata(
+                    metadata,
+                    expected_hash=local_hash,
+                    expected_size_bytes=asset.probe.size_bytes,
+                )
+                status: Literal["existing", "uploaded"] = "existing"
+            else:
+                upload_local_video(
+                    path=asset.path,
+                    bucket=settings.QINIU_BUCKET,
+                    key=asset.object_key,
+                )
+                metadata = stat_object_metadata_or_none(
+                    bucket=settings.QINIU_BUCKET, key=asset.object_key
+                )
+                if metadata is None:
+                    raise CommandError("正式动作视频上传后无法读取远端对象")
+                _validate_remote_metadata(
+                    metadata,
+                    expected_hash=local_hash,
+                    expected_size_bytes=asset.probe.size_bytes,
+                )
+                status = "uploaded"
+        except ValidationError:
+            logger.warning("正式动作视频远端对象操作失败")
+            raise CommandError("正式动作视频远端对象操作失败") from None
         uploaded.append(
             UploadedMotionAsset(
                 source_key=asset.source_key,

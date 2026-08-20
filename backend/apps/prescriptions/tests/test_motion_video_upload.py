@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
@@ -227,6 +228,36 @@ def test_missing_remote_objects_are_uploaded_and_revalidated(tmp_path, monkeypat
         MOTION_ACTION_VIDEO_OBJECT_KEYS.values()
     )
     assert stat.call_count == 10
+
+
+@pytest.mark.parametrize("failure_point", ["initial_stat", "upload", "post_upload_stat"])
+def test_storage_validation_errors_do_not_leak_sensitive_details(
+    tmp_path, monkeypatch, caplog, failure_point
+):
+    source_root = _source_root(tmp_path)
+    secret = "token=private-access-key"
+    error = ValidationError(secret)
+    stat = Mock()
+    upload = Mock()
+    if failure_point == "initial_stat":
+        stat.side_effect = error
+    elif failure_point == "upload":
+        stat.return_value = None
+        upload.side_effect = error
+    else:
+        stat.side_effect = [None, error]
+
+    monkeypatch.setattr(assets, "probe_motion_asset", lambda path, ffprobe_path: _probe())
+    monkeypatch.setattr(assets.qiniu, "etag", lambda path: "local-etag")
+    monkeypatch.setattr(assets, "stat_object_metadata_or_none", stat)
+    monkeypatch.setattr(assets, "upload_local_video", upload)
+
+    with pytest.raises(CommandError, match="正式动作视频远端对象操作失败") as exc_info:
+        assets.upload_motion_action_assets(source_root)
+
+    assert secret not in str(exc_info.value)
+    assert secret not in caplog.text
+    assert "正式动作视频远端对象操作失败" in caplog.text
 
 
 def test_check_only_uses_no_qiniu_operations(tmp_path, monkeypatch):
