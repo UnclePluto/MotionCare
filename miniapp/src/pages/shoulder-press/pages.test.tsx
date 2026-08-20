@@ -24,8 +24,6 @@ import {
 import { MotionTrainingOverlay as ShoulderPressTrainingOverlay } from '../../features/motion-training/TrainingOverlay'
 import ShoulderPressUploadPage from '../motion-training/upload'
 
-const DEMO_SHOULDER_PRESS_VIDEO_URL = 'https://cdn.whestsun.com/examples/shoulder-press/IMG_0383_SDR.mp4?e=2101639122&token=wDcTeQDwD9lRRZ4uxwE1qEbRbIZHvRXSbA0eLBpW:18Lf7MbPH0Rag3TpJUBldzuGHAY='
-
 type ReactElement = {
   type: string | ((props?: Record<string, unknown>) => ReactElement)
   props: Record<string, unknown> & {
@@ -211,6 +209,7 @@ const alertPlayerHarness = vi.hoisted(() => ({
 }))
 
 const requestMock = vi.hoisted(() => vi.fn())
+const publicRequestMock = vi.hoisted(() => vi.fn())
 const apiMocks = vi.hoisted(() => ({
   createVideoSession: vi.fn(),
   getVideoSessionStatus: vi.fn(),
@@ -331,7 +330,10 @@ vi.mock('@tarojs/taro', () => ({
   }
 }))
 
-vi.mock('../../api/client', () => ({ request: requestMock }))
+vi.mock('../../api/client', () => ({
+  request: requestMock,
+  publicRequest: publicRequestMock,
+}))
 vi.mock('../game-session/retryUpload', () => retryMocks)
 vi.mock('../../features/motion-training/api', () => apiMocks)
 vi.mock('../../features/motion-training/recorder', () => ({ MotionTrainingRecorder: recorderHarness.MockShoulderPressRecorder }))
@@ -404,6 +406,51 @@ const MOTION_ACTION_CASES = [
     videoUrl: 'https://cdn.example.com/shoulder-press.mp4'
   }
 ] as const
+
+const DEMO_MOTION_ACTION_CASES = [
+  {
+    id: 888808,
+    sourceKey: 'motion-aerobic-high-knee',
+    name: '椰林步道模拟（原地高抬腿+摆臂）',
+    instruction: '原地高抬腿并自然摆臂，保持躯干稳定。',
+    videoUrl: 'https://signed.example.com/high-knee.mp4'
+  },
+  {
+    id: 888809,
+    sourceKey: 'motion-balance-sit-stand',
+    name: '坐站转移训练',
+    instruction: '双脚稳定踩地，从坐姿平稳站起，再缓慢坐下。',
+    videoUrl: 'https://signed.example.com/sit-stand.mp4'
+  },
+  {
+    id: 888810,
+    sourceKey: 'motion-resistance-row',
+    name: '坐姿划船',
+    instruction: '保持背部挺直，双肘贴近身体向后拉，再缓慢还原。',
+    videoUrl: 'https://signed.example.com/row.mp4'
+  },
+  {
+    id: 888811,
+    sourceKey: 'motion-resistance-leg-kickback',
+    name: '腿部后踢',
+    instruction: '保持躯干稳定，单腿缓慢向后伸展，再平稳回到起始位置。',
+    videoUrl: 'https://signed.example.com/leg-kickback.mp4'
+  },
+  {
+    id: 888807,
+    sourceKey: 'motion-resistance-shoulder-press',
+    name: '肩部推举',
+    instruction: '保持身体稳定，双臂缓慢向上推举，再平稳回到起始位置。',
+    videoUrl: 'https://signed.example.com/shoulder-press.mp4'
+  }
+] as const
+
+const DEMO_MOTION_VIDEO_RESPONSE = {
+  videos: DEMO_MOTION_ACTION_CASES.map(({ sourceKey, videoUrl }) => ({
+    source_key: sourceKey,
+    video_url: videoUrl,
+  }))
+}
 
 function prescriptionForMotionAction(
   actionCase: typeof MOTION_ACTION_CASES[number],
@@ -652,6 +699,7 @@ beforeEach(async () => {
   recorderHarness.reset()
   clearCurrentPrescriptionCache()
   requestMock.mockResolvedValue(PRESCRIPTION)
+  publicRequestMock.mockResolvedValue(DEMO_MOTION_VIDEO_RESPONSE)
   retryMocks.loadPendingGameUpload.mockReturnValue(null)
   retryMocks.postGameTrainingRecord.mockResolvedValue(undefined)
   retryMocks.savePendingGameUploadAfterActiveRetry.mockImplementation(async (_storage, payload) => ({ payload }))
@@ -3603,7 +3651,7 @@ describe('审核演示模式', () => {
     })
   })
 
-  it('演示运动计划隔离真实副作用并路由到六个游戏和肩部推举', async () => {
+  it('演示运动计划隔离真实副作用并路由到六个游戏和五个运动动作', async () => {
     session.startDemoSession()
     writeCurrentPrescriptionCache(PRESCRIPTION)
 
@@ -3619,11 +3667,16 @@ describe('审核演示模式', () => {
       element.type === 'Button' && textContent(element).includes('开始游戏')
     ))
     expect(gameButtons).toHaveLength(6)
-    expect(findButtonByText(page.element, '开始跟练')).toBeTruthy()
+    const motionButtons = findAll(page.element, (element) => (
+      element.type === 'Button' && textContent(element).includes('开始跟练')
+    ))
+    expect(motionButtons).toHaveLength(5)
     expect(textContent(page.element)).not.toContain('查看历史')
     expect(textContent(page.element)).not.toContain('最近：')
     expect(textContent(page.element)).not.toContain('待补传')
-    expect(textContent(page.element)).toContain('肩部推举')
+    DEMO_MOTION_ACTION_CASES.forEach(({ name }) => {
+      expect(textContent(page.element)).toContain(name)
+    })
     expect(requestMock).not.toHaveBeenCalled()
     expect(retryMocks.loadPendingGameUpload).not.toHaveBeenCalled()
     expect(retryMocks.subscribePendingGameUploadRetryLoop).not.toHaveBeenCalled()
@@ -3643,41 +3696,48 @@ describe('审核演示模式', () => {
       })
     }
 
-    taroHarness.taroMock.navigateTo.mockClear()
-    clickButtonByText(page.element, '开始跟练')
-    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
-      url: '/pages/motion-training/index?actionId=888807'
-    })
+    for (const [index, button] of motionButtons.entries()) {
+      taroHarness.taroMock.navigateTo.mockClear()
+      button.props.onClick?.()
+      expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+        url: `/pages/motion-training/index?actionId=${DEMO_MOTION_ACTION_CASES[index].id}`
+      })
+    }
   })
 
-  it('演示肩部推举沿用说明页并保留动作预览入口', async () => {
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 沿用说明页并保留动作预览入口',
+    async ({ id, name, instruction }) => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = String(id)
 
     const page = renderPage(ShoulderPressGuidePage)
     await flushPromises()
     page.rerender()
 
     expect(requestMock).not.toHaveBeenCalled()
-    expect(textContent(page.element)).toContain('肩部推举')
-    expect(textContent(page.element)).toContain('双臂缓慢向上推举')
+    expect(textContent(page.element)).toContain(name)
+    expect(textContent(page.element)).toContain(instruction)
     expect(textContent(page.element)).not.toContain('动作已失效')
 
     clickButtonByText(page.element, '动作预览')
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
-      url: '/pages/motion-training/preview?actionId=888807'
+      url: `/pages/motion-training/preview?actionId=${id}`
     })
 
     taroHarness.taroMock.navigateTo.mockClear()
     clickButtonByText(page.element, '开始训练')
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
-      url: '/pages/motion-training/camera?actionId=888807'
+      url: `/pages/motion-training/camera?actionId=${id}`
     })
-  })
+    }
+  )
 
-  it('演示肩部推举从本地计划播放原动作预览并进入摄像头', async () => {
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 从审核清单播放预览并进入摄像头',
+    async ({ id, videoUrl }) => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = String(id)
 
     const page = renderPage(ShoulderPressPreviewPage)
     await flushPromises()
@@ -3685,7 +3745,7 @@ describe('审核演示模式', () => {
 
     expect(requestMock).not.toHaveBeenCalled()
     expect(findFirstByType(page.element, 'Video').props).toMatchObject({
-      src: DEMO_SHOULDER_PRESS_VIDEO_URL,
+      src: videoUrl,
       autoplay: true,
       loop: true,
       muted: true,
@@ -3693,13 +3753,16 @@ describe('审核演示模式', () => {
     })
     clickButtonByText(page.element, '开始训练')
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
-      url: '/pages/motion-training/camera?actionId=888807'
+      url: `/pages/motion-training/camera?actionId=${id}`
     })
-  })
+    }
+  )
 
-  it('演示肩部推举只预览摄像头并开始本地计时', async () => {
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 只预览摄像头并开始 10 分钟本地计时',
+    async ({ id, videoUrl }) => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = String(id)
 
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
@@ -3719,9 +3782,9 @@ describe('审核演示模式', () => {
 
     expect(findTrainingOverlay(page.element).props).toMatchObject({
       elapsedMs: 0,
-      expectedDurationSeconds: 60,
+      expectedDurationSeconds: 600,
       started: true,
-      videoUrl: DEMO_SHOULDER_PRESS_VIDEO_URL
+      videoUrl
     })
     expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
     expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalledWith(
@@ -3731,13 +3794,18 @@ describe('审核演示模式', () => {
     expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
     expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
     expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
-  })
+    }
+  )
 
-  it('演示肩部推举提前结束后只显示本地完成状态', async () => {
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 提前结束后只显示本地完成状态',
+    async ({ id }) => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = String(id)
 
     const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
     initializeCamera(page.element)
     page.rerender()
     clickButtonByText(page.element, '开始训练')
@@ -3756,25 +3824,36 @@ describe('审核演示模式', () => {
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
       url: '/pages/prescription/index'
     })
-  })
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalledWith(
+      PENDING_SHOULDER_PRESS_SESSION_KEY,
+      expect.anything()
+    )
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+    }
+  )
 
-  it('演示肩部推举在本地计时满一分钟后自动完成', async () => {
+  it('演示肩部推举在本地计时满十分钟后自动完成', async () => {
     session.startDemoSession()
     taroHarness.routerParams.actionId = '888807'
     vi.useFakeTimers()
 
     const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
     initializeCamera(page.element)
     page.rerender()
     clickButtonByText(page.element, '开始训练')
     page.rerender()
 
-    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.advanceTimersByTimeAsync(600_000)
     await flushPromises()
     page.rerender()
 
     expect(textContent(page.element)).toContain('体验完成')
-    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(60_000)
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(600_000)
     expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
     expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
   })
@@ -3786,6 +3865,8 @@ describe('审核演示模式', () => {
     vi.setSystemTime(1787184000000)
 
     const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
     initializeCamera(page.element)
     page.rerender()
     clickButtonByText(page.element, '开始训练')
@@ -3802,16 +3883,16 @@ describe('审核演示模式', () => {
 
     await hide()
     page.rerender()
-    await vi.advanceTimersByTimeAsync(50_000)
+    await vi.advanceTimersByTimeAsync(590_000)
     page.rerender()
     expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(10_000)
     expect(textContent(page.element)).not.toContain('体验完成')
 
     await show()
     page.rerender()
-    await vi.advanceTimersByTimeAsync(50_000)
+    await vi.advanceTimersByTimeAsync(590_000)
     page.rerender()
-    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(60_000)
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(600_000)
     expect(textContent(page.element)).toContain('体验完成')
   })
 
@@ -3820,6 +3901,8 @@ describe('审核演示模式', () => {
     taroHarness.routerParams.actionId = '888807'
 
     const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
     findFirstByType(page.element, 'Camera').props.onError?.()
     page.rerender()
 

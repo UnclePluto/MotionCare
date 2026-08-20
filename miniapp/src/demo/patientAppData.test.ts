@@ -3,16 +3,33 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HomeData } from '../types/patientApp'
 
 const requestMock = vi.hoisted(() => vi.fn())
+const publicRequestMock = vi.hoisted(() => vi.fn())
 
-vi.mock('../api/client', () => ({ request: requestMock }))
+vi.mock('../api/client', () => ({
+  request: requestMock,
+  publicRequest: publicRequestMock,
+}))
+
+const demoVideos = [
+  'motion-aerobic-high-knee',
+  'motion-balance-sit-stand',
+  'motion-resistance-row',
+  'motion-resistance-leg-kickback',
+  'motion-resistance-shoulder-press',
+].map((sourceKey) => ({
+  source_key: sourceKey,
+  video_url: `https://signed.example.com/${sourceKey}.mp4`,
+}))
 
 describe('患者端数据源', () => {
   beforeEach(() => {
     vi.resetModules()
     requestMock.mockReset()
+    publicRequestMock.mockReset()
+    publicRequestMock.mockResolvedValue({ videos: demoVideos })
   })
 
-  it('开启演示会话时返回固定数据且不发起网络请求', async () => {
+  it('开启演示会话时只用公开清单构造固定数据', async () => {
     const session = await import('./session')
     const dataSource = await import('./patientAppData')
 
@@ -26,6 +43,8 @@ describe('患者端数据源', () => {
       actions: expect.any(Array),
     })
     expect(requestMock).not.toHaveBeenCalled()
+    expect(publicRequestMock).toHaveBeenCalledTimes(1)
+    expect(publicRequestMock).toHaveBeenCalledWith('/patient-app/demo-motion-videos/')
   })
 
   it('未开启演示会话时使用真实患者端接口', async () => {
@@ -46,5 +65,6 @@ describe('患者端数据源', () => {
     await expect(dataSource.fetchCurrentPrescriptionData()).resolves.toBe(realPrescription)
     expect(requestMock).toHaveBeenNthCalledWith(1, '/patient-app/home/')
     expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/current-prescription/')
+    expect(publicRequestMock).not.toHaveBeenCalled()
   })
 })

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { containsSensitiveCredentialText } from '../../api/safeError'
 import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
 import { isDemoSession } from '../../demo/session'
+import DemoCamera from '../../features/motion-training/DemoCamera'
 import {
   createMotionTrainingAlertPlayer,
   MOTION_TRAINING_ALERT_TEXT,
@@ -60,7 +61,6 @@ import {
   cleanupAndCheckMotionTrainingStorage,
   type MotionTrainingSavedFile
 } from '../../features/motion-training/storageGuard'
-import ShoulderPressDemoCameraPage from '../shoulder-press/demoCamera'
 
 type CameraContext = ReturnType<typeof Taro.createCameraContext>
 type SessionUpdate = (session: PendingMotionTrainingSession) => void
@@ -1352,6 +1352,6 @@ export function MotionTrainingRecordingCameraPage() {
 
 export default function MotionTrainingCameraPage() {
   return isDemoSession()
-    ? <ShoulderPressDemoCameraPage />
+    ? <DemoCamera />
     : <MotionTrainingRecordingCameraPage />
 }

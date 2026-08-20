@@ -83,3 +83,23 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
   return response.data
 }
+
+export async function publicRequest<T>(path: string): Promise<T> {
+  let response: Taro.request.SuccessCallbackResult<T>
+  try {
+    response = await Taro.request<T>({
+      url: apiUrl(path),
+      method: 'GET',
+      header: {
+        'content-type': 'application/json'
+      }
+    })
+  } catch (error) {
+    throw new Error(networkRequestErrorMessage(error))
+  }
+
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(safeApiErrorMessage(response.data))
+  }
+  return response.data
+}
