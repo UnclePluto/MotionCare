@@ -160,18 +160,31 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Task 2 will switch to custom user model ("accounts.User").
 AUTH_USER_MODEL = "accounts.User"
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL = os.getenv(
+    "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL", REDIS_URL
+)
+DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS = int(
+    os.getenv("DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS", "60")
+)
+DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS = int(
+    os.getenv("DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS", "60")
+)
+if min(
+    DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS,
+    DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS,
+) <= 0:
+    raise ImproperlyConfigured("演示视频 Redis 限流配置无效")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
         "rest_framework.authentication.BasicAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": ["apps.common.permissions.IsAuthenticatedAndPasswordChanged"],
-    "DEFAULT_THROTTLE_RATES": {
-        "demo_motion_videos": "60/min",
-    },
 }
 
-CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_TIMEZONE = "Asia/Shanghai"
 CELERY_ENABLE_UTC = True

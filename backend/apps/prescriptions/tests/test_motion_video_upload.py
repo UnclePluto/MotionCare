@@ -59,6 +59,7 @@ def _ffprobe_output(
     width: int = 1080,
     height: int = 1920,
     duration: str = "30.0",
+    format_name: str = "mov,mp4,m4a,3gp,3g2,mj2",
 ) -> str:
     return json.dumps(
         {
@@ -71,7 +72,7 @@ def _ffprobe_output(
                 },
                 {"codec_type": "audio", "codec_name": audio_codec},
             ],
-            "format": {"duration": duration},
+            "format": {"duration": duration, "format_name": format_name},
         }
     )
 
@@ -174,6 +175,79 @@ def test_probe_returns_validated_media_metadata(tmp_path, monkeypatch):
         duration_seconds=30.0,
         size_bytes=len(b"official-motion-video"),
     )
+
+
+def test_probe_rejects_non_mp4_suffix_before_running_ffprobe(tmp_path, monkeypatch):
+    path = tmp_path / "official.mov"
+    path.write_bytes(b"official-motion-video")
+    run = Mock()
+    monkeypatch.setattr(assets.subprocess, "run", run)
+
+    with pytest.raises(CommandError, match="扩展名必须为 .mp4"):
+        assets.probe_motion_asset(path, ffprobe_path="ffprobe")
+
+    run.assert_not_called()
+
+
+def test_probe_rejects_non_mp4_container(tmp_path, monkeypatch):
+    path = tmp_path / "official.mp4"
+    path.write_bytes(b"official-motion-video")
+    monkeypatch.setattr(
+        assets.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=_ffprobe_output(format_name="matroska,webm"),
+            )
+        ),
+    )
+
+    with pytest.raises(CommandError, match="容器必须为 MP4"):
+        assets.probe_motion_asset(path, ffprobe_path="ffprobe")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"streams": "not-a-list", "format": {}},
+        {"streams": ["not-a-stream"], "format": {}},
+        {"streams": [], "format": []},
+        {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1080,
+                    "height": 1920,
+                },
+                {"codec_type": "audio", "codec_name": "aac"},
+            ],
+            "format": {"format_name": ["mp4"], "duration": "30"},
+        },
+    ],
+)
+def test_probe_turns_malformed_ffprobe_structures_into_command_error(
+    tmp_path,
+    monkeypatch,
+    payload,
+):
+    path = tmp_path / "official.mp4"
+    path.write_bytes(b"official-motion-video")
+    monkeypatch.setattr(
+        assets.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=json.dumps(payload)
+            )
+        ),
+    )
+
+    with pytest.raises(CommandError, match="FFprobe 输出无效"):
+        assets.probe_motion_asset(path, ffprobe_path="ffprobe")
 
 
 def test_matching_remote_objects_are_reported_as_existing_without_upload(tmp_path, monkeypatch):

@@ -33,6 +33,29 @@ from .video_staging import (
 )
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
+LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS = 2_400
+LEGACY_TRAINING_VIDEO_MAX_SEGMENTS = 600
+CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS = 1_800
+FINALIZE_DURATION_TOLERANCE_SECONDS = 5
+
+
+def _session_upload_limits(video):
+    if (
+        CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS
+        < video.expected_duration_seconds
+        <= LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS
+    ):
+        return (
+            LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS,
+            LEGACY_TRAINING_VIDEO_MAX_SEGMENTS,
+        )
+    return (
+        min(
+            settings.TRAINING_VIDEO_MAX_DURATION_SECONDS,
+            CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS,
+        ),
+        min(settings.TRAINING_VIDEO_MAX_SEGMENTS, 360),
+    )
 
 
 def _active_prescription(project_patient):
@@ -111,7 +134,10 @@ def create_training_video_session(
         )
         return existing, False
 
-    if expected_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
+    if expected_duration_seconds > min(
+        settings.TRAINING_VIDEO_MAX_DURATION_SECONDS,
+        CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS,
+    ):
         raise ValidationError("训练视频时长超过限制")
     _ensure_staging_available()
     active, action = _get_current_recordable_motion_action(
@@ -143,12 +169,20 @@ def create_training_video_session(
     return video, True
 
 
-def _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes):
-    if index >= settings.TRAINING_VIDEO_MAX_SEGMENTS:
+def _validate_segment_request(
+    index,
+    uploaded_file,
+    duration_ms,
+    declared_size_bytes,
+    *,
+    max_duration_seconds,
+    max_segments,
+):
+    if index >= max_segments:
         raise ValidationError("训练视频分段数量超过限制")
     if declared_size_bytes > settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES:
         raise ValidationError("训练视频分段过大")
-    if duration_ms > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000:
+    if duration_ms > max_duration_seconds * 1000:
         raise ValidationError("训练视频分段时长超过限制")
     content_type = (uploaded_file.content_type or "").split(";", 1)[0].strip().lower()
     if content_type != "video/mp4":
@@ -180,7 +214,15 @@ def store_training_video_segment(
     if preliminary_video is None:
         raise Http404
 
-    _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes)
+    max_duration_seconds, max_segments = _session_upload_limits(preliminary_video)
+    _validate_segment_request(
+        index,
+        uploaded_file,
+        duration_ms,
+        declared_size_bytes,
+        max_duration_seconds=max_duration_seconds,
+        max_segments=max_segments,
+    )
     temporary, actual_size_bytes, sha256 = write_uploaded_segment(
         preliminary_video, index, uploaded_file
     )
@@ -231,11 +273,12 @@ def store_training_video_segment(
                     segment_count = totals["segment_count"] or 0
                     total_duration_ms = totals["total_duration_ms"] or 0
                     total_size_bytes = totals["total_size_bytes"] or 0
-                    if segment_count + 1 > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+                    max_duration_seconds, max_segments = _session_upload_limits(video)
+                    if segment_count + 1 > max_segments:
                         raise ValidationError("训练视频分段数量超过限制")
                     if (
                         total_duration_ms + duration_ms
-                        > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000
+                        > max_duration_seconds * 1000
                     ):
                         raise ValidationError("训练视频总时长超过限制")
                     if (
@@ -272,9 +315,10 @@ def store_training_video_segment(
 
 
 def _validate_uploaded_segments_for_finalize(video, segment_count, actual_duration_seconds):
-    if segment_count > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+    max_duration_seconds, max_segments = _session_upload_limits(video)
+    if segment_count > max_segments:
         raise ValidationError("训练视频分段数量超过限制")
-    if actual_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
+    if actual_duration_seconds > max_duration_seconds:
         raise ValidationError("训练视频总时长超过限制")
 
     segments = list(
@@ -285,7 +329,7 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
         raise ValidationError("训练视频已上传分段必须连续且数量匹配")
 
     total_duration_ms = sum(segment.duration_ms for segment in segments)
-    if total_duration_ms > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000:
+    if total_duration_ms > max_duration_seconds * 1000:
         raise ValidationError("训练视频总时长超过限制")
 
     total_size_bytes = sum(segment.size_bytes for segment in segments)
@@ -293,8 +337,10 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
         raise ValidationError("训练视频总大小超过限制")
 
     actual_segment_duration_seconds = total_duration_ms / 1000
-    allowed_difference = max(2, actual_duration_seconds * 0.02)
-    if abs(actual_segment_duration_seconds - actual_duration_seconds) > allowed_difference:
+    if (
+        abs(actual_segment_duration_seconds - actual_duration_seconds)
+        > FINALIZE_DURATION_TOLERANCE_SECONDS
+    ):
         raise ValidationError("训练视频分段时长与提交时长不一致")
 
     staging = staging_root()

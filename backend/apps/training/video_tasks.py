@@ -8,7 +8,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from apps.studies.models import ProjectPatient
@@ -45,6 +45,8 @@ RETRY_BASE_SECONDS = 60
 QINIU_CLEANUP_INITIAL_BACKOFF_SECONDS = 300
 QINIU_CLEANUP_MAX_BACKOFF_SECONDS = 86400
 QINIU_CLEANUP_BATCH_SIZE = 100
+ASSEMBLED_VIDEO_HARD_MAX_DURATION_SECONDS = 1_800
+ASSEMBLED_VIDEO_DURATION_TOLERANCE_SECONDS = 5
 
 
 class AssemblyLeaseLost(ValidationError):
@@ -341,6 +343,30 @@ def mark_uploading_qiniu(
         or video.cleanup_requested_at is not None
     ):
         raise AssemblyLeaseLost("训练视频合并任务租约已失效")
+
+    probed_duration_seconds = result.probe.duration_seconds
+    if (
+        not math.isfinite(probed_duration_seconds)
+        or probed_duration_seconds <= 0
+        or probed_duration_seconds > ASSEMBLED_VIDEO_HARD_MAX_DURATION_SECONDS
+    ):
+        raise ValidationError("训练视频合并结果真实时长超过限制")
+    client_segment_duration_seconds = (
+        TrainingVideoSegment.objects.filter(
+            training_video=video,
+            status=TrainingVideoSegment.Status.UPLOADED,
+        ).aggregate(total_duration_ms=Sum("duration_ms"))["total_duration_ms"]
+        or 0
+    ) / 1000
+    declared_durations = [client_segment_duration_seconds]
+    if video.actual_duration_seconds is not None:
+        declared_durations.append(video.actual_duration_seconds)
+    if any(
+        abs(probed_duration_seconds - declared_duration)
+        > ASSEMBLED_VIDEO_DURATION_TOLERANCE_SECONDS
+        for declared_duration in declared_durations
+    ):
+        raise ValidationError("训练视频真实时长与客户端声明不一致")
 
     now = timezone.now()
     attempt_key = attempt_key or qiniu_attempt_object_key(video, lease_attempt)

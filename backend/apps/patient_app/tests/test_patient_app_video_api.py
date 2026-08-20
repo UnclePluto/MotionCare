@@ -1144,7 +1144,7 @@ def test_finalize_enforces_total_size_limit(
     ("indexes", "durations_ms", "payload", "expected_fragment"),
     [
         ([0, 2], [30000, 30000], {"segment_count": 3, "actual_duration_seconds": 60}, "连续"),
-        ([0, 1], [30000, 30000], {"segment_count": 2, "actual_duration_seconds": 55}, "时长"),
+        ([0, 1], [30000, 30000], {"segment_count": 2, "actual_duration_seconds": 54}, "时长"),
     ],
 )
 def test_finalize_rejects_missing_index_and_duration_mismatch(
@@ -1186,6 +1186,79 @@ def test_finalize_rejects_missing_index_and_duration_mismatch(
     assert response.status_code == 400
     assert expected_fragment in response.content.decode()
     assert not VideoAssemblyJob.objects.exists()
+
+
+@pytest.mark.django_db
+def test_finalize_accepts_exact_five_second_declared_duration_difference(
+    project_patient,
+    doctor,
+    active_prescription,
+    tmp_path,
+    monkeypatch,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_date=timezone.localdate(),
+        expected_duration_seconds=60,
+        status=TrainingVideo.Status.UPLOADING_SEGMENTS,
+    )
+    _create_uploaded_segments(video, tmp_path, [30_000, 30_000])
+    monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", Mock())
+
+    response = client.post(
+        _finalize_url(video),
+        {"segment_count": 2, "actual_duration_seconds": 55, "note": ""},
+        format="json",
+    )
+
+    assert response.status_code == 202, response.data
+
+
+@pytest.mark.django_db
+def test_existing_legacy_server_session_accepts_361st_segment_and_finalize(
+    project_patient,
+    doctor,
+    active_prescription,
+    tmp_path,
+    monkeypatch,
+):
+    action = _shoulder_press_action(active_prescription)
+    client = _auth_client(project_patient, doctor)
+    video = TrainingVideo.objects.create(
+        client_session_id=uuid.UUID(CLIENT_SESSION_ID),
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_date=datetime(2026, 7, 11, tzinfo=UTC).date(),
+        expected_duration_seconds=2_400,
+        training_started_at=datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC),
+        status=TrainingVideo.Status.UPLOADING_SEGMENTS,
+        uploaded_segment_count=360,
+    )
+    _bulk_create_uploaded_segments(video, tmp_path, 360, 5_000)
+
+    uploaded = client.post(
+        _segment_url(video.id, 360),
+        _segment_payload(b"legacy-last-segment", duration_ms=1_000),
+    )
+
+    assert uploaded.status_code == 201, uploaded.data
+    monkeypatch.setattr("apps.training.video_tasks.run_video_assembly_job.delay", Mock())
+    finalized = client.post(
+        _finalize_url(video),
+        _finalize_payload(segment_count=361, actual_duration_seconds=1_801),
+        format="json",
+    )
+
+    assert finalized.status_code == 202, finalized.data
+    video.refresh_from_db()
+    assert video.expected_duration_seconds == 2_400
+    assert video.expected_segment_count == 361
+    assert video.actual_duration_seconds == 1_801
 
 
 @pytest.mark.django_db

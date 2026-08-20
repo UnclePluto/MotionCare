@@ -120,7 +120,40 @@ def test_training_video_limit_templates_match_runtime_contract():
 def test_motion_action_video_delivery_settings_are_safe_and_rate_limited():
     assert settings.MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS == 7200
     assert settings.MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN == "https://cdn.whestsun.com"
-    assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]["demo_motion_videos"] == "60/min"
+    assert settings.DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS == 60
+    assert settings.DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS == 60
+    assert settings.DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL == settings.REDIS_URL
+
+
+def test_production_video_delivery_uses_existing_shared_redis_and_safe_defaults():
+    root = settings.ROOT_DIR
+    compose = (root / "deploy" / "docker-compose.prod.yml").read_text()
+    production_values = dotenv_values(root / "deploy" / "env.production.example")
+
+    assert "REDIS_URL: &backend-redis-url redis://:" in compose
+    assert "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL: *backend-redis-url" in compose
+    assert (
+        "MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN: "
+        "${MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN:-https://cdn.whestsun.com}"
+    ) in compose
+    assert (
+        "MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS: "
+        "${MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS:-7200}"
+    ) in compose
+    assert production_values["MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN"] == (
+        "https://cdn.whestsun.com"
+    )
+    assert production_values["MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS"] == "7200"
+
+
+def test_openresty_overwrites_forwarded_client_headers():
+    proxy_config = (
+        settings.ROOT_DIR / "deploy" / "openresty" / "motioncare.conf"
+    ).read_text()
+
+    assert "$proxy_add_x_forwarded_for" not in proxy_config
+    assert proxy_config.count("proxy_set_header X-Real-IP $remote_addr;") == 5
+    assert proxy_config.count("proxy_set_header X-Forwarded-For $remote_addr;") == 5
 
 
 def test_wearable_sync_uses_shanghai_timezone_and_https_provider():

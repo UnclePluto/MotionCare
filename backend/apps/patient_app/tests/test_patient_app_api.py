@@ -3,6 +3,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.patient_app.throttles import DemoMotionVideoRateThrottle
 from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.prescriptions.motion_videos import MotionVideoResolution
@@ -16,6 +17,25 @@ OFFICIAL_MOTION_SOURCE_KEYS = (
     "motion-resistance-row",
     "motion-resistance-shoulder-press",
 )
+
+
+class _IsolatedDemoManifestRedis:
+    def __init__(self):
+        self.count = 0
+
+    def eval(self, *_args):
+        self.count += 1
+        return self.count
+
+
+@pytest.fixture(autouse=True)
+def isolate_demo_manifest_rate_limit(monkeypatch):
+    redis = _IsolatedDemoManifestRedis()
+    monkeypatch.setattr(
+        DemoMotionVideoRateThrottle,
+        "redis_client_factory",
+        staticmethod(lambda _url: redis),
+    )
 
 
 def _auth_client(project_patient, doctor):

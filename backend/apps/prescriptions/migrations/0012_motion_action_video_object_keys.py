@@ -1,13 +1,29 @@
 from django.db import migrations, models
 
-from apps.prescriptions.action_library import MOTION_ACTION_VIDEO_OBJECT_KEYS
+MOTION_ACTION_VIDEO_OBJECT_KEYS_V1 = {
+    "motion-aerobic-high-knee": (
+        "motion-action-videos/v1/motion-aerobic-high-knee.mp4"
+    ),
+    "motion-balance-sit-stand": (
+        "motion-action-videos/v1/motion-balance-sit-stand.mp4"
+    ),
+    "motion-resistance-row": (
+        "motion-action-videos/v1/motion-resistance-row.mp4"
+    ),
+    "motion-resistance-leg-kickback": (
+        "motion-action-videos/v1/motion-resistance-leg-kickback.mp4"
+    ),
+    "motion-resistance-shoulder-press": (
+        "motion-action-videos/v1/motion-resistance-shoulder-press.mp4"
+    ),
+}
 
 
 def backfill_motion_action_video_keys(apps, schema_editor):
     ActionLibraryItem = apps.get_model("prescriptions", "ActionLibraryItem")
     PrescriptionAction = apps.get_model("prescriptions", "PrescriptionAction")
 
-    for source_key, object_key in MOTION_ACTION_VIDEO_OBJECT_KEYS.items():
+    for source_key, object_key in MOTION_ACTION_VIDEO_OBJECT_KEYS_V1.items():
         ActionLibraryItem.objects.filter(source_key=source_key).update(
             video_object_key=object_key,
             video_url="",

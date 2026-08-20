@@ -8,7 +8,6 @@ from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError as DrfValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
@@ -33,6 +32,7 @@ from apps.training.video_services import (
 from apps.training.views import validation_detail
 
 from .authentication import PatientAppTokenAuthentication
+from .throttles import DemoMotionVideoRateThrottle
 from .serializers import (
     PatientAppBindSerializer,
     PatientAppTrainingRecordCreateSerializer,
@@ -198,8 +198,7 @@ class PatientAppBindView(APIView):
 class DemoMotionVideoManifestView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "demo_motion_videos"
+    throttle_classes = [DemoMotionVideoRateThrottle]
     cache_key = "patient-app:demo-motion-videos:v1"
     cache_timeout_seconds = 60
 

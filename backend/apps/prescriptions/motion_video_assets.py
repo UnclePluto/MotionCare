@@ -58,6 +58,8 @@ class _PreparedMotionAsset:
 
 def probe_motion_asset(path: Path, ffprobe_path: str) -> MotionAssetProbe:
     path = Path(path)
+    if path.suffix.lower() != ".mp4":
+        raise CommandError("正式动作视频扩展名必须为 .mp4")
     try:
         completed = subprocess.run(
             [
@@ -84,8 +86,13 @@ def probe_motion_asset(path: Path, ffprobe_path: str) -> MotionAssetProbe:
     ) as exc:
         raise CommandError("正式动作视频无法通过 FFprobe 解析") from exc
 
+    if not isinstance(payload, dict):
+        raise CommandError("正式动作视频 FFprobe 输出无效")
     streams = payload.get("streams")
-    if not isinstance(streams, list):
+    media_format = payload.get("format")
+    if not isinstance(streams, list) or not isinstance(media_format, dict):
+        raise CommandError("正式动作视频 FFprobe 输出无效")
+    if any(not isinstance(stream, dict) for stream in streams):
         raise CommandError("正式动作视频 FFprobe 输出无效")
     video_stream = next(
         (stream for stream in streams if stream.get("codec_type") == "video"), None
@@ -97,14 +104,19 @@ def probe_motion_asset(path: Path, ffprobe_path: str) -> MotionAssetProbe:
         raise CommandError("正式动作视频必须包含视频和音频流")
 
     try:
+        format_name = media_format["format_name"]
+        if not isinstance(format_name, str):
+            raise TypeError
         video_codec = str(video_stream["codec_name"])
         audio_codec = str(audio_stream["codec_name"])
         width = int(video_stream["width"])
         height = int(video_stream["height"])
-        duration_seconds = float(payload["format"]["duration"])
+        duration_seconds = float(media_format["duration"])
     except (KeyError, TypeError, ValueError) as exc:
         raise CommandError("正式动作视频 FFprobe 输出无效") from exc
 
+    if "mp4" not in {item.strip().lower() for item in format_name.split(",")}:
+        raise CommandError("正式动作视频容器必须为 MP4")
     if video_codec != "h264" or audio_codec != "aac":
         raise CommandError("正式动作视频编码必须为 H.264 + AAC")
     if (width, height) != (1080, 1920):

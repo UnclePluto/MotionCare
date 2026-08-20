@@ -51,7 +51,11 @@ def test_prescription_snapshot_copies_motion_video_object_key(project_patient, d
 
 
 @pytest.mark.django_db
-def test_data_migration_replaces_all_official_motion_urls(project_patient, doctor):
+def test_data_migration_replays_frozen_v1_keys_when_runtime_catalog_changes(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
     action = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
     action.video_url = "https://old.example.com/shoulder.mp4"
     action.video_object_key = ""
@@ -64,12 +68,20 @@ def test_data_migration_replaces_all_official_motion_urls(project_patient, docto
     migration = importlib.import_module(
         "apps.prescriptions.migrations.0012_motion_action_video_object_keys"
     )
+    monkeypatch.setitem(
+        MOTION_ACTION_VIDEO_OBJECT_KEYS,
+        action.source_key,
+        "motion-action-videos/v2/runtime-only.mp4",
+    )
     migration.backfill_motion_action_video_keys(django_apps, None)
 
     action.refresh_from_db()
     active_action.refresh_from_db()
     archived_action.refresh_from_db()
-    expected = MOTION_ACTION_VIDEO_OBJECT_KEYS[action.source_key]
+    expected = (
+        "motion-action-videos/v1/"
+        "motion-resistance-shoulder-press.mp4"
+    )
     assert action.video_object_key == expected
     assert action.video_url == ""
     assert active_action.video_object_key_snapshot == expected
