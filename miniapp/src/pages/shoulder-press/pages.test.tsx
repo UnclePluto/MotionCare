@@ -490,6 +490,32 @@ function pendingSession(segmentCount = 2) {
   }
 }
 
+function historicalPendingUpload(
+  actualDurationMs: number,
+  compressionState: 'pending_compression' | 'compression_failed'
+) {
+  return {
+    clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+    actionId: 42,
+    trainingDate: '2026-07-11',
+    expectedDurationSeconds: 2400,
+    actualDurationMs,
+    finalized: false,
+    createdAt: 1783692000000,
+    trainingStartedAt: '2026-07-11T09:32:14+08:00',
+    trainingEndedAt: '2026-07-11T10:12:14+08:00',
+    segments: [{
+      index: 0,
+      compressionState,
+      rawSavedFilePath: `wxfile://store/historical-${actualDurationMs}.mp4`,
+      durationMs: actualDurationMs,
+      ...(compressionState === 'compression_failed'
+        ? { compressionError: '历史压缩失败' }
+        : {})
+    }]
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -2538,6 +2564,55 @@ describe('shoulder press pages', () => {
     expect(apiMocks.createVideoSession).toHaveBeenCalledWith(expect.objectContaining({
       trainingStartedAt: '2026-07-11T09:32:14+08:00'
     }))
+  })
+
+  it.each([
+    ['new key at 1800001ms', PENDING_SHOULDER_PRESS_SESSION_KEY, 1_800_001, 'pending_compression'],
+    ['new key at 2400000ms', PENDING_SHOULDER_PRESS_SESSION_KEY, 2_400_000, 'compression_failed'],
+    ['legacy key at 1800001ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 1_800_001, 'compression_failed'],
+    ['legacy key at 2400000ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 2_400_000, 'pending_compression']
+  ] as const)(
+    'promotes and uploads a historical pending segment from the %s',
+    async (_caseName, key, durationMs, compressionState) => {
+      const stored = historicalPendingUpload(durationMs, compressionState)
+      taroHarness.storage.set(key, stored)
+
+      renderPage(ShoulderPressUploadPage)
+      await taroHarness.showCallbacks[0]()
+      await flushPromises(30)
+
+      expect(taroHarness.taroMock.getFileInfo).toHaveBeenCalledWith({
+        filePath: `wxfile://store/historical-${durationMs}.mp4`
+      })
+      expect(apiMocks.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
+        filePath: `wxfile://store/historical-${durationMs}.mp4`,
+        durationMs
+      }))
+      expect(apiMocks.finalizeVideoSession).toHaveBeenCalledWith(expect.objectContaining({
+        actualDurationSeconds: Math.ceil(durationMs / 1000)
+      }))
+      expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+        url: '/pages/prescription/index'
+      })
+    }
+  )
+
+  it.each([
+    ['new key', PENDING_SHOULDER_PRESS_SESSION_KEY],
+    ['legacy key', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY]
+  ])('rejects a historical pending upload above 2400000ms from the %s', async (_caseName, key) => {
+    taroHarness.storage.set(key, historicalPendingUpload(2_400_001, 'pending_compression'))
+
+    const page = renderPage(ShoulderPressUploadPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('无法继续上传')
+    expect(taroHarness.taroMock.getFileInfo).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
   })
 
   it('reuses persisted training timestamps when retrying the upload page', async () => {

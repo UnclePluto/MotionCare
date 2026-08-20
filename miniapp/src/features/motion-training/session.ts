@@ -463,7 +463,15 @@ export function promoteLegacyMotionTrainingSegment(
     throw new Error('待上传录像分段不存在')
   }
   const actualDurationMs = session.actualDurationMs - current.durationMs + input.durationMs
-  if (actualDurationMs > MAX_MOTION_TRAINING_MANIFEST_DURATION_MS) {
+  const isHistoricalInPlacePromotion = (
+    session.actualDurationMs > MAX_MOTION_TRAINING_MANIFEST_DURATION_MS &&
+    session.actualDurationMs <= MOTION_TRAINING_LEGACY_RESTORE_LIMIT_MS &&
+    input.durationMs === current.durationMs
+  )
+  const maximumDurationMs = isHistoricalInPlacePromotion
+    ? MOTION_TRAINING_LEGACY_RESTORE_LIMIT_MS
+    : MAX_MOTION_TRAINING_MANIFEST_DURATION_MS
+  if (actualDurationMs > maximumDurationMs) {
     throw new Error('录像总时长超过限制，请重新录制')
   }
 

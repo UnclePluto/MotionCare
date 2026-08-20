@@ -54,6 +54,30 @@ function historicalRecordedSession(actualDurationMs: number) {
   }
 }
 
+function historicalPendingSession(
+  actualDurationMs: number,
+  compressionState: 'pending_compression' | 'compression_failed' = 'pending_compression'
+) {
+  return {
+    clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+    actionId: 42,
+    trainingDate: '2026-08-06',
+    expectedDurationSeconds: 2400,
+    actualDurationMs,
+    segments: [{
+      index: 0,
+      compressionState,
+      rawSavedFilePath: 'wxfile://store/historical-raw.mp4',
+      durationMs: actualDurationMs,
+      ...(compressionState === 'compression_failed'
+        ? { compressionError: '历史压缩失败' }
+        : {})
+    }],
+    finalized: false,
+    createdAt: 1783692000000
+  }
+}
+
 describe('shoulder press segmented session helpers', () => {
   it('builds session, preview, and upload urls', () => {
     expect(buildMotionTrainingSessionUrl(42)).toBe('/pages/motion-training/index?actionId=42')
@@ -382,6 +406,57 @@ describe('shoulder press segmented session helpers', () => {
       localFileState: 'saved'
     })
     expect(isCompressedMotionTrainingSegment(completed.segments[0])).toBe(true)
+  })
+
+  it.each([
+    ['new key at 1800001ms', PENDING_MOTION_TRAINING_SESSION_KEY, 1_800_001, 'pending_compression'],
+    ['new key at 2400000ms', PENDING_MOTION_TRAINING_SESSION_KEY, 2_400_000, 'compression_failed'],
+    ['legacy key at 1800001ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 1_800_001, 'compression_failed'],
+    ['legacy key at 2400000ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 2_400_000, 'pending_compression']
+  ] as const)(
+    'promotes an in-place historical segment restored from the %s',
+    (_caseName, key, durationMs, compressionState) => {
+      const storage = memoryStorage()
+      storage.setStorageSync(key, historicalPendingSession(durationMs, compressionState))
+      const restored = loadPendingMotionTrainingSession(storage)
+
+      expect(restored).not.toBeNull()
+      const promoted = promoteLegacyMotionTrainingSegment(restored!, 0, {
+        savedFilePath: 'wxfile://store/historical-raw.mp4',
+        durationMs,
+        sizeBytes: 2_097_152
+      })
+
+      expect(promoted).toMatchObject({
+        actualDurationMs: durationMs,
+        segments: [{
+          index: 0,
+          compressionState: 'compressed',
+          durationMs,
+          uploadState: 'pending'
+        }]
+      })
+    }
+  )
+
+  it('does not let a current session grow past 1800000ms through legacy promotion', () => {
+    const current = historicalPendingSession(1_800_000)
+
+    expect(() => promoteLegacyMotionTrainingSegment(current, 0, {
+      savedFilePath: 'wxfile://store/current-raw.mp4',
+      durationMs: 1_800_001,
+      sizeBytes: 1
+    })).toThrow('录像总时长超过限制')
+  })
+
+  it('rejects a historical in-place promotion above 2400000ms', () => {
+    const historical = historicalPendingSession(2_400_001)
+
+    expect(() => promoteLegacyMotionTrainingSegment(historical, 0, {
+      savedFilePath: 'wxfile://store/historical-raw.mp4',
+      durationMs: 2_400_001,
+      sizeBytes: 1
+    })).toThrow('录像总时长超过限制')
   })
 
   it('loads the raw path and error from a legacy compression-failed manifest', () => {
