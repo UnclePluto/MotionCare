@@ -2,9 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> 状态：approved
+> 状态：implementing
 > 日期：2026-08-20
 > 范围：上传五个正式教学视频，将肩部推举录像链路泛化到全部正式运动动作，并保留审核演示隔离与旧会话兼容。
+>
+> 修订（2026-08-21, codex）：Tasks 1–11 已按检查点提交落地，Task 12 正在执行真实上传与完整验证。
+>
+> 执行记录（2026-08-21, codex）：Task 1 `ca8851a`；Task 2 `cd507a0`；Task 3 `8d39cd3`（审查修复 `ebb705a`）；Task 4 `a30fedc`（审查修复 `eddd827`）；Task 5 `8cdcc42`（部署边界修复 `750341d`）；Task 6 `1e0b59d`；Task 7 `a1d440a`；Task 8 `86d42a1`；Task 9 `6553b60`（兼容修复 `6f1d7b4`）；Task 10 `1b32ec5`（兼容修复 `7eab8aa`）；Task 11 `6381f7b`。
 
 **Goal:** 五个正式运动动作均使用七牛私有正式教学视频，在微信小程序中完成统一预览、全量录像跟练、分片恢复、训练记录和医生审阅闭环。
 
@@ -94,7 +98,7 @@
 - Produces: `MOTION_ACTION_VIDEO_OBJECT_KEYS: dict[str, str]`、`OFFICIAL_MOTION_ACTION_SOURCE_KEYS: frozenset[str]`、`is_official_motion_action(source_key: str | None) -> bool`。
 - Produces: `ActionLibraryItem.video_object_key` 与 `PrescriptionAction.video_object_key_snapshot`。
 
-- [ ] **Step 1: 写入五动作目录、快照复制和回填失败测试**
+- [x] **Step 1: 写入五动作目录、快照复制和回填失败测试**
 
 在 `test_motion_action_library.py` 增加：
 
@@ -158,13 +162,13 @@ def test_data_migration_replaces_all_official_motion_urls(project_patient, docto
     assert archived_action.video_url_snapshot == ""
 ```
 
-- [ ] **Step 2: 运行目标测试并确认失败**
+- [x] **Step 2: 运行目标测试并确认失败**
 
 Run: `cd backend && .venv/bin/pytest apps/prescriptions/tests/test_motion_action_library.py -q`
 
 Expected: FAIL，缺少媒体目录常量、模型字段或 `0012` migration。
 
-- [ ] **Step 3: 实现唯一目录、模型字段和数据迁移**
+- [x] **Step 3: 实现唯一目录、模型字段和数据迁移**
 
 在 `action_library.py` 定义：
 
@@ -203,7 +207,7 @@ PrescriptionAction.objects.filter(
 
 reverse migration 使用 `RunPython.noop`，避免回退时恢复已废弃的长期 URL。
 
-- [ ] **Step 4: 验证 migration 与目标测试**
+- [x] **Step 4: 验证 migration 与目标测试**
 
 Run:
 
@@ -215,7 +219,7 @@ cd backend
 
 Expected: 无待生成 migration，目标测试 PASS。
 
-- [ ] **Step 5: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 5: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add backend/apps/prescriptions/action_library.py backend/apps/prescriptions/models.py backend/apps/prescriptions/migrations/0012_motion_action_video_object_keys.py backend/apps/prescriptions/tests/test_motion_action_library.py
@@ -236,7 +240,7 @@ git commit -m "feat(处方): 保存正式动作视频对象键"
 - Produces: `resolve_motion_video_url(object_key: str, legacy_url: str = "") -> MotionVideoResolution`。
 - Produces: `build_demo_motion_video_manifest() -> list[dict[str, str]]`。
 
-- [ ] **Step 1: 写入白名单、HTTPS、TTL 和失败降级测试**
+- [x] **Step 1: 写入白名单、HTTPS、TTL 和失败降级测试**
 
 ```python
 @override_settings(
@@ -273,13 +277,13 @@ def test_motion_video_signer_rejects_non_https_domain():
     assert result.url == ""
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `cd backend && .venv/bin/pytest apps/prescriptions/tests/test_motion_videos.py backend/tests/test_settings.py -q`
 
 Expected: FAIL，签名服务和配置尚不存在。
 
-- [ ] **Step 3: 实现安全解析结果和清单生成**
+- [x] **Step 3: 实现安全解析结果和清单生成**
 
 ```python
 @dataclass(frozen=True)
@@ -309,7 +313,7 @@ def resolve_motion_video_url(object_key: str, legacy_url: str = "") -> MotionVid
 
 `build_demo_motion_video_manifest()` 遍历固定映射；任一项 `unavailable=True` 时抛出统一 `ValidationError("演示视频暂时不可用")`，不得包含对象 Key 或签名错误原文。
 
-- [ ] **Step 4: 加入精确配置并验证**
+- [x] **Step 4: 加入精确配置并验证**
 
 在 settings 中加入 7200 秒 TTL、HTTPS 域名、演示限流 `60/min`，并将录像上限配置留给 Task 5。运行：
 
@@ -317,7 +321,7 @@ Run: `cd backend && .venv/bin/pytest apps/prescriptions/tests/test_motion_videos
 
 Expected: PASS。
 
-- [ ] **Step 5: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 5: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add backend/apps/prescriptions/motion_videos.py backend/apps/prescriptions/tests/test_motion_videos.py backend/config/settings.py backend/tests/test_settings.py
@@ -338,7 +342,7 @@ git commit -m "feat(视频): 动态签发正式教学视频地址"
 - Produces: 兼容字段 `video_url` / `video_url_snapshot`、新字段 `video_configured` / `video_unavailable`。
 - Produces: `GET /api/patient-app/demo-motion-videos/`。
 
-- [ ] **Step 1: 写入序列化和清单失败测试**
+- [x] **Step 1: 写入序列化和清单失败测试**
 
 ```python
 @pytest.mark.django_db
@@ -373,13 +377,13 @@ def test_demo_motion_manifest_has_no_patient_queries(client, django_assert_num_q
 
 另加测试确认接口不接受 `?object_key=...` 改变结果、签名失败返回不含 token/Key 的 503、缓存 60 秒内只调用一次清单生成器。
 
-- [ ] **Step 2: 运行目标测试并确认失败**
+- [x] **Step 2: 运行目标测试并确认失败**
 
 Run: `cd backend && .venv/bin/pytest apps/prescriptions/tests/test_motion_action_library.py apps/patient_app/tests/test_patient_app_api.py -q`
 
 Expected: FAIL，响应字段和演示接口尚不存在。
 
-- [ ] **Step 3: 实现兼容序列化**
+- [x] **Step 3: 实现兼容序列化**
 
 将动作库和处方动作的 URL 字段改为 `SerializerMethodField`，调用签名服务；模型原字段仍保留。患者端动作响应使用：
 
@@ -397,7 +401,7 @@ return {
 
 医生端额外返回 `video_configured = bool(video_object_key or legacy_url)`，使动作库徽标不依赖数据库中的旧 URL。
 
-- [ ] **Step 4: 实现只读演示清单**
+- [x] **Step 4: 实现只读演示清单**
 
 `DemoMotionVideoManifestView` 使用 `AllowAny`、`ScopedRateThrottle` 和 scope `demo_motion_videos`。以固定 cache key `patient-app:demo-motion-videos:v1` 缓存完整响应 60 秒；异常统一返回：
 
@@ -408,13 +412,13 @@ return Response(
 )
 ```
 
-- [ ] **Step 5: 运行目标测试**
+- [x] **Step 5: 运行目标测试**
 
 Run: `cd backend && .venv/bin/pytest apps/prescriptions/tests/test_motion_action_library.py apps/patient_app/tests/test_patient_app_api.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 6: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 6: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add backend/apps/prescriptions/serializers.py backend/apps/prescriptions/tests/test_motion_action_library.py backend/apps/patient_app/views.py backend/apps/patient_app/urls.py backend/apps/patient_app/tests/test_patient_app_api.py
@@ -436,7 +440,7 @@ git commit -m "feat(患者端): 返回正式动作视频动态地址"
 - Produces: `probe_motion_asset(path: Path, ffprobe_path: str) -> MotionAssetProbe`。
 - Produces: `upload_motion_action_assets(source_root: Path) -> list[UploadedMotionAsset]`。
 
-- [ ] **Step 1: 写入固定路径、FFprobe 与远端冲突测试**
+- [x] **Step 1: 写入固定路径、FFprobe 与远端冲突测试**
 
 测试必须覆盖：缺一个文件即在任何上传前失败；非 H.264、非 AAC、非 1080×1920、时长不在 5–120 秒均失败；远端相同 Hash/大小/MIME 幂等成功；远端内容不同失败且不调用上传覆盖。
 
@@ -449,13 +453,13 @@ assert [asset.object_key for asset in uploaded] == list(
 upload.assert_not_called()  # 远端五项全部完全一致时
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `cd backend && .venv/bin/pytest apps/prescriptions/tests/test_motion_video_upload.py -q`
 
 Expected: FAIL，上传模块和命令不存在。
 
-- [ ] **Step 3: 实现 FFprobe 解析与固定文件映射**
+- [x] **Step 3: 实现 FFprobe 解析与固定文件映射**
 
 使用 `subprocess.run([...], capture_output=True, text=True, timeout=30, check=True)` 获取 JSON。校验逻辑必须精确为：
 
@@ -486,13 +490,13 @@ if not 5 <= duration_seconds <= 120:
     raise CommandError("正式动作视频时长必须为 5–120 秒")
 ```
 
-- [ ] **Step 4: 实现远端幂等校验和命令输出**
+- [x] **Step 4: 实现远端幂等校验和命令输出**
 
 先通过 `stat_object_metadata_or_none()` 读取远端；存在时使用 `validate_object_metadata()` 校验本地七牛 ETag、大小和 `video/mp4`。不存在时调用 `upload_local_video()` 上传固定 canonical Key，再次 stat 校验。输出只包含动作编码、Key、字节数和“已存在/已上传”。
 
 命令必须注册 `--check-only` 布尔参数；启用时只执行本地文件与 FFprobe 校验，既不调用七牛 stat，也不调用上传。
 
-- [ ] **Step 5: 运行单元测试与本地只读预检**
+- [x] **Step 5: 运行单元测试与本地只读预检**
 
 Run:
 
@@ -504,7 +508,7 @@ cd backend
 
 Expected: 测试 PASS；五个本地素材全部通过，`--check-only` 不访问写接口。
 
-- [ ] **Step 6: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 6: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add backend/apps/prescriptions/motion_video_assets.py backend/apps/prescriptions/management backend/apps/prescriptions/tests/test_motion_video_upload.py
@@ -525,7 +529,7 @@ git commit -m "feat(视频): 增加正式动作素材幂等上传命令"
 - Produces: `_get_current_recordable_motion_action(project_patient, prescription_action_id)`。
 - Enforces: 1800 秒、360 分片、536870912 字节。
 
-- [ ] **Step 1: 写入五动作参数化会话与容量失败测试**
+- [x] **Step 1: 写入五动作参数化会话与容量失败测试**
 
 ```python
 @pytest.mark.parametrize("source_key", sorted(OFFICIAL_MOTION_ACTION_SOURCE_KEYS))
@@ -551,13 +555,13 @@ def test_every_official_motion_action_can_create_video_session(
 
 另加：1801 秒失败、index 360 失败、累计分片刚好 512 MiB 允许而多 1 字节失败、合并输出多 1 字节失败、非正式 motion 动作失败。
 
-- [ ] **Step 2: 运行目标测试并确认旧肩部推举限制导致失败**
+- [x] **Step 2: 运行目标测试并确认旧肩部推举限制导致失败**
 
 Run: `cd backend && .venv/bin/pytest apps/patient_app/tests/test_patient_app_video_api.py apps/training/tests/test_video_tasks.py -q`
 
 Expected: 另外四动作创建会话失败，容量配置不符合新边界。
 
-- [ ] **Step 3: 泛化录像动作校验**
+- [x] **Step 3: 泛化录像动作校验**
 
 把 `_get_current_shoulder_action()` 替换为：
 
@@ -580,17 +584,17 @@ def _get_current_recordable_motion_action(project_patient, prescription_action_i
     return active, action
 ```
 
-- [ ] **Step 4: 实现时长、分片和累计字节三层校验**
+- [x] **Step 4: 实现时长、分片和累计字节三层校验**
 
 settings 设为 1800、360、536870912。接收新分片前聚合已上传 `Sum("size_bytes")`，若加本分片后超过上限则拒绝；finalize 再校验总和；合并完成后在写入 `video.size_bytes` 前拒绝超限结果并进入现有失败/清理流程。
 
-- [ ] **Step 5: 运行录像后端目标测试**
+- [x] **Step 5: 运行录像后端目标测试**
 
 Run: `cd backend && .venv/bin/pytest apps/patient_app/tests/test_patient_app_video_api.py apps/training/tests/test_video_tasks.py -q`
 
 Expected: PASS。
 
-- [ ] **Step 6: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 6: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add backend/config/settings.py backend/apps/training/video_services.py backend/apps/training/video_tasks.py backend/apps/patient_app/tests/test_patient_app_video_api.py backend/apps/training/tests/test_video_tasks.py
@@ -615,11 +619,11 @@ git commit -m "feat(训练): 支持五动作三十分钟录像"
 - Produces: `get_motion_analyzer(source_key: str | None) -> MotionAnalyzer | None`、`analysis_available(source_key) -> bool`。
 - Produces: 训练追踪记录 `analysis_available: bool`。
 
-- [ ] **Step 1: 写入绕过限制、时长和分析注册失败测试**
+- [x] **Step 1: 写入绕过限制、时长和分析注册失败测试**
 
 测试必须参数化五动作，断言 `POST /api/patient-app/training-records/` 全部返回 400 和“运动动作必须完成录像上传”；处方运动动作 31 分钟返回 400，30 分钟通过；分析注册表只为肩部推举返回 analyzer；其它四动作 `create_analysis_job()` 返回“不支持当前动作分析”；tracking 五动作都有录像字段，但仅肩部推举 `analysis_available=true`。
 
-- [ ] **Step 2: 运行目标测试并确认失败**
+- [x] **Step 2: 运行目标测试并确认失败**
 
 Run:
 
@@ -630,11 +634,11 @@ cd backend
 
 Expected: 旧逻辑只拦肩部推举且 tasks 硬编码分析函数。
 
-- [ ] **Step 3: 实现手工提交和处方时长限制**
+- [x] **Step 3: 实现手工提交和处方时长限制**
 
 患者端使用 `is_official_motion_action()` 拦截五动作。`ActivateNowActionSerializer.validate()` 读取 `attrs["action_library_item"]`；正式运动动作 `duration_minutes > 30` 时返回“运动动作时长不能超过 30 分钟”，游戏不受本次新上限影响。
 
-- [ ] **Step 4: 实现单分析器注册表并改造任务**
+- [x] **Step 4: 实现单分析器注册表并改造任务**
 
 ```python
 @dataclass(frozen=True)
@@ -655,7 +659,7 @@ MOTION_ANALYZERS = {
 
 `create_analysis_job()` 根据 source key 获取注册项；`run_motion_analysis_job()` 从 job 的处方动作 source key 获取同一 analyzer，调用 `analyze_keypoints(frames)`，并把 `algorithm_version` 传给 `_persist_success()`。不得改变肩部推举既有结果结构。
 
-- [ ] **Step 5: 在 tracking 返回计算能力并运行测试**
+- [x] **Step 5: 在 tracking 返回计算能力并运行测试**
 
 每条 recent record 增加：
 
@@ -669,7 +673,7 @@ Run: `cd backend && .venv/bin/pytest apps/patient_app/tests/test_patient_app_api
 
 Expected: PASS。
 
-- [ ] **Step 6: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 6: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add backend/apps/patient_app/views.py backend/apps/prescriptions/serializers.py backend/apps/training/analysis_registry.py backend/apps/training/video_services.py backend/apps/training/tasks.py backend/apps/training/tracking.py backend/apps/patient_app/tests/test_patient_app_api.py backend/apps/training/tests/test_motion_analysis.py backend/apps/training/tests/test_tracking_api.py
@@ -689,17 +693,17 @@ git commit -m "refactor(分析): 按动作注册录像分析器"
 **Interfaces:**
 - Consumes: `video_configured: boolean`、`analysis_available: boolean`。
 
-- [ ] **Step 1: 写入徽标与分析入口失败测试**
+- [x] **Step 1: 写入徽标与分析入口失败测试**
 
 在 tracking 测试构造一条非肩部推举但 `analysis_available=true` 的记录，断言显示分析入口；构造肩部推举但 `analysis_available=false` 的记录，断言不显示。动作库测试数据 `video_url=""`、`video_configured=true` 时仍断言“已配置视频”。
 
-- [ ] **Step 2: 运行目标测试并确认失败**
+- [x] **Step 2: 运行目标测试并确认失败**
 
 Run: `cd frontend && npm run test -- src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx src/pages/prescriptions/PrescriptionPanel.test.tsx`
 
 Expected: FAIL，页面仍以肩部推举编码和 `video_url` 判断能力。
 
-- [ ] **Step 3: 改用后端能力字段**
+- [x] **Step 3: 改用后端能力字段**
 
 删除 `isShoulderPressRecord()` 对分析按钮的控制，改为：
 
@@ -709,7 +713,7 @@ const selectedVideoSupportsAnalysis = videoDrawerRecord?.analysis_available === 
 
 动作库徽标使用 `action.video_configured`；保留动态 `video_url` 给需要播放的界面。
 
-- [ ] **Step 4: 运行目标测试、lint 和类型构建**
+- [x] **Step 4: 运行目标测试、lint 和类型构建**
 
 Run:
 
@@ -722,7 +726,7 @@ npm run build
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 5: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add frontend/src/pages/prescriptions/types.ts frontend/src/pages/prescriptions/FixedActionLibraryTab.tsx frontend/src/pages/training-tracking/types.ts frontend/src/pages/training-tracking/TrainingTrackingDetailPage.tsx frontend/src/pages/training-tracking/TrainingTrackingDetailPage.test.tsx
@@ -747,7 +751,7 @@ git commit -m "feat(管理端): 按能力展示动作视频分析"
 - Produces: `buildMotionTrainingGuideUrl()`、`buildMotionTrainingPreviewUrl()`、`buildMotionTrainingCameraUrl()`、`buildMotionTrainingUploadUrl()`。
 - Produces: `PENDING_MOTION_TRAINING_SESSION_KEY = "motioncare.pendingMotionTrainingSession"`，兼容读取 `motioncare.pendingShoulderPressSession`。
 
-- [ ] **Step 1: 写入五动作路由和旧 Key 恢复失败测试**
+- [x] **Step 1: 写入五动作路由和旧 Key 恢复失败测试**
 
 ```ts
 it.each(OFFICIAL_MOTION_SOURCE_KEYS)('routes %s to motion training', (sourceKey) => {
@@ -763,13 +767,13 @@ it('migrates the old shoulder session without deleting it early', () => {
 })
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `cd miniapp && npm test -- src/pages/shoulder-press/session.test.ts src/pages/prescription/actionRouting.test.ts`
 
 Expected: FAIL，通用目录、路由和 Key 不存在。
 
-- [ ] **Step 3: 实现通用目录、动作解析与路由**
+- [x] **Step 3: 实现通用目录、动作解析与路由**
 
 `catalog.ts` 必须与后端五编码一致，并以 `export type MotionSourceKey = typeof OFFICIAL_MOTION_SOURCE_KEYS[number]` 导出联合类型。`actionEntryUrl()` 对五动作统一返回通用说明页，按钮统一为“开始跟练”；游戏与其它训练保持原路由。
 
@@ -777,7 +781,7 @@ Expected: FAIL，通用目录、路由和 Key 不存在。
 
 `CurrentPrescription.actions[].video_unavailable` 定义为可选布尔值 `video_unavailable?: boolean`，兼容升级前写入本地缓存的旧处方响应。
 
-- [ ] **Step 4: 实现旧会话双 Key 兼容**
+- [x] **Step 4: 实现旧会话双 Key 兼容**
 
 加载顺序为新 Key 优先、旧 Key 次之。旧 Key 命中时把规范化载荷写入新 Key但不删除旧 Key；成功完成或用户明确放弃时同时清除两个 Key。旧导出通过别名继续可用：
 
@@ -786,13 +790,13 @@ export const PENDING_SHOULDER_PRESS_SESSION_KEY = LEGACY_PENDING_SHOULDER_PRESS_
 export const loadPendingShoulderPressSession = loadPendingMotionTrainingSession
 ```
 
-- [ ] **Step 5: 运行目标测试**
+- [x] **Step 5: 运行目标测试**
 
 Run: `cd miniapp && npm test -- src/pages/shoulder-press/session.test.ts src/pages/prescription/actionRouting.test.ts`
 
 Expected: PASS。
 
-- [ ] **Step 6: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 6: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add miniapp/src/features/motion-training miniapp/src/pages/prescription/actionRouting.ts miniapp/src/types/patientApp.ts miniapp/src/pages/shoulder-press/session.test.ts miniapp/src/pages/prescription/actionRouting.test.ts
@@ -833,7 +837,7 @@ git commit -m "refactor(小程序): 建立通用运动跟练会话"
 - Produces generic `MotionTraining*` types/functions matching the existing shoulder pipeline behavior。
 - Preserves legacy `ShoulderPress*` aliases only in thin files under `pages/shoulder-press/`。
 
-- [ ] **Step 1: 复制现有纯逻辑测试到通用目录并执行精确符号映射**
+- [x] **Step 1: 复制现有纯逻辑测试到通用目录并执行精确符号映射**
 
 使用以下无遗漏映射更新测试和实现：
 
@@ -847,13 +851,13 @@ SHOULDER_PRESS -> MOTION_TRAINING
 
 保留动作名称等由 API 返回的真实文案，不做字符串替换。所有既有 API、recorder、buffer、storage、local file、workflow、page state 和 alert audio 测试必须在通用目录运行。
 
-- [ ] **Step 2: 运行迁移后的测试并确认导入失败**
+- [x] **Step 2: 运行迁移后的测试并确认导入失败**
 
 Run: `cd miniapp && npm test -- src/features/motion-training`
 
 Expected: FAIL，通用实现尚未完成或仍存在肩部推举导入。
 
-- [ ] **Step 3: 抽取通用实现并保持行为不变**
+- [x] **Step 3: 抽取通用实现并保持行为不变**
 
 以现有已通过测试的肩部推举实现为唯一来源，移动逻辑后只做上述符号和路由泛化。关键常量必须为：
 
@@ -867,7 +871,7 @@ export const MOTION_TRAINING_BUFFER_LOW_BYTES = 10 * 1024 * 1024
 
 `shouldAutoFinishMotionTraining()` 以处方时长或 1,797,000ms 安全截止先到者为准。API 函数使用 `MotionTraining` 命名，但请求路径保持现有后端 `training-video-sessions` 不变。
 
-- [ ] **Step 4: 在旧目录保留薄别名并验证无循环依赖**
+- [x] **Step 4: 在旧目录保留薄别名并验证无循环依赖**
 
 旧纯逻辑文件只允许从 `../../features/motion-training/...` 重导出；不得反向让通用模块导入 `pages/shoulder-press`。运行：
 
@@ -878,13 +882,13 @@ rg "pages/shoulder-press|../shoulder-press" src/features/motion-training
 
 Expected: 无匹配。
 
-- [ ] **Step 5: 运行通用核心与旧测试回归**
+- [x] **Step 5: 运行通用核心与旧测试回归**
 
 Run: `cd miniapp && npm test -- src/features/motion-training src/pages/shoulder-press`
 
 Expected: PASS。
 
-- [ ] **Step 6: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 6: 检查点提交（仅在用户明确授权后）**
 
 提交时只 stage 通用目录和本任务改成薄别名的旧纯逻辑文件，提交信息：
 
@@ -915,29 +919,29 @@ git commit -m "refactor(小程序): 抽取通用运动录像核心"
 - Consumes: Task 8/9 的通用动作、路由、会话和录像核心。
 - Produces: 四个 `/pages/motion-training/*` 页面；旧肩部推举页面为兼容包装。
 
-- [ ] **Step 1: 将页面测试参数化为五动作**
+- [x] **Step 1: 将页面测试参数化为五动作**
 
 构造五个 `CurrentPrescription.actions`，逐个断言：处方按钮为“开始跟练”；说明页有“动作预览/开始训练”；预览使用对应 `video_url`；camera 创建对应 actionId 的会话；upload 恢复同一 actionId。视频继续断言 `autoplay/loop/muted/controls=false`。
 
-- [ ] **Step 2: 运行页面测试并确认失败**
+- [x] **Step 2: 运行页面测试并确认失败**
 
 Run: `cd miniapp && npm test -- src/pages/shoulder-press/pages.test.tsx`
 
 Expected: 另外四动作仍进入手工训练或被肩部推举 resolver 拒绝。
 
-- [ ] **Step 3: 实现通用说明和预览页**
+- [x] **Step 3: 实现通用说明和预览页**
 
 说明与预览页调用 `fetchCurrentPrescriptionData()` 后使用 `resolveMotionTrainingAction()`。`video_unavailable=true` 或 URL 为空时隐藏预览播放器但保留“开始训练”；视频 onError 触发一次处方刷新，第二次失败显示非阻塞提示。
 
-- [ ] **Step 4: 泛化 camera 与 upload 协调页面**
+- [x] **Step 4: 泛化 camera 与 upload 协调页面**
 
 以现有 shoulder camera/upload 为行为基线，替换为通用 imports 和类型。camera 必须把实际 action 的 `video_url` 传入 `MotionTrainingOverlay`；所有 session、segment、finalize 请求使用当前 actionId。页面不得按 source key 分支，AI 不在小程序录像页执行。
 
-- [ ] **Step 5: 保留旧路由包装并注册新页面**
+- [x] **Step 5: 保留旧路由包装并注册新页面**
 
 旧页面默认导出通用页面组件；旧路由参数原样透传。`app.config.ts` 注册四个新页面，同时保留原四个 shoulder 路由。旧 upload 恢复页仍能清理两个本地 Key。
 
-- [ ] **Step 6: 运行页面测试与微信构建**
+- [x] **Step 6: 运行页面测试与微信构建**
 
 Run:
 
@@ -949,7 +953,7 @@ npm run build:weapp
 
 Expected: PASS；`dist/app.json` 同时包含新旧路由。
 
-- [ ] **Step 7: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 7: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git commit -m "feat(小程序): 五动作统一录像跟练页面"
@@ -973,31 +977,31 @@ git commit -m "feat(小程序): 五动作统一录像跟练页面"
 - Produces: `fetchDemoMotionVideoManifest() -> Promise<Record<MotionSourceKey, string>>`，60 秒内存缓存。
 - Produces: 五个 duration 10 的演示 motion actions。
 
-- [ ] **Step 1: 写入五动作清单、10 分钟与零副作用测试**
+- [x] **Step 1: 写入五动作清单、10 分钟与零副作用测试**
 
 测试固定演示 ID：肩部推举保留 `888807`；高抬腿、坐站、划船、后踢依次使用 `888808`–`888811`。断言五动作 `duration_minutes=10`、每个 URL 来自 manifest、camera `expectedDurationSeconds=600`。
 
 对五动作参数化断言演示 camera 不调用：`createCameraContext`、`createVideoSession`、`uploadVideoSegment`、`finalizeVideoSession`、`setStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY, ...)`。提前结束只显示本地“体验完成”。
 
-- [ ] **Step 2: 运行演示测试并确认失败**
+- [x] **Step 2: 运行演示测试并确认失败**
 
 Run: `cd miniapp && npm test -- src/demo/data.test.ts src/pages/shoulder-press/pages.test.tsx`
 
 Expected: 当前只有肩部推举、时长 1 分钟且使用长期硬编码 URL。
 
-- [ ] **Step 3: 实现不带患者身份的 publicRequest 与 manifest 缓存**
+- [x] **Step 3: 实现不带患者身份的 publicRequest 与 manifest 缓存**
 
 `publicRequest` 只发送 JSON header，不调用 `patientAuthorizationHeader()`，失败使用安全中性错误。manifest 模块验证响应恰好包含五个唯一 source key 和非空 HTTPS URL；60 秒内复用同一 Promise，失败立即清空缓存以允许重试。
 
-- [ ] **Step 4: 构造五动作演示处方并移除长期 URL**
+- [x] **Step 4: 构造五动作演示处方并移除长期 URL**
 
 删除 `DEMO_SHOULDER_PRESS_VIDEO_URL`。`createDemoCurrentPrescription(videoUrls)` 与 `createDemoHomeData(videoUrls)` 接收清单映射；五个 motion action 统一 `duration_minutes: 10`、`weekly_target_count: 1`，视频不可用时设置 `video_url: ''`、`video_unavailable: true`。
 
-- [ ] **Step 5: 将演示 camera 泛化为当前动作**
+- [x] **Step 5: 将演示 camera 泛化为当前动作**
 
 `DemoCamera.tsx` 从演示处方解析 actionId，把 `action.video_url` 和 600 秒传给通用 overlay。通用 camera 在演示会话下渲染该组件；旧 `shoulder-press/demoCamera.tsx` 只重导出它。保持只渲染 `Camera`、本地计时、后台暂停、权限设置和提前结束，不创建 CameraContext。
 
-- [ ] **Step 6: 运行演示测试和小程序完整测试**
+- [x] **Step 6: 运行演示测试和小程序完整测试**
 
 Run:
 
@@ -1015,7 +1019,7 @@ rg "token=.*210|IMG_0383_SDR|DEMO_SHOULDER_PRESS_VIDEO_URL" src
 
 Expected: 无匹配。
 
-- [ ] **Step 7: 检查点提交（仅在用户明确授权后）**
+- [x] **Step 7: 检查点提交（仅在用户明确授权后）**
 
 ```bash
 git commit -m "feat(小程序): 演示五动作十分钟跟练"
@@ -1034,13 +1038,13 @@ git commit -m "feat(小程序): 演示五动作十分钟跟练"
 - Consumes: Tasks 1–11 的代码、migration、上传命令和构建产物。
 - Produces: 五个真实七牛 `v1` 对象、已迁移本地数据和完整验证记录。
 
-- [ ] **Step 1: 更新追加式决策记录**
+- [x] **Step 1: 更新追加式决策记录**
 
 在 `open-questions.md` 已确认决策表追加 D039：五个正式运动动作统一使用私有正式教学视频和全量录像跟练，真实患者上限 30 分钟，演示为 10 分钟无录像体验，AI 按动作逐步注册。
 
 在 changelog 顶部追加 `0.20 - 2026-08-20`，只追加本次决策，不修改 0.19 及更早条目。README 索引加入本 spec/plan。spec/plan 状态改为 `implementing`，执行记录只在实际 checkpoint commit 存在后填写 short SHA。
 
-- [ ] **Step 2: 运行完整自动化门禁**
+- [x] **Step 2: 运行完整自动化门禁**
 
 Run:
 
@@ -1055,7 +1059,7 @@ cd miniapp && npm run build:weapp
 
 Expected: 全部 PASS。
 
-- [ ] **Step 3: 执行真实七牛上传**
+- [x] **Step 3: 执行真实七牛上传**
 
 此步骤是用户已授权目标内的外部写操作，但执行前再次打印目标 bucket `motioncare` 和五个 canonical Key；不得打印密钥或 token。
 
@@ -1068,7 +1072,7 @@ cd backend
 
 Expected: 五项均显示“已上传”或“已存在且校验一致”，无冲突。
 
-- [ ] **Step 4: 迁移本地数据库并核对五动作及全部快照**
+- [x] **Step 4: 迁移本地数据库并核对五动作及全部快照**
 
 Run:
 
@@ -1080,11 +1084,11 @@ cd backend
 
 Expected: 第一行 `5`；第二行等于全部正式运动处方动作快照数量；第三、四行均为 `0`。
 
-- [ ] **Step 5: 验证五个动态 HTTPS 地址和远端媒体**
+- [x] **Step 5: 验证五个动态 HTTPS 地址和远端媒体**
 
 通过 Django shell 调用 `build_demo_motion_video_manifest()`，逐 URL 执行 HEAD/GET，断言状态 200、`Content-Type: video/mp4`，再用 FFprobe 验证下载首个对象。日志仅输出 source key、状态、MIME、Content-Length，不输出完整 query/token。
 
-- [ ] **Step 6: 执行静态安全扫描**
+- [x] **Step 6: 执行静态安全扫描**
 
 Run:
 
@@ -1096,11 +1100,11 @@ git status --short
 
 Expected: 无硬编码长期签名、密钥或旧肩推源；diff 无空白错误；status 只包含已知保留改动和本计划产物。
 
-- [ ] **Step 7: 记录人工门禁状态**
+- [x] **Step 7: 记录人工门禁状态**
 
 微信开发者工具、iOS、Android 分别记录五动作首帧、循环预览、Camera+Video 同层、前后台切换、弱网和提前结束结果。未完成的人工项明确列为“待真机验收”，不得报告生产真机已完成。
 
-- [ ] **Step 8: 最终检查点提交（仅在用户明确授权后）**
+- [x] **Step 8: 最终检查点提交（仅在用户明确授权后）**
 
 ```bash
 git add docs/superpowers/specs/2026-08-20-motion-action-official-video-recording-design.md docs/superpowers/plans/2026-08-20-motion-action-official-video-recording.md docs/superpowers/README.md specs/patient-rehab-system/open-questions.md specs/patient-rehab-system/changelog.md

@@ -1,9 +1,13 @@
-> 状态：approved
+> 状态：implementing
 > 日期：2026-08-20
 > 范围：五个正式运动动作的教学视频上传、私有动态签名、小程序统一预览与全量录像跟练。
 > 关联：`docs/superpowers/specs/2026-05-14-prescription-motion-training-design.md`、`docs/superpowers/specs/2026-07-14-segmented-training-video-pipeline-design.md`、`docs/superpowers/specs/2026-08-09-wechat-shoulder-press-preview-pip-design.md`、`docs/superpowers/specs/2026-08-12-wechat-miniapp-demo-mode-design.md`
 >
 > 审批记录（2026-08-20）：用户已在 brainstorm 中逐节确认总体架构、视频数据、真实患者流程、10 分钟审核演示流程、发布与验收方案，并已复核书面 spec。
+>
+> 修订（2026-08-21, codex）：Tasks 1–11 已按检查点提交落地，Task 12 正在执行真实上传与完整验证。
+>
+> 执行记录（2026-08-21, codex）：Task 1 `ca8851a`；Task 2 `cd507a0`；Task 3 `8d39cd3`（审查修复 `ebb705a`）；Task 4 `a30fedc`（审查修复 `eddd827`）；Task 5 `8cdcc42`（部署边界修复 `750341d`）；Task 6 `1e0b59d`；Task 7 `a1d440a`；Task 8 `86d42a1`；Task 9 `6553b60`（兼容修复 `6f1d7b4`）；Task 10 `1b32ec5`（兼容修复 `7eab8aa`）；Task 11 `6381f7b`。
 
 # 五运动动作正式视频与统一录像跟练设计
 
