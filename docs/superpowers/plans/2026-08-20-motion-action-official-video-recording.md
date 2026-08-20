@@ -2,15 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> 状态：implementing
+> 状态：implemented
 > 日期：2026-08-20
 > 范围：上传五个正式教学视频，将肩部推举录像链路泛化到全部正式运动动作，并保留审核演示隔离与旧会话兼容。
 >
-> 修订（2026-08-21, codex）：Tasks 1–11 已按检查点提交落地，Task 12 正在执行真实上传与完整验证。
+> 修订（2026-08-21, codex）：Tasks 1–12 与整分支最终审查修复均已落地；微信开发者工具、iOS、Android 人工项待真机验收。
 >
 > 执行记录（2026-08-21, codex）：Task 1 `ca8851a`；Task 2 `cd507a0`；Task 3 `8d39cd3`（审查修复 `ebb705a`）；Task 4 `a30fedc`（审查修复 `eddd827`）；Task 5 `8cdcc42`（部署边界修复 `750341d`）；Task 6 `1e0b59d`；Task 7 `a1d440a`；Task 8 `86d42a1`；Task 9 `6553b60`（兼容修复 `6f1d7b4`）；Task 10 `1b32ec5`（兼容修复 `7eab8aa`）；Task 11 `6381f7b`。
 >
 > 执行记录（2026-08-21, codex）：Task 12 文档与验收检查点 `0136341`；微信开发者工具、iOS、Android 人工项待真机验收。
+>
+> 最终审查记录（2026-08-21, codex）：审查准备 `db9cea6`、修复基线 `52543c3`；后端边界修复 `51d4e4e`、小程序恢复修复 `d9e9c63`、后端全量夹具修复 `8cb1feb`。7 个 Important 与 5 个本轮 Minor 全部关闭，自动化门禁通过。
 
 **Goal:** 五个正式运动动作均使用七牛私有正式教学视频，在微信小程序中完成统一预览、全量录像跟练、分片恢复、训练记录和医生审阅闭环。
 

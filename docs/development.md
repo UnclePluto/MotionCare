@@ -102,7 +102,7 @@ example:
 client_max_body_size 40m;
 ```
 
-Do not raise this to the full 200 MB training-video limit. The staging directory
+Do not raise this to the full 512 MiB training-video limit. The staging directory
 must not be exposed by Django, Nginx, or static file serving, and it must be
 excluded from server backups.
 
