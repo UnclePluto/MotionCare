@@ -144,6 +144,142 @@ def test_upload_local_video_stats_after_successful_upload(tmp_path, monkeypatch)
     upload_token.assert_called_once_with("motioncare-training", "training-videos/1/final.mp4", 3600)
 
 
+@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
+def test_upload_local_video_insert_only_sets_upload_policy(tmp_path, monkeypatch):
+    path = _local_video(tmp_path)
+    stat = Mock(
+        side_effect=[
+            (None, _stat_response(status_code=612, error="no such file")),
+            (_matching_metadata(path), _stat_response()),
+        ]
+    )
+    put_file = Mock(
+        return_value=(
+            {"key": "motion-action-videos/v1/official.mp4", "hash": etag(str(path))},
+            _stat_response(),
+        )
+    )
+    upload_token = Mock(return_value="upload-token")
+    auth = Auth("ak-test", "sk-test")
+    monkeypatch.setattr(auth, "upload_token", upload_token)
+    monkeypatch.setattr(BucketManager, "stat", stat)
+    monkeypatch.setattr(training_qiniu, "put_file", put_file)
+    monkeypatch.setattr(training_qiniu, "Auth", Mock(return_value=auth))
+
+    metadata = training_qiniu.upload_local_video(
+        path=path,
+        bucket="motioncare-training",
+        key="motion-action-videos/v1/official.mp4",
+        insert_only=True,
+    )
+
+    assert metadata == _matching_metadata(path)
+    upload_token.assert_called_once_with(
+        "motioncare-training",
+        "motion-action-videos/v1/official.mp4",
+        3600,
+        policy={"insertOnly": 1},
+    )
+
+
+@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
+def test_insert_only_upload_accepts_matching_object_created_concurrently(
+    tmp_path, monkeypatch
+):
+    path = _local_video(tmp_path)
+    stat = Mock(
+        side_effect=[
+            (None, _stat_response(status_code=612, error="no such file")),
+            (_matching_metadata(path), _stat_response()),
+        ]
+    )
+    put_file = Mock(return_value=(None, _stat_response(status_code=614, error="exists")))
+    auth = Auth("ak-test", "sk-test")
+    monkeypatch.setattr(auth, "upload_token", Mock(return_value="upload-token"))
+    monkeypatch.setattr(BucketManager, "stat", stat)
+    monkeypatch.setattr(training_qiniu, "put_file", put_file)
+    monkeypatch.setattr(training_qiniu, "Auth", Mock(return_value=auth))
+
+    metadata = training_qiniu.upload_local_video(
+        path=path,
+        bucket="motioncare-training",
+        key="motion-action-videos/v1/official.mp4",
+        insert_only=True,
+    )
+
+    assert metadata == _matching_metadata(path)
+    assert stat.call_count == 2
+    put_file.assert_called_once()
+
+
+@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
+def test_insert_only_upload_rejects_conflicting_object_created_concurrently(
+    tmp_path, monkeypatch
+):
+    path = _local_video(tmp_path)
+    conflicting = {
+        **_matching_metadata(path),
+        "hash": "other-hash",
+    }
+    stat = Mock(
+        side_effect=[
+            (None, _stat_response(status_code=612, error="no such file")),
+            (conflicting, _stat_response()),
+        ]
+    )
+    put_file = Mock(side_effect=RuntimeError("sensitive sdk detail"))
+    auth = Auth("ak-test", "sk-test")
+    monkeypatch.setattr(auth, "upload_token", Mock(return_value="upload-token"))
+    monkeypatch.setattr(BucketManager, "stat", stat)
+    monkeypatch.setattr(training_qiniu, "put_file", put_file)
+    monkeypatch.setattr(training_qiniu, "Auth", Mock(return_value=auth))
+
+    with pytest.raises(ValidationError, match="冲突") as exc_info:
+        training_qiniu.upload_local_video(
+            path=path,
+            bucket="motioncare-training",
+            key="motion-action-videos/v1/official.mp4",
+            insert_only=True,
+        )
+
+    assert "sensitive sdk detail" not in str(exc_info.value)
+    assert exc_info.value.__suppress_context__ is True
+    assert stat.call_count == 2
+    put_file.assert_called_once()
+
+
+@override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
+def test_insert_only_upload_does_not_hide_failure_when_remote_stays_missing(
+    tmp_path, monkeypatch
+):
+    path = _local_video(tmp_path)
+    stat = Mock(
+        side_effect=[
+            (None, _stat_response(status_code=612, error="no such file")),
+            (None, _stat_response(status_code=612, error="no such file")),
+        ]
+    )
+    put_file = Mock(side_effect=RuntimeError("sensitive sdk detail"))
+    auth = Auth("ak-test", "sk-test")
+    monkeypatch.setattr(auth, "upload_token", Mock(return_value="upload-token"))
+    monkeypatch.setattr(BucketManager, "stat", stat)
+    monkeypatch.setattr(training_qiniu, "put_file", put_file)
+    monkeypatch.setattr(training_qiniu, "Auth", Mock(return_value=auth))
+
+    with pytest.raises(ValidationError, match="训练视频上传七牛失败") as exc_info:
+        training_qiniu.upload_local_video(
+            path=path,
+            bucket="motioncare-training",
+            key="motion-action-videos/v1/official.mp4",
+            insert_only=True,
+        )
+
+    assert "sensitive sdk detail" not in str(exc_info.value)
+    assert exc_info.value.__suppress_context__ is True
+    assert stat.call_count == 2
+    put_file.assert_called_once()
+
+
 @override_settings(
     QINIU_ACCESS_KEY="ak-test",
     QINIU_SECRET_KEY="sk-test",

@@ -227,6 +227,7 @@ def test_missing_remote_objects_are_uploaded_and_revalidated(tmp_path, monkeypat
     assert [call.kwargs["key"] for call in upload.call_args_list] == list(
         MOTION_ACTION_VIDEO_OBJECT_KEYS.values()
     )
+    assert [call.kwargs["insert_only"] for call in upload.call_args_list] == [True] * 5
     assert stat.call_count == 10
 
 

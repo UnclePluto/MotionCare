@@ -136,6 +136,7 @@ def upload_local_video(
     path: Path,
     bucket: str,
     key: str,
+    insert_only: bool = False,
     deadline_monotonic: float | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
@@ -176,13 +177,39 @@ def upload_local_video(
         )
         return existing
 
+    def resolve_insert_only_upload_failure() -> dict:
+        try:
+            concurrent = stat_object_metadata_or_none(bucket=bucket, key=key)
+        except ValidationError:
+            raise ValidationError("训练视频上传七牛失败") from None
+        if concurrent is None:
+            raise ValidationError("训练视频上传七牛失败") from None
+        try:
+            validate_object_metadata(
+                concurrent,
+                expected_hash=local_etag,
+                expected_size_bytes=local_size,
+                expected_content_type="video/mp4",
+            )
+        except ValidationError:
+            raise ValidationError("七牛目标对象与本地视频冲突") from None
+        return concurrent
+
     try:
         qiniu.config.set_default(
             connection_timeout=settings.QINIU_UPLOAD_REQUEST_TIMEOUT_SECONDS,
             connection_retries=settings.QINIU_UPLOAD_REQUEST_RETRIES,
         )
         auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
-        token = auth.upload_token(bucket, key, 3600)
+        if insert_only:
+            token = auth.upload_token(
+                bucket,
+                key,
+                3600,
+                policy={"insertOnly": 1},
+            )
+        else:
+            token = auth.upload_token(bucket, key, 3600)
         result, response = put_file(
             token,
             key,
@@ -193,12 +220,20 @@ def upload_local_video(
         )
         check_deadline()
     except ValidationError:
+        if insert_only:
+            return resolve_insert_only_upload_failure()
         raise
     except Exception as exc:
+        if insert_only:
+            return resolve_insert_only_upload_failure()
         raise ValidationError("训练视频上传七牛失败") from exc
     if getattr(response, "status_code", None) != 200 or not isinstance(result, dict):
+        if insert_only:
+            return resolve_insert_only_upload_failure()
         raise ValidationError("训练视频上传七牛失败")
     if result.get("key") != key or result.get("hash") != local_etag:
+        if insert_only:
+            return resolve_insert_only_upload_failure()
         raise ValidationError("七牛训练视频上传结果不匹配")
 
     metadata = stat_object_metadata(bucket=bucket, key=key)

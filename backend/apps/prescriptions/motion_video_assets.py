@@ -186,6 +186,7 @@ def upload_motion_action_assets(source_root: Path) -> list[UploadedMotionAsset]:
                     path=asset.path,
                     bucket=settings.QINIU_BUCKET,
                     key=asset.object_key,
+                    insert_only=True,
                 )
                 metadata = stat_object_metadata_or_none(
                     bucket=settings.QINIU_BUCKET, key=asset.object_key
