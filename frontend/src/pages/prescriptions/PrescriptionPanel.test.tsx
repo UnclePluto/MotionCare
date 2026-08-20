@@ -51,7 +51,8 @@ const action = {
   suggested_frequency: "3 次/周",
   suggested_duration_minutes: 20,
   default_difficulty: "低",
-  video_url: "https://example.com/video.mp4",
+  video_url: "",
+  video_configured: true,
   has_ai_supervision: true,
   is_active: true,
 };
@@ -68,6 +69,7 @@ const resistanceAction = {
   suggested_duration_minutes: 10,
   default_difficulty: "中",
   video_url: "",
+  video_configured: false,
   has_ai_supervision: false,
   is_active: true,
 };
@@ -84,6 +86,7 @@ const legKickbackAction = {
   suggested_duration_minutes: 10,
   default_difficulty: "中",
   video_url: "",
+  video_configured: false,
   has_ai_supervision: false,
   is_active: true,
 };
@@ -100,6 +103,7 @@ const gameAction = {
   suggested_duration_minutes: 10,
   default_difficulty: "",
   video_url: "",
+  video_configured: false,
   has_ai_supervision: false,
   is_active: true,
 };
@@ -116,6 +120,7 @@ const executiveAction = {
   suggested_duration_minutes: 10,
   default_difficulty: "",
   video_url: "",
+  video_configured: false,
   has_ai_supervision: false,
   is_active: true,
 };
@@ -132,6 +137,7 @@ const emptyFrequencyAction = {
   suggested_duration_minutes: null,
   default_difficulty: "",
   video_url: "",
+  video_configured: false,
   has_ai_supervision: false,
   is_active: true,
 };
@@ -222,6 +228,7 @@ describe("PrescriptionPanel", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: "固定动作库" }));
     expect(await screen.findByText("椰林步道模拟（原地高抬腿+摆臂）")).toBeInTheDocument();
+    expect(screen.getByText("已配置视频")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "新增动作" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();

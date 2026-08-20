@@ -34,7 +34,10 @@ export function FixedActionLibraryTab({ actions }: Props) {
                 <Tag>
                   {action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "未配置时长"}
                 </Tag>
-                <Badge status={action.video_url ? "success" : "default"} text={action.video_url ? "已配置视频" : "无视频资源"} />
+                <Badge
+                  status={action.video_configured ? "success" : "default"}
+                  text={action.video_configured ? "已配置视频" : "无视频资源"}
+                />
                 {action.has_ai_supervision ? <Tag color="blue">支持 AI 监督</Tag> : <Tag>无 AI 监督</Tag>}
               </Space>
               <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>

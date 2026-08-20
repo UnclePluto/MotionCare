@@ -73,7 +73,6 @@ const TRAINING_STATUS_LABEL: Record<string, string> = {
 };
 
 const PENDING_VIDEO_PROCESSING_STATUSES = new Set(["queued", "assembling", "uploading_qiniu"]);
-const SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press";
 
 const VIDEO_STATUS_LABEL: Record<string, string> = {
   attached: "已上传",
@@ -105,12 +104,8 @@ function isGameRecord(record: TrackingRecentRecord) {
   return record.internal_type === "game";
 }
 
-function isShoulderPressRecord(record: TrackingRecentRecord) {
-  return record.action_source_key === SHOULDER_PRESS_SOURCE_KEY;
-}
-
 function canUseVideoActions(record: TrackingRecentRecord) {
-  return record.video_id != null && record.video_status === "attached" && isShoulderPressRecord(record);
+  return record.video_id != null && record.video_status === "attached";
 }
 
 function isActiveAnalysisStatus(status: MotionAnalysisJobStatus | null | undefined) {
@@ -302,7 +297,7 @@ export function TrainingTrackingDetailPage() {
     selectedProjectPatient?.patientId === numericPatientId ? selectedProjectPatient.projectPatientId : undefined;
   const drawerOpen = videoDrawerRecord !== null;
   const selectedVideoId = videoDrawerRecord?.video_id ?? null;
-  const selectedVideoSupportsAnalysis = videoDrawerRecord ? isShoulderPressRecord(videoDrawerRecord) : false;
+  const selectedVideoSupportsAnalysis = videoDrawerRecord?.analysis_available === true;
 
   useEffect(() => {
     setSelectedProjectPatient(null);
@@ -756,15 +751,17 @@ export function TrainingTrackingDetailPage() {
                         onClick={() => openVideoDrawer(record)}
                       />
                     </Tooltip>
-                    <Tooltip title="动作分析">
-                      <Button
-                        aria-label="动作分析"
-                        icon={<ExperimentOutlined />}
-                        size="small"
-                        type="text"
-                        onClick={() => openVideoDrawer(record)}
-                      />
-                    </Tooltip>
+                    {record.analysis_available ? (
+                      <Tooltip title="动作分析">
+                        <Button
+                          aria-label="动作分析"
+                          icon={<ExperimentOutlined />}
+                          size="small"
+                          type="text"
+                          onClick={() => openVideoDrawer(record)}
+                        />
+                      </Tooltip>
+                    ) : null}
                   </Space>
                 ) : (
                   "—"
