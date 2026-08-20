@@ -94,6 +94,8 @@ jobs:
           file: backend/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ env.ACR_IMAGE }}:backend-${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
@@ -104,6 +106,8 @@ jobs:
           file: frontend/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ env.ACR_IMAGE }}:web-${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
@@ -114,6 +118,8 @@ jobs:
           file: miniapp/Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ env.ACR_IMAGE }}:wx-${{ github.sha }}
           build-args: TARO_APP_API_BASE_URL=/api
           cache-from: type=gha,scope=wx
