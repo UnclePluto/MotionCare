@@ -1,4 +1,5 @@
-import { buildShoulderPressSessionUrl, SHOULDER_PRESS_SOURCE_KEY } from '../shoulder-press/session'
+import { buildMotionTrainingGuideUrl } from '../../features/motion-training/action'
+import { isOfficialMotionSourceKey } from '../../features/motion-training/catalog'
 import { gameSessionUrl } from './gameSubpackage'
 
 type RoutableAction = {
@@ -8,8 +9,8 @@ type RoutableAction = {
 }
 
 export function actionEntryUrl(action: RoutableAction): string {
-  if (action.source_key === SHOULDER_PRESS_SOURCE_KEY) {
-    return buildShoulderPressSessionUrl(action.id)
+  if (action.internal_type === 'motion' && isOfficialMotionSourceKey(action.source_key)) {
+    return buildMotionTrainingGuideUrl(action.id)
   }
   if (action.internal_type === 'game') {
     return gameSessionUrl(action.id)
@@ -18,7 +19,7 @@ export function actionEntryUrl(action: RoutableAction): string {
 }
 
 export function actionButtonLabel(action: RoutableAction): string {
-  if (action.source_key === SHOULDER_PRESS_SOURCE_KEY) return '开始跟练'
+  if (action.internal_type === 'motion' && isOfficialMotionSourceKey(action.source_key)) return '开始跟练'
   if (action.internal_type === 'game') return '开始游戏'
   return '开始训练'
 }

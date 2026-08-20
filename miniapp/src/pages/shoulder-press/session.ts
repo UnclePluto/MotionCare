@@ -1,5 +1,12 @@
+import {
+  LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY,
+  clearPendingMotionTrainingSession,
+  loadPendingMotionTrainingSession,
+  savePendingMotionTrainingSession
+} from '../../features/motion-training/session'
+
 export const SHOULDER_PRESS_SOURCE_KEY = 'motion-resistance-shoulder-press'
-export const PENDING_SHOULDER_PRESS_SESSION_KEY = 'motioncare.pendingShoulderPressSession'
+export const PENDING_SHOULDER_PRESS_SESSION_KEY = LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY
 export const PENDING_SHOULDER_PRESS_UPLOAD_KEY = PENDING_SHOULDER_PRESS_SESSION_KEY
 
 export type LegacyPendingCompressionShoulderPressSegment = {
@@ -70,16 +77,8 @@ function isPositiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
-function isNonNegativeNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-}
-
 function isPositiveInteger(value: unknown): value is number {
   return isPositiveNumber(value) && Number.isInteger(value)
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return isNonNegativeNumber(value) && Number.isInteger(value)
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -380,131 +379,16 @@ export function isSegmentReadyForLocalDeletion(segment: PendingShoulderPressSegm
   )
 }
 
-function normalizeSegment(value: unknown, expectedIndex: number): PendingShoulderPressSegment | null {
-  if (!value || typeof value !== 'object') return null
-  const segment = value as Record<string, unknown>
-  if (segment.index !== expectedIndex) return null
-  if (!isPositiveInteger(segment.durationMs)) return null
-  if (
-    segment.compressionState === 'pending_compression' ||
-    segment.compressionState === 'compression_failed'
-  ) {
-    if (!isUsableTempVideoPath(segment.rawSavedFilePath)) return null
-    if (
-      segment.compressionState === 'compression_failed' &&
-      !isNonEmptyString(segment.compressionError)
-    ) return null
-    return {
-      index: expectedIndex,
-      compressionState: segment.compressionState,
-      rawSavedFilePath: segment.rawSavedFilePath,
-      durationMs: segment.durationMs,
-      ...(isNonEmptyString(segment.compressionError)
-        ? { compressionError: segment.compressionError }
-        : {})
-    }
-  }
-
-  if (segment.compressionState !== undefined && segment.compressionState !== 'compressed') return null
-  if (!isUsableTempVideoPath(segment.savedFilePath)) return null
-  if (!isPositiveInteger(segment.sizeBytes)) return null
-  if (segment.uploadState !== 'pending' && segment.uploadState !== 'uploading' && segment.uploadState !== 'uploaded') {
-    return null
-  }
-  if (segment.sha256 !== undefined && !isNonEmptyString(segment.sha256)) return null
-  if (
-    segment.localFileState !== undefined &&
-    segment.localFileState !== 'temporary' &&
-    segment.localFileState !== 'save_failed' &&
-    segment.localFileState !== 'saved'
-  ) return null
-
-  return {
-    index: expectedIndex,
-    compressionState: 'compressed',
-    savedFilePath: segment.savedFilePath,
-    durationMs: segment.durationMs,
-    sizeBytes: segment.sizeBytes,
-    uploadState: segment.uploadState,
-    localFileState: segment.localFileState ?? 'saved',
-    ...(segment.sha256 ? { sha256: segment.sha256 } : {})
-  }
-}
-
-function normalizeSession(value: unknown): PendingShoulderPressSession | null {
-  if (!value || typeof value !== 'object') return null
-  const session = value as Partial<PendingShoulderPressSession>
-  if (!isNonEmptyString(session.clientSessionId) || !UUID_V4_PATTERN.test(session.clientSessionId)) return null
-  if (!isPositiveInteger(session.actionId)) return null
-  if (!isTrainingDate(session.trainingDate)) return null
-  if (!isPositiveNumber(session.expectedDurationSeconds)) return null
-  if (!isNonNegativeInteger(session.actualDurationMs)) return null
-  if (!Array.isArray(session.segments)) return null
-  if (typeof session.finalized !== 'boolean') return null
-  if (!isPositiveNumber(session.createdAt)) return null
-  let trainingStartedAtMs: number | undefined
-  if (session.trainingStartedAt !== undefined) {
-    const parsed = parseOffsetIsoTimestamp(session.trainingStartedAt)
-    if (parsed === null) return null
-    trainingStartedAtMs = parsed
-  }
-  let trainingEndedAtMs: number | undefined
-  if (session.trainingEndedAt !== undefined) {
-    const parsed = parseOffsetIsoTimestamp(session.trainingEndedAt)
-    if (parsed === null) return null
-    trainingEndedAtMs = parsed
-  }
-  if (trainingEndedAtMs !== undefined && trainingStartedAtMs === undefined) return null
-  if (
-    trainingStartedAtMs !== undefined &&
-    trainingEndedAtMs !== undefined &&
-    trainingEndedAtMs <= trainingStartedAtMs
-  ) return null
-
-  const segments = session.segments.map((segment, index) => normalizeSegment(segment, index))
-  if (segments.some((segment) => segment === null)) return null
-  const normalizedSegments = segments as PendingShoulderPressSegment[]
-  const actualDurationMs = normalizedSegments.reduce((total, segment) => total + segment.durationMs, 0)
-  if (session.actualDurationMs !== actualDurationMs) return null
-  if (
-    session.finalized &&
-    normalizedSegments.some((segment) => (
-      !isCompressedShoulderPressSegment(segment) || segment.uploadState !== 'uploaded'
-    ))
-  ) return null
-
-  return {
-    clientSessionId: session.clientSessionId,
-    ...(isPositiveInteger(session.videoId) ? { videoId: session.videoId } : {}),
-    actionId: session.actionId,
-    trainingDate: session.trainingDate,
-    ...(session.trainingStartedAt ? { trainingStartedAt: session.trainingStartedAt } : {}),
-    ...(session.trainingEndedAt ? { trainingEndedAt: session.trainingEndedAt } : {}),
-    expectedDurationSeconds: normalizeShoulderPressExpectedDurationSeconds(
-      session.expectedDurationSeconds
-    ),
-    actualDurationMs,
-    segments: normalizedSegments,
-    finalized: session.finalized,
-    createdAt: session.createdAt,
-    ...(typeof session.lastError === 'string' ? { lastError: session.lastError } : {})
-  }
-}
-
-export function savePendingShoulderPressSession(
+export const savePendingShoulderPressSession = savePendingMotionTrainingSession as (
   storage: StorageLike,
   payload: PendingShoulderPressSession
-): void {
-  storage.setStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY, payload)
-}
-
-export function loadPendingShoulderPressSession(storage: StorageLike): PendingShoulderPressSession | null {
-  return normalizeSession(storage.getStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY))
-}
-
-export function clearPendingShoulderPressSession(storage: StorageLike): void {
-  storage.removeStorageSync(PENDING_SHOULDER_PRESS_SESSION_KEY)
-}
+) => void
+export const loadPendingShoulderPressSession = loadPendingMotionTrainingSession as (
+  storage: StorageLike
+) => PendingShoulderPressSession | null
+export const clearPendingShoulderPressSession = clearPendingMotionTrainingSession as (
+  storage: StorageLike
+) => void
 
 export function buildPendingShoulderPressUpload(input: {
   actionId: number
