@@ -2,8 +2,8 @@ import { Button, Text, Video, View } from '@tarojs/components'
 import Taro, { useRouter } from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 
-import { request } from '../../api/client'
-import type { CurrentPrescription } from '../../types/patientApp'
+import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
+import { isDemoSession } from '../../demo/session'
 import {
   reLaunchPendingShoulderPressUploadIfNeeded,
   resolveShoulderPressAction,
@@ -14,6 +14,7 @@ import { buildShoulderPressCameraUrl } from './session'
 export default function ShoulderPressPreviewPage() {
   const router = useRouter()
   const actionId = Number(router.params.actionId)
+  const demoMode = isDemoSession()
   const [action, setAction] = useState<ShoulderPressAction | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
@@ -23,15 +24,17 @@ export default function ShoulderPressPreviewPage() {
   useEffect(() => {
     let cancelled = false
     async function bootstrap() {
-      const redirected = await reLaunchPendingShoulderPressUploadIfNeeded(Taro)
-      if (cancelled || redirected) return
+      if (!demoMode) {
+        const redirected = await reLaunchPendingShoulderPressUploadIfNeeded(Taro)
+        if (cancelled || redirected) return
+      }
       if (!Number.isInteger(actionId) || actionId <= 0) {
         setError('训练动作无效，请返回当前运动计划重新进入')
         setLoaded(true)
         return
       }
       try {
-        const prescription = await request<CurrentPrescription>('/patient-app/current-prescription/')
+        const prescription = await fetchCurrentPrescriptionData()
         if (cancelled) return
         const currentAction = resolveShoulderPressAction(prescription, actionId)
         if (!currentAction?.video_url) {
@@ -49,7 +52,7 @@ export default function ShoulderPressPreviewPage() {
     }
     void bootstrap()
     return () => { cancelled = true }
-  }, [actionId])
+  }, [actionId, demoMode])
 
   return (
     <View className='page shoulder-preview-page'>

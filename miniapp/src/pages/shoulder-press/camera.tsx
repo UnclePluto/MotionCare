@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { request } from '../../api/client'
 import { containsSensitiveCredentialText } from '../../api/safeError'
+import { isDemoSession } from '../../demo/session'
 import type { CurrentPrescription } from '../../types/patientApp'
 import './assets/audio/network_slow_paused.m4a'
 import './assets/audio/upload_recovered.m4a'
@@ -19,6 +20,7 @@ import {
   pendingShoulderPressLocalBytes,
   type ShoulderPressBufferState
 } from './bufferGuard'
+import ShoulderPressDemoCameraPage from './demoCamera'
 import { saveTemporaryShoulderPressSegmentForRetry } from './localFile'
 import {
   canStartShoulderPressRecording,
@@ -406,7 +408,7 @@ function uploadPendingSegmentsInBackground(onSession?: SessionUpdate): Promise<v
   return backgroundUploadPromise
 }
 
-export default function ShoulderPressCameraPage() {
+export function ShoulderPressRecordingCameraPage() {
   const router = useRouter()
   const actionId = Number(router.params.actionId)
   const [action, setAction] = useState<ShoulderPressAction | null>(null)
@@ -1349,4 +1351,10 @@ export default function ShoulderPressCameraPage() {
       </View>
     </View>
   )
+}
+
+export default function ShoulderPressCameraPage() {
+  return isDemoSession()
+    ? <ShoulderPressDemoCameraPage />
+    : <ShoulderPressRecordingCameraPage />
 }

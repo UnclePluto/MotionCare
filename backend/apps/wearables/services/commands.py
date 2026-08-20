@@ -190,11 +190,15 @@ def send_device_command(
     parameters: dict[str, Any] | None = None,
     require_binding: bool = False,
 ) -> WearableCommandLog:
-    if not device.enabled:
+    is_platform_ring = command_type == "ring" and device.provider == "miwitracker"
+    if not device.enabled and not is_platform_ring:
         raise DisabledDevice("设备已停用。")
     if command_type not in _COMMAND_FIELDS:
         raise UnsupportedCapability("不支持的远程命令。")
-    if not isinstance(device.model, str) or not device.model.strip():
+    if (
+        not is_platform_ring
+        and (not isinstance(device.model, str) or not device.model.strip())
+    ):
         raise UnsupportedCapability("该设备型号能力尚未验证。")
     capability = get_capability_profile(device.provider, device.model)
     command_code = getattr(capability, command_type)

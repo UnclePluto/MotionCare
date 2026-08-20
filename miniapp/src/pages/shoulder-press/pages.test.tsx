@@ -23,8 +23,10 @@ import {
 import { ShoulderPressTrainingOverlay } from './trainingOverlay'
 import ShoulderPressUploadPage from './upload'
 
+const DEMO_SHOULDER_PRESS_VIDEO_URL = 'https://cdn.whestsun.com/examples/shoulder-press/IMG_0383_SDR.mp4?e=2101639122&token=wDcTeQDwD9lRRZ4uxwE1qEbRbIZHvRXSbA0eLBpW:18Lf7MbPH0Rag3TpJUBldzuGHAY='
+
 type ReactElement = {
-  type: string
+  type: string | ((props?: Record<string, unknown>) => ReactElement)
   props: Record<string, unknown> & {
     children?: unknown
     onError?: () => unknown
@@ -137,6 +139,7 @@ const taroHarness = vi.hoisted(() => {
     navigateTo: vi.fn(),
     navigateBack: vi.fn(),
     redirectTo: vi.fn(),
+    openSetting: vi.fn(() => Promise.resolve({ authSetting: {} })),
     showModal: vi.fn(async () => ({ confirm: true, cancel: false })),
     setKeepScreenOn: vi.fn(() => Promise.resolve()),
     saveFile: vi.fn(),
@@ -453,7 +456,10 @@ async function flushPromises(times = 8) {
 function renderPage<T>(Component: (props?: T) => ReactElement, props?: T) {
   const render = () => {
     reactHarness.beginRender()
-    const element = Component(props)
+    let element = Component(props)
+    while (element && typeof element.type === 'function') {
+      element = element.type(element.props)
+    }
     reactHarness.runEffects()
     return element
   }
@@ -3342,7 +3348,7 @@ describe('审核演示模式', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('演示模式，仅供功能体验，数据不会保存。')
-    expect(textContent(page.element)).toContain('体验运动计划中的全部游戏功能。')
+    expect(textContent(page.element)).toContain('体验运动计划中的全部功能。')
     expect(textContent(page.element)).not.toContain('历史记录')
     expect(textContent(page.element)).toContain('用户01')
     expect(textContent(page.element)).toContain('功能展示')
@@ -3367,7 +3373,7 @@ describe('审核演示模式', () => {
     })
   })
 
-  it('演示运动计划隔离真实缓存与上传副作用并路由到六个游戏', async () => {
+  it('演示运动计划隔离真实副作用并路由到六个游戏和肩部推举', async () => {
     session.startDemoSession()
     writeCurrentPrescriptionCache(PRESCRIPTION)
 
@@ -3383,10 +3389,11 @@ describe('审核演示模式', () => {
       element.type === 'Button' && textContent(element).includes('开始游戏')
     ))
     expect(gameButtons).toHaveLength(6)
+    expect(findButtonByText(page.element, '开始跟练')).toBeTruthy()
     expect(textContent(page.element)).not.toContain('查看历史')
     expect(textContent(page.element)).not.toContain('最近：')
     expect(textContent(page.element)).not.toContain('待补传')
-    expect(textContent(page.element)).not.toContain('肩部推举')
+    expect(textContent(page.element)).toContain('肩部推举')
     expect(requestMock).not.toHaveBeenCalled()
     expect(retryMocks.loadPendingGameUpload).not.toHaveBeenCalled()
     expect(retryMocks.subscribePendingGameUploadRetryLoop).not.toHaveBeenCalled()
@@ -3405,6 +3412,191 @@ describe('审核演示模式', () => {
         url: `/pages/game-session/index?actionId=${actionIds[index]}`
       })
     }
+
+    taroHarness.taroMock.navigateTo.mockClear()
+    clickButtonByText(page.element, '开始跟练')
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/index?actionId=888807'
+    })
+  })
+
+  it('演示肩部推举沿用说明页并保留动作预览入口', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('肩部推举')
+    expect(textContent(page.element)).toContain('双臂缓慢向上推举')
+    expect(textContent(page.element)).not.toContain('动作已失效')
+
+    clickButtonByText(page.element, '动作预览')
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/preview?actionId=888807'
+    })
+
+    taroHarness.taroMock.navigateTo.mockClear()
+    clickButtonByText(page.element, '开始训练')
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/camera?actionId=888807'
+    })
+  })
+
+  it('演示肩部推举从本地计划播放原动作预览并进入摄像头', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+
+    const page = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(findFirstByType(page.element, 'Video').props).toMatchObject({
+      src: DEMO_SHOULDER_PRESS_VIDEO_URL,
+      autoplay: true,
+      loop: true,
+      muted: true,
+      controls: false
+    })
+    clickButtonByText(page.element, '开始训练')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/camera?actionId=888807'
+    })
+  })
+
+  it('演示肩部推举只预览摄像头并开始本地计时', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(findFirstByType(page.element, 'Camera').props).toMatchObject({
+      devicePosition: 'front',
+      flash: 'off',
+      mode: 'normal'
+    })
+
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+
+    expect(findTrainingOverlay(page.element).props).toMatchObject({
+      elapsedMs: 0,
+      expectedDurationSeconds: 60,
+      started: true,
+      videoUrl: DEMO_SHOULDER_PRESS_VIDEO_URL
+    })
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalledWith(
+      PENDING_SHOULDER_PRESS_SESSION_KEY,
+      expect.anything()
+    )
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+  })
+
+  it('演示肩部推举提前结束后只显示本地完成状态', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+
+    const page = renderPage(ShoulderPressCameraPage)
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+    clickButtonByText(page.element, '提前结束')
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('体验完成')
+    expect(textContent(page.element)).toContain('本次演示不保存')
+    expect(taroHarness.taroMock.showModal).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalledWith({
+      url: '/pages/shoulder-press/upload'
+    })
+
+    clickButtonByText(page.element, '返回运动计划')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
+      url: '/pages/prescription/index'
+    })
+  })
+
+  it('演示肩部推举在本地计时满一分钟后自动完成', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+    vi.useFakeTimers()
+
+    const page = renderPage(ShoulderPressCameraPage)
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('体验完成')
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(60_000)
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+  })
+
+  it('演示肩部推举切到后台时暂停计时并在返回后继续', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+    vi.useFakeTimers()
+    vi.setSystemTime(1787184000000)
+
+    const page = renderPage(ShoulderPressCameraPage)
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(10_000)
+    page.rerender()
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(10_000)
+
+    const hide = taroHarness.hideCallbacks.at(-1)
+    const show = taroHarness.showCallbacks.at(-1)
+    expect(typeof hide).toBe('function')
+    expect(typeof show).toBe('function')
+    if (!hide || !show) return
+
+    await hide()
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(50_000)
+    page.rerender()
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(10_000)
+    expect(textContent(page.element)).not.toContain('体验完成')
+
+    await show()
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(50_000)
+    page.rerender()
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(60_000)
+    expect(textContent(page.element)).toContain('体验完成')
+  })
+
+  it('演示肩部推举在摄像头授权失败时引导打开设置', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+
+    const page = renderPage(ShoulderPressCameraPage)
+    findFirstByType(page.element, 'Camera').props.onError?.()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('请开启摄像头权限')
+    expect(findButtonByText(page.element, '开始训练').props.disabled).toBe(true)
+    clickButtonByText(page.element, '打开设置')
+    expect(taroHarness.taroMock.openSetting).toHaveBeenCalledTimes(1)
   })
 
   it.each(expectedGames)('演示游戏 $name 能从本地运动计划加载', async ({ actionId, name }) => {

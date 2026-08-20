@@ -1,12 +1,12 @@
 import { BellOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { isAxiosError } from "axios";
 import dayjs from "dayjs";
 import { useMemo, useRef, useState } from "react";
 
 import { apiClient } from "../../api/client";
-import type { WearableDevice, WearableStatus } from "./types";
+import type { WearableCommandResponse, WearableDevice, WearableStatus } from "./types";
 
 type DeviceFormValues = { imei: string };
 type DeviceFilter = "all" | "bound" | "unbound" | "disabled";
@@ -18,6 +18,10 @@ type StatusRequest = {
 type StatusFeedback = StatusRequest & {
   result: WearableStatus | null;
   error: unknown | null;
+};
+type RingFeedback = {
+  type: "success" | "error";
+  message: string;
 };
 
 function formatTime(value: string | null | undefined) {
@@ -32,6 +36,20 @@ function errorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function ringResultFeedback(result: WearableCommandResponse): RingFeedback {
+  if (result.status === "succeeded" || result.status === "queued") {
+    return { type: "success", message: "响铃指令已下发" };
+  }
+  return {
+    type: "error",
+    message: {
+      offline: "设备离线，响铃未执行",
+      timeout: "响铃请求超时，请稍后重试",
+      failed: "设备响铃失败",
+    }[result.status],
+  };
+}
+
 export function DeviceInventoryPage() {
   const queryClient = useQueryClient();
   const [form] = Form.useForm<DeviceFormValues>();
@@ -40,6 +58,7 @@ export function DeviceInventoryPage() {
   const [filter, setFilter] = useState<DeviceFilter>("all");
   const statusRequestGeneration = useRef(0);
   const [statusFeedback, setStatusFeedback] = useState<StatusFeedback | null>(null);
+  const [ringFeedback, setRingFeedback] = useState<RingFeedback | null>(null);
 
   const devicesQuery = useQuery({
     queryKey: ["wearable-devices"],
@@ -80,9 +99,11 @@ export function DeviceInventoryPage() {
 
   const ring = useMutation({
     mutationFn: async ({ deviceId }: { deviceId: number }) =>
-      apiClient.post(`/wearables/devices/${deviceId}/ring/`),
-    onSuccess: () => message.success("响铃指令已下发"),
-    onError: (error) => message.error(errorMessage(error, "设备响铃失败")),
+      (await apiClient.post<WearableCommandResponse>(`/wearables/devices/${deviceId}/ring/`)).data,
+    onSuccess: (result) => setRingFeedback(ringResultFeedback(result)),
+    onError: (error) => {
+      setRingFeedback({ type: "error", message: errorMessage(error, "设备响铃失败") });
+    },
   });
 
   const runStatusCheck = (device: WearableDevice) => {
@@ -164,6 +185,16 @@ export function DeviceInventoryPage() {
           style={{ marginBottom: 16 }}
         />
       ) : null}
+      {ringFeedback ? (
+        <Alert
+          type={ringFeedback.type}
+          showIcon
+          closable
+          message={ringFeedback.message}
+          onClose={() => setRingFeedback(null)}
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
 
       {devicesQuery.isError ? (
         <Alert type="error" showIcon message="设备管理加载失败" />
@@ -206,7 +237,7 @@ export function DeviceInventoryPage() {
               key: "actions",
               width: 180,
               render: (_: unknown, device) => (
-                <Space size={0}>
+                <Space size={8}>
                   <Button
                     type="link"
                     style={{ paddingInline: 0 }}
@@ -220,17 +251,18 @@ export function DeviceInventoryPage() {
                   >
                     通信测试
                   </Button>
-                  <Button
-                    type="link"
-                    aria-label="响铃"
-                    icon={<BellOutlined />}
-                    style={{ paddingInline: 0 }}
-                    disabled={!device.enabled}
-                    loading={ring.isPending && ring.variables?.deviceId === device.id}
-                    onClick={() => ring.mutate({ deviceId: device.id })}
-                  >
-                    响铃
-                  </Button>
+                  {device.provider === "miwitracker" ? (
+                    <Button
+                      type="link"
+                      aria-label="响铃"
+                      icon={<BellOutlined />}
+                      style={{ paddingInline: 0 }}
+                      loading={ring.isPending && ring.variables?.deviceId === device.id}
+                      onClick={() => ring.mutate({ deviceId: device.id })}
+                    >
+                      响铃
+                    </Button>
+                  ) : null}
                 </Space>
               ),
             },

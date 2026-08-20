@@ -347,15 +347,80 @@ describe("DeviceInventoryPage", () => {
     expect(screen.queryByText("前一台设备通信失败。")).not.toBeInTheDocument();
   });
 
-  it("响铃按钮调用设备响铃接口", async () => {
+  it("仅为 miwitracker 设备显示响铃且停用设备仍可响铃", async () => {
+    mockGet.mockResolvedValue({
+      data: [
+        device({ enabled: false }),
+        device({
+          id: 8,
+          provider: "other-provider",
+          short_code: "1008",
+          external_device_id: "device-008",
+        }),
+      ],
+    });
+    mockPost.mockResolvedValue({
+      data: {
+        id: 11,
+        command_type: "ring",
+        status: "succeeded",
+        provider_code: "0",
+        completed_at: "2026-08-20T02:00:00Z",
+      },
+    });
+    renderPage();
+
+    const disabledMiwitrackerRow = (await screen.findByText("0826")).closest("tr");
+    const otherProviderRow = screen.getByText("1008").closest("tr");
+    expect(disabledMiwitrackerRow).not.toBeNull();
+    expect(otherProviderRow).not.toBeNull();
+    expect(within(disabledMiwitrackerRow!).getByRole("button", { name: "通信测试" })).toBeDisabled();
+    expect(within(disabledMiwitrackerRow!).getByRole("button", { name: "响铃" })).toBeEnabled();
+    expect(within(otherProviderRow!).queryByRole("button", { name: "响铃" })).not.toBeInTheDocument();
+  });
+
+  it.each(["succeeded", "queued"] as const)(
+    "响铃命令状态为 %s 时提示已下发",
+    async (status) => {
+      mockGet.mockResolvedValue({ data: [device({ model: "" })] });
+      mockPost.mockResolvedValue({
+        data: {
+          id: 11,
+          command_type: "ring",
+          status,
+          provider_code: status === "succeeded" ? "0" : "1803",
+          completed_at: status === "succeeded" ? "2026-08-20T02:00:00Z" : null,
+        },
+      });
+      renderPage();
+
+      fireEvent.click(await screen.findByRole("button", { name: "响铃" }));
+
+      expect(await screen.findByText("响铃指令已下发")).toBeInTheDocument();
+      expect(mockPost).toHaveBeenCalledWith("/wearables/devices/7/ring/");
+    },
+  );
+
+  it.each([
+    ["offline", "设备离线，响铃未执行"],
+    ["timeout", "响铃请求超时，请稍后重试"],
+    ["failed", "设备响铃失败"],
+  ] as const)("响铃命令状态为 %s 时显示失败原因", async (status, expectedMessage) => {
     mockGet.mockResolvedValue({ data: [device()] });
-    mockPost.mockResolvedValue({ data: {} });
+    mockPost.mockResolvedValue({
+      data: {
+        id: 11,
+        command_type: "ring",
+        status,
+        provider_code: status === "offline" ? "1800" : status === "timeout" ? "1801" : "1802",
+        completed_at: "2026-08-20T02:00:00Z",
+      },
+    });
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "响铃" }));
 
-    await waitFor(() => {
-      expect(mockPost).toHaveBeenCalledWith("/wearables/devices/7/ring/");
-    });
+    expect(await screen.findByText(expectedMessage)).toBeInTheDocument();
+    expect(screen.queryByText("响铃指令已下发")).not.toBeInTheDocument();
   });
 });
