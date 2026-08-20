@@ -10,9 +10,9 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .analysis import analyze_shoulder_press_keypoints
+from .analysis_registry import get_motion_analyzer
 from .models import MotionAnalysisJob
-from .pose_inference import PP_TINYPOSE_MODEL_NAME, extract_video_keypoint_frames
+from .pose_inference import extract_video_keypoint_frames
 from .video_services import create_private_download_url
 
 
@@ -112,7 +112,10 @@ def _safe_failure_reason(stage, exc):
 def _claim_job(job_id):
     job = (
         MotionAnalysisJob.objects.select_for_update(of=("self",))
-        .select_related("training_video")
+        .select_related(
+            "training_video",
+            "prescription_action__action_library_item",
+        )
         .get(pk=job_id)
     )
     if job.status != MotionAnalysisJob.Status.PENDING:
@@ -146,7 +149,7 @@ def _validated_counts(result):
     return total, standard, nonstandard
 
 
-def _persist_success(job_id, result):
+def _persist_success(job_id, result, algorithm_version):
     total, standard, nonstandard = _validated_counts(result)
     now = timezone.now()
     MotionAnalysisJob.objects.filter(
@@ -154,7 +157,7 @@ def _persist_success(job_id, result):
         status=MotionAnalysisJob.Status.RUNNING,
     ).update(
         status=MotionAnalysisJob.Status.SUCCEEDED,
-        algorithm_version=PP_TINYPOSE_MODEL_NAME,
+        algorithm_version=algorithm_version,
         total_count=total,
         standard_count=standard,
         nonstandard_count=nonstandard,
@@ -207,8 +210,14 @@ def run_motion_analysis_job(job_id):
         return job
 
     temporary_path = None
-    stage = "生成下载地址"
+    stage = "选择分析器"
     try:
+        source_key = job.prescription_action.action_library_item.source_key
+        analyzer = get_motion_analyzer(source_key)
+        if analyzer is None:
+            raise ValueError("不支持当前动作分析")
+
+        stage = "生成下载地址"
         private_url = create_private_download_url(job.training_video)
         suffix = Path(job.training_video.object_key).suffix or ".mp4"
         with tempfile.NamedTemporaryFile(
@@ -232,9 +241,9 @@ def run_motion_analysis_job(job_id):
             sample_fps=settings.MOTION_ANALYSIS_SAMPLE_FPS,
         )
         stage = "规则分析"
-        result = analyze_shoulder_press_keypoints(frames)
+        result = analyzer.analyze_keypoints(frames)
         stage = "保存结果"
-        return _persist_success(job.id, result)
+        return _persist_success(job.id, result, analyzer.algorithm_version)
     except Exception as exc:
         return _persist_failure(job.id, _safe_failure_reason(stage, exc))
     finally:

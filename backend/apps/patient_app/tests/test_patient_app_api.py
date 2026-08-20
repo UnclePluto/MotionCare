@@ -9,6 +9,15 @@ from apps.prescriptions.motion_videos import MotionVideoResolution
 from apps.training.models import TrainingRecord
 
 
+OFFICIAL_MOTION_SOURCE_KEYS = (
+    "motion-aerobic-high-knee",
+    "motion-balance-sit-stand",
+    "motion-resistance-leg-kickback",
+    "motion-resistance-row",
+    "motion-resistance-shoulder-press",
+)
+
+
 def _auth_client(project_patient, doctor):
     code, _ = create_binding_code(project_patient=project_patient, created_by=doctor)
     token, _ = bind_project_patient_with_code(code, wx_openid="openid-a")
@@ -368,12 +377,14 @@ def test_training_record_api_allows_multiple_records_same_day(
 
 
 @pytest.mark.django_db
-def test_training_record_api_rejects_shoulder_press_without_video(
+@pytest.mark.parametrize("source_key", OFFICIAL_MOTION_SOURCE_KEYS)
+def test_training_record_api_rejects_official_motion_action_without_video(
+    source_key,
     project_patient,
     doctor,
     active_prescription,
 ):
-    item = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
+    item = ActionLibraryItem.objects.get(source_key=source_key)
     action = active_prescription.add_action_snapshot(
         item,
         weekly_frequency="2 次/周",
@@ -394,8 +405,83 @@ def test_training_record_api_rejects_shoulder_press_without_video(
     )
 
     assert response.status_code == 400, response.data
-    assert response.data["detail"] == "肩部推举必须完成录像上传"
+    assert response.data["detail"] == "运动动作必须完成录像上传"
     assert not TrainingRecord.objects.filter(prescription_action=action).exists()
+
+
+def _activate_now_payload(action, duration_minutes):
+    return {
+        "expected_active_version": 1,
+        "actions": [
+            {
+                "action_library_item": action.id,
+                "weekly_frequency": "3 次/周",
+                "weekly_target_count": 3,
+                "duration_minutes": duration_minutes,
+            }
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_activate_now_rejects_official_motion_action_over_30_minutes(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        _activate_now_payload(action, 31),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert "运动动作时长不能超过 30 分钟" in str(response.data)
+    assert Prescription.objects.filter(project_patient=project_patient).count() == 1
+
+
+@pytest.mark.django_db
+def test_activate_now_accepts_official_motion_action_at_30_minutes(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        _activate_now_payload(action, 30),
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    assert response.data["actions"][0]["duration_minutes"] == 30
+
+
+@pytest.mark.django_db
+def test_activate_now_does_not_apply_motion_duration_limit_to_game(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    action = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        _activate_now_payload(action, 31),
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    assert response.data["actions"][0]["duration_minutes"] == 31
 
 
 @pytest.mark.django_db

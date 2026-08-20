@@ -216,7 +216,7 @@ def test_analysis_job_rejects_non_shoulder_press_and_unattached_video(
     )
 
     assert wrong_action_response.status_code == 400
-    assert "肩部推举" in str(wrong_action_response.data)
+    assert wrong_action_response.data["detail"] == "不支持当前动作分析"
     assert unattached_response.status_code == 400
     assert "绑定" in str(unattached_response.data)
     assert MotionAnalysisJob.objects.count() == 0

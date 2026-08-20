@@ -23,6 +23,15 @@ from apps.wearables.models import (
 )
 
 
+OFFICIAL_MOTION_SOURCE_KEYS = (
+    "motion-aerobic-high-knee",
+    "motion-balance-sit-stand",
+    "motion-resistance-leg-kickback",
+    "motion-resistance-row",
+    "motion-resistance-shoulder-press",
+)
+
+
 def _sql_datetime_param_matches(value, expected):
     if isinstance(value, str):
         try:
@@ -1293,6 +1302,53 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
     assert recent["analysis_total_count"] == 8
     assert recent["analysis_standard_count"] == 6
     assert recent["analysis_nonstandard_count"] == 2
+
+
+@pytest.mark.django_db
+def test_tracking_recent_records_expose_video_and_analysis_capability_for_all_motion_actions(
+    doctor,
+    project_patient,
+    active_prescription,
+):
+    for index, source_key in enumerate(OFFICIAL_MOTION_SOURCE_KEYS):
+        item = ActionLibraryItem.objects.get(source_key=source_key)
+        action = active_prescription.add_action_snapshot(
+            item,
+            weekly_frequency="2 次/周",
+            duration_minutes=10,
+            weekly_target_count=2,
+            sort_order=index,
+        )
+        record = _record(
+            project_patient,
+            active_prescription,
+            action,
+            training_date=timezone.localdate() - timezone.timedelta(days=index),
+        )
+        _training_video(
+            project_patient,
+            active_prescription,
+            action,
+            status=TrainingVideo.Status.ATTACHED,
+            training_record=record,
+        )
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    assert response.status_code == 200, response.data
+    recent_by_source_key = {
+        item["action_source_key"]: item for item in response.data["recent_records"]
+    }
+    assert set(recent_by_source_key) == set(OFFICIAL_MOTION_SOURCE_KEYS)
+    for source_key in OFFICIAL_MOTION_SOURCE_KEYS:
+        recent = recent_by_source_key[source_key]
+        assert recent["video_id"] is not None
+        assert recent["video_status"] == TrainingVideo.Status.ATTACHED
+        assert recent["analysis_available"] is (
+            source_key == "motion-resistance-shoulder-press"
+        )
 
 
 @pytest.mark.django_db

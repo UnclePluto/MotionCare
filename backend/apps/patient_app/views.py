@@ -12,6 +12,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
+from apps.prescriptions.action_library import is_official_motion_action
 from apps.prescriptions.models import Prescription, PrescriptionAction
 from apps.prescriptions.motion_videos import (
     MotionVideoResolution,
@@ -24,7 +25,6 @@ from apps.training.services import create_training_record
 from apps.training.video_services import (
     SegmentConflict,
     SessionConflict,
-    SHOULDER_PRESS_SOURCE_KEY,
     create_training_video_session,
     finalize_training_video_session,
     store_training_video_segment,
@@ -276,9 +276,9 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
                     {"detail": "处方已更新，请返回当前处方重新进入"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if action.action_library_item.source_key == SHOULDER_PRESS_SOURCE_KEY:
+            if is_official_motion_action(action.action_library_item.source_key):
                 return Response(
-                    {"detail": "肩部推举必须完成录像上传"},
+                    {"detail": "运动动作必须完成录像上传"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             record = create_training_record(

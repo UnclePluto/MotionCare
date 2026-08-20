@@ -11,6 +11,7 @@ from apps.prescriptions.action_library import is_official_motion_action
 from apps.prescriptions.models import ActionLibraryItem, Prescription, PrescriptionAction
 from apps.studies.models import ProjectPatient
 
+from .analysis_registry import get_motion_analyzer
 from .models import (
     MotionAnalysisJob,
     TrainingVideo,
@@ -499,8 +500,9 @@ def create_analysis_job(*, video, requested_by):
     )
     if locked_video.status != TrainingVideo.Status.ATTACHED or not locked_video.training_record_id:
         raise ValidationError("训练视频尚未绑定训练记录")
-    if locked_video.prescription_action.action_library_item.source_key != SHOULDER_PRESS_SOURCE_KEY:
-        raise ValidationError("当前仅支持肩部推举动作分析")
+    source_key = locked_video.prescription_action.action_library_item.source_key
+    if get_motion_analyzer(source_key) is None:
+        raise ValidationError("不支持当前动作分析")
     if MotionAnalysisJob.objects.filter(
         training_video=locked_video,
         status__in=[MotionAnalysisJob.Status.PENDING, MotionAnalysisJob.Status.RUNNING],

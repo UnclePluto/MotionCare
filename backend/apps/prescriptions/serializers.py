@@ -2,7 +2,7 @@ import re
 
 from rest_framework import serializers
 
-from .action_library import official_action_queryset
+from .action_library import is_official_motion_action, official_action_queryset
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
 from .motion_videos import MotionVideoResolution, resolve_motion_video_url
 
@@ -146,6 +146,12 @@ class ActivateNowActionSerializer(serializers.Serializer):
         duration_minutes = attrs.get("duration_minutes")
         if duration_minutes is None:
             raise serializers.ValidationError("动作需填写时长")
+        action_library_item = attrs["action_library_item"]
+        if (
+            is_official_motion_action(action_library_item.source_key)
+            and duration_minutes > 30
+        ):
+            raise serializers.ValidationError("运动动作时长不能超过 30 分钟")
         return attrs
 
 

@@ -11,6 +11,7 @@ from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
+from .analysis_registry import analysis_available
 from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
@@ -480,6 +481,9 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "action_name": record.prescription_action.action_name_snapshot,
                 "action_source_key": (
                     record.prescription_action.action_library_item.source_key or None
+                ),
+                "analysis_available": analysis_available(
+                    record.prescription_action.action_library_item.source_key
                 ),
                 "internal_type": record.prescription_action.internal_type_snapshot,
                 "action_type": record.prescription_action.action_type_snapshot,
