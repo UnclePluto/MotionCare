@@ -1,36 +1,31 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY,
+  LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY,
   PENDING_MOTION_TRAINING_SESSION_KEY,
-  clearPendingMotionTrainingSession,
-  loadPendingMotionTrainingSession
-} from '../../features/motion-training/session'
-import {
-  PENDING_SHOULDER_PRESS_SESSION_KEY,
-  appendUploadableShoulderPressSegment,
+  appendUploadableMotionTrainingSegment,
   appendPendingSegment,
-  buildShoulderPressCameraUrl,
-  buildShoulderPressPreviewUrl,
-  buildShoulderPressSessionUrl,
-  buildShoulderPressUploadUrl,
-  clearPendingShoulderPressSession,
+  buildMotionTrainingCameraUrl,
+  buildMotionTrainingPreviewUrl,
+  buildMotionTrainingSessionUrl,
+  buildMotionTrainingUploadUrl,
+  clearPendingMotionTrainingSession,
   clientTrainingMoment,
-  createPendingShoulderPressSession,
-  isCompressedShoulderPressSegment,
+  createPendingMotionTrainingSession,
+  isCompressedMotionTrainingSegment,
   isSegmentReadyForLocalDeletion,
-  loadPendingShoulderPressSession,
+  loadPendingMotionTrainingSession,
   markServerUploadedSegments,
-  markShoulderPressTrainingEnded,
-  markShoulderPressTrainingStarted,
-  promoteLegacyShoulderPressSegment,
-  requireShoulderPressTrainingStartedAt,
-  savePendingShoulderPressSession
+  markMotionTrainingEnded,
+  markMotionTrainingStarted,
+  promoteLegacyMotionTrainingSegment,
+  requireMotionTrainingStartedAt,
+  savePendingMotionTrainingSession
 } from './session'
 
 function memoryStorage(initial?: unknown) {
   const store = new Map<string, unknown>()
-  if (initial !== undefined) store.set(PENDING_SHOULDER_PRESS_SESSION_KEY, initial)
+  if (initial !== undefined) store.set(PENDING_MOTION_TRAINING_SESSION_KEY, initial)
   return {
     getStorageSync: vi.fn((key: string) => store.get(key)),
     setStorageSync: vi.fn((key: string, value: unknown) => store.set(key, value)),
@@ -40,12 +35,12 @@ function memoryStorage(initial?: unknown) {
 
 describe('shoulder press segmented session helpers', () => {
   it('builds session, preview, and upload urls', () => {
-    expect(buildShoulderPressSessionUrl(42)).toBe('/pages/motion-training/index?actionId=42')
-    expect(buildShoulderPressCameraUrl(42)).toBe('/pages/motion-training/camera?actionId=42')
-    expect(buildShoulderPressPreviewUrl(42)).toBe(
+    expect(buildMotionTrainingSessionUrl(42)).toBe('/pages/motion-training/index?actionId=42')
+    expect(buildMotionTrainingCameraUrl(42)).toBe('/pages/motion-training/camera?actionId=42')
+    expect(buildMotionTrainingPreviewUrl(42)).toBe(
       '/pages/motion-training/preview?actionId=42'
     )
-    expect(buildShoulderPressUploadUrl()).toBe('/pages/motion-training/upload')
+    expect(buildMotionTrainingUploadUrl()).toBe('/pages/motion-training/upload')
   })
 
   it('formats the phone instant with an explicit local offset', () => {
@@ -56,7 +51,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('sets the first start once and refreshes a stale pre-midnight training date', () => {
-    const session = createPendingShoulderPressSession({
+    const session = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-08-05',
@@ -64,12 +59,12 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: Date.UTC(2026, 7, 5, 15, 59, 0)
     })
 
-    const started = markShoulderPressTrainingStarted(
+    const started = markMotionTrainingStarted(
       session,
       Date.UTC(2026, 7, 5, 16, 1, 2),
       480
     )
-    const resumed = markShoulderPressTrainingStarted(
+    const resumed = markMotionTrainingStarted(
       started,
       Date.UTC(2026, 7, 5, 16, 5, 0),
       480
@@ -81,7 +76,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('requires a recorded training start before creating a remote session', () => {
-    const session = createPendingShoulderPressSession({
+    const session = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-08-06',
@@ -89,16 +84,16 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
     })
 
-    expect(() => requireShoulderPressTrainingStartedAt(session))
+    expect(() => requireMotionTrainingStartedAt(session))
       .toThrow('训练开始时间缺失，请重新训练')
-    expect(requireShoulderPressTrainingStartedAt({
+    expect(requireMotionTrainingStartedAt({
       ...session,
       trainingStartedAt: '2026-08-06T00:01:02+08:00'
     })).toBe('2026-08-06T00:01:02+08:00')
   })
 
   it('sets the final end once and keeps it through storage recovery', () => {
-    const started = markShoulderPressTrainingStarted(createPendingShoulderPressSession({
+    const started = markMotionTrainingStarted(createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-08-05',
@@ -106,15 +101,15 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: Date.UTC(2026, 7, 5, 15, 59, 0)
     }), Date.UTC(2026, 7, 5, 16, 1, 2), 480)
     const storage = memoryStorage()
-    const ended = markShoulderPressTrainingEnded(started, Date.UTC(2026, 7, 5, 16, 9, 27), 480)
+    const ended = markMotionTrainingEnded(started, Date.UTC(2026, 7, 5, 16, 9, 27), 480)
 
-    savePendingShoulderPressSession(storage, ended)
+    savePendingMotionTrainingSession(storage, ended)
 
-    expect(loadPendingShoulderPressSession(storage)).toMatchObject({
+    expect(loadPendingMotionTrainingSession(storage)).toMatchObject({
       trainingStartedAt: '2026-08-06T00:01:02+08:00',
       trainingEndedAt: '2026-08-06T00:09:27+08:00'
     })
-    expect(markShoulderPressTrainingEnded(
+    expect(markMotionTrainingEnded(
       ended,
       Date.UTC(2026, 7, 5, 16, 10, 0),
       480
@@ -122,7 +117,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('rejects ending without a start and rejects a non-increasing end', () => {
-    const session = createPendingShoulderPressSession({
+    const session = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-08-06',
@@ -130,12 +125,12 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
     })
 
-    expect(() => markShoulderPressTrainingEnded(
+    expect(() => markMotionTrainingEnded(
       session,
       Date.UTC(2026, 7, 5, 16, 9, 27),
       480
     )).toThrow('训练开始时间缺失')
-    expect(() => markShoulderPressTrainingEnded({
+    expect(() => markMotionTrainingEnded({
       ...session,
       trainingStartedAt: '2026-08-06T00:09:27+08:00'
     }, Date.UTC(2026, 7, 5, 16, 1, 2), 480)).toThrow('训练结束时间必须晚于开始时间')
@@ -153,8 +148,8 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: Date.UTC(2026, 7, 5, 16, 0, 0)
     }
 
-    expect(loadPendingShoulderPressSession(memoryStorage(legacyManifest))).not.toBeNull()
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage(legacyManifest))).not.toBeNull()
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       ...legacyManifest,
       trainingStartedAt: '2026-08-06T00:01:02'
     }))).toBeNull()
@@ -168,7 +163,7 @@ describe('shoulder press segmented session helpers', () => {
     ['an out-of-range offset hour', '2026-08-06T00:01:02+24:00'],
     ['an out-of-range offset minute', '2026-08-06T00:01:02+08:60']
   ])('rejects %s during cold recovery', (_caseName, trainingStartedAt) => {
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       actionId: 42,
       trainingDate: '2026-08-06',
@@ -185,7 +180,7 @@ describe('shoulder press segmented session helpers', () => {
     ['the same instant', '2026-08-05T16:00:00Z'],
     ['an earlier instant', '2026-08-05T15:59:59Z']
   ])('rejects %s as the cold-recovery end', (_caseName, trainingEndedAt) => {
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       actionId: 42,
       trainingDate: '2026-08-06',
@@ -202,7 +197,7 @@ describe('shoulder press segmented session helpers', () => {
   it('rejects cold recovery when the platform timestamp parser is non-finite', () => {
     const parse = vi.spyOn(Date, 'parse').mockReturnValue(Number.NaN)
     try {
-      expect(loadPendingShoulderPressSession(memoryStorage({
+      expect(loadPendingMotionTrainingSession(memoryStorage({
         clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
         actionId: 42,
         trainingDate: '2026-08-06',
@@ -220,7 +215,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('persists multiple saved segments and converts getVideoInfo kB to bytes', () => {
-    const session = createPendingShoulderPressSession({
+    const session = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -245,7 +240,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('appends a temporary raw segment with exact duration and byte size', () => {
-    const session = createPendingShoulderPressSession({
+    const session = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -253,7 +248,7 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: 1783692000000
     })
 
-    const updated = appendUploadableShoulderPressSegment(session, {
+    const updated = appendUploadableMotionTrainingSegment(session, {
       filePath: 'wxfile://temp/raw-segment-0.mp4',
       durationMs: 15_001,
       sizeBytes: 19_876_543,
@@ -273,7 +268,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('allows 1800 seconds and rejects a manifest duration above 1800000ms', () => {
-    const session = createPendingShoulderPressSession({
+    const session = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 1800,
       trainingDate: '2026-07-11',
@@ -281,7 +276,7 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: 1783692000000
     })
 
-    const full = appendUploadableShoulderPressSegment(session, {
+    const full = appendUploadableMotionTrainingSegment(session, {
       filePath: 'wxfile://temp/raw-0.mp4',
       durationMs: 1_800_000,
       sizeBytes: 1,
@@ -289,7 +284,7 @@ describe('shoulder press segmented session helpers', () => {
     })
 
     expect(full.actualDurationMs).toBe(1_800_000)
-    expect(() => appendUploadableShoulderPressSegment(session, {
+    expect(() => appendUploadableMotionTrainingSegment(session, {
       filePath: 'wxfile://temp/raw-1.mp4',
       durationMs: 1_800_001,
       sizeBytes: 1,
@@ -298,7 +293,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('promotes a legacy pending-compression segment without changing its index', () => {
-    const base = createPendingShoulderPressSession({
+    const base = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -324,7 +319,7 @@ describe('shoulder press segmented session helpers', () => {
       durationMs: 29_800
     })
 
-    const completed = promoteLegacyShoulderPressSegment(pending, 0, {
+    const completed = promoteLegacyMotionTrainingSegment(pending, 0, {
       savedFilePath: 'wxfile://store/raw-0.mp4',
       durationMs: 29_800,
       sizeBytes: 2_097_152
@@ -340,12 +335,12 @@ describe('shoulder press segmented session helpers', () => {
       uploadState: 'pending',
       localFileState: 'saved'
     })
-    expect(isCompressedShoulderPressSegment(completed.segments[0])).toBe(true)
+    expect(isCompressedMotionTrainingSegment(completed.segments[0])).toBe(true)
   })
 
   it('loads the raw path and error from a legacy compression-failed manifest', () => {
-    const restored = loadPendingShoulderPressSession(memoryStorage({
-      ...createPendingShoulderPressSession({
+    const restored = loadPendingMotionTrainingSession(memoryStorage({
+      ...createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -369,11 +364,11 @@ describe('shoulder press segmented session helpers', () => {
       durationMs: 30_000,
       compressionError: '旧版压缩失败'
     })
-    expect(restored && isCompressedShoulderPressSegment(restored.segments[0])).toBe(false)
+    expect(restored && isCompressedMotionTrainingSegment(restored.segments[0])).toBe(false)
   })
 
   it('loads old manifests without compressionState as compressed segments', () => {
-    const restored = loadPendingShoulderPressSession(memoryStorage({
+    const restored = loadPendingMotionTrainingSession(memoryStorage({
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       actionId: 42,
       trainingDate: '2026-07-11',
@@ -400,7 +395,7 @@ describe('shoulder press segmented session helpers', () => {
 
   it('keeps the original training date when a session is restored on the next day', () => {
     const storage = memoryStorage()
-    const session = appendPendingSegment(createPendingShoulderPressSession({
+    const session = appendPendingSegment(createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -412,9 +407,9 @@ describe('shoulder press segmented session helpers', () => {
       sizeKb: 1000
     })
 
-    savePendingShoulderPressSession(storage, session)
+    savePendingMotionTrainingSession(storage, session)
 
-    expect(loadPendingShoulderPressSession(storage)?.trainingDate).toBe('2026-07-11')
+    expect(loadPendingMotionTrainingSession(storage)?.trainingDate).toBe('2026-07-11')
   })
 
   it('rejects damaged segment metadata and non-contiguous indexes during cold recovery', () => {
@@ -428,7 +423,7 @@ describe('shoulder press segmented session helpers', () => {
       createdAt: 1783692000000
     }
 
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       ...validBase,
       segments: [{
         index: 0,
@@ -439,7 +434,7 @@ describe('shoulder press segmented session helpers', () => {
       }]
     }))).toBeNull()
 
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       ...validBase,
       segments: [
         {
@@ -461,7 +456,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('rejects finalized sessions that still have pending segments during cold recovery', () => {
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       actionId: 42,
       trainingDate: '2026-07-11',
@@ -480,7 +475,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('rejects sessions whose actual duration no longer matches the segment manifest', () => {
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       actionId: 42,
       trainingDate: '2026-07-11',
@@ -499,7 +494,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('restores finalized sessions with uploaded segments even when two sha256 values match', () => {
-    expect(loadPendingShoulderPressSession(memoryStorage({
+    expect(loadPendingMotionTrainingSession(memoryStorage({
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       actionId: 42,
       trainingDate: '2026-07-11',
@@ -529,7 +524,7 @@ describe('shoulder press segmented session helpers', () => {
   })
 
   it('validates the RFC4122 v4 client session id shape', () => {
-    expect(() => createPendingShoulderPressSession({
+    expect(() => createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -542,7 +537,7 @@ describe('shoulder press segmented session helpers', () => {
     const session = [
       { savedFilePath: 'wxfile://store/segment-0.mp4', durationSeconds: 30, sizeKb: 1000 },
       { savedFilePath: 'wxfile://store/segment-1.mp4', durationSeconds: 30, sizeKb: 1000 }
-    ].reduce((current, segment) => appendPendingSegment(current, segment), createPendingShoulderPressSession({
+    ].reduce((current, segment) => appendPendingSegment(current, segment), createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-07-11',
@@ -564,25 +559,25 @@ describe('shoulder press segmented session helpers', () => {
   it('clears pending session only through the named storage key', () => {
     const storage = memoryStorage()
 
-    clearPendingShoulderPressSession(storage)
+    clearPendingMotionTrainingSession(storage)
 
-    expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_SHOULDER_PRESS_SESSION_KEY)
+    expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_MOTION_TRAINING_SESSION_KEY)
   })
 
   it('migrates the old shoulder session without deleting it early', () => {
     const storage = memoryStorage()
-    const pendingSession = createPendingShoulderPressSession({
+    const pendingSession = createPendingMotionTrainingSession({
       actionId: 42,
       expectedDurationSeconds: 180,
       trainingDate: '2026-08-20',
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       createdAt: 1787193600000
     })
-    storage.setStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, pendingSession)
+    storage.setStorageSync(LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY, pendingSession)
 
     expect(loadPendingMotionTrainingSession(storage)).toMatchObject({ actionId: 42 })
     expect(storage.getStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY)).toMatchObject({ actionId: 42 })
-    expect(storage.getStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({ actionId: 42 })
+    expect(storage.getStorageSync(LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY)).toMatchObject({ actionId: 42 })
   })
 
   it('clears both session keys after a completed or abandoned motion training session', () => {
@@ -591,6 +586,6 @@ describe('shoulder press segmented session helpers', () => {
     clearPendingMotionTrainingSession(storage)
 
     expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_MOTION_TRAINING_SESSION_KEY)
-    expect(storage.removeStorageSync).toHaveBeenCalledWith(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)
+    expect(storage.removeStorageSync).toHaveBeenCalledWith(LEGACY_PENDING_MOTION_TRAINING_SESSION_KEY)
   })
 })

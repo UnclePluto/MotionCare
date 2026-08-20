@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  createShoulderPressAlertPlayer,
-  SHOULDER_PRESS_ALERT_SRC,
-  SHOULDER_PRESS_ALERT_TEXT,
+  createMotionTrainingAlertPlayer,
+  MOTION_TRAINING_ALERT_SRC,
+  MOTION_TRAINING_ALERT_TEXT,
 } from './alertAudio'
 
 const taroMock = vi.hoisted(() => ({
@@ -32,7 +32,7 @@ function audioContextHarness() {
   return { audio, callbacks }
 }
 
-describe('shoulder press alert audio', () => {
+describe('motion training alert audio', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.clearAllMocks()
@@ -43,11 +43,11 @@ describe('shoulder press alert audio', () => {
   })
 
   it('uses the approved paused and recovered alert copy with local audio sources', () => {
-    expect(SHOULDER_PRESS_ALERT_TEXT).toEqual({
+    expect(MOTION_TRAINING_ALERT_TEXT).toEqual({
       pause: '网络较慢，训练已暂停，请保持页面打开，等待视频上传。',
       ready: '视频上传已恢复，可以继续训练。',
     })
-    expect(SHOULDER_PRESS_ALERT_SRC).toEqual({
+    expect(MOTION_TRAINING_ALERT_SRC).toEqual({
       pause: '/features/motion-training/assets/audio/network_slow_paused.m4a',
       ready: '/features/motion-training/assets/audio/upload_recovered.m4a',
     })
@@ -56,7 +56,7 @@ describe('shoulder press alert audio', () => {
   it('resolves true after the alert ends and releases its audio context', async () => {
     const { audio, callbacks } = audioContextHarness()
     taroMock.createInnerAudioContext.mockReturnValue(audio)
-    const player = createShoulderPressAlertPlayer()
+    const player = createMotionTrainingAlertPlayer()
 
     const playback = player.play('pause')
     callbacks.ended?.()
@@ -70,7 +70,7 @@ describe('shoulder press alert audio', () => {
     const { audio, callbacks } = audioContextHarness()
     taroMock.createInnerAudioContext.mockReturnValue(audio)
 
-    const playback = createShoulderPressAlertPlayer().play('ready')
+    const playback = createMotionTrainingAlertPlayer().play('ready')
     callbacks.error?.()
 
     await expect(playback).resolves.toBe(false)
@@ -82,7 +82,7 @@ describe('shoulder press alert audio', () => {
     audio.onEnded.mockImplementation((callback: () => void) => callback())
     taroMock.createInnerAudioContext.mockReturnValue(audio)
 
-    const playback = createShoulderPressAlertPlayer().play('pause')
+    const playback = createMotionTrainingAlertPlayer().play('pause')
 
     await expect(playback).resolves.toBe(true)
     expect(audio.play).not.toHaveBeenCalled()
@@ -95,7 +95,7 @@ describe('shoulder press alert audio', () => {
     audio.onError.mockImplementation((callback: () => void) => callback())
     taroMock.createInnerAudioContext.mockReturnValue(audio)
 
-    const playback = createShoulderPressAlertPlayer().play('ready')
+    const playback = createMotionTrainingAlertPlayer().play('ready')
 
     await expect(playback).resolves.toBe(false)
     expect(audio.play).not.toHaveBeenCalled()
@@ -108,14 +108,14 @@ describe('shoulder press alert audio', () => {
       throw new Error('audio unavailable')
     })
 
-    await expect(createShoulderPressAlertPlayer().play('pause')).resolves.toBe(false)
+    await expect(createMotionTrainingAlertPlayer().play('pause')).resolves.toBe(false)
   })
 
   it('times out after fifteen seconds when playback emits no terminal event', async () => {
     const { audio } = audioContextHarness()
     taroMock.createInnerAudioContext.mockReturnValue(audio)
 
-    const playback = createShoulderPressAlertPlayer().play('pause')
+    const playback = createMotionTrainingAlertPlayer().play('pause')
     await vi.advanceTimersByTimeAsync(15_000)
 
     await expect(playback).resolves.toBe(false)
@@ -126,14 +126,14 @@ describe('shoulder press alert audio', () => {
     const first = audioContextHarness()
     const second = audioContextHarness()
     taroMock.createInnerAudioContext.mockReturnValueOnce(first.audio).mockReturnValueOnce(second.audio)
-    const player = createShoulderPressAlertPlayer()
+    const player = createMotionTrainingAlertPlayer()
 
     const firstPlayback = player.play('pause')
     const secondPlayback = player.play('ready')
 
     await expect(firstPlayback).resolves.toBe(false)
     expect(first.audio.stop).toHaveBeenCalledTimes(1)
-    expect(second.audio.src).toBe(SHOULDER_PRESS_ALERT_SRC.ready)
+    expect(second.audio.src).toBe(MOTION_TRAINING_ALERT_SRC.ready)
     expect(second.audio.play).toHaveBeenCalledTimes(1)
     second.callbacks.ended?.()
     await expect(secondPlayback).resolves.toBe(true)
@@ -144,7 +144,7 @@ describe('shoulder press alert audio', () => {
     const second = audioContextHarness()
     first.audio.stop.mockImplementation(() => first.callbacks.ended?.())
     taroMock.createInnerAudioContext.mockReturnValueOnce(first.audio).mockReturnValueOnce(second.audio)
-    const player = createShoulderPressAlertPlayer()
+    const player = createMotionTrainingAlertPlayer()
 
     const firstPlayback = player.play('pause')
     const secondPlayback = player.play('ready')
@@ -157,7 +157,7 @@ describe('shoulder press alert audio', () => {
   it('stops and destroys the active alert when disposed', async () => {
     const { audio } = audioContextHarness()
     taroMock.createInnerAudioContext.mockReturnValue(audio)
-    const player = createShoulderPressAlertPlayer()
+    const player = createMotionTrainingAlertPlayer()
 
     const playback = player.play('ready')
     player.dispose()
@@ -171,7 +171,7 @@ describe('shoulder press alert audio', () => {
     const first = audioContextHarness()
     const second = audioContextHarness()
     taroMock.createInnerAudioContext.mockReturnValueOnce(first.audio).mockReturnValueOnce(second.audio)
-    const player = createShoulderPressAlertPlayer()
+    const player = createMotionTrainingAlertPlayer()
     const firstPlayback = player.play('pause')
 
     void player.play('ready')

@@ -2,16 +2,16 @@ import { describe, expect, it } from 'vitest'
 
 import type { CurrentPrescription } from '../../types/patientApp'
 import {
-  canStartShoulderPressRecording,
-  computeShoulderPressEffectiveDuration,
-  formatShoulderPressTimer,
+  canStartMotionTrainingRecording,
+  computeMotionTrainingEffectiveDuration,
+  formatMotionTrainingTimer,
   isServerSafeFinalizeStatus,
-  nextShoulderPressPreviewVisibility,
-  remainingShoulderPressSeconds,
-  resolveShoulderPressAction,
-  SHOULDER_PRESS_RECORDING_STOP_MS,
-  shoulderPressUploadCounters,
-  shouldAutoFinishShoulderPressTraining
+  nextMotionTrainingPreviewVisibility,
+  remainingMotionTrainingSeconds,
+  resolveMotionTrainingAction,
+  MOTION_TRAINING_RECORDING_STOP_MS,
+  motionTrainingUploadCounters,
+  shouldAutoFinishMotionTraining
 } from './pageState'
 
 function prescription(): NonNullable<CurrentPrescription> {
@@ -45,99 +45,99 @@ function prescription(): NonNullable<CurrentPrescription> {
   }
 }
 
-describe('shoulder press compatibility page state', () => {
-  it('resolves the requested active official motion action', () => {
-    expect(resolveShoulderPressAction(prescription(), 42)?.action_name).toBe('肩部推举')
-    expect(resolveShoulderPressAction(prescription(), 99)).toBeNull()
+describe('motion training page state', () => {
+  it('resolves only the requested active motion action', () => {
+    expect(resolveMotionTrainingAction(prescription(), 42)?.action_name).toBe('肩部推举')
+    expect(resolveMotionTrainingAction(prescription(), 99)).toBeNull()
 
     const anotherMotion = prescription()
     anotherMotion.actions[0].source_key = 'motion-resistance-row'
-    expect(resolveShoulderPressAction(anotherMotion, 42)?.action_name).toBe('肩部推举')
+    expect(resolveMotionTrainingAction(anotherMotion, 42)?.action_name).toBe('肩部推举')
 
     const wrongSource = prescription()
     wrongSource.actions[0].source_key = 'motion-unknown'
-    expect(resolveShoulderPressAction(wrongSource, 42)).toBeNull()
+    expect(resolveMotionTrainingAction(wrongSource, 42)).toBeNull()
   })
 
   it('allows recording only after both action and front camera are ready', () => {
-    expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: true, busy: false })).toBe(true)
-    expect(canStartShoulderPressRecording({ actionReady: false, cameraReady: true, busy: false })).toBe(false)
-    expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: false, busy: false })).toBe(false)
-    expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
+    expect(canStartMotionTrainingRecording({ actionReady: true, cameraReady: true, busy: false })).toBe(true)
+    expect(canStartMotionTrainingRecording({ actionReady: false, cameraReady: true, busy: false })).toBe(false)
+    expect(canStartMotionTrainingRecording({ actionReady: true, cameraReady: false, busy: false })).toBe(false)
+    expect(canStartMotionTrainingRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
   })
 
   it('computes a clamped prescription countdown from effective recording time', () => {
-    expect(remainingShoulderPressSeconds(0, 120)).toBe(120)
-    expect(remainingShoulderPressSeconds(30_001, 120)).toBe(90)
-    expect(remainingShoulderPressSeconds(120_000, 120)).toBe(0)
-    expect(remainingShoulderPressSeconds(150_000, 120)).toBe(0)
+    expect(remainingMotionTrainingSeconds(0, 120)).toBe(120)
+    expect(remainingMotionTrainingSeconds(30_001, 120)).toBe(90)
+    expect(remainingMotionTrainingSeconds(120_000, 120)).toBe(0)
+    expect(remainingMotionTrainingSeconds(150_000, 120)).toBe(0)
   })
 
   it('auto finishes at the prescription duration and retains the camera safety stop', () => {
-    expect(shouldAutoFinishShoulderPressTraining({
+    expect(shouldAutoFinishMotionTraining({
       actualDurationMs: 119_999,
       expectedDurationSeconds: 120
     })).toBe(false)
-    expect(shouldAutoFinishShoulderPressTraining({
+    expect(shouldAutoFinishMotionTraining({
       actualDurationMs: 120_000,
       expectedDurationSeconds: 120
     })).toBe(true)
-    expect(shouldAutoFinishShoulderPressTraining({
-      actualDurationMs: SHOULDER_PRESS_RECORDING_STOP_MS,
+    expect(shouldAutoFinishMotionTraining({
+      actualDurationMs: MOTION_TRAINING_RECORDING_STOP_MS,
       expectedDurationSeconds: 2400
     })).toBe(true)
   })
 
   it('only changes preview visibility for a dominant horizontal swipe', () => {
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'visible', deltaX: 45, deltaY: 5
     })).toBe('hidden')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'hidden', deltaX: -45, deltaY: 5
     })).toBe('visible')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'visible', deltaX: 20, deltaY: 0
     })).toBe('visible')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'visible', deltaX: 45, deltaY: 60
     })).toBe('visible')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'visible', deltaX: 40, deltaY: 0
     })).toBe('hidden')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'hidden', deltaX: -40, deltaY: 0
     })).toBe('visible')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'visible', deltaX: 39, deltaY: 0
     })).toBe('visible')
-    expect(nextShoulderPressPreviewVisibility({
+    expect(nextMotionTrainingPreviewVisibility({
       visibility: 'visible', deltaX: 40, deltaY: 40
     })).toBe('visible')
   })
 
   it('computes effective duration from the continuous recording anchor without double counting saved segments', () => {
-    expect(computeShoulderPressEffectiveDuration({
+    expect(computeMotionTrainingEffectiveDuration({
       savedDurationMs: 30_000,
       recording: true,
       recordingBaseDurationMs: 0,
       recordingStartedAtMs: 1_000,
       nowMs: 61_000
     })).toBe(60_000)
-    expect(computeShoulderPressEffectiveDuration({
+    expect(computeMotionTrainingEffectiveDuration({
       savedDurationMs: 30_000,
       recording: false,
       recordingBaseDurationMs: 0,
       recordingStartedAtMs: 0,
       nowMs: 80_000
     })).toBe(30_000)
-    expect(computeShoulderPressEffectiveDuration({
+    expect(computeMotionTrainingEffectiveDuration({
       savedDurationMs: 30_000,
       recording: true,
       recordingBaseDurationMs: 30_000,
       recordingStartedAtMs: 100_000,
       nowMs: 120_000
     })).toBe(50_000)
-    expect(computeShoulderPressEffectiveDuration({
+    expect(computeMotionTrainingEffectiveDuration({
       savedDurationMs: 30_000,
       recording: true,
       recordingBaseDurationMs: 0,
@@ -147,13 +147,13 @@ describe('shoulder press compatibility page state', () => {
   })
 
   it('formats the fixed-size recording timer', () => {
-    expect(formatShoulderPressTimer(0)).toBe('00:00')
-    expect(formatShoulderPressTimer(61_400)).toBe('01:01')
-    expect(formatShoulderPressTimer(1_800_000)).toBe('30:00')
+    expect(formatMotionTrainingTimer(0)).toBe('00:00')
+    expect(formatMotionTrainingTimer(61_400)).toBe('01:01')
+    expect(formatMotionTrainingTimer(1_800_000)).toBe('30:00')
   })
 
   it('counts uploaded and pending segments for stable page status', () => {
-    expect(shoulderPressUploadCounters([
+    expect(motionTrainingUploadCounters([
       {
         index: 0,
         compressionState: 'compressed',

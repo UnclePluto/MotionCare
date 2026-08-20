@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ShoulderPressRecorder } from './recorder'
+import { MotionTrainingRecorder } from './recorder'
 
 type StartOptions = {
   success?: () => void
@@ -38,7 +38,7 @@ async function flushPromises(times = 6) {
   }
 }
 
-describe('ShoulderPressRecorder', () => {
+describe('MotionTrainingRecorder', () => {
   it('starts five-second recordings before asynchronously delivering a timeout segment', async () => {
     const { camera, startOptions } = fakeCamera()
     const order: string[] = []
@@ -46,7 +46,7 @@ describe('ShoulderPressRecorder', () => {
     const onSegment = vi.fn(async (path: string, durationMs: number) => {
       order.push(`segment:${path}:${durationMs}`)
     })
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment
@@ -83,7 +83,7 @@ describe('ShoulderPressRecorder', () => {
     let now = 1000
     const delivered: Array<{ path: string; durationMs: number }> = []
     const onPause = vi.fn()
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onPause,
@@ -112,7 +112,7 @@ describe('ShoulderPressRecorder', () => {
     const { camera, startOptions, stopOptions } = fakeCamera()
     let now = 0
     const delivered: string[] = []
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: async (path) => {
@@ -134,7 +134,7 @@ describe('ShoulderPressRecorder', () => {
   it('finish stops automatic continuation and returns all delivered segments', async () => {
     const { camera, startOptions, stopOptions } = fakeCamera()
     let now = 0
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: vi.fn(async () => undefined)
@@ -160,7 +160,7 @@ describe('ShoulderPressRecorder', () => {
   it('keeps the active generation stoppable after the native stop fails', async () => {
     const { camera, stopOptions } = fakeCamera()
     let now = 1000
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: vi.fn(async () => undefined)
@@ -188,7 +188,7 @@ describe('ShoulderPressRecorder', () => {
     let now = 0
     const onMaxDuration = vi.fn()
     const onSegment = vi.fn(async () => undefined)
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       maxDurationMs: 12_000,
@@ -243,7 +243,7 @@ describe('ShoulderPressRecorder', () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
     const onMaxDuration = vi.fn()
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       maxDurationMs: 1_797_000,
@@ -282,7 +282,7 @@ describe('ShoulderPressRecorder', () => {
       releaseSegment = resolve
     })
     const onMaxDuration = vi.fn()
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       maxDurationMs: 12_000,
@@ -334,7 +334,7 @@ describe('ShoulderPressRecorder', () => {
       if (startOptions.length === 1) options.success?.()
       else options.fail?.()
     })
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: async (path) => {
@@ -364,7 +364,7 @@ describe('ShoulderPressRecorder', () => {
       unhandled.push(reason)
     }
     let now = 0
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: async (path) => {
@@ -393,7 +393,7 @@ describe('ShoulderPressRecorder', () => {
   it('ignores stale start callbacks from older generations when finishing the active segment', async () => {
     const { camera, startOptions, stopOptions } = fakeCamera()
     let now = 0
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: vi.fn(async () => undefined)
@@ -419,7 +419,7 @@ describe('ShoulderPressRecorder', () => {
   it('lets finish wait for an in-flight pause stop and returns the delivered segment', async () => {
     const { camera, stopOptions } = fakeCamera()
     let now = 1000
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: vi.fn(async () => undefined)
@@ -446,7 +446,7 @@ describe('ShoulderPressRecorder', () => {
       startOptions.push(options)
     })
     let now = 1000
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: vi.fn(async () => undefined)
@@ -473,7 +473,7 @@ describe('ShoulderPressRecorder', () => {
       startOptions.push(options)
       if (startOptions.length === 1) options.success?.()
     })
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       onSegment: vi.fn(async () => undefined)
@@ -504,7 +504,7 @@ describe('ShoulderPressRecorder', () => {
       finalSegmentSaveAttempt += 1
       if (finalSegmentSaveAttempt === 1) throw new Error('尾段保存失败')
     })
-    const recorder = new ShoulderPressRecorder({
+    const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
       maxDurationMs: 12_000,
