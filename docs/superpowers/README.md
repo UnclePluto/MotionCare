@@ -33,6 +33,7 @@ docs/superpowers/
 | `specs/2026-08-07-training-video-fixed-health-window-design.md` | 训练视频固定健康观察窗口 | implemented |
 | `specs/2026-08-09-wearable-management-permission-design.md` | 穿戴设备管理权限 + IMEI 单字段录入 | implemented |
 | `specs/2026-08-20-motion-action-official-video-recording-design.md` | 五运动动作正式视频与统一录像跟练 | implementing |
+| `specs/2026-08-21-game-question-analytics-design.md` | 六款认知游戏逐题数据与长期统计 | review |
 
 ## 实施计划（plans/）当前清单
 
