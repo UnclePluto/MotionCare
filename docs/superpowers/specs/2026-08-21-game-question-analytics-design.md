@@ -1,4 +1,5 @@
-> 状态：review
+> 状态：approved
+> 修订（2026-08-21, codex）：用户确认书面设计；补充补传重试元数据不参与幂等语义指纹的规则。
 > 日期：2026-08-21
 > 范围：六款认知游戏逐题有效作答时间、正确性、拼图交换次数，以及医生端单场明细和长期趋势统计。
 > 关联：`docs/superpowers/specs/2026-05-16-wechat-miniapp-real-games-design.md`、`docs/superpowers/specs/2026-05-15-game-prescription-tracking-design.md`
@@ -68,12 +69,14 @@ MotionCare 的六款认知游戏已经通过微信小程序完成真实游玩、
 
 ### `TrainingRecord` 扩展
 
-新增可空 `client_session_id` UUID 字段：
+新增可空 `client_session_id` UUID 字段和可空 `client_payload_fingerprint` SHA-256 十六进制字段：
 
 - 新版小程序必须为每次实际游戏训练生成一个 UUID。
 - 同一 UUID 只允许对应一条训练记录。
 - 历史记录和未升级客户端创建的记录允许为空。
-- 幂等重传时，后端比较患者、处方动作和标准化后的训练/逐题内容；完全一致返回已有记录，内容冲突返回 `409`。
+- 首次写入时，后端对患者、处方动作和标准化后的训练/逐题语义内容计算指纹并保存。
+- 指纹排除后端派生汇总字段，以及 `raw_detail.upload_mode`、`retry_count`、`total_retry_count` 这三个传输重试元数据；补传改变这些字段不构成训练内容冲突。
+- 幂等重传时，后端比较 UUID 和语义指纹；完全一致返回已有记录，内容冲突返回 `409`。已保存记录不因幂等重传改写传输元数据。
 
 ### `GameQuestionResult`
 
@@ -193,7 +196,7 @@ POST /api/patient-app/training-records/
 
 - 首次成功创建返回 `201`。
 - 完全一致的 `client_session_id` 重传返回原训练记录和 `200`。
-- UUID 相同但患者、处方动作或标准化内容不同返回 `409`。
+- UUID 相同但患者、处方动作或标准化语义内容不同返回 `409`；仅传输重试元数据变化仍返回原记录和 `200`。
 - 没有 UUID 的旧客户端维持现有非幂等行为。
 
 ### 旧客户端兼容
