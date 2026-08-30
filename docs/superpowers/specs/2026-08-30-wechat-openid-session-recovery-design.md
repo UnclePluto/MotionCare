@@ -1,7 +1,7 @@
 > 状态：approved
 > 日期：2026-08-30
 > 范围：小程序使用真实 OpenID 建立持久账号绑定，并在缓存或 token 丢失后自动恢复登录
-> 关联：同主题实施计划在本设计审阅通过后创建
+> 关联：`docs/superpowers/plans/2026-08-30-wechat-openid-session-recovery.md`
 
 # 微信小程序 OpenID 自动恢复登录设计
 
