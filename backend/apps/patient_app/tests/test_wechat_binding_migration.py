@@ -4,15 +4,18 @@ from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
 
 
-MIGRATION_FROM = ("patient_app", "0002_alter_patientappbindingcode_code_hash")
+MIGRATION_FROM = [
+    ("accounts", "0002_user_gender_must_change_password"),
+    ("patient_app", "0002_alter_patientappbindingcode_code_hash"),
+]
 MIGRATION_TO = ("patient_app", "0003_add_wechat_binding")
 
 
 @pytest.mark.django_db(transaction=True)
 def test_add_wechat_binding_migration_clears_legacy_temporary_login_codes():
     executor = MigrationExecutor(connection)
-    executor.migrate([MIGRATION_FROM])
-    old_apps = executor.loader.project_state([MIGRATION_FROM]).apps
+    executor.migrate(MIGRATION_FROM)
+    old_apps = executor.loader.project_state(MIGRATION_FROM).apps
 
     User = old_apps.get_model("accounts", "User")
     Patient = old_apps.get_model("patients", "Patient")
@@ -26,6 +29,7 @@ def test_add_wechat_binding_migration_clears_legacy_temporary_login_codes():
         phone="13800001111",
         name="测试医生",
         role="doctor",
+        gender="unknown",
     )
     patient = Patient.objects.create(
         name="患者甲",
