@@ -12,6 +12,34 @@ class WechatIdentityUnavailable(Exception):
     pass
 
 
+class _WechatCode2SessionTransport(httpx.BaseTransport):
+    def __init__(
+        self,
+        transport: httpx.BaseTransport,
+        *,
+        app_secret: str,
+        wx_code: str,
+    ) -> None:
+        self._transport = transport
+        self._sensitive_params = {
+            "secret": app_secret,
+            "js_code": wx_code,
+        }
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        upstream_request = httpx.Request(
+            request.method,
+            request.url.copy_merge_params(self._sensitive_params),
+            headers=request.headers,
+            content=request.content,
+            extensions=request.extensions,
+        )
+        return self._transport.handle_request(upstream_request)
+
+    def close(self) -> None:
+        self._transport.close()
+
+
 def exchange_login_code(wx_code: str, *, transport: httpx.BaseTransport | None = None) -> str:
     if settings.WECHAT_MINIAPP_AUTH_MODE == "mock":
         return settings.WECHAT_MINIAPP_MOCK_OPENID
@@ -23,13 +51,19 @@ def exchange_login_code(wx_code: str, *, transport: httpx.BaseTransport | None =
         pool=settings.WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS,
     )
     try:
-        with httpx.Client(timeout=timeout, transport=transport) as client:
+        upstream_transport = transport or httpx.HTTPTransport()
+        with httpx.Client(
+            timeout=timeout,
+            transport=_WechatCode2SessionTransport(
+                upstream_transport,
+                app_secret=settings.WECHAT_MINIAPP_APP_SECRET,
+                wx_code=wx_code,
+            ),
+        ) as client:
             response = client.get(
                 "https://api.weixin.qq.com/sns/jscode2session",
                 params={
                     "appid": settings.WECHAT_MINIAPP_APP_ID,
-                    "secret": settings.WECHAT_MINIAPP_APP_SECRET,
-                    "js_code": wx_code,
                     "grant_type": "authorization_code",
                 },
             )

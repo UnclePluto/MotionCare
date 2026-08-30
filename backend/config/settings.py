@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 import os
 
 from celery.schedules import crontab
@@ -185,10 +186,13 @@ validate_wechat_miniapp_settings(
     app_secret=WECHAT_MINIAPP_APP_SECRET,
     mock_openid=WECHAT_MINIAPP_MOCK_OPENID,
 )
-if min(
-    WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS,
-    WECHAT_MINIAPP_READ_TIMEOUT_SECONDS,
-) <= 0:
+if not all(
+    math.isfinite(timeout) and timeout > 0
+    for timeout in (
+        WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS,
+        WECHAT_MINIAPP_READ_TIMEOUT_SECONDS,
+    )
+):
     raise ImproperlyConfigured("微信身份服务超时配置必须大于 0")
 DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL = os.getenv(
     "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL", REDIS_URL

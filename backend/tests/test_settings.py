@@ -250,6 +250,35 @@ def test_production_settings_refuse_missing_wechat_credentials_in_subprocess():
     assert "WECHAT_MINIAPP_APP_SECRET" not in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("connect_timeout", "read_timeout"),
+    [("nan", "10"), ("5", "inf")],
+)
+def test_wechat_identity_settings_refuse_non_finite_timeouts_in_subprocess(
+    connect_timeout,
+    read_timeout,
+):
+    environment = {
+        **os.environ,
+        "DJANGO_DEBUG": "true",
+        "WECHAT_MINIAPP_AUTH_MODE": "mock",
+        "WECHAT_MINIAPP_MOCK_OPENID": "local-openid",
+        "WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS": connect_timeout,
+        "WECHAT_MINIAPP_READ_TIMEOUT_SECONDS": read_timeout,
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", "import config.settings"],
+        cwd=settings.BASE_DIR,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "微信身份服务超时配置必须大于 0" in result.stderr
+
+
 def test_wechat_identity_templates_use_safe_credentials_and_modes():
     root = settings.ROOT_DIR
     local_values = dotenv_values(root / ".env.example")
