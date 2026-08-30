@@ -33,6 +33,7 @@
 - 不使用客户端持久化的 OpenID、UnionID 或长期 refresh token 作为身份依据。
 - 不把微信 `session_key` 下发给小程序，也不使用它替代 MotionCare 自有 token。
 - 不改变演示模式的数据隔离规则。
+- 不重做 Web 管理端患者绑定卡片的布局和操作流程；只补充持久微信绑定状态语义。
 
 ## 4. 数据模型
 
@@ -136,7 +137,29 @@ POST /api/patient-app/bind/
 
 成功响应继续返回新 token 和绑定身份。旧字段 `wx_openid` 从请求合同中删除；多传该字段不能影响服务端解析出的身份。
 
-### 6.3 错误分类
+### 6.3 医生端绑定状态
+
+现有医生端接口继续保留：
+
+```text
+GET /api/studies/project-patients/{id}/binding-status/
+```
+
+响应新增：
+
+```json
+{
+  "has_wechat_binding": true,
+  "wechat_bound_at": "2026-08-30T10:00:00+08:00"
+}
+```
+
+- `has_wechat_binding` 和 `wechat_bound_at` 表示不会随 token 过期而消失的持久微信绑定。
+- 现有 `has_active_session`、`last_bound_at` 和 `active_session_expires_at` 继续只描述当前可用 token session。
+- Web 管理端的“患者绑定状态”和“撤销绑定”能力以持久微信绑定为主，同时在迁移期兼容尚未补建持久绑定的有效旧 session。
+- 页面布局、生成绑定码与撤销二次确认流程保持不变。
+
+### 6.4 错误分类
 
 - `400`：请求字段无效或微信临时 code 无效/已使用。
 - `409`：并发换绑导致数据库唯一性竞争，客户端可重新发起完整流程。
@@ -257,6 +280,7 @@ WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
 
 - `wechat-session/` 覆盖 `authenticated`、`unbound`、旧 token 迁移和安全错误。
 - `bind/` 只接受 `code + wx_code`；客户端伪造 `wx_openid` 不影响结果。
+- 医生端绑定状态同时准确返回持久微信绑定和活动 token session；token 过期后仍可撤销持久绑定。
 - 两个公开身份接口均应用共享限流。
 - 响应与错误中不泄露敏感凭据。
 
@@ -271,6 +295,12 @@ WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
 - 演示绑定码继续进入隔离演示模式。
 - 原有 `401/403` 清 token 行为最终会进入新的恢复流程。
 
+### 11.5 Web 管理端
+
+- 持久微信绑定存在而 token 已过期时仍显示“已绑定”并允许撤销。
+- 迁移期只有有效旧 session、尚无持久绑定时不错误显示为未绑定。
+- 生成绑定码、撤销确认和现有状态字段展示保持兼容。
+
 ## 12. 验收标准
 
 - 真实用户完成一次 OpenID 绑定后，清空小程序缓存仍能自动进入原账号。
@@ -278,6 +308,7 @@ WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
 - 同一 OpenID 绑定新账号后，旧账号患者端 token 失效，但旧账号研究数据完整保留。
 - 目标账号原来绑定的其他 OpenID 不能再自动登录。
 - 指导老师撤销患者端绑定后，原 OpenID 只能看到绑定码入口。
+- 持久绑定存在而 token 已过期时，医生端仍显示已绑定并可执行撤销。
 - 升级前仍保有有效 token 的用户无感补建真实 OpenID 绑定；升级前已经丢失 token 的用户只需重新绑定一次。
 - 微信身份交换不可用时，不把已绑定用户误判为未绑定。
 - 后端患者端相关测试、小程序全量测试、小程序 TypeScript 检查和生产构建全部通过。
@@ -292,6 +323,7 @@ WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
 - `backend/apps/patient_app/views.py`
 - `backend/apps/patient_app/urls.py`
 - 新增微信身份提供器及其测试
+- `backend/apps/studies/views.py` 与绑定状态 API 测试
 - `backend/config/settings.py` 与配置测试
 - `.env.example`
 - `deploy/env.production.example`
@@ -303,4 +335,9 @@ WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
 - `miniapp/src/api/client.ts` 或新增专用身份 API 模块
 - 相应 Vitest 测试
 
-不修改 Web 管理端页面和项目级解绑接口合同。
+Web 管理端：
+
+- `frontend/src/pages/research-entry/ProjectPatientBindingCard.tsx`
+- `frontend/src/pages/research-entry/ProjectPatientBindingCard.test.tsx`
+
+Web 端仅调整持久绑定状态判断，不改变页面布局和操作流程；项目级解绑接口合同保持不变。
