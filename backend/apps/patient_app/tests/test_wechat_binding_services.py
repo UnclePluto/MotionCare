@@ -1,8 +1,11 @@
 import pytest
 from django.db import IntegrityError, transaction
+from django.db.models import QuerySet
 from django.utils import timezone
 
+from apps.patient_app import services
 from apps.patient_app.models import (
+    PatientAppBindingCode,
     PatientAppSession,
     PatientAppWechatBinding,
 )
@@ -138,6 +141,30 @@ def test_valid_matching_token_is_kept_and_legacy_openid_is_backfilled(project_pa
 
 
 @pytest.mark.django_db
+def test_valid_matching_token_keeps_nonempty_session_openid_audit_value(project_patient):
+    PatientAppWechatBinding.objects.create(
+        project_patient=project_patient,
+        wx_openid="openid-001",
+    )
+    session = create_patient_app_session(
+        project_patient,
+        token="matching-token",
+        wx_openid="historical-audit-openid",
+    )
+
+    result = recover_patient_app_session(
+        wx_openid="openid-001",
+        presented_token="matching-token",
+    )
+
+    session.refresh_from_db()
+    assert result.status == "authenticated"
+    assert result.token is None
+    assert result.session == session
+    assert session.wx_openid == "historical-audit-openid"
+
+
+@pytest.mark.django_db
 def test_valid_legacy_token_claims_unbound_openid(project_patient):
     session = create_patient_app_session(project_patient, token="legacy-token")
 
@@ -245,6 +272,11 @@ def test_binding_new_project_replaces_both_sides_and_deactivates_sessions(
         token="source-token",
         wx_openid="openid-001",
     )
+    source_legacy_session = create_patient_app_session(
+        project_patient,
+        token="source-legacy-token",
+        wx_openid=None,
+    )
     target_session = create_patient_app_session(
         target_project_patient,
         token="target-token",
@@ -255,6 +287,7 @@ def test_binding_new_project_replaces_both_sides_and_deactivates_sessions(
     token, new_session = bind_project_patient_with_code(code, wx_openid="openid-001")
 
     source_session.refresh_from_db()
+    source_legacy_session.refresh_from_db()
     target_session.refresh_from_db()
     assert token
     assert new_session.project_patient == target_project_patient
@@ -266,6 +299,7 @@ def test_binding_new_project_replaces_both_sides_and_deactivates_sessions(
         == target_project_patient
     )
     assert source_session.is_active is False
+    assert source_legacy_session.is_active is False
     assert target_session.is_active is False
     assert ProjectPatient.objects.filter(pk=project_patient.pk).exists()
     assert ProjectPatient.objects.filter(pk=target_project_patient.pk).exists()
@@ -292,11 +326,13 @@ def test_revoke_deletes_wechat_binding_and_deactivates_sessions(project_patient)
     ).exists()
 
 
+@pytest.mark.parametrize("sqlite_column", ["wx_openid", "project_patient_id"])
 @pytest.mark.django_db
 def test_binding_failure_rolls_back_code_consumption_and_relationship_changes(
     project_patient,
     doctor,
     monkeypatch,
+    sqlite_column,
 ):
     target_project_patient = create_second_project_patient(doctor)
     source_binding = PatientAppWechatBinding.objects.create(
@@ -320,7 +356,9 @@ def test_binding_failure_rolls_back_code_consumption_and_relationship_changes(
     code, binding_code = create_binding_code(target_project_patient, created_by=doctor)
 
     def raise_integrity_error(*args, **kwargs):
-        raise IntegrityError("duplicate persistent binding")
+        raise IntegrityError(
+            f"UNIQUE constraint failed: patient_app_patientappwechatbinding.{sqlite_column}"
+        )
 
     monkeypatch.setattr(PatientAppWechatBinding.objects, "create", raise_integrity_error)
 
@@ -339,3 +377,153 @@ def test_binding_failure_rolls_back_code_consumption_and_relationship_changes(
     assert target_binding.project_patient == target_project_patient
     assert source_session.is_active is True
     assert target_session.is_active is True
+
+
+@pytest.mark.django_db
+def test_unknown_integrity_error_is_not_mapped_to_binding_conflict(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    code, binding_code = create_binding_code(project_patient, created_by=doctor)
+
+    def raise_integrity_error(*args, **kwargs):
+        raise IntegrityError("CHECK constraint failed: unrelated_check")
+
+    monkeypatch.setattr(PatientAppWechatBinding.objects, "create", raise_integrity_error)
+
+    with pytest.raises(IntegrityError, match="unrelated_check"):
+        bind_project_patient_with_code(code, wx_openid="openid-001")
+
+    binding_code.refresh_from_db()
+    assert binding_code.used_at is None
+
+
+@pytest.mark.django_db
+def test_recovery_does_not_map_unknown_integrity_error_to_binding_conflict(
+    project_patient,
+    monkeypatch,
+):
+    create_patient_app_session(project_patient, token="legacy-token")
+
+    def raise_integrity_error(*args, **kwargs):
+        raise IntegrityError("CHECK constraint failed: unrelated_check")
+
+    monkeypatch.setattr(PatientAppWechatBinding.objects, "create", raise_integrity_error)
+
+    with pytest.raises(IntegrityError, match="unrelated_check"):
+        recover_patient_app_session(
+            wx_openid="openid-001",
+            presented_token="legacy-token",
+        )
+
+    assert not PatientAppWechatBinding.objects.exists()
+
+
+@pytest.mark.parametrize(
+    "constraint_name",
+    [
+        "patient_app_patientappwechatbinding_wx_openid_d8e72b28_uniq",
+        "patient_app_patientappwe_project_patient_id_e7c05965_uniq",
+    ],
+)
+@pytest.mark.django_db
+def test_postgresql_binding_unique_constraints_are_mapped_to_binding_conflict(
+    project_patient,
+    doctor,
+    monkeypatch,
+    constraint_name,
+):
+    code, binding_code = create_binding_code(project_patient, created_by=doctor)
+
+    class FakePostgresUniqueViolation(Exception):
+        def __init__(self):
+            self.diag = type("Diag", (), {"constraint_name": constraint_name})()
+
+    try:
+        raise IntegrityError("duplicate key") from FakePostgresUniqueViolation()
+    except IntegrityError as error:
+        postgres_integrity_error = error
+
+    def raise_integrity_error(*args, **kwargs):
+        raise postgres_integrity_error
+
+    monkeypatch.setattr(PatientAppWechatBinding.objects, "create", raise_integrity_error)
+
+    with pytest.raises(PatientAppBindingConflict):
+        bind_project_patient_with_code(code, wx_openid="openid-001")
+
+    binding_code.refresh_from_db()
+    assert binding_code.used_at is None
+
+
+@pytest.mark.django_db
+def test_session_token_hash_collision_retries_without_binding_conflict(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    collided_session = create_patient_app_session(
+        project_patient,
+        token="collision-token",
+    )
+    code, _ = create_binding_code(project_patient, created_by=doctor)
+    generated_tokens = iter(["collision-token", "fresh-token"])
+    monkeypatch.setattr(
+        services.secrets,
+        "token_urlsafe",
+        lambda _length: next(generated_tokens),
+    )
+
+    token, session = bind_project_patient_with_code(code, wx_openid="openid-001")
+
+    collided_session.refresh_from_db()
+    assert token == "fresh-token"
+    assert session.token_hash == hash_patient_app_token("fresh-token")
+    assert collided_session.is_active is False
+
+
+@pytest.mark.django_db
+def test_session_token_hash_collision_has_finite_retry_limit(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    create_patient_app_session(project_patient, token="collision-token")
+    code, binding_code = create_binding_code(project_patient, created_by=doctor)
+    generated_tokens = []
+
+    def generate_colliding_token(_length):
+        generated_tokens.append("collision-token")
+        return "collision-token"
+
+    monkeypatch.setattr(services.secrets, "token_urlsafe", generate_colliding_token)
+
+    with pytest.raises(IntegrityError, match="patientappsession.token_hash"):
+        bind_project_patient_with_code(code, wx_openid="openid-001")
+
+    binding_code.refresh_from_db()
+    assert generated_tokens == ["collision-token"] * 3
+    assert binding_code.used_at is None
+    assert not PatientAppWechatBinding.objects.exists()
+
+
+@pytest.mark.django_db
+def test_binding_locks_project_patients_before_binding_code(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    code, _ = create_binding_code(project_patient, created_by=doctor)
+    lock_order = []
+    original_select_for_update = QuerySet.select_for_update
+
+    def record_select_for_update(queryset, *args, **kwargs):
+        lock_order.append(queryset.model)
+        return original_select_for_update(queryset, *args, **kwargs)
+
+    monkeypatch.setattr(QuerySet, "select_for_update", record_select_for_update)
+
+    bind_project_patient_with_code(code, wx_openid="openid-001")
+
+    assert lock_order.index(ProjectPatient) < lock_order.index(PatientAppBindingCode)
