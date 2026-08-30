@@ -50,6 +50,17 @@ def create_patient_app_session(
     )
 
 
+def postgres_integrity_error(constraint_name: str) -> IntegrityError:
+    class FakePostgresUniqueViolation(Exception):
+        def __init__(self):
+            self.diag = type("Diag", (), {"constraint_name": constraint_name})()
+
+    try:
+        raise IntegrityError("duplicate key") from FakePostgresUniqueViolation()
+    except IntegrityError as error:
+        return error
+
+
 @pytest.mark.django_db
 def test_wechat_binding_is_unique_on_both_openid_and_project_patient(
     project_patient,
@@ -423,8 +434,8 @@ def test_recovery_does_not_map_unknown_integrity_error_to_binding_conflict(
 @pytest.mark.parametrize(
     "constraint_name",
     [
-        "patient_app_patientappwechatbinding_wx_openid_d8e72b28_uniq",
-        "patient_app_patientappwe_project_patient_id_e7c05965_uniq",
+        "patient_app_patientappwechatbinding_wx_openid_key",
+        "patient_app_patientappwechatbinding_project_patient_id_key",
     ],
 )
 @pytest.mark.django_db
@@ -436,17 +447,10 @@ def test_postgresql_binding_unique_constraints_are_mapped_to_binding_conflict(
 ):
     code, binding_code = create_binding_code(project_patient, created_by=doctor)
 
-    class FakePostgresUniqueViolation(Exception):
-        def __init__(self):
-            self.diag = type("Diag", (), {"constraint_name": constraint_name})()
-
-    try:
-        raise IntegrityError("duplicate key") from FakePostgresUniqueViolation()
-    except IntegrityError as error:
-        postgres_integrity_error = error
+    postgres_error = postgres_integrity_error(constraint_name)
 
     def raise_integrity_error(*args, **kwargs):
-        raise postgres_integrity_error
+        raise postgres_error
 
     monkeypatch.setattr(PatientAppWechatBinding.objects, "create", raise_integrity_error)
 
@@ -455,6 +459,34 @@ def test_postgresql_binding_unique_constraints_are_mapped_to_binding_conflict(
 
     binding_code.refresh_from_db()
     assert binding_code.used_at is None
+
+
+@pytest.mark.django_db
+def test_postgresql_session_token_hash_constraint_retries(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    code, _ = create_binding_code(project_patient, created_by=doctor)
+    original_create = PatientAppSession.objects.create
+    create_attempts = []
+    token_constraint_error = postgres_integrity_error(
+        "patient_app_patientappsession_token_hash_key"
+    )
+
+    def create_with_one_token_collision(*args, **kwargs):
+        create_attempts.append(kwargs["token_hash"])
+        if len(create_attempts) == 1:
+            raise token_constraint_error
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(PatientAppSession.objects, "create", create_with_one_token_collision)
+
+    token, session = bind_project_patient_with_code(code, wx_openid="openid-001")
+
+    assert token
+    assert session.token_hash == hash_patient_app_token(token)
+    assert len(create_attempts) == 2
 
 
 @pytest.mark.django_db

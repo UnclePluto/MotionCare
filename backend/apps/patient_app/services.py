@@ -25,8 +25,8 @@ SESSION_TTL = timezone.timedelta(days=30)
 SESSION_TOKEN_MAX_ATTEMPTS = 3
 PATIENT_APP_WECHAT_BINDING_UNIQUE_CONSTRAINTS = frozenset(
     {
-        "patient_app_patientappwechatbinding_wx_openid_d8e72b28_uniq",
-        "patient_app_patientappwe_project_patient_id_e7c05965_uniq",
+        "patient_app_patientappwechatbinding_wx_openid_key",
+        "patient_app_patientappwechatbinding_project_patient_id_key",
     }
 )
 PATIENT_APP_WECHAT_BINDING_SQLITE_UNIQUE_ERRORS = frozenset(
@@ -35,9 +35,7 @@ PATIENT_APP_WECHAT_BINDING_SQLITE_UNIQUE_ERRORS = frozenset(
         "UNIQUE constraint failed: patient_app_patientappwechatbinding.project_patient_id",
     }
 )
-PATIENT_APP_SESSION_TOKEN_UNIQUE_CONSTRAINT = (
-    "patient_app_patientappsession_token_hash_f07ee10f_uniq"
-)
+PATIENT_APP_SESSION_TOKEN_UNIQUE_CONSTRAINT = "patient_app_patientappsession_token_hash_key"
 PATIENT_APP_SESSION_TOKEN_SQLITE_UNIQUE_ERROR = (
     "UNIQUE constraint failed: patient_app_patientappsession.token_hash"
 )
