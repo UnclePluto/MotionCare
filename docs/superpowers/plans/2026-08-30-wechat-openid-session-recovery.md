@@ -1057,6 +1057,8 @@ npm run build
 
 Expected: 测试、lint 和构建全部通过；现有 warning 必须单独列出，不能冒充本次新增错误。
 
+验证备注（2026-08-30）：Web Vitest `265 passed`；lint 退出码 0，为 `0 errors, 5 warnings`，5 条均为既有 `react-refresh/only-export-components` warning，不属于本次新增错误；build 退出码 0，但保留既有大于 500 kB 的 chunk warning，主 JS 约 `3219.18 kB`（gzip `1046.82 kB`）。
+
 - [x] **Step 4: 执行敏感信息与合同静态检查**
 
 Run:
