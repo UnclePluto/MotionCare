@@ -1,12 +1,19 @@
 import re
 import secrets
+from dataclasses import dataclass
+from typing import Literal
 
 from django.core.exceptions import ValidationError
 from django.core.signing import salted_hmac
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from apps.patient_app.models import PatientAppBindingCode, PatientAppSession
+from apps.patient_app.models import (
+    PatientAppBindingCode,
+    PatientAppSession,
+    PatientAppWechatBinding,
+)
 from apps.studies.models import ProjectPatient
 
 BINDING_CODE_ALPHABET = "0123456789"
@@ -15,6 +22,17 @@ BINDING_CODE_MAX_ATTEMPTS = 20
 BINDING_CODE_TTL = timezone.timedelta(minutes=15)
 BINDING_CODE_PATTERN = re.compile(r"^[0-9]{4}$")
 SESSION_TTL = timezone.timedelta(days=30)
+
+
+@dataclass(frozen=True)
+class PatientAppSessionRecovery:
+    status: Literal["authenticated", "unbound"]
+    token: str | None
+    session: PatientAppSession | None
+
+
+class PatientAppBindingConflict(Exception):
+    pass
 
 
 def _normalize_binding_code(code: str) -> str:
@@ -27,6 +45,46 @@ def _hash_binding_code(code: str) -> str:
 
 def hash_patient_app_token(token: str) -> str:
     return salted_hmac("patient_app.session_token", token).hexdigest()
+
+
+def _active_session_for_token(token: str | None, now) -> PatientAppSession | None:
+    if not token:
+        return None
+    return (
+        PatientAppSession.objects.select_related("project_patient__patient")
+        .filter(
+            token_hash=hash_patient_app_token(token),
+            is_active=True,
+            expires_at__gt=now,
+        )
+        .first()
+    )
+
+
+def _create_patient_app_session(*, project_patient, wx_openid, now):
+    token = secrets.token_urlsafe(32)
+    session = PatientAppSession.objects.create(
+        project_patient=project_patient,
+        patient=project_patient.patient,
+        wx_openid=wx_openid,
+        token_hash=hash_patient_app_token(token),
+        expires_at=now + SESSION_TTL,
+    )
+    return token, session
+
+
+def _lock_and_deactivate_sessions(*, filters: Q, now) -> None:
+    session_ids = list(
+        PatientAppSession.objects.select_for_update()
+        .filter(filters, is_active=True)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    if session_ids:
+        PatientAppSession.objects.filter(pk__in=session_ids).update(
+            is_active=False,
+            updated_at=now,
+        )
 
 
 def _generate_binding_code() -> str:
@@ -56,11 +114,15 @@ def create_binding_code(project_patient, created_by=None):
                 revoked_at__isnull=True,
                 expires_at__lte=now,
             ).update(revoked_at=now, updated_at=now)
-            active_collision_exists = PatientAppBindingCode.objects.select_for_update().filter(
-                code_hash=code_hash,
-                used_at__isnull=True,
-                revoked_at__isnull=True,
-            ).exists()
+            active_collision_exists = (
+                PatientAppBindingCode.objects.select_for_update()
+                .filter(
+                    code_hash=code_hash,
+                    used_at__isnull=True,
+                    revoked_at__isnull=True,
+                )
+                .exists()
+            )
             if active_collision_exists:
                 continue
             try:
@@ -78,6 +140,129 @@ def create_binding_code(project_patient, created_by=None):
             raise ValidationError("绑定码生成失败，请重试")
 
 
+def recover_patient_app_session(
+    *,
+    wx_openid: str,
+    presented_token: str | None,
+) -> PatientAppSessionRecovery:
+    now = timezone.now()
+
+    try:
+        with transaction.atomic():
+            persistent_binding_ref = (
+                PatientAppWechatBinding.objects.filter(wx_openid=wx_openid)
+                .only("id", "project_patient_id")
+                .first()
+            )
+            active_session_ref = _active_session_for_token(presented_token, now)
+            related_project_patient_ids = {
+                item_id
+                for item_id in (
+                    getattr(persistent_binding_ref, "project_patient_id", None),
+                    getattr(active_session_ref, "project_patient_id", None),
+                )
+                if item_id is not None
+            }
+            locked_project_patients = {
+                item.pk: item
+                for item in ProjectPatient.objects.select_for_update()
+                .select_related("patient")
+                .filter(pk__in=related_project_patient_ids)
+                .order_by("pk")
+            }
+            locked_bindings = list(
+                PatientAppWechatBinding.objects.select_for_update()
+                .filter(
+                    Q(wx_openid=wx_openid) | Q(project_patient_id__in=related_project_patient_ids)
+                )
+                .order_by("pk")
+            )
+            persistent_binding = next(
+                (item for item in locked_bindings if item.wx_openid == wx_openid),
+                None,
+            )
+            if (
+                persistent_binding is not None
+                and persistent_binding.project_patient_id not in locked_project_patients
+            ):
+                raise PatientAppBindingConflict
+
+            active_session = None
+            if active_session_ref is not None:
+                active_session = (
+                    PatientAppSession.objects.select_for_update()
+                    .filter(
+                        pk=active_session_ref.pk,
+                        is_active=True,
+                        expires_at__gt=now,
+                    )
+                    .first()
+                )
+
+            if persistent_binding is not None:
+                project_patient = locked_project_patients[persistent_binding.project_patient_id]
+                if (
+                    active_session is not None
+                    and active_session.project_patient_id == project_patient.pk
+                ):
+                    if active_session.wx_openid != wx_openid:
+                        active_session.wx_openid = wx_openid
+                        active_session.save(update_fields=["wx_openid", "updated_at"])
+                    return PatientAppSessionRecovery(
+                        status="authenticated",
+                        token=None,
+                        session=active_session,
+                    )
+
+                _lock_and_deactivate_sessions(
+                    filters=Q(project_patient=project_patient) | Q(wx_openid=wx_openid),
+                    now=now,
+                )
+                token, session = _create_patient_app_session(
+                    project_patient=project_patient,
+                    wx_openid=wx_openid,
+                    now=now,
+                )
+                return PatientAppSessionRecovery(
+                    status="authenticated",
+                    token=token,
+                    session=session,
+                )
+
+            if active_session is None:
+                return PatientAppSessionRecovery(
+                    status="unbound",
+                    token=None,
+                    session=None,
+                )
+
+            project_patient = locked_project_patients[active_session.project_patient_id]
+            target_binding = next(
+                (item for item in locked_bindings if item.project_patient_id == project_patient.pk),
+                None,
+            )
+            if target_binding is not None:
+                return PatientAppSessionRecovery(
+                    status="unbound",
+                    token=None,
+                    session=None,
+                )
+
+            PatientAppWechatBinding.objects.create(
+                project_patient=project_patient,
+                wx_openid=wx_openid,
+            )
+            active_session.wx_openid = wx_openid
+            active_session.save(update_fields=["wx_openid", "updated_at"])
+            return PatientAppSessionRecovery(
+                status="authenticated",
+                token=None,
+                session=active_session,
+            )
+    except IntegrityError as exc:
+        raise PatientAppBindingConflict from exc
+
+
 def bind_project_patient_with_code(code: str, wx_openid: str):
     now = timezone.now()
     normalized_code = _normalize_binding_code(code)
@@ -85,47 +270,73 @@ def bind_project_patient_with_code(code: str, wx_openid: str):
         raise ValidationError("绑定码无效")
     code_hash = _hash_binding_code(normalized_code)
 
-    with transaction.atomic():
-        binding_ref = (
-            PatientAppBindingCode.objects.filter(code_hash=code_hash)
-            .order_by("-created_at", "-id")
-            .only("id", "project_patient_id")
-            .first()
-        )
-        if binding_ref is None:
-            raise ValidationError("绑定码无效")
-        ProjectPatient.objects.select_for_update().get(pk=binding_ref.project_patient_id)
-        binding = (
-            PatientAppBindingCode.objects.select_for_update()
-            .select_related("project_patient__patient")
-            .filter(pk=binding_ref.pk)
-            .first()
-        )
-        if binding is None:
-            raise ValidationError("绑定码无效")
-        if binding.used_at is not None:
-            raise ValidationError("绑定码已使用")
-        if binding.revoked_at is not None:
-            raise ValidationError("绑定码已撤销")
-        if binding.expires_at <= now:
-            raise ValidationError("绑定码已过期")
+    try:
+        with transaction.atomic():
+            binding_ref = (
+                PatientAppBindingCode.objects.filter(code_hash=code_hash)
+                .order_by("-created_at", "-id")
+                .only("id", "project_patient_id")
+                .first()
+            )
+            if binding_ref is None:
+                raise ValidationError("绑定码无效")
+            binding = (
+                PatientAppBindingCode.objects.select_for_update().filter(pk=binding_ref.pk).first()
+            )
+            if binding is None:
+                raise ValidationError("绑定码无效")
+            if binding.used_at is not None:
+                raise ValidationError("绑定码已使用")
+            if binding.revoked_at is not None:
+                raise ValidationError("绑定码已撤销")
+            if binding.expires_at <= now:
+                raise ValidationError("绑定码已过期")
 
-        project_patient = binding.project_patient
-        PatientAppSession.objects.select_for_update().filter(
-            project_patient=project_patient,
-            is_active=True,
-        ).update(is_active=False, updated_at=now)
+            related_project_patient_ids = set(
+                PatientAppWechatBinding.objects.filter(
+                    Q(wx_openid=wx_openid) | Q(project_patient_id=binding.project_patient_id)
+                ).values_list("project_patient_id", flat=True)
+            )
+            related_project_patient_ids.add(binding.project_patient_id)
+            locked_project_patients = {
+                item.pk: item
+                for item in ProjectPatient.objects.select_for_update()
+                .select_related("patient")
+                .filter(pk__in=related_project_patient_ids)
+                .order_by("pk")
+            }
+            project_patient = locked_project_patients[binding.project_patient_id]
+            locked_bindings = list(
+                PatientAppWechatBinding.objects.select_for_update()
+                .filter(Q(wx_openid=wx_openid) | Q(project_patient=project_patient))
+                .order_by("pk")
+            )
+            if any(
+                item.project_patient_id not in locked_project_patients for item in locked_bindings
+            ):
+                raise PatientAppBindingConflict
 
-        token = secrets.token_urlsafe(32)
-        session = PatientAppSession.objects.create(
-            project_patient=project_patient,
-            patient=project_patient.patient,
-            wx_openid=wx_openid,
-            token_hash=hash_patient_app_token(token),
-            expires_at=now + SESSION_TTL,
-        )
-        binding.used_at = now
-        binding.save(update_fields=["used_at", "updated_at"])
+            _lock_and_deactivate_sessions(
+                filters=Q(wx_openid=wx_openid) | Q(project_patient=project_patient),
+                now=now,
+            )
+            if locked_bindings:
+                PatientAppWechatBinding.objects.filter(
+                    pk__in=[item.pk for item in locked_bindings]
+                ).delete()
+            PatientAppWechatBinding.objects.create(
+                project_patient=project_patient,
+                wx_openid=wx_openid,
+            )
+            token, session = _create_patient_app_session(
+                project_patient=project_patient,
+                wx_openid=wx_openid,
+                now=now,
+            )
+            binding.used_at = now
+            binding.save(update_fields=["used_at", "updated_at"])
+    except IntegrityError as exc:
+        raise PatientAppBindingConflict from exc
 
     return token, session
 
@@ -141,7 +352,10 @@ def revoke_project_patient_binding(project_patient) -> None:
             used_at__isnull=True,
             revoked_at__isnull=True,
         ).update(revoked_at=now, updated_at=now)
-        PatientAppSession.objects.select_for_update().filter(
-            project_patient=locked_project_patient,
-            is_active=True,
-        ).update(is_active=False, updated_at=now)
+        PatientAppWechatBinding.objects.select_for_update().filter(
+            project_patient=locked_project_patient
+        ).delete()
+        _lock_and_deactivate_sessions(
+            filters=Q(project_patient=locked_project_patient),
+            now=now,
+        )
