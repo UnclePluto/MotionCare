@@ -85,6 +85,14 @@ def test_add_wechat_binding_migration_clears_legacy_temporary_login_codes(
             migrated_session = PatientAppSession.objects.get(pk=legacy_session.pk)
             assert migrated_session.wx_openid is None
             assert PatientAppWechatBinding.objects.count() == 0
+
+            executor = MigrationExecutor(connection)
+            executor.migrate(MIGRATION_FROM)
+            rolled_back_apps = executor.loader.project_state(MIGRATION_FROM).apps
+            PatientAppSession = rolled_back_apps.get_model("patient_app", "PatientAppSession")
+
+            rolled_back_session = PatientAppSession.objects.get(pk=legacy_session.pk)
+            assert rolled_back_session.wx_openid == ""
         finally:
             try:
                 MigrationExecutor(connection).migrate(original_leaf_nodes)

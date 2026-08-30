@@ -10,6 +10,11 @@ def clear_legacy_session_openids(apps, schema_editor):
     PatientAppSession.objects.exclude(wx_openid__isnull=True).update(wx_openid=None)
 
 
+def restore_legacy_session_openids(apps, schema_editor):
+    PatientAppSession = apps.get_model("patient_app", "PatientAppSession")
+    PatientAppSession.objects.filter(wx_openid__isnull=True).update(wx_openid="")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -26,7 +31,7 @@ class Migration(migrations.Migration):
         ),
         migrations.RunPython(
             clear_legacy_session_openids,
-            migrations.RunPython.noop,
+            restore_legacy_session_openids,
         ),
         migrations.CreateModel(
             name='PatientAppWechatBinding',
