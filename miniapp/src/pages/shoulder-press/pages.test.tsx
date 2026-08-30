@@ -3698,6 +3698,68 @@ describe('审核演示模式', () => {
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
   })
 
+  it('恢复成功后的首页跳转失败进入安全重试态并保留新 token', async () => {
+    const navigation = deferred<void>()
+    void navigation.promise.catch(() => undefined)
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    taroHarness.taroMock.redirectTo.mockReturnValueOnce(navigation.promise)
+    requestMock.mockResolvedValueOnce({
+      status: 'authenticated',
+      token: 'restored-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    const page = renderPage(BindPage)
+
+    const check = taroHarness.showCallbacks[0]()
+    await flushPromises()
+    navigation.reject(new Error('private-route-secret'))
+    await check
+    await flushPromises()
+    page.rerender()
+
+    expect(getPatientAppToken()).toBe('restored-token')
+    expect(textContent(page.element)).toContain('进入首页失败，请重新检查登录')
+    expect(textContent(page.element)).not.toContain('private-route-secret')
+    expect(findButtonByText(page.element, '重新检查登录')).toBeTruthy()
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('恢复成功跳转未完成时重复 show 不会发起第二次恢复', async () => {
+    const navigation = deferred<void>()
+    taroHarness.taroMock.login.mockResolvedValue({ code: 'startup-code' })
+    taroHarness.taroMock.redirectTo.mockReturnValueOnce(navigation.promise)
+    requestMock
+      .mockResolvedValueOnce({
+        status: 'authenticated',
+        token: 'restored-token',
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+      .mockResolvedValue({ status: 'unbound' })
+    const page = renderPage(BindPage)
+
+    const firstCheck = taroHarness.showCallbacks[0]()
+    await flushPromises()
+    const repeatedCheck = taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledTimes(1)
+
+    navigation.resolve()
+    await Promise.all([firstCheck, repeatedCheck])
+    await flushPromises()
+    page.rerender()
+
+    expect(getPatientAppToken()).toBe('restored-token')
+    expect(textContent(page.element)).not.toContain('进入首页失败')
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
   it('登录检查失败只显示重试且不显示绑定输入', async () => {
     taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
     requestMock.mockRejectedValueOnce(new Error('网络连接失败，请稍后重试'))
@@ -3767,11 +3829,119 @@ describe('审核演示模式', () => {
     expect(getPatientAppToken()).toBe('real-token')
   })
 
+  it('真实绑定失败后恢复提交按钮并用新微信 code 再次绑定', async () => {
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'startup-code' })
+      .mockResolvedValueOnce({ code: 'first-binding-code' })
+      .mockResolvedValueOnce({ code: 'retry-binding-code' })
+    requestMock
+      .mockResolvedValueOnce({ status: 'unbound' })
+      .mockRejectedValueOnce(new Error('绑定服务暂时不可用，请重试'))
+      .mockResolvedValueOnce({
+        token: 'real-token',
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+    taroHarness.taroMock.redirectTo.mockResolvedValueOnce(undefined)
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '1234' } })
+    page.rerender()
+
+    await findButtonByText(page.element, '绑定账号').props.onClick?.()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('绑定服务暂时不可用，请重试')
+    expect(findButtonByText(page.element, '绑定账号').props.loading).toBe(false)
+    expect(findButtonByText(page.element, '绑定账号').props.disabled).toBe(false)
+
+    await findButtonByText(page.element, '绑定账号').props.onClick?.()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(3)
+    expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_code: 'first-binding-code' }
+    })
+    expect(requestMock).toHaveBeenNthCalledWith(3, '/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_code: 'retry-binding-code' }
+    })
+    expect(getPatientAppToken()).toBe('real-token')
+  })
+
+  it('绑定成功后的首页跳转失败保留 token 并通过恢复重试', async () => {
+    const navigation = deferred<void>()
+    void navigation.promise.catch(() => undefined)
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'startup-code' })
+      .mockResolvedValueOnce({ code: 'binding-code' })
+      .mockResolvedValueOnce({ code: 'recovery-code' })
+    requestMock
+      .mockResolvedValueOnce({ status: 'unbound' })
+      .mockResolvedValueOnce({
+        token: 'real-token',
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+      .mockResolvedValueOnce({
+        status: 'authenticated',
+        token: null,
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+    taroHarness.taroMock.redirectTo
+      .mockReturnValueOnce(navigation.promise)
+      .mockResolvedValueOnce(undefined)
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '1234' } })
+    page.rerender()
+
+    const submit = findButtonByText(page.element, '绑定账号').props.onClick?.()
+    await flushPromises()
+    navigation.reject(new Error('private-binding-route-secret'))
+    await submit
+    await flushPromises()
+    page.rerender()
+
+    expect(getPatientAppToken()).toBe('real-token')
+    expect(textContent(page.element)).toContain('进入首页失败，请重新检查登录')
+    expect(textContent(page.element)).not.toContain('private-binding-route-secret')
+    expect(findButtonByText(page.element, '重新检查登录')).toBeTruthy()
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+
+    await findButtonByText(page.element, '重新检查登录').props.onClick?.()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(3)
+    expect(requestMock).toHaveBeenNthCalledWith(3, '/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'recovery-code' }
+    })
+    expect(getPatientAppToken()).toBe('real-token')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledTimes(2)
+  })
+
   it('重复触发页面显示时不会并发恢复登录', async () => {
     const response = deferred<{ status: 'unbound' }>()
     taroHarness.taroMock.login.mockResolvedValue({ code: 'startup-code' })
     requestMock.mockReturnValueOnce(response.promise)
-    renderPage(BindPage)
+    const page = renderPage(BindPage)
 
     const firstCheck = taroHarness.showCallbacks[0]()
     const repeatedCheck = taroHarness.showCallbacks[0]()
@@ -3782,6 +3952,10 @@ describe('审核演示模式', () => {
 
     response.resolve({ status: 'unbound' })
     await Promise.all([firstCheck, repeatedCheck])
+    await flushPromises()
+    page.rerender()
+
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(1)
   })
 
   it('页面卸载后忽略迟到的恢复响应', async () => {
@@ -3927,6 +4101,22 @@ describe('审核演示模式', () => {
     expect(retryMocks.stopPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
     expect(session.isDemoSession()).toBe(true)
+  })
+
+  it('进程内演示会话重新显示绑定页时跳过真实恢复并进入首页', async () => {
+    setPatientAppToken('preserved-real-token')
+    session.startDemoSession()
+    taroHarness.taroMock.redirectTo.mockResolvedValueOnce(undefined)
+    renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(getPatientAppToken()).toBe('preserved-real-token')
+    expect(session.isDemoSession()).toBe(true)
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
   })
 
   it('应用演示生命周期保持演示状态并隔离真实上传恢复', async () => {

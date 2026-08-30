@@ -4,13 +4,22 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { bindWechatAccount, recoverWechatSession } from '../../auth/wechatSession'
 import { clearPatientAppToken, setPatientAppToken } from '../../auth/token'
-import { DEMO_BINDING_CODE, startDemoSession } from '../../demo/session'
+import { DEMO_BINDING_CODE, isDemoSession, startDemoSession } from '../../demo/session'
 import { stopPendingGameUploadRetryLoop } from '../game-session/retryUpload'
 
 type LoginCheckState = 'checking' | 'unbound' | 'error'
+const HOME_NAVIGATION_ERROR = '进入首页失败，请重新检查登录'
 
 function normalizeBindingCode(value: string) {
   return value.replace(/\D/g, '').slice(0, 4)
+}
+
+async function redirectToHome(): Promise<void> {
+  try {
+    await Taro.redirectTo({ url: '/pages/home/index' })
+  } catch {
+    throw new Error(HOME_NAVIGATION_ERROR)
+  }
 }
 
 export default function BindPage() {
@@ -40,6 +49,11 @@ export default function BindPage() {
     setError('')
 
     try {
+      if (isDemoSession()) {
+        await redirectToHome()
+        return
+      }
+
       const body = await recoverWechatSession()
       if (!mountedRef.current || requestVersionRef.current !== requestVersion) return
 
@@ -50,7 +64,7 @@ export default function BindPage() {
       }
 
       if (body.token) setPatientAppToken(body.token)
-      Taro.redirectTo({ url: '/pages/home/index' })
+      await redirectToHome()
     } catch (err) {
       if (!mountedRef.current || requestVersionRef.current !== requestVersion) return
       setError(err instanceof Error ? err.message : '登录检查失败，请重试')
@@ -82,14 +96,17 @@ export default function BindPage() {
     const requestVersion = requestVersionRef.current + 1
     requestVersionRef.current = requestVersion
     activeRequestRef.current = 'bind'
+    let bindingSucceeded = false
     try {
       const body = await bindWechatAccount(normalizedCode)
       if (!mountedRef.current || requestVersionRef.current !== requestVersion) return
       setPatientAppToken(body.token)
-      Taro.redirectTo({ url: '/pages/home/index' })
+      bindingSucceeded = true
+      await redirectToHome()
     } catch (err) {
       if (!mountedRef.current || requestVersionRef.current !== requestVersion) return
       setError(err instanceof Error ? err.message : '绑定失败')
+      if (bindingSucceeded) setLoginCheckState('error')
     } finally {
       if (mountedRef.current && requestVersionRef.current === requestVersion) {
         setLoading(false)
