@@ -3634,15 +3634,119 @@ describe('shoulder press pages', () => {
 })
 
 describe('审核演示模式', () => {
-  it('普通绑定码仍执行真实绑定', async () => {
-    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'wx-code' })
+  it('启动检查中不显示绑定码输入', () => {
+    const page = renderPage(BindPage)
+
+    expect(textContent(page.element)).toContain('正在恢复登录')
+    expect(textContent(page.element)).toContain('正在检查登录状态')
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('只有后端明确 unbound 后才显示绑定码', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockResolvedValueOnce({ status: 'unbound' })
+    const page = renderPage(BindPage)
+
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(1)
+  })
+
+  it('清缓存后按微信身份恢复并保存新 token', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
     requestMock.mockResolvedValueOnce({
+      status: 'authenticated',
+      token: 'restored-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(getPatientAppToken()).toBe('restored-token')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
+  })
+
+  it('有效旧 token 静默迁移时保留原 token', async () => {
+    setPatientAppToken('legacy-token')
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockResolvedValueOnce({
+      status: 'authenticated',
+      token: null,
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'startup-code' }
+    })
+    expect(getPatientAppToken()).toBe('legacy-token')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
+  })
+
+  it('登录检查失败只显示重试且不显示绑定输入', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockRejectedValueOnce(new Error('网络连接失败，请稍后重试'))
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('网络连接失败，请稍后重试')
+    expect(findButtonByText(page.element, '重新检查登录')).toBeTruthy()
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('点击重新检查后可从 error 进入 unbound', async () => {
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'failed-startup-code' })
+      .mockResolvedValueOnce({ code: 'retry-startup-code' })
+    requestMock
+      .mockRejectedValueOnce(new Error('网络连接失败，请稍后重试'))
+      .mockResolvedValueOnce({ status: 'unbound' })
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    clickButtonByText(page.element, '重新检查登录')
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(2)
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(1)
+  })
+
+  it('普通绑定启动和提交使用两个不同微信 code', async () => {
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'startup-code' })
+      .mockResolvedValueOnce({ code: 'binding-code-login' })
+    requestMock.mockResolvedValueOnce({ status: 'unbound' }).mockResolvedValueOnce({
       token: 'real-token',
       project_patient_id: 1,
       patient: { id: 1, name: '王阿姨' },
       project: { id: 1, name: '居家运动项目' }
     })
     const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
     const onInput = findFirstByType(page.element, 'Input').props.onInput
     if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
     onInput({ detail: { value: '1234' } })
@@ -3651,12 +3755,67 @@ describe('审核演示模式', () => {
     clickButtonByText(page.element, '绑定账号')
     await flushPromises()
 
-    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
-    expect(requestMock).toHaveBeenCalledWith('/patient-app/bind/', {
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(2)
+    expect(requestMock).toHaveBeenNthCalledWith(1, '/patient-app/wechat-session/', {
       method: 'POST',
-      data: { code: '1234', wx_openid: 'wx-code' }
+      data: { wx_code: 'startup-code' }
+    })
+    expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_code: 'binding-code-login' }
     })
     expect(getPatientAppToken()).toBe('real-token')
+  })
+
+  it('重复触发页面显示时不会并发恢复登录', async () => {
+    const response = deferred<{ status: 'unbound' }>()
+    taroHarness.taroMock.login.mockResolvedValue({ code: 'startup-code' })
+    requestMock.mockReturnValueOnce(response.promise)
+    renderPage(BindPage)
+
+    const firstCheck = taroHarness.showCallbacks[0]()
+    const repeatedCheck = taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+
+    response.resolve({ status: 'unbound' })
+    await Promise.all([firstCheck, repeatedCheck])
+  })
+
+  it('页面卸载后忽略迟到的恢复响应', async () => {
+    const response = deferred<{
+      status: 'authenticated'
+      token: string
+      project_patient_id: number
+      patient: { id: number; name: string }
+      project: { id: number; name: string }
+    }>()
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockReturnValueOnce(response.promise)
+    const page = renderPage(BindPage)
+
+    const check = taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'startup-code' }
+    })
+    page.unmount()
+    response.resolve({
+      status: 'authenticated',
+      token: 'late-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    await check
+    await flushPromises()
+
+    expect(getPatientAppToken()).toBeUndefined()
+    expect(taroHarness.taroMock.redirectTo).not.toHaveBeenCalled()
   })
 
   it('应用演示生命周期在未登录时不恢复真实上传任务', async () => {
@@ -3711,30 +3870,6 @@ describe('审核演示模式', () => {
     expect(retryMocks.tryUploadPendingGameRecord).toHaveBeenCalledTimes(1)
   })
 
-  it('已有真实身份提交 8888 时仅进入真实首页', async () => {
-    setPatientAppToken('real-token')
-    const page = renderPage(BindPage)
-
-    await taroHarness.showCallbacks[0]()
-    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
-
-    const tokenWriteCountBeforeSubmit = taroHarness.taroMock.setStorageSync.mock.calls.length
-    const onInput = findFirstByType(page.element, 'Input').props.onInput
-    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
-    onInput({ detail: { value: '8888' } })
-    page.rerender()
-
-    clickButtonByText(page.element, '绑定账号')
-    await flushPromises()
-
-    expect(getPatientAppToken()).toBe('real-token')
-    expect(taroHarness.taroMock.setStorageSync).toHaveBeenCalledTimes(tokenWriteCountBeforeSubmit)
-    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
-    expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
-    expect(retryMocks.stopPendingGameUploadRetryLoop).not.toHaveBeenCalled()
-    expect(session.isDemoSession()).toBe(false)
-  })
-
   it('真实游戏提前结束仍播放保存部分记录提示并展示原说明', async () => {
     setPatientAppToken('real-token')
     vi.useFakeTimers()
@@ -3766,7 +3901,13 @@ describe('审核演示模式', () => {
   })
 
   it('演示绑定 8888 不请求真实鉴权并进入首页', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockResolvedValueOnce({ status: 'unbound' })
     const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
     const onInput = findFirstByType(page.element, 'Input').props.onInput
     if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
     onInput({ detail: { value: '8888' } })
@@ -3775,7 +3916,12 @@ describe('审核演示模式', () => {
     clickButtonByText(page.element, '绑定账号')
     await flushPromises()
 
-    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'startup-code' }
+    })
     expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
     expect(getPatientAppToken()).toBeUndefined()
     expect(retryMocks.stopPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
