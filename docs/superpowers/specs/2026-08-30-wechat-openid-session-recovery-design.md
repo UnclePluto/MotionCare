@@ -235,6 +235,8 @@ WECHAT_MINIAPP_APP_ID
 WECHAT_MINIAPP_APP_SECRET
 WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS
 WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
+WECHAT_MINIAPP_AUTH_MODE
+WECHAT_MINIAPP_MOCK_OPENID
 ```
 
 要求：
@@ -244,6 +246,7 @@ WECHAT_MINIAPP_READ_TIMEOUT_SECONDS
 - `.env.example` 与 `deploy/env.production.example` 只记录空值和说明。
 - `deploy/docker-compose.prod.yml` 向 Web、Celery 等实际需要加载 Django settings 的后端容器透传配置，但微信身份交换只由 Web 请求路径调用。
 - 非 DEBUG 环境缺少 AppID/AppSecret 或启用模拟身份时，Django 配置检查必须失败。
+- `WECHAT_MINIAPP_AUTH_MODE` 只允许 `wechat` 或 `mock`；`mock` 仅可在 DEBUG 环境使用，并从 `WECHAT_MINIAPP_MOCK_OPENID` 读取固定本地身份。
 - 本地开发可显式启用仅限 DEBUG 的模拟身份提供器；自动化测试优先注入 mock transport/provider，不访问真实微信网络。
 - 发布前必须先把当前 AppID 对应的 AppSecret 安全配置到生产环境，否则不得发布依赖自动恢复的新小程序版本。
 
