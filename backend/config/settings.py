@@ -6,7 +6,7 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
-from config.environment import env_bool
+from config.environment import env_bool, validate_wechat_miniapp_settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ROOT_DIR = BASE_DIR.parent
@@ -161,6 +161,35 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+WECHAT_MINIAPP_AUTH_MODE = os.getenv(
+    "WECHAT_MINIAPP_AUTH_MODE", "mock" if DEBUG else "wechat"
+)
+WECHAT_MINIAPP_APP_ID = os.getenv("WECHAT_MINIAPP_APP_ID", "")
+WECHAT_MINIAPP_APP_SECRET = os.getenv("WECHAT_MINIAPP_APP_SECRET", "")
+WECHAT_MINIAPP_MOCK_OPENID = os.getenv("WECHAT_MINIAPP_MOCK_OPENID", "local-openid")
+WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS", "5")
+)
+WECHAT_MINIAPP_READ_TIMEOUT_SECONDS = float(
+    os.getenv("WECHAT_MINIAPP_READ_TIMEOUT_SECONDS", "10")
+)
+PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_REQUESTS = 60
+PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_WINDOW_SECONDS = 60
+PATIENT_APP_BIND_RATE_LIMIT_REQUESTS = 30
+PATIENT_APP_BIND_RATE_LIMIT_WINDOW_SECONDS = 900
+PATIENT_APP_AUTH_RATE_LIMIT_REDIS_URL = REDIS_URL
+validate_wechat_miniapp_settings(
+    debug=DEBUG,
+    auth_mode=WECHAT_MINIAPP_AUTH_MODE,
+    app_id=WECHAT_MINIAPP_APP_ID,
+    app_secret=WECHAT_MINIAPP_APP_SECRET,
+    mock_openid=WECHAT_MINIAPP_MOCK_OPENID,
+)
+if min(
+    WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS,
+    WECHAT_MINIAPP_READ_TIMEOUT_SECONDS,
+) <= 0:
+    raise ImproperlyConfigured("微信身份服务超时配置必须大于 0")
 DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL = os.getenv(
     "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL", REDIS_URL
 )

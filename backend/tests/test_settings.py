@@ -1,4 +1,7 @@
 import re
+import os
+import subprocess
+import sys
 from io import StringIO
 
 import pytest
@@ -6,7 +9,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import dotenv_values
 
-from config.environment import env_bool
+from config.environment import env_bool, validate_wechat_miniapp_settings
 
 
 def test_env_bool_defaults_to_false_when_variable_is_unset(monkeypatch):
@@ -173,3 +176,90 @@ def test_wearable_provider_examples_declare_only_safe_placeholders():
         assert values["MIWITRACKER_BASE_URL"].startswith("https://")
         assert values["MIWITRACKER_APP_ID"] == ""
         assert values["MIWITRACKER_KEY"] == ""
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {
+            "debug": False,
+            "auth_mode": "mock",
+            "app_id": "wx",
+            "app_secret": "secret",
+            "mock_openid": "local",
+        },
+        {
+            "debug": False,
+            "auth_mode": "wechat",
+            "app_id": "",
+            "app_secret": "secret",
+            "mock_openid": "",
+        },
+        {
+            "debug": False,
+            "auth_mode": "wechat",
+            "app_id": "wx",
+            "app_secret": "",
+            "mock_openid": "",
+        },
+        {
+            "debug": True,
+            "auth_mode": "mock",
+            "app_id": "",
+            "app_secret": "",
+            "mock_openid": "",
+        },
+    ],
+)
+def test_invalid_wechat_identity_settings_fail_closed(kwargs):
+    with pytest.raises(ImproperlyConfigured):
+        validate_wechat_miniapp_settings(**kwargs)
+
+
+def test_wechat_identity_settings_default_to_local_mock_mode():
+    assert settings.WECHAT_MINIAPP_AUTH_MODE == "mock"
+    assert settings.WECHAT_MINIAPP_MOCK_OPENID == "local-openid"
+    assert settings.WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS == 5
+    assert settings.WECHAT_MINIAPP_READ_TIMEOUT_SECONDS == 10
+    assert settings.PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_REQUESTS == 60
+    assert settings.PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_WINDOW_SECONDS == 60
+    assert settings.PATIENT_APP_BIND_RATE_LIMIT_REQUESTS == 30
+    assert settings.PATIENT_APP_BIND_RATE_LIMIT_WINDOW_SECONDS == 900
+    assert settings.PATIENT_APP_AUTH_RATE_LIMIT_REDIS_URL == settings.REDIS_URL
+
+
+def test_production_settings_refuse_missing_wechat_credentials_in_subprocess():
+    environment = {
+        **os.environ,
+        "DJANGO_DEBUG": "false",
+        "WECHAT_MINIAPP_AUTH_MODE": "wechat",
+        "WECHAT_MINIAPP_APP_ID": "",
+        "WECHAT_MINIAPP_APP_SECRET": "",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", "import config.settings"],
+        cwd=settings.BASE_DIR,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "微信真实身份模式缺少 AppID 或 AppSecret" in result.stderr
+    assert "WECHAT_MINIAPP_APP_SECRET" not in result.stderr
+
+
+def test_wechat_identity_templates_use_safe_credentials_and_modes():
+    root = settings.ROOT_DIR
+    local_values = dotenv_values(root / ".env.example")
+    production_values = dotenv_values(root / "deploy" / "env.production.example")
+    compose = (root / "deploy" / "docker-compose.prod.yml").read_text()
+
+    assert local_values["WECHAT_MINIAPP_AUTH_MODE"] == "mock"
+    assert local_values["WECHAT_MINIAPP_MOCK_OPENID"] == "local-openid"
+    assert production_values["WECHAT_MINIAPP_AUTH_MODE"] == "wechat"
+    assert production_values["WECHAT_MINIAPP_APP_ID"] == ""
+    assert production_values["WECHAT_MINIAPP_APP_SECRET"] == ""
+    assert "WECHAT_MINIAPP_APP_ID: ${WECHAT_MINIAPP_APP_ID}" in compose
+    assert "WECHAT_MINIAPP_APP_SECRET: ${WECHAT_MINIAPP_APP_SECRET}" in compose
