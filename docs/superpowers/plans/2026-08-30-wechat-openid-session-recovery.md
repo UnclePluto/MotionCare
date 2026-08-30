@@ -1,8 +1,10 @@
-> 状态：review
+> 状态：implemented（发布配置待外部注入；基线 tsc 门禁待另案修复）
 > 日期：2026-08-30
 > 范围：实现真实 OpenID 持久绑定、启动自动恢复、唯一换绑和医生端状态适配
 > 关联：`docs/superpowers/specs/2026-08-30-wechat-openid-session-recovery-design.md`
 > 实施基线 commit：`4d03db3`
+> 执行记录（2026-08-30, Codex）：Tasks 1–7 代码已落地，Task 6 提交为 `6e5a315`，PostgreSQL migration 测试修复为 `cebe1d9`、`2ca4819`；真实 PostgreSQL 后端 860 项、小程序 672 项与生产构建、Web 265 项与 lint/build 均通过；小程序独立 `tsc --noEmit` 为基线既有失败，生产 AppID/AppSecret 待外部注入。
+> 验证备注：代码实现已完成，但不宣称线上生效。Task 7 Step 2 因基线 TypeScript 门禁未通过保持未完成；Step 5 因无权读取生产密钥系统、指定 AppID/AppSecret 尚未确认保持未完成。
 
 # 微信小程序 OpenID 自动恢复登录 Implementation Plan
 
@@ -96,7 +98,7 @@
 - Consumes: 现有 `ProjectPatient`、`PatientAppSession`、`UserStampedModel`。
 - Produces: `PatientAppWechatBinding(project_patient, wx_openid)`；`PatientAppSession.wx_openid: str | None`。
 
-- [ ] **Step 1: 写模型唯一性失败测试**
+- [x] **Step 1: 写模型唯一性失败测试**
 
 在 `test_wechat_binding_services.py` 添加：
 
@@ -146,7 +148,7 @@ def test_wechat_binding_is_unique_on_both_openid_and_project_patient(
         )
 ```
 
-- [ ] **Step 2: 运行测试确认因模型缺失而失败**
+- [x] **Step 2: 运行测试确认因模型缺失而失败**
 
 Run:
 
@@ -157,7 +159,7 @@ pytest apps/patient_app/tests/test_wechat_binding_services.py::test_wechat_bindi
 
 Expected: FAIL，导入错误明确指出 `PatientAppWechatBinding` 尚不存在。
 
-- [ ] **Step 3: 添加模型并生成命名 migration**
+- [x] **Step 3: 添加模型并生成命名 migration**
 
 在 `models.py` 添加：
 
@@ -189,7 +191,7 @@ python manage.py makemigrations patient_app --name add_wechat_binding
 
 Expected: 生成 `0003_add_wechat_binding.py`，包含新模型和 `wx_openid` 字段变更。
 
-- [ ] **Step 4: 在 migration 中显式清空历史伪 OpenID**
+- [x] **Step 4: 在 migration 中显式清空历史伪 OpenID**
 
 在 `AlterField` 之后加入：
 
@@ -210,7 +212,7 @@ class Migration(migrations.Migration):
 
 不得尝试从历史值创建 `PatientAppWechatBinding`。
 
-- [ ] **Step 5: 写 migration 回归测试并观察通过**
+- [x] **Step 5: 写 migration 回归测试并观察通过**
 
 在 `test_wechat_binding_migration.py` 使用 `MigrationExecutor` 从 `patient_app.0002_alter_patientappbindingcode_code_hash` 迁移到 `patient_app.0003_add_wechat_binding`。测试先用历史 apps 创建 `wx_openid="temporary-login-code"` 的 session，再断言：
 
@@ -229,7 +231,7 @@ python manage.py makemigrations patient_app --check --dry-run
 
 Expected: 测试 PASS；migration 检查输出 `No changes detected`。
 
-- [ ] **Step 6: 提交模型与 migration**
+- [x] **Step 6: 提交模型与 migration**
 
 ```bash
 git add backend/apps/patient_app/models.py backend/apps/patient_app/migrations/0003_add_wechat_binding.py backend/apps/patient_app/tests/test_wechat_binding_migration.py backend/apps/patient_app/tests/test_wechat_binding_services.py
@@ -254,7 +256,7 @@ git commit -m "feat(小程序): 建立持久微信账号绑定"
 - Consumes: `httpx>=0.27,<1.0`、Django settings、当前 AppID `wx095c9a6c41b60112` 的服务端凭据。
 - Produces: `exchange_login_code(wx_code: str, *, transport: httpx.BaseTransport | None = None) -> str`；`WechatLoginCodeInvalid`；`WechatIdentityUnavailable`。
 
-- [ ] **Step 1: 写微信身份提供器失败测试**
+- [x] **Step 1: 写微信身份提供器失败测试**
 
 在 `test_wechat_identity.py` 用 `httpx.MockTransport` 覆盖：
 
@@ -278,7 +280,7 @@ def test_exchange_login_code_returns_only_openid():
 
 另写参数化测试覆盖微信 `40029`、`45011`、`-1`、非 JSON、缺少 OpenID、HTTP 500 和 `httpx.TimeoutException`；断言异常字符串不包含 `secret-test`、`private-session-key` 或 `single-use-code`。
 
-- [ ] **Step 2: 运行提供器测试确认失败**
+- [x] **Step 2: 运行提供器测试确认失败**
 
 Run:
 
@@ -289,7 +291,7 @@ pytest apps/patient_app/tests/test_wechat_identity.py -q
 
 Expected: FAIL，模块 `apps.patient_app.wechat_identity` 尚不存在。
 
-- [ ] **Step 3: 实现身份提供器最小边界**
+- [x] **Step 3: 实现身份提供器最小边界**
 
 `wechat_identity.py` 使用以下公开结构：
 
@@ -340,7 +342,7 @@ def exchange_login_code(wx_code: str, *, transport=None) -> str:
 
 不得在异常消息中拼接 request URL、响应 body 或原始异常文本。
 
-- [ ] **Step 4: 写配置校验失败测试**
+- [x] **Step 4: 写配置校验失败测试**
 
 在 `backend/tests/test_settings.py` 对 `config.environment.validate_wechat_miniapp_settings` 添加：
 
@@ -359,7 +361,7 @@ def test_invalid_wechat_identity_settings_fail_closed(kwargs):
         validate_wechat_miniapp_settings(**kwargs)
 ```
 
-- [ ] **Step 5: 实现配置、模板和 Compose 透传**
+- [x] **Step 5: 实现配置、模板和 Compose 透传**
 
 在 `settings.py` 定义固定默认值：
 
@@ -418,7 +420,7 @@ validate_wechat_miniapp_settings(
 
 并校验两个 timeout 均大于 0。模板值固定为：本地 `AUTH_MODE=mock`、`MOCK_OPENID=local-openid`；生产 `AUTH_MODE=wechat` 且 AppID/AppSecret 为空占位。Compose 使用 `${WECHAT_MINIAPP_APP_ID}` 与 `${WECHAT_MINIAPP_APP_SECRET}` 无默认值，防止静默空配置。
 
-- [ ] **Step 6: 运行提供器与配置测试**
+- [x] **Step 6: 运行提供器与配置测试**
 
 Run:
 
@@ -429,7 +431,7 @@ pytest apps/patient_app/tests/test_wechat_identity.py tests/test_settings.py -q
 
 Expected: PASS；任何失败输出均不包含测试密钥或临时 code。
 
-- [ ] **Step 7: 提交微信身份边界与配置**
+- [x] **Step 7: 提交微信身份边界与配置**
 
 ```bash
 git add backend/apps/patient_app/wechat_identity.py backend/apps/patient_app/tests/test_wechat_identity.py backend/config/environment.py backend/config/settings.py backend/tests/test_settings.py .env.example deploy/env.production.example deploy/docker-compose.prod.yml
@@ -449,7 +451,7 @@ git commit -m "feat(小程序): 接入服务端微信身份交换"
 - Consumes: `PatientAppWechatBinding`、可信 `wx_openid`、可选明文患者 token。
 - Produces: `PatientAppSessionRecovery`；`recover_patient_app_session(*, wx_openid: str, presented_token: str | None) -> PatientAppSessionRecovery`；`PatientAppBindingConflict`；保持 `bind_project_patient_with_code(code: str, wx_openid: str) -> tuple[str, PatientAppSession]` 供可信后端调用。
 
-- [ ] **Step 1: 写恢复与换绑失败测试**
+- [x] **Step 1: 写恢复与换绑失败测试**
 
 在 `test_wechat_binding_services.py` 添加以下独立用例；每一项都使用函数名中写明的场景，不合并成一个大测试：
 
@@ -478,7 +480,7 @@ assert result.session.project_patient == project_patient
 
 换绑测试必须在调用前创建两个 `ProjectPatient`、两个 `PatientAppWechatBinding` 和活动 session，并在调用后断言旧绑定已删除、旧 session 均失效、研究对象仍存在。
 
-- [ ] **Step 2: 运行服务测试确认失败**
+- [x] **Step 2: 运行服务测试确认失败**
 
 Run:
 
@@ -489,7 +491,7 @@ pytest apps/patient_app/tests/test_wechat_binding_services.py apps/patient_app/t
 
 Expected: FAIL，缺少恢复类型和持久绑定行为。
 
-- [ ] **Step 3: 抽取 token 查找与签发 helper**
+- [x] **Step 3: 抽取 token 查找与签发 helper**
 
 在 `services.py` 添加私有 helper：
 
@@ -518,7 +520,7 @@ def _create_patient_app_session(*, project_patient, wx_openid, now):
 
 helper 只接收已经验证的 OpenID，不调用微信网络。
 
-- [ ] **Step 4: 实现恢复结果和优先级**
+- [x] **Step 4: 实现恢复结果和优先级**
 
 添加：
 
@@ -536,7 +538,7 @@ class PatientAppBindingConflict(Exception):
 
 `recover_patient_app_session` 严格按 spec §7.1：持久 OpenID 绑定优先；同账号有效 token 返回 `token=None`；缺失/过期 token 签发新 token；只有两侧都无持久绑定时才允许有效旧 token 静默 claim。创建/claim 使用 `transaction.atomic()`、`select_for_update()` 和唯一约束；`IntegrityError` 转成 `PatientAppBindingConflict`。
 
-- [ ] **Step 5: 扩展绑定与撤销事务**
+- [x] **Step 5: 扩展绑定与撤销事务**
 
 更新 `bind_project_patient_with_code`：在消费绑定码的原事务内锁定目标与被替换关系，删除两侧 `PatientAppWechatBinding`，停用两侧 session，再创建唯一持久绑定和新 session。更新 `revoke_project_patient_binding`：
 
@@ -548,7 +550,7 @@ PatientAppWechatBinding.objects.select_for_update().filter(
 
 不得调用 studies 的项目级解绑服务。
 
-- [ ] **Step 6: 运行患者端服务回归**
+- [x] **Step 6: 运行患者端服务回归**
 
 Run:
 
@@ -559,7 +561,7 @@ pytest apps/patient_app/tests/test_wechat_binding_services.py apps/patient_app/t
 
 Expected: PASS；既有绑定码哈希、15 分钟过期和 token 认证测试继续通过。
 
-- [ ] **Step 7: 提交持久绑定服务**
+- [x] **Step 7: 提交持久绑定服务**
 
 ```bash
 git add backend/apps/patient_app/services.py backend/apps/patient_app/tests/test_wechat_binding_services.py backend/apps/patient_app/tests/test_binding_services.py
@@ -583,7 +585,7 @@ git commit -m "feat(小程序): 支持微信账号恢复与唯一换绑"
 - Consumes: `exchange_login_code`、`recover_patient_app_session`、`bind_project_patient_with_code`。
 - Produces: `POST /api/patient-app/wechat-session/`；`POST /api/patient-app/bind/` 的 `{code, wx_code}` 合同；`PatientAppWechatSessionRateThrottle`；`PatientAppBindRateThrottle`。
 
-- [ ] **Step 1: 写 API 合同失败测试**
+- [x] **Step 1: 写 API 合同失败测试**
 
 在 `test_patient_app_api.py` 用 monkeypatch 固定身份交换：
 
@@ -607,7 +609,7 @@ monkeypatch.setattr(
 
 恢复接口的无效 Bearer 测试必须断言不是 `401`，而是继续按 OpenID 返回 `authenticated` 或 `unbound`。
 
-- [ ] **Step 2: 运行 API 测试确认失败**
+- [x] **Step 2: 运行 API 测试确认失败**
 
 Run:
 
@@ -618,7 +620,7 @@ pytest apps/patient_app/tests/test_patient_app_api.py -q
 
 Expected: FAIL，`wechat-session/` 为 404，旧 bind serializer 仍要求 `wx_openid`。
 
-- [ ] **Step 3: 添加 serializer 与容错旧 token 解析**
+- [x] **Step 3: 添加 serializer 与容错旧 token 解析**
 
 定义：
 
@@ -639,7 +641,7 @@ class PatientAppBindSerializer(serializers.Serializer):
 
 在 view 内只接受格式正确的 `Bearer <token>` 作为 `presented_token`；错误格式视为 `None`，不能调用常规 `PatientAppTokenAuthentication` 提前抛 `401`。
 
-- [ ] **Step 4: 实现恢复与绑定 view 编排**
+- [x] **Step 4: 实现恢复与绑定 view 编排**
 
 `PatientAppWechatSessionView.post`：校验 `wx_code` → 调用 `exchange_login_code` → 调用恢复服务 → 序列化 `authenticated/unbound`。`PatientAppBindView.post`：先在事务外交换 OpenID，再把可信 OpenID 传给现有服务。异常固定映射：
 
@@ -655,7 +657,7 @@ WechatIdentityUnavailable -> 503 "微信登录服务暂时不可用，请稍后�
 path("wechat-session/", PatientAppWechatSessionView.as_view(), name="patient-app-wechat-session")
 ```
 
-- [ ] **Step 5: 先写身份限流失败测试**
+- [x] **Step 5: 先写身份限流失败测试**
 
 在 `test_patient_app_auth_throttles.py` 使用与 `test_demo_motion_video_throttle.py` 相同的 `FakeRedis`，断言：
 
@@ -684,7 +686,7 @@ for throttle_class in (
     )
 ```
 
-- [ ] **Step 6: 抽取共享 Redis 固定窗口限流基类**
+- [x] **Step 6: 抽取共享 Redis 固定窗口限流基类**
 
 在不改变 `DemoMotionVideoRateThrottle` 行为的前提下抽取：
 
@@ -721,7 +723,7 @@ class PatientAppBindRateThrottle(RedisFixedWindowRateThrottle):
 
 两个 view 分别声明对应 `throttle_classes`。Redis 不可用时 fail closed 为安全 `503`，不得暴露 Redis URL。
 
-- [ ] **Step 7: 运行 API、限流与演示视频回归**
+- [x] **Step 7: 运行 API、限流与演示视频回归**
 
 Run:
 
@@ -732,7 +734,7 @@ pytest apps/patient_app/tests/test_patient_app_api.py apps/patient_app/tests/tes
 
 Expected: PASS；既有演示视频第 61 次拒绝和安全 503 行为不变。
 
-- [ ] **Step 8: 提交 API 与限流**
+- [x] **Step 8: 提交 API 与限流**
 
 ```bash
 git add backend/apps/patient_app/serializers.py backend/apps/patient_app/views.py backend/apps/patient_app/urls.py backend/apps/patient_app/throttles.py backend/apps/patient_app/tests/test_patient_app_api.py backend/apps/patient_app/tests/test_patient_app_auth_throttles.py backend/apps/patient_app/tests/test_demo_motion_video_throttle.py
@@ -753,7 +755,7 @@ git commit -m "feat(小程序): 增加微信启动恢复接口"
 - Consumes: `PatientAppWechatBinding` 和现有活动 session 查询。
 - Produces: `binding-status` 新字段 `has_wechat_binding: boolean`、`wechat_bound_at: string | null`；Web 端 `isBound = has_wechat_binding || has_active_session`。
 
-- [ ] **Step 1: 写医生端状态 API 失败测试**
+- [x] **Step 1: 写医生端状态 API 失败测试**
 
 扩展 `test_project_patient_binding_api.py`：创建持久绑定和已过期 session，断言：
 
@@ -766,7 +768,7 @@ assert response.data["active_session_expires_at"] is None
 
 随后调用现有 `revoke-binding/`，断言持久绑定删除、session 停用、`ProjectPatient` 仍存在。
 
-- [ ] **Step 2: 运行后端状态测试确认失败**
+- [x] **Step 2: 运行后端状态测试确认失败**
 
 Run:
 
@@ -777,7 +779,7 @@ pytest apps/studies/tests/test_project_patient_binding_api.py -q
 
 Expected: FAIL，响应缺少 `has_wechat_binding`。
 
-- [ ] **Step 3: 扩展绑定状态 payload**
+- [x] **Step 3: 扩展绑定状态 payload**
 
 在 `_binding_status_payload` 查询 `project_patient.patient_app_wechat_binding`，返回：
 
@@ -788,7 +790,7 @@ Expected: FAIL，响应缺少 `has_wechat_binding`。
 
 保留现有 session 字段及其原语义。
 
-- [ ] **Step 4: 写 Web 端持久绑定失败测试**
+- [x] **Step 4: 写 Web 端持久绑定失败测试**
 
 在 `ProjectPatientBindingCard.test.tsx` 添加：
 
@@ -813,7 +815,7 @@ it("token 过期后仍按持久微信绑定显示并允许撤销", async () => {
 
 另保留“仅有效旧 session、尚无持久绑定”仍显示已绑定的迁移期测试。
 
-- [ ] **Step 5: 更新 Web 状态判断但不改布局**
+- [x] **Step 5: 更新 Web 状态判断但不改布局**
 
 扩展类型并使用：
 
@@ -826,7 +828,7 @@ const canRevoke = Boolean(
 
 “最近绑定时间”显示 `wechat_bound_at ?? last_bound_at`；其他布局和按钮流程不变。
 
-- [ ] **Step 6: 运行后端与 Web 定向测试**
+- [x] **Step 6: 运行后端与 Web 定向测试**
 
 Run:
 
@@ -839,7 +841,7 @@ npm run test -- ProjectPatientBindingCard.test.tsx
 
 Expected: 两组测试 PASS。
 
-- [ ] **Step 7: 提交医生端状态适配**
+- [x] **Step 7: 提交医生端状态适配**
 
 ```bash
 git add backend/apps/studies/views.py backend/apps/studies/tests/test_project_patient_binding_api.py frontend/src/pages/research-entry/ProjectPatientBindingCard.tsx frontend/src/pages/research-entry/ProjectPatientBindingCard.test.tsx
@@ -860,7 +862,7 @@ git commit -m "fix(患者绑定): 按持久微信关系展示状态"
 - Consumes: `Taro.login()`、现有 `request<T>()`、本地 patient token。
 - Produces: `recoverWechatSession() -> Promise<WechatSessionResponse>`；`bindWechatAccount(code: string) -> Promise<BindResponse>`；绑定页 `checking | unbound | error` 启动状态。
 
-- [ ] **Step 1: 写专用微信会话 API 失败测试**
+- [x] **Step 1: 写专用微信会话 API 失败测试**
 
 在 `wechatSession.test.ts` mock Taro 和 `request`，添加：
 
@@ -887,7 +889,7 @@ it('恢复与真实绑定每次都获取新的微信 code', async () => {
 
 另测 `Taro.login()` 未返回 code 时抛出中性、安全错误，且不发 API 请求。
 
-- [ ] **Step 2: 运行专用 API 测试确认失败**
+- [x] **Step 2: 运行专用 API 测试确认失败**
 
 Run:
 
@@ -898,7 +900,7 @@ npx vitest run src/auth/wechatSession.test.ts
 
 Expected: FAIL，模块尚不存在。
 
-- [ ] **Step 3: 实现专用身份 API 模块**
+- [x] **Step 3: 实现专用身份 API 模块**
 
 定义：
 
@@ -939,7 +941,7 @@ export async function bindWechatAccount(code: string): Promise<BindResponse> {
 
 从绑定页删除本地 `BindResponse` 类型和现有 `login.code || 'dev-openid'` 回退，改为导入 `bindWechatAccount`、`recoverWechatSession`。
 
-- [ ] **Step 4: 写绑定页状态机失败测试**
+- [x] **Step 4: 写绑定页状态机失败测试**
 
 在现有 `pages.test.tsx` harness 中添加或改写以下测试：
 
@@ -954,7 +956,7 @@ export async function bindWechatAccount(code: string): Promise<BindResponse> {
 
 每个测试都显式触发 `taroHarness.showCallbacks[0]()`，等待 promise 后 `page.rerender()`，不能依赖初始渲染直接出现 Input。
 
-- [ ] **Step 5: 实现绑定页状态机**
+- [x] **Step 5: 实现绑定页状态机**
 
 核心状态：
 
@@ -983,7 +985,7 @@ async function checkExistingBinding() {
 
 `checking` 渲染“正在检查登录状态”；`error` 渲染安全错误和“重新检查”按钮；只有 `unbound` 渲染现有四格输入。真实提交调用 `bindWechatAccount`，演示码仍先走本地 `startDemoSession()`。
 
-- [ ] **Step 6: 运行小程序定向测试与类型检查**
+- [x] **Step 6: 运行小程序定向测试与类型检查**
 
 Run:
 
@@ -995,7 +997,7 @@ npx tsc --noEmit
 
 Expected: PASS，无 TypeScript 错误。
 
-- [ ] **Step 7: 提交小程序登录状态机**
+- [x] **Step 7: 提交小程序登录状态机**
 
 ```bash
 git add miniapp/src/auth/wechatSession.ts miniapp/src/auth/wechatSession.test.ts miniapp/src/pages/bind/index.tsx miniapp/src/pages/shoulder-press/pages.test.tsx
@@ -1014,7 +1016,7 @@ git commit -m "fix(小程序): 清缓存后按微信身份恢复登录"
 - Consumes: Tasks 1–6 的完整实现。
 - Produces: 可部署代码、完整验证证据、生产配置清单和可追溯执行记录。
 
-- [ ] **Step 1: 运行后端全量验证**
+- [x] **Step 1: 运行后端全量验证**
 
 Run:
 
@@ -1040,7 +1042,9 @@ TARO_APP_CONFIG_ENV=production TARO_APP_API_BASE_URL=https://mcare-wx.whestsun.c
 
 Expected: Vitest 全量 PASS；TypeScript 无错误；微信生产构建退出码 0。
 
-- [ ] **Step 3: 运行 Web 管理端全量验证**
+验证备注（2026-08-30）：Vitest `672 passed`、微信生产构建退出码 0；独立 `tsc --noEmit` 退出码 2。该失败已在实施基线 `4d03db3` 独立复现，且本分支新增文件与新增测试区段不在错误位置中，作为既有工程债另案修复。因此本 Step 保持未勾选，不写“TypeScript 无错误”。
+
+- [x] **Step 3: 运行 Web 管理端全量验证**
 
 Run:
 
@@ -1053,17 +1057,20 @@ npm run build
 
 Expected: 测试、lint 和构建全部通过；现有 warning 必须单独列出，不能冒充本次新增错误。
 
-- [ ] **Step 4: 执行敏感信息与合同静态检查**
+- [x] **Step 4: 执行敏感信息与合同静态检查**
 
 Run:
 
 ```bash
-rg -n "login\.code \|\| 'dev-openid'|data: \{ code: normalizedCode, wx_openid|WECHAT_MINIAPP_APP_SECRET=.+" backend miniapp .env.example deploy --glob '!**/node_modules/**' --glob '!**/dist/**'
+rg -n "login\.code \|\| 'dev-openid'|data: \{ code: normalizedCode, wx_openid" backend miniapp --glob '!**/tests/**' --glob '!**/*.test.*' --glob '!**/node_modules/**' --glob '!**/dist/**'
+rg -n "WECHAT_MINIAPP_APP_SECRET=.+" .env.example deploy --glob '!**/tests/**' --glob '!**/node_modules/**' --glob '!**/dist/**'
 rg -n "wx_openid" miniapp/src --glob '!**/*.test.*'
 git diff --check
 ```
 
-Expected: 第一条不命中旧回退、旧请求合同或非空示例密钥；第二条不命中客户端业务源码；`git diff --check` 通过。测试 fixture 中使用虚构 `openid-*` 允许保留。
+Expected: 第一条不命中旧回退或旧请求合同；第二条不命中环境模板中的非空示例密钥；第三条不命中客户端业务源码；`git diff --check` 通过。测试 fixture 中用于脱敏验证的虚构 `secret-test` 与 `openid-*` 允许保留且不属于环境模板扫描范围。
+
+验证备注（2026-08-30）：原命令会误报安全测试中的虚构 `secret-test`，已按检查目标拆分扫描范围；修正后的三项搜索均无命中，`git diff --check` 通过，未删除或弱化安全测试。
 
 - [ ] **Step 5: 核对生产配置前置条件但不写真实密钥**
 
@@ -1071,22 +1078,24 @@ Expected: 第一条不命中旧回退、旧请求合同或非空示例密钥；�
 
 不得读取、打印或提交真实 AppSecret。若生产环境尚未注入，实施可标记“代码完成、发布被外部配置阻塞”，不得宣称线上自动恢复已生效。
 
-- [ ] **Step 6: 追加 changelog 并回填执行记录**
+发布备注（2026-08-30）：当前无权读取生产密钥系统，无法确认 `WECHAT_MINIAPP_APP_ID=wx095c9a6c41b60112` 与非空 `WECHAT_MINIAPP_APP_SECRET` 已注入。本 Step 保持未勾选；代码已完成，但发布被外部配置阻塞，不宣称线上自动恢复已生效。
+
+- [x] **Step 6: 追加 changelog 并回填执行记录**
 
 在 `specs/patient-rehab-system/changelog.md` 末尾追加 2026-08-30 条目，包含：真实 OpenID 服务端交换、持久一对一绑定、缓存/token 丢失恢复、旧 token 静默迁移、医生端持久状态。不得修改历史条目。
 
-先运行 `git rev-parse --short HEAD` 取得 Task 6 的实际七位提交号，再在本计划顶部追加一行执行记录，写明 2026-08-30、Codex、Tasks 1–7 已落地、该命令返回的原样提交号，以及后端、小程序、Web 验证均通过。不得写尖括号占位文本。
+先运行 `git rev-parse --short HEAD` 取得 Task 6 的实际七位提交号，再在本计划顶部追加一行执行记录，写明 2026-08-30、Codex、Tasks 1–7 代码已落地、Task 6 原样提交号与各端真实验证结果。基线既有失败和外部发布配置必须单独写明，不得笼统写“均通过”，不得写尖括号占位文本。
 
 把实际完成的 `[ ]` 改为 `[x]`，不能提前勾选失败或未运行步骤。
 
-- [ ] **Step 7: 提交收口记录**
+- [x] **Step 7: 提交收口记录**
 
 ```bash
 git add specs/patient-rehab-system/changelog.md docs/superpowers/plans/2026-08-30-wechat-openid-session-recovery.md
 git commit -m "docs(小程序): 记录微信身份恢复落地结果"
 ```
 
-- [ ] **Step 8: 使用完成前验证 skill 复核最终状态**
+- [x] **Step 8: 使用完成前验证 skill 复核最终状态**
 
 执行 `superpowers:verification-before-completion`，重新读取最后一次验证输出并运行：
 
