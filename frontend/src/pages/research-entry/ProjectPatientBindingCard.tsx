@@ -14,6 +14,8 @@ import {
 } from "../wearables/WearableBindingPanel";
 
 type BindingStatus = {
+  has_wechat_binding: boolean;
+  wechat_bound_at: string | null;
   has_active_session: boolean;
   has_active_binding_code: boolean;
   binding_code_expires_at: string | null;
@@ -34,15 +36,15 @@ function formatTime(value: string | null | undefined) {
   return value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—";
 }
 
-function PatientBindingDescriptions({ status }: { status: BindingStatus | undefined }) {
+function PatientBindingDescriptions({ status, isBound }: { status: BindingStatus | undefined; isBound: boolean }) {
   const wearableBinding = useWearableBindingView();
   const binding = wearableBinding.isLoading ? null : wearableBinding.binding;
 
   return (
     <Descriptions size="small" bordered column={{ xs: 1, sm: 3 }}>
-      <Descriptions.Item label="患者绑定状态">{status?.has_active_session ? <Tag color="green">已绑定</Tag> : <Tag>未绑定</Tag>}</Descriptions.Item>
+      <Descriptions.Item label="患者绑定状态">{isBound ? <Tag color="green">已绑定</Tag> : <Tag>未绑定</Tag>}</Descriptions.Item>
       <Descriptions.Item label="有效绑定码">{status?.has_active_binding_code ? <Tag color="blue">存在</Tag> : <Tag>无</Tag>}</Descriptions.Item>
-      <Descriptions.Item label="最近绑定时间">{formatTime(status?.last_bound_at)}</Descriptions.Item>
+      <Descriptions.Item label="最近绑定时间">{formatTime(status?.wechat_bound_at ?? status?.last_bound_at)}</Descriptions.Item>
       <Descriptions.Item label="绑定码过期时间">{formatTime(status?.binding_code_expires_at)}</Descriptions.Item>
       <Descriptions.Item label="登录过期时间">{formatTime(status?.active_session_expires_at)}</Descriptions.Item>
       <Descriptions.Item label="设备简码">{binding?.short_code ?? "—"}</Descriptions.Item>
@@ -89,7 +91,10 @@ function MiniappBindingSection({ projectPatientId }: { projectPatientId: number 
   });
 
   const status = statusQuery.data;
-  const canRevoke = Boolean(status?.has_active_session || status?.has_active_binding_code);
+  const isBound = Boolean(status?.has_wechat_binding || status?.has_active_session);
+  const canRevoke = Boolean(
+    status?.has_wechat_binding || status?.has_active_session || status?.has_active_binding_code,
+  );
   const generatedCode = createCode.data?.projectPatientId === projectPatientId ? createCode.data : null;
 
   return (
@@ -107,7 +112,7 @@ function MiniappBindingSection({ projectPatientId }: { projectPatientId: number 
         </Space>
       </Space>
 
-      <PatientBindingDescriptions status={status} />
+      <PatientBindingDescriptions status={status} isBound={isBound} />
 
       {generatedCode ? (
         <Alert

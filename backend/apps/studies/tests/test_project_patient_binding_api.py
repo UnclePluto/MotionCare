@@ -4,9 +4,13 @@ import pytest
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.patient_app.models import PatientAppBindingCode, PatientAppSession
+from apps.patient_app.models import (
+    PatientAppBindingCode,
+    PatientAppSession,
+    PatientAppWechatBinding,
+)
 from apps.patient_app.services import bind_project_patient_with_code
-from apps.studies.models import StudyProject
+from apps.studies.models import ProjectPatient, StudyProject
 
 
 def _client(user):
@@ -114,6 +118,38 @@ def test_revoke_project_patient_binding_deactivates_session_and_unused_code(
         project_patient=project_patient,
         is_active=True,
     ).exists()
+
+
+@pytest.mark.django_db
+def test_binding_status_and_revoke_use_persistent_wechat_binding_after_session_expiry(
+    doctor,
+    project_patient,
+):
+    client = _client(doctor)
+    created = client.post(f"/api/studies/project-patients/{project_patient.id}/binding-code/")
+    _, session = bind_project_patient_with_code(created.data["code"], wx_openid="openid-001")
+    session.expires_at = timezone.now() - timezone.timedelta(seconds=1)
+    session.save(update_fields=["expires_at"])
+
+    response = client.get(f"/api/studies/project-patients/{project_patient.id}/binding-status/")
+
+    assert response.status_code == 200, response.data
+    assert response.data["has_wechat_binding"] is True
+    assert response.data["wechat_bound_at"] is not None
+    assert response.data["has_active_session"] is False
+    assert response.data["active_session_expires_at"] is None
+
+    revoke_response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/revoke-binding/"
+    )
+
+    assert revoke_response.status_code == 200, revoke_response.data
+    assert not PatientAppWechatBinding.objects.filter(
+        project_patient=project_patient
+    ).exists()
+    session.refresh_from_db()
+    assert session.is_active is False
+    assert ProjectPatient.objects.filter(pk=project_patient.pk).exists()
 
 
 @pytest.mark.django_db
