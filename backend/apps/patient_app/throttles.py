@@ -13,8 +13,20 @@ class DemoMotionVideoRateLimitUnavailable(APIException):
     default_code = "demo_motion_video_rate_limit_unavailable"
 
 
-class DemoMotionVideoRateThrottle(BaseThrottle):
+class PatientAppAuthRateLimitUnavailable(APIException):
+    status_code = 503
+    default_detail = "登录服务繁忙，请稍后重试"
+    default_code = "patient_app_auth_rate_limit_unavailable"
+
+
+class RedisFixedWindowRateThrottle(BaseThrottle):
     """Redis-backed fixed-window throttle shared by every API worker."""
+
+    key_namespace: str
+    redis_url_setting: str
+    requests_setting: str
+    window_setting: str
+    unavailable_exception_class: type[APIException]
 
     redis_client_factory = staticmethod(redis.Redis.from_url)
     _increment_script = """
@@ -50,19 +62,41 @@ return count
     def allow_request(self, request, view):
         client_ip = self._trusted_client_ip(request)
         identity = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
-        key = f"motioncare:rate-limit:demo-motion-videos:{identity}"
+        key = f"motioncare:rate-limit:{self.key_namespace}:{identity}"
         try:
-            client = self.redis_client_factory(
-                settings.DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL
-            )
+            client = self.redis_client_factory(getattr(settings, self.redis_url_setting))
             count = int(
                 client.eval(
                     self._increment_script,
                     1,
                     key,
-                    settings.DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS,
+                    getattr(settings, self.window_setting),
                 )
             )
         except Exception as exc:
-            raise DemoMotionVideoRateLimitUnavailable() from exc
-        return count <= settings.DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS
+            raise self.unavailable_exception_class() from exc
+        return count <= getattr(settings, self.requests_setting)
+
+
+class DemoMotionVideoRateThrottle(RedisFixedWindowRateThrottle):
+    key_namespace = "demo-motion-videos"
+    redis_url_setting = "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL"
+    requests_setting = "DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS"
+    window_setting = "DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS"
+    unavailable_exception_class = DemoMotionVideoRateLimitUnavailable
+
+
+class PatientAppWechatSessionRateThrottle(RedisFixedWindowRateThrottle):
+    key_namespace = "patient-app-wechat-session"
+    redis_url_setting = "PATIENT_APP_AUTH_RATE_LIMIT_REDIS_URL"
+    requests_setting = "PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_REQUESTS"
+    window_setting = "PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_WINDOW_SECONDS"
+    unavailable_exception_class = PatientAppAuthRateLimitUnavailable
+
+
+class PatientAppBindRateThrottle(RedisFixedWindowRateThrottle):
+    key_namespace = "patient-app-bind"
+    redis_url_setting = "PATIENT_APP_AUTH_RATE_LIMIT_REDIS_URL"
+    requests_setting = "PATIENT_APP_BIND_RATE_LIMIT_REQUESTS"
+    window_setting = "PATIENT_APP_BIND_RATE_LIMIT_WINDOW_SECONDS"
+    unavailable_exception_class = PatientAppAuthRateLimitUnavailable

@@ -5,6 +5,7 @@ from django.core.cache import cache
 from django.db.models import Count, Prefetch
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.authentication import get_authorization_header
 from rest_framework.exceptions import APIException, ValidationError as DrfValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -32,15 +33,29 @@ from apps.training.video_services import (
 from apps.training.views import validation_detail
 
 from .authentication import PatientAppTokenAuthentication
-from .throttles import DemoMotionVideoRateThrottle
+from .throttles import (
+    DemoMotionVideoRateThrottle,
+    PatientAppBindRateThrottle,
+    PatientAppWechatSessionRateThrottle,
+)
 from .serializers import (
     PatientAppBindSerializer,
     PatientAppTrainingRecordCreateSerializer,
     PatientAppTrainingVideoFinalizeSerializer,
     PatientAppTrainingVideoSegmentSerializer,
     PatientAppTrainingVideoSessionSerializer,
+    PatientAppWechatSessionSerializer,
 )
-from .services import bind_project_patient_with_code
+from .services import (
+    PatientAppBindingConflict,
+    bind_project_patient_with_code,
+    recover_patient_app_session,
+)
+from .wechat_identity import (
+    WechatIdentityUnavailable,
+    WechatLoginCodeInvalid,
+    exchange_login_code,
+)
 
 
 def current_week_bounds(today=None):
@@ -69,6 +84,33 @@ def serialize_me(project_patient):
             "name": project_patient.project.name,
         },
     }
+
+
+def optional_bearer_token(request):
+    parts = get_authorization_header(request).split()
+    if len(parts) != 2 or parts[0].lower() != b"bearer" or not parts[1]:
+        return None
+    try:
+        return parts[1].decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def wechat_identity_error_response(exc):
+    if isinstance(exc, WechatLoginCodeInvalid):
+        return Response(
+            {"detail": "微信登录凭证无效，请重试"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if isinstance(exc, PatientAppBindingConflict):
+        return Response(
+            {"detail": "账号绑定发生冲突，请重试"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    return Response(
+        {"detail": "微信登录服务暂时不可用，请稍后重试"},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 
 def current_prescription_for(project_patient):
@@ -181,18 +223,53 @@ def serialize_prescription(project_patient):
 class PatientAppBindView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [PatientAppBindRateThrottle]
 
     def post(self, request):
         serializer = PatientAppBindSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            token, session = bind_project_patient_with_code(**serializer.validated_data)
+            wx_openid = exchange_login_code(serializer.validated_data["wx_code"])
+            token, session = bind_project_patient_with_code(
+                code=serializer.validated_data["code"],
+                wx_openid=wx_openid,
+            )
+        except (WechatLoginCodeInvalid, WechatIdentityUnavailable, PatientAppBindingConflict) as exc:
+            return wechat_identity_error_response(exc)
         except DjangoValidationError as exc:
             return Response(
                 {"detail": validation_detail(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response({"token": token, **serialize_me(session.project_patient)})
+
+
+class PatientAppWechatSessionView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [PatientAppWechatSessionRateThrottle]
+
+    def post(self, request):
+        serializer = PatientAppWechatSessionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            wx_openid = exchange_login_code(serializer.validated_data["wx_code"])
+            recovery = recover_patient_app_session(
+                wx_openid=wx_openid,
+                presented_token=optional_bearer_token(request),
+            )
+        except (WechatLoginCodeInvalid, WechatIdentityUnavailable, PatientAppBindingConflict) as exc:
+            return wechat_identity_error_response(exc)
+
+        if recovery.status == "unbound":
+            return Response({"status": "unbound"})
+        return Response(
+            {
+                "status": "authenticated",
+                "token": recovery.token,
+                **serialize_me(recovery.session.project_patient),
+            }
+        )
 
 
 class DemoMotionVideoManifestView(APIView):

@@ -63,9 +63,23 @@ class BindingCodeField(serializers.CharField):
         return value
 
 
+class WechatCodeField(serializers.CharField):
+    def __init__(self, **kwargs):
+        super().__init__(
+            min_length=1,
+            max_length=128,
+            trim_whitespace=False,
+            **kwargs,
+        )
+
+
+class PatientAppWechatSessionSerializer(serializers.Serializer):
+    wx_code = WechatCodeField()
+
+
 class PatientAppBindSerializer(serializers.Serializer):
     code = BindingCodeField()
-    wx_openid = serializers.CharField(max_length=128)
+    wx_code = WechatCodeField()
 
 
 class PatientAppTrainingRecordCreateSerializer(serializers.Serializer):

@@ -3,8 +3,22 @@ from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.patient_app.throttles import DemoMotionVideoRateThrottle
-from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
+from apps.patient_app.models import PatientAppSession, PatientAppWechatBinding
+from apps.patient_app.throttles import (
+    DemoMotionVideoRateThrottle,
+    PatientAppBindRateThrottle,
+    PatientAppWechatSessionRateThrottle,
+)
+from apps.patient_app.services import (
+    PatientAppBindingConflict,
+    bind_project_patient_with_code,
+    create_binding_code,
+    hash_patient_app_token,
+)
+from apps.patient_app.wechat_identity import (
+    WechatIdentityUnavailable,
+    WechatLoginCodeInvalid,
+)
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.prescriptions.motion_videos import MotionVideoResolution
 from apps.training.models import TrainingRecord
@@ -31,11 +45,16 @@ class _IsolatedDemoManifestRedis:
 @pytest.fixture(autouse=True)
 def isolate_demo_manifest_rate_limit(monkeypatch):
     redis = _IsolatedDemoManifestRedis()
-    monkeypatch.setattr(
+    for throttle_class in (
         DemoMotionVideoRateThrottle,
-        "redis_client_factory",
-        staticmethod(lambda _url: redis),
-    )
+        PatientAppWechatSessionRateThrottle,
+        PatientAppBindRateThrottle,
+    ):
+        monkeypatch.setattr(
+            throttle_class,
+            "redis_client_factory",
+            staticmethod(lambda _url, redis=redis: redis),
+        )
 
 
 def _auth_client(project_patient, doctor):
@@ -58,13 +77,18 @@ def _game_prescription_action(active_prescription):
 
 
 @pytest.mark.django_db
-def test_bind_api_returns_token_and_bound_identity(project_patient, doctor):
+def test_bind_api_returns_token_and_bound_identity(project_patient, doctor, monkeypatch):
     code, _ = create_binding_code(project_patient=project_patient, created_by=doctor)
     client = APIClient()
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
 
     response = client.post(
         "/api/patient-app/bind/",
-        {"code": code, "wx_openid": "openid-a"},
+        {"code": code, "wx_code": "wx-code"},
         format="json",
     )
 
@@ -75,19 +99,243 @@ def test_bind_api_returns_token_and_bound_identity(project_patient, doctor):
     assert response.data["project"]["name"] == project_patient.project.name
 
 
+@pytest.mark.django_db
+def test_wechat_session_returns_authenticated_and_new_token_for_bound_openid(
+    project_patient,
+    monkeypatch,
+):
+    PatientAppWechatBinding.objects.create(
+        project_patient=project_patient,
+        wx_openid="openid-001",
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "authenticated"
+    assert response.data["token"]
+    assert response.data["project_patient_id"] == project_patient.id
+
+
+@pytest.mark.django_db
+def test_wechat_session_returns_unbound_without_binding_or_valid_legacy_token(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.json() == {"status": "unbound"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "authorization_header",
+    [
+        "Bearer invalid-token",
+        "Bearer",
+        "Bearer invalid-token extra-part",
+        "Basic invalid-token",
+    ],
+)
+def test_wechat_session_ignores_invalid_optional_bearer_and_still_restores_openid(
+    project_patient,
+    monkeypatch,
+    authorization_header,
+):
+    PatientAppWechatBinding.objects.create(
+        project_patient=project_patient,
+        wx_openid="openid-001",
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=authorization_header)
+
+    response = client.post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.status_code != 401
+    assert response.data["status"] == "authenticated"
+
+
+@pytest.mark.django_db
+def test_wechat_session_migrates_valid_legacy_token(project_patient, monkeypatch):
+    legacy_token = "legacy-token"
+    PatientAppSession.objects.create(
+        project_patient=project_patient,
+        patient=project_patient.patient,
+        wx_openid=None,
+        token_hash=hash_patient_app_token(legacy_token),
+        expires_at=timezone.now() + timezone.timedelta(days=30),
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {legacy_token}")
+
+    response = client.post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "authenticated"
+    assert response.data["token"] is None
+    assert PatientAppWechatBinding.objects.get(
+        project_patient=project_patient
+    ).wx_openid == "openid-001"
+
+
+@pytest.mark.django_db
+def test_bind_api_requires_wx_code_and_ignores_forged_wx_openid(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    code, _ = create_binding_code(project_patient=project_patient, created_by=doctor)
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    client = APIClient()
+
+    missing_code_response = client.post(
+        "/api/patient-app/bind/",
+        {"code": code},
+        format="json",
+    )
+    response = client.post(
+        "/api/patient-app/bind/",
+        {
+            "code": code,
+            "wx_code": "wx-code",
+            "wx_openid": "forged-openid",
+        },
+        format="json",
+    )
+
+    assert missing_code_response.status_code == 400, missing_code_response.data
+    assert response.status_code == 200, response.data
+    assert PatientAppWechatBinding.objects.get(
+        project_patient=project_patient
+    ).wx_openid == "openid-001"
+
+
+@pytest.mark.django_db
+def test_invalid_wechat_code_returns_safe_400(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: (_ for _ in ()).throw(
+            WechatLoginCodeInvalid("wx-code=private-single-use-code")
+        ),
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "private-single-use-code"},
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert response.json() == {"detail": "微信登录凭证无效，请重试"}
+    assert "private-single-use-code" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_unavailable_wechat_identity_returns_safe_503(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: (_ for _ in ()).throw(
+            WechatIdentityUnavailable(
+                "app-secret session_key redis://user:password@example.invalid"
+            )
+        ),
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 503, response.data
+    assert response.json() == {"detail": "微信登录服务暂时不可用，请稍后重试"}
+    assert "app-secret" not in response.content.decode()
+    assert "session_key" not in response.content.decode()
+    assert "password" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_binding_conflict_returns_safe_409(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.recover_patient_app_session",
+        lambda **kwargs: (_ for _ in ()).throw(
+            PatientAppBindingConflict("Bearer private-token code=1234")
+        ),
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 409, response.data
+    assert response.json() == {"detail": "账号绑定发生冲突，请重试"}
+    assert "private-token" not in response.content.decode()
+    assert "1234" not in response.content.decode()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
-        {"code": "12AB", "wx_openid": "openid-a"},
-        {"code": "１２３４", "wx_openid": "openid-a"},
-        {"code": "", "wx_openid": "openid-a"},
-        {"code": "123", "wx_openid": "openid-a"},
-        {"code": "12345", "wx_openid": "openid-a"},
-        {"code": " 1234 ", "wx_openid": "openid-a"},
-        {"code": "\t1234\n", "wx_openid": "openid-a"},
-        {"code": 1234, "wx_openid": "openid-a"},
-        {"code": None, "wx_openid": "openid-a"},
-        {"wx_openid": "openid-a"},
+        {"code": "12AB", "wx_code": "wx-code"},
+        {"code": "１２３４", "wx_code": "wx-code"},
+        {"code": "", "wx_code": "wx-code"},
+        {"code": "123", "wx_code": "wx-code"},
+        {"code": "12345", "wx_code": "wx-code"},
+        {"code": " 1234 ", "wx_code": "wx-code"},
+        {"code": "\t1234\n", "wx_code": "wx-code"},
+        {"code": 1234, "wx_code": "wx-code"},
+        {"code": None, "wx_code": "wx-code"},
+        {"wx_code": "wx-code"},
     ],
 )
 @pytest.mark.django_db

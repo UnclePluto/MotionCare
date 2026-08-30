@@ -3,7 +3,7 @@ from collections import defaultdict
 import pytest
 from django.core.cache import cache
 
-from apps.patient_app.throttles import DemoMotionVideoRateThrottle
+from apps.patient_app.throttles import RedisFixedWindowRateThrottle
 
 
 class FakeRedis:
@@ -24,7 +24,7 @@ class FakeRedis:
 def isolated_rate_limit(monkeypatch):
     redis = FakeRedis()
     monkeypatch.setattr(
-        DemoMotionVideoRateThrottle,
+        RedisFixedWindowRateThrottle,
         "redis_client_factory",
         staticmethod(lambda _url: redis),
     )
@@ -100,7 +100,7 @@ def test_demo_manifest_returns_safe_503_when_redis_is_unavailable(
         raise RuntimeError("redis://user:secret@example/token")
 
     monkeypatch.setattr(
-        DemoMotionVideoRateThrottle,
+        RedisFixedWindowRateThrottle,
         "redis_client_factory",
         staticmethod(fail_to_connect),
     )

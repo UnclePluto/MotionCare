@@ -12,9 +12,15 @@ from .views import (
     PatientAppTrainingVideoSegmentView,
     PatientAppTrainingVideoSessionView,
     PatientAppTrainingVideoStatusView,
+    PatientAppWechatSessionView,
 )
 
 urlpatterns = [
+    path(
+        "wechat-session/",
+        PatientAppWechatSessionView.as_view(),
+        name="patient-app-wechat-session",
+    ),
     path("bind/", PatientAppBindView.as_view(), name="patient-app-bind"),
     path(
         "demo-motion-videos/",
