@@ -1,9 +1,14 @@
+import threading
+
 import pytest
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, close_old_connections, connection, transaction
 from django.db.models import QuerySet
 from django.utils import timezone
+from rest_framework.request import Request
+from rest_framework.test import APIRequestFactory
 
 from apps.patient_app import services
+from apps.patient_app.authentication import PatientAppTokenAuthentication
 from apps.patient_app.models import (
     PatientAppBindingCode,
     PatientAppSession,
@@ -59,6 +64,20 @@ def postgres_integrity_error(constraint_name: str) -> IntegrityError:
         raise IntegrityError("duplicate key") from FakePostgresUniqueViolation()
     except IntegrityError as error:
         return error
+
+
+def start_database_thread(name, operation, results, errors, completed):
+    def runner():
+        close_old_connections()
+        try:
+            results[name] = operation()
+        except Exception as exc:  # pragma: no cover - surfaced by parent assertions
+            errors[name] = exc
+        finally:
+            completed[name].set()
+            close_old_connections()
+
+    return threading.Thread(target=runner, name=name)
 
 
 @pytest.mark.django_db
@@ -314,6 +333,113 @@ def test_binding_new_project_replaces_both_sides_and_deactivates_sessions(
     assert target_session.is_active is False
     assert ProjectPatient.objects.filter(pk=project_patient.pk).exists()
     assert ProjectPatient.objects.filter(pk=target_project_patient.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(
+    connection.vendor != "postgresql",
+    reason="需要 PostgreSQL 双连接验证换绑行锁交错",
+)
+def test_concurrent_rebind_does_not_deactivate_source_that_moved_to_another_openid(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    target_project_patient = create_second_project_patient(doctor)
+    PatientAppWechatBinding.objects.create(
+        project_patient=project_patient,
+        wx_openid="openid-current",
+    )
+    source_code, _ = create_binding_code(project_patient, created_by=doctor)
+    target_code, _ = create_binding_code(target_project_patient, created_by=doctor)
+    project_patient_lock_started = {
+        "move-source": threading.Event(),
+        "bind-target": threading.Event(),
+    }
+    completed = {
+        "move-source": threading.Event(),
+        "bind-target": threading.Event(),
+    }
+    results = {}
+    errors = {}
+    original_fetch_all = QuerySet._fetch_all
+
+    def observe_project_patient_lock(queryset):
+        thread_name = threading.current_thread().name
+        if (
+            thread_name in project_patient_lock_started
+            and queryset.model is ProjectPatient
+            and queryset.query.select_for_update
+        ):
+            project_patient_lock_started[thread_name].set()
+        return original_fetch_all(queryset)
+
+    move_source = start_database_thread(
+        "move-source",
+        lambda: bind_project_patient_with_code(
+            source_code,
+            wx_openid="openid-moved",
+        ),
+        results,
+        errors,
+        completed,
+    )
+    bind_target = start_database_thread(
+        "bind-target",
+        lambda: bind_project_patient_with_code(
+            target_code,
+            wx_openid="openid-current",
+        ),
+        results,
+        errors,
+        completed,
+    )
+
+    monkeypatch.setattr(QuerySet, "_fetch_all", observe_project_patient_lock)
+    try:
+        with transaction.atomic():
+            ProjectPatient.objects.select_for_update().get(pk=project_patient.pk)
+            move_source.start()
+            assert project_patient_lock_started["move-source"].wait(timeout=10)
+            assert not completed["move-source"].wait(timeout=0.2)
+            bind_target.start()
+            assert project_patient_lock_started["bind-target"].wait(timeout=10)
+            assert not completed["bind-target"].wait(timeout=0.2)
+    finally:
+        if move_source.ident is not None:
+            move_source.join(timeout=10)
+        if bind_target.ident is not None:
+            bind_target.join(timeout=10)
+
+    assert not move_source.is_alive()
+    assert not bind_target.is_alive()
+    assert errors == {}
+    moved_token, moved_session = results["move-source"]
+    target_token, target_session = results["bind-target"]
+    moved_session.refresh_from_db()
+    target_session.refresh_from_db()
+    assert moved_token
+    assert target_token
+    assert (
+        PatientAppWechatBinding.objects.get(project_patient=project_patient).wx_openid
+        == "openid-moved"
+    )
+    assert (
+        PatientAppWechatBinding.objects.get(project_patient=target_project_patient).wx_openid
+        == "openid-current"
+    )
+    assert moved_session.is_active is True
+    assert target_session.is_active is True
+
+    request = Request(
+        APIRequestFactory().get(
+            "/api/patient-app/me/",
+            HTTP_AUTHORIZATION=f"Bearer {moved_token}",
+        )
+    )
+    principal, authenticated_session = PatientAppTokenAuthentication().authenticate(request)
+    assert principal.project_patient == project_patient
+    assert authenticated_session == moved_session
 
 
 @pytest.mark.django_db

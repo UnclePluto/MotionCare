@@ -360,21 +360,33 @@ def bind_project_patient_with_code(code: str, wx_openid: str):
             project_patient = locked_project_patients[binding.project_patient_id]
             locked_bindings = list(
                 PatientAppWechatBinding.objects.select_for_update()
-                .filter(Q(wx_openid=wx_openid) | Q(project_patient=project_patient))
+                .filter(Q(project_patient_id__in=locked_project_patients) | Q(wx_openid=wx_openid))
                 .order_by("pk")
             )
             if any(
                 item.project_patient_id not in locked_project_patients for item in locked_bindings
             ):
                 raise PatientAppBindingConflict
+            current_openid_binding = next(
+                (item for item in locked_bindings if item.wx_openid == wx_openid),
+                None,
+            )
+            bindings_to_replace = [
+                item
+                for item in locked_bindings
+                if item.wx_openid == wx_openid or item.project_patient_id == project_patient.pk
+            ]
+            affected_project_patient_ids = {project_patient.pk}
+            if current_openid_binding is not None:
+                affected_project_patient_ids.add(current_openid_binding.project_patient_id)
 
             _lock_and_deactivate_sessions(
-                filters=Q(project_patient_id__in=locked_project_patients),
+                filters=Q(project_patient_id__in=affected_project_patient_ids),
                 now=now,
             )
-            if locked_bindings:
+            if bindings_to_replace:
                 PatientAppWechatBinding.objects.filter(
-                    pk__in=[item.pk for item in locked_bindings]
+                    pk__in=[item.pk for item in bindings_to_replace]
                 ).delete()
             PatientAppWechatBinding.objects.create(
                 project_patient=project_patient,
