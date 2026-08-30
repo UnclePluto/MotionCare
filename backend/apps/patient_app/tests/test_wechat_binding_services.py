@@ -1,4 +1,5 @@
 import threading
+import uuid
 
 import pytest
 from django.db import IntegrityError, close_old_connections, connection, transaction
@@ -22,6 +23,7 @@ from apps.patient_app.services import (
     recover_patient_app_session,
     revoke_project_patient_binding,
 )
+from apps.accounts.models import User
 from apps.patients.models import Patient
 from apps.studies.models import ProjectPatient, StudyGroup, StudyProject
 
@@ -335,111 +337,205 @@ def test_binding_new_project_replaces_both_sides_and_deactivates_sessions(
     assert ProjectPatient.objects.filter(pk=target_project_patient.pk).exists()
 
 
-@pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(
     connection.vendor != "postgresql",
     reason="需要 PostgreSQL 双连接验证换绑行锁交错",
 )
 def test_concurrent_rebind_does_not_deactivate_source_that_moved_to_another_openid(
-    project_patient,
-    doctor,
+    django_db_setup,
+    django_db_blocker,
     monkeypatch,
 ):
-    target_project_patient = create_second_project_patient(doctor)
-    PatientAppWechatBinding.objects.create(
-        project_patient=project_patient,
-        wx_openid="openid-current",
-    )
-    source_code, _ = create_binding_code(project_patient, created_by=doctor)
-    target_code, _ = create_binding_code(target_project_patient, created_by=doctor)
-    project_patient_lock_started = {
-        "move-source": threading.Event(),
-        "bind-target": threading.Event(),
+    del django_db_setup
+    database_name = str(connection.settings_dict["NAME"])
+    if not database_name.startswith("test_"):
+        raise RuntimeError("并发换绑测试拒绝在非 test_ 数据库运行")
+
+    created_ids = {
+        "doctor": None,
+        "patients": [],
+        "project": None,
+        "group": None,
+        "project_patients": [],
     }
-    completed = {
-        "move-source": threading.Event(),
-        "bind-target": threading.Event(),
-    }
-    results = {}
-    errors = {}
-    original_fetch_all = QuerySet._fetch_all
+    move_source = None
+    bind_target = None
 
-    def observe_project_patient_lock(queryset):
-        thread_name = threading.current_thread().name
-        if (
-            thread_name in project_patient_lock_started
-            and queryset.model is ProjectPatient
-            and queryset.query.select_for_update
-        ):
-            project_patient_lock_started[thread_name].set()
-        return original_fetch_all(queryset)
+    with django_db_blocker.unblock():
+        try:
+            unique_number = uuid.uuid4().int % 1_000_000_000
+            unique_suffix = f"{unique_number:09d}"
+            doctor = User.objects.create_user(
+                phone=f"17{unique_suffix}",
+                password="pass123456",
+                name=f"并发换绑医生-{unique_suffix}",
+                role=User.Role.DOCTOR,
+            )
+            created_ids["doctor"] = doctor.pk
+            source_patient = Patient.objects.create(
+                name=f"并发源患者-{unique_suffix}",
+                gender=Patient.Gender.MALE,
+                age=70,
+                phone=f"18{unique_suffix}",
+                primary_doctor=doctor,
+            )
+            target_patient = Patient.objects.create(
+                name=f"并发目标患者-{unique_suffix}",
+                gender=Patient.Gender.FEMALE,
+                age=68,
+                phone=f"19{unique_suffix}",
+                primary_doctor=doctor,
+            )
+            created_ids["patients"] = [source_patient.pk, target_patient.pk]
+            project = StudyProject.objects.create(
+                name=f"并发换绑项目-{unique_suffix}",
+                created_by=doctor,
+            )
+            created_ids["project"] = project.pk
+            group = StudyGroup.objects.create(
+                project=project,
+                name="并发组",
+                target_ratio=1,
+            )
+            created_ids["group"] = group.pk
+            source_project_patient = ProjectPatient.objects.create(
+                project=project,
+                patient=source_patient,
+                group=group,
+            )
+            target_project_patient = ProjectPatient.objects.create(
+                project=project,
+                patient=target_patient,
+                group=group,
+            )
+            created_ids["project_patients"] = [
+                source_project_patient.pk,
+                target_project_patient.pk,
+            ]
+            PatientAppWechatBinding.objects.create(
+                project_patient=source_project_patient,
+                wx_openid="openid-current",
+            )
+            source_code, _ = create_binding_code(
+                source_project_patient,
+                created_by=doctor,
+            )
+            target_code, _ = create_binding_code(
+                target_project_patient,
+                created_by=doctor,
+            )
+            project_patient_lock_started = {
+                "move-source": threading.Event(),
+                "bind-target": threading.Event(),
+            }
+            completed = {
+                "move-source": threading.Event(),
+                "bind-target": threading.Event(),
+            }
+            results = {}
+            errors = {}
+            original_fetch_all = QuerySet._fetch_all
 
-    move_source = start_database_thread(
-        "move-source",
-        lambda: bind_project_patient_with_code(
-            source_code,
-            wx_openid="openid-moved",
-        ),
-        results,
-        errors,
-        completed,
-    )
-    bind_target = start_database_thread(
-        "bind-target",
-        lambda: bind_project_patient_with_code(
-            target_code,
-            wx_openid="openid-current",
-        ),
-        results,
-        errors,
-        completed,
-    )
+            def observe_project_patient_lock(queryset):
+                thread_name = threading.current_thread().name
+                if (
+                    thread_name in project_patient_lock_started
+                    and queryset.model is ProjectPatient
+                    and queryset.query.select_for_update
+                ):
+                    project_patient_lock_started[thread_name].set()
+                return original_fetch_all(queryset)
 
-    monkeypatch.setattr(QuerySet, "_fetch_all", observe_project_patient_lock)
-    try:
-        with transaction.atomic():
-            ProjectPatient.objects.select_for_update().get(pk=project_patient.pk)
-            move_source.start()
-            assert project_patient_lock_started["move-source"].wait(timeout=10)
-            assert not completed["move-source"].wait(timeout=0.2)
-            bind_target.start()
-            assert project_patient_lock_started["bind-target"].wait(timeout=10)
-            assert not completed["bind-target"].wait(timeout=0.2)
-    finally:
-        if move_source.ident is not None:
+            move_source = start_database_thread(
+                "move-source",
+                lambda: bind_project_patient_with_code(
+                    source_code,
+                    wx_openid="openid-moved",
+                ),
+                results,
+                errors,
+                completed,
+            )
+            bind_target = start_database_thread(
+                "bind-target",
+                lambda: bind_project_patient_with_code(
+                    target_code,
+                    wx_openid="openid-current",
+                ),
+                results,
+                errors,
+                completed,
+            )
+
+            monkeypatch.setattr(QuerySet, "_fetch_all", observe_project_patient_lock)
+            with transaction.atomic():
+                ProjectPatient.objects.select_for_update().get(pk=source_project_patient.pk)
+                move_source.start()
+                assert project_patient_lock_started["move-source"].wait(timeout=10)
+                assert not completed["move-source"].wait(timeout=0.2)
+                bind_target.start()
+                assert project_patient_lock_started["bind-target"].wait(timeout=10)
+                assert not completed["bind-target"].wait(timeout=0.2)
+
             move_source.join(timeout=10)
-        if bind_target.ident is not None:
             bind_target.join(timeout=10)
+            assert not move_source.is_alive()
+            assert not bind_target.is_alive()
+            assert errors == {}
+            moved_token, moved_session = results["move-source"]
+            target_token, target_session = results["bind-target"]
+            moved_session.refresh_from_db()
+            target_session.refresh_from_db()
+            assert moved_token
+            assert target_token
+            assert (
+                PatientAppWechatBinding.objects.get(
+                    project_patient=source_project_patient
+                ).wx_openid
+                == "openid-moved"
+            )
+            assert (
+                PatientAppWechatBinding.objects.get(
+                    project_patient=target_project_patient
+                ).wx_openid
+                == "openid-current"
+            )
+            assert moved_session.is_active is True
+            assert target_session.is_active is True
 
-    assert not move_source.is_alive()
-    assert not bind_target.is_alive()
-    assert errors == {}
-    moved_token, moved_session = results["move-source"]
-    target_token, target_session = results["bind-target"]
-    moved_session.refresh_from_db()
-    target_session.refresh_from_db()
-    assert moved_token
-    assert target_token
-    assert (
-        PatientAppWechatBinding.objects.get(project_patient=project_patient).wx_openid
-        == "openid-moved"
-    )
-    assert (
-        PatientAppWechatBinding.objects.get(project_patient=target_project_patient).wx_openid
-        == "openid-current"
-    )
-    assert moved_session.is_active is True
-    assert target_session.is_active is True
-
-    request = Request(
-        APIRequestFactory().get(
-            "/api/patient-app/me/",
-            HTTP_AUTHORIZATION=f"Bearer {moved_token}",
-        )
-    )
-    principal, authenticated_session = PatientAppTokenAuthentication().authenticate(request)
-    assert principal.project_patient == project_patient
-    assert authenticated_session == moved_session
+            request = Request(
+                APIRequestFactory().get(
+                    "/api/patient-app/me/",
+                    HTTP_AUTHORIZATION=f"Bearer {moved_token}",
+                )
+            )
+            principal, authenticated_session = PatientAppTokenAuthentication().authenticate(request)
+            assert principal.project_patient == source_project_patient
+            assert authenticated_session == moved_session
+        finally:
+            for database_thread in (move_source, bind_target):
+                if database_thread is not None and database_thread.ident is not None:
+                    database_thread.join(timeout=10)
+            project_patient_ids = created_ids["project_patients"]
+            if project_patient_ids:
+                PatientAppSession.objects.filter(
+                    project_patient_id__in=project_patient_ids
+                ).delete()
+                PatientAppWechatBinding.objects.filter(
+                    project_patient_id__in=project_patient_ids
+                ).delete()
+                PatientAppBindingCode.objects.filter(
+                    project_patient_id__in=project_patient_ids
+                ).delete()
+                ProjectPatient.objects.filter(pk__in=project_patient_ids).delete()
+            if created_ids["group"] is not None:
+                StudyGroup.objects.filter(pk=created_ids["group"]).delete()
+            if created_ids["project"] is not None:
+                StudyProject.objects.filter(pk=created_ids["project"]).delete()
+            if created_ids["patients"]:
+                Patient.objects.filter(pk__in=created_ids["patients"]).delete()
+            if created_ids["doctor"] is not None:
+                User.objects.filter(pk=created_ids["doctor"]).delete()
 
 
 @pytest.mark.django_db
