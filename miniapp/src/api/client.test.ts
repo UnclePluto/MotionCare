@@ -15,14 +15,16 @@ const prescriptionCacheMocks = vi.hoisted(() => ({
 vi.mock('@tarojs/taro', () => ({ default: taroMocks }))
 vi.mock('../pages/prescription/cache', () => prescriptionCacheMocks)
 
-import { request, safeApiErrorMessage } from './client'
+import { publicRequest, request, safeApiErrorMessage } from './client'
 import { resolveApiBaseUrl } from './baseUrl'
 import * as safeError from './safeError'
 import { clearPatientAppToken, setPatientAppToken } from '../auth/token'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  taroMocks.request.mockReset()
   taroMocks.getDeviceInfo.mockReturnValue({ platform: 'ios' })
+  taroMocks.getStorageSync.mockReturnValue(undefined)
 })
 
 describe('小程序 API 地址', () => {
@@ -58,6 +60,35 @@ describe('小程序 API 错误', () => {
     expect(safeApiErrorMessage({
       detail: '患者处方已更新，请联系医生或医护',
     })).toBe('用户运动计划已更新，请联系指导老师或指导老师')
+  })
+})
+
+describe('小程序公开 API', () => {
+  it('只发送 JSON header，即使存在患者 token 也不附带身份', async () => {
+    taroMocks.getStorageSync.mockReturnValue('patient-token')
+    taroMocks.request.mockResolvedValueOnce({ statusCode: 200, data: { ok: true } })
+
+    await expect(publicRequest<{ ok: boolean }>('/patient-app/demo-motion-videos/'))
+      .resolves.toEqual({ ok: true })
+
+    expect(taroMocks.request).toHaveBeenCalledWith(expect.objectContaining({
+      url: expect.stringContaining('/patient-app/demo-motion-videos/'),
+      method: 'GET',
+      header: { 'content-type': 'application/json' },
+    }))
+  })
+
+  it.each([401, 403])('收到 %s 时只返回安全错误，不清理患者会话', async (statusCode) => {
+    taroMocks.request.mockResolvedValueOnce({
+      statusCode,
+      data: { detail: 'token=private-patient-token' },
+    })
+
+    await expect(publicRequest('/patient-app/demo-motion-videos/')).rejects.toThrow('请求失败')
+
+    expect(prescriptionCacheMocks.clearCurrentPrescriptionCache).not.toHaveBeenCalled()
+    expect(taroMocks.removeStorageSync).not.toHaveBeenCalled()
+    expect(taroMocks.redirectTo).not.toHaveBeenCalled()
   })
 })
 

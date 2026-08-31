@@ -36,11 +36,23 @@ class PatientAppSession(UserStampedModel):
         on_delete=models.CASCADE,
         related_name="patient_app_sessions",
     )
-    wx_openid = models.CharField(max_length=128)
+    wx_openid = models.CharField(max_length=128, null=True, blank=True)
     token_hash = models.CharField(max_length=128, unique=True)
     expires_at = models.DateTimeField()
     last_seen_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["-id"]
+
+
+class PatientAppWechatBinding(UserStampedModel):
+    project_patient = models.OneToOneField(
+        "studies.ProjectPatient",
+        on_delete=models.CASCADE,
+        related_name="patient_app_wechat_binding",
+    )
+    wx_openid = models.CharField(max_length=128, unique=True)
 
     class Meta:
         ordering = ["-id"]

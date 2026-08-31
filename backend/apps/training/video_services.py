@@ -7,9 +7,11 @@ from django.db.models import Count, Sum
 from django.http import Http404
 from django.utils import timezone
 
-from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.prescriptions.action_library import is_official_motion_action
+from apps.prescriptions.models import ActionLibraryItem, Prescription, PrescriptionAction
 from apps.studies.models import ProjectPatient
 
+from .analysis_registry import get_motion_analyzer
 from .models import (
     MotionAnalysisJob,
     TrainingVideo,
@@ -31,6 +33,29 @@ from .video_staging import (
 )
 
 SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
+LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS = 2_400
+LEGACY_TRAINING_VIDEO_MAX_SEGMENTS = 600
+CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS = 1_800
+FINALIZE_DURATION_TOLERANCE_SECONDS = 5
+
+
+def _session_upload_limits(video):
+    if (
+        CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS
+        < video.expected_duration_seconds
+        <= LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS
+    ):
+        return (
+            LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS,
+            LEGACY_TRAINING_VIDEO_MAX_SEGMENTS,
+        )
+    return (
+        min(
+            settings.TRAINING_VIDEO_MAX_DURATION_SECONDS,
+            CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS,
+        ),
+        min(settings.TRAINING_VIDEO_MAX_SEGMENTS, 360),
+    )
 
 
 def _active_prescription(project_patient):
@@ -44,7 +69,7 @@ def _active_prescription(project_patient):
     )
 
 
-def _get_current_shoulder_action(project_patient, prescription_action_id):
+def _get_current_recordable_motion_action(project_patient, prescription_action_id):
     active = _active_prescription(project_patient)
     if active is None:
         raise ValidationError("当前无生效处方")
@@ -54,9 +79,12 @@ def _get_current_shoulder_action(project_patient, prescription_action_id):
         .first()
     )
     if action is None:
-        raise ValidationError("处方已更新，请返回当前处方重新进入")
-    if action.action_library_item.source_key != SHOULDER_PRESS_SOURCE_KEY:
-        raise ValidationError("当前仅肩部推举支持录像上传")
+        raise ValidationError("运动计划已更新，请返回当前运动计划重新进入")
+    if (
+        action.internal_type_snapshot != ActionLibraryItem.InternalType.MOTION
+        or not is_official_motion_action(action.action_library_item.source_key)
+    ):
+        raise ValidationError("当前动作不支持录像上传")
     return active, action
 
 
@@ -106,10 +134,13 @@ def create_training_video_session(
         )
         return existing, False
 
-    if expected_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
+    if expected_duration_seconds > min(
+        settings.TRAINING_VIDEO_MAX_DURATION_SECONDS,
+        CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS,
+    ):
         raise ValidationError("训练视频时长超过限制")
     _ensure_staging_available()
-    active, action = _get_current_shoulder_action(
+    active, action = _get_current_recordable_motion_action(
         project_patient, prescription_action_id
     )
     try:
@@ -138,12 +169,20 @@ def create_training_video_session(
     return video, True
 
 
-def _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes):
-    if index >= settings.TRAINING_VIDEO_MAX_SEGMENTS:
+def _validate_segment_request(
+    index,
+    uploaded_file,
+    duration_ms,
+    declared_size_bytes,
+    *,
+    max_duration_seconds,
+    max_segments,
+):
+    if index >= max_segments:
         raise ValidationError("训练视频分段数量超过限制")
     if declared_size_bytes > settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES:
         raise ValidationError("训练视频分段过大")
-    if duration_ms > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000:
+    if duration_ms > max_duration_seconds * 1000:
         raise ValidationError("训练视频分段时长超过限制")
     content_type = (uploaded_file.content_type or "").split(";", 1)[0].strip().lower()
     if content_type != "video/mp4":
@@ -175,7 +214,15 @@ def store_training_video_segment(
     if preliminary_video is None:
         raise Http404
 
-    _validate_segment_request(index, uploaded_file, duration_ms, declared_size_bytes)
+    max_duration_seconds, max_segments = _session_upload_limits(preliminary_video)
+    _validate_segment_request(
+        index,
+        uploaded_file,
+        duration_ms,
+        declared_size_bytes,
+        max_duration_seconds=max_duration_seconds,
+        max_segments=max_segments,
+    )
     temporary, actual_size_bytes, sha256 = write_uploaded_segment(
         preliminary_video, index, uploaded_file
     )
@@ -221,16 +268,24 @@ def store_training_video_segment(
                     ).aggregate(
                         segment_count=Count("id"),
                         total_duration_ms=Sum("duration_ms"),
+                        total_size_bytes=Sum("size_bytes"),
                     )
                     segment_count = totals["segment_count"] or 0
                     total_duration_ms = totals["total_duration_ms"] or 0
-                    if segment_count + 1 > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+                    total_size_bytes = totals["total_size_bytes"] or 0
+                    max_duration_seconds, max_segments = _session_upload_limits(video)
+                    if segment_count + 1 > max_segments:
                         raise ValidationError("训练视频分段数量超过限制")
                     if (
                         total_duration_ms + duration_ms
-                        > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000
+                        > max_duration_seconds * 1000
                     ):
                         raise ValidationError("训练视频总时长超过限制")
+                    if (
+                        total_size_bytes + actual_size_bytes
+                        > settings.TRAINING_VIDEO_MAX_SIZE_BYTES
+                    ):
+                        raise ValidationError("训练视频总大小超过限制")
 
                     destination = install_uploaded_segment(video, index, temporary)
                     destination_was_installed = True
@@ -260,9 +315,10 @@ def store_training_video_segment(
 
 
 def _validate_uploaded_segments_for_finalize(video, segment_count, actual_duration_seconds):
-    if segment_count > settings.TRAINING_VIDEO_MAX_SEGMENTS:
+    max_duration_seconds, max_segments = _session_upload_limits(video)
+    if segment_count > max_segments:
         raise ValidationError("训练视频分段数量超过限制")
-    if actual_duration_seconds > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS:
+    if actual_duration_seconds > max_duration_seconds:
         raise ValidationError("训练视频总时长超过限制")
 
     segments = list(
@@ -273,12 +329,18 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
         raise ValidationError("训练视频已上传分段必须连续且数量匹配")
 
     total_duration_ms = sum(segment.duration_ms for segment in segments)
-    if total_duration_ms > settings.TRAINING_VIDEO_MAX_DURATION_SECONDS * 1000:
+    if total_duration_ms > max_duration_seconds * 1000:
         raise ValidationError("训练视频总时长超过限制")
 
+    total_size_bytes = sum(segment.size_bytes for segment in segments)
+    if total_size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
+        raise ValidationError("训练视频总大小超过限制")
+
     actual_segment_duration_seconds = total_duration_ms / 1000
-    allowed_difference = max(2, actual_duration_seconds * 0.02)
-    if abs(actual_segment_duration_seconds - actual_duration_seconds) > allowed_difference:
+    if (
+        abs(actual_segment_duration_seconds - actual_duration_seconds)
+        > FINALIZE_DURATION_TOLERANCE_SECONDS
+    ):
         raise ValidationError("训练视频分段时长与提交时长不一致")
 
     staging = staging_root()
@@ -484,8 +546,9 @@ def create_analysis_job(*, video, requested_by):
     )
     if locked_video.status != TrainingVideo.Status.ATTACHED or not locked_video.training_record_id:
         raise ValidationError("训练视频尚未绑定训练记录")
-    if locked_video.prescription_action.action_library_item.source_key != SHOULDER_PRESS_SOURCE_KEY:
-        raise ValidationError("当前仅支持肩部推举动作分析")
+    source_key = locked_video.prescription_action.action_library_item.source_key
+    if get_motion_analyzer(source_key) is None:
+        raise ValidationError("不支持当前动作分析")
     if MotionAnalysisJob.objects.filter(
         training_video=locked_video,
         status__in=[MotionAnalysisJob.Status.PENDING, MotionAnalysisJob.Status.RUNNING],

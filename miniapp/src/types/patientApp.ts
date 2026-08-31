@@ -33,6 +33,7 @@ export type CurrentPrescription = null | {
     action_type: string
     action_instruction: string
     video_url: string
+    video_unavailable?: boolean
     has_ai_supervision: boolean
     weekly_frequency: string
     duration_minutes: number | null

@@ -12,6 +12,7 @@ export type ActionLibraryItem = {
   suggested_duration_minutes: number | null;
   default_difficulty: string;
   video_url: string;
+  video_configured: boolean;
   has_ai_supervision: boolean;
   is_active: boolean;
 };

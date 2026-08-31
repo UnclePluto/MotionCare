@@ -1,9 +1,15 @@
+import re
+import os
+import subprocess
+import sys
+from io import StringIO
+
 import pytest
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import dotenv_values
 
-from config.environment import env_bool
+from config.environment import env_bool, validate_wechat_miniapp_settings
 
 
 def test_env_bool_defaults_to_false_when_variable_is_unset(monkeypatch):
@@ -69,13 +75,88 @@ def test_reverse_proxy_and_static_settings_are_production_ready():
     assert settings.STATIC_ROOT.name == "staticfiles"
 
 
-def test_training_video_limits_support_raw_five_second_forty_minute_sessions():
+def test_training_video_limits_support_raw_five_second_thirty_minute_sessions():
     assert settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES == 80 * 1024 * 1024
-    assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 2400
-    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 600
+    assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 1800
+    assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 360
+    assert settings.TRAINING_VIDEO_MAX_SIZE_BYTES == 536_870_912
     assert settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS == 900
     assert settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS == 7200
-    assert not hasattr(settings, "TRAINING_VIDEO_MAX_SIZE_BYTES")
+
+
+def test_training_video_limit_templates_match_runtime_contract():
+    expected = {
+        "TRAINING_VIDEO_MAX_SIZE_BYTES": "536870912",
+        "TRAINING_VIDEO_MAX_DURATION_SECONDS": "1800",
+        "TRAINING_VIDEO_MAX_SEGMENTS": "360",
+    }
+    root = settings.ROOT_DIR
+
+    for example_path in (
+        root / ".env.example",
+        root / "deploy" / "env.production.example",
+    ):
+        values = dotenv_values(example_path)
+        assert {key: values.get(key) for key in expected} == expected
+
+    development = (root / "docs" / "development.md").read_text()
+    video_environment = (
+        development.split("Segmented training video environment variables:", 1)[1]
+        .split("```bash", 1)[1]
+        .split("```", 1)[0]
+    )
+    documented_values = dotenv_values(stream=StringIO(video_environment))
+    assert {key: documented_values.get(key) for key in expected} == expected
+
+    compose = (root / "deploy" / "docker-compose.prod.yml").read_text()
+    compose_defaults = dict(
+        re.findall(
+            r"^  (TRAINING_VIDEO_MAX_(?:SIZE_BYTES|DURATION_SECONDS|SEGMENTS)): "
+            r"\$\{\1:-(\d+)\}$",
+            compose,
+            flags=re.MULTILINE,
+        )
+    )
+    assert compose_defaults == expected
+
+
+def test_motion_action_video_delivery_settings_are_safe_and_rate_limited():
+    assert settings.MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS == 7200
+    assert settings.MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN == "https://cdn.whestsun.com"
+    assert settings.DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS == 60
+    assert settings.DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS == 60
+    assert settings.DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL == settings.REDIS_URL
+
+
+def test_production_video_delivery_uses_existing_shared_redis_and_safe_defaults():
+    root = settings.ROOT_DIR
+    compose = (root / "deploy" / "docker-compose.prod.yml").read_text()
+    production_values = dotenv_values(root / "deploy" / "env.production.example")
+
+    assert "REDIS_URL: &backend-redis-url redis://:" in compose
+    assert "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL: *backend-redis-url" in compose
+    assert (
+        "MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN: "
+        "${MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN:-https://cdn.whestsun.com}"
+    ) in compose
+    assert (
+        "MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS: "
+        "${MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS:-7200}"
+    ) in compose
+    assert production_values["MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN"] == (
+        "https://cdn.whestsun.com"
+    )
+    assert production_values["MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS"] == "7200"
+
+
+def test_openresty_overwrites_forwarded_client_headers():
+    proxy_config = (
+        settings.ROOT_DIR / "deploy" / "openresty" / "motioncare.conf"
+    ).read_text()
+
+    assert "$proxy_add_x_forwarded_for" not in proxy_config
+    assert proxy_config.count("proxy_set_header X-Real-IP $remote_addr;") == 5
+    assert proxy_config.count("proxy_set_header X-Forwarded-For $remote_addr;") == 5
 
 
 def test_wearable_sync_uses_shanghai_timezone_and_https_provider():
@@ -95,3 +176,119 @@ def test_wearable_provider_examples_declare_only_safe_placeholders():
         assert values["MIWITRACKER_BASE_URL"].startswith("https://")
         assert values["MIWITRACKER_APP_ID"] == ""
         assert values["MIWITRACKER_KEY"] == ""
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {
+            "debug": False,
+            "auth_mode": "mock",
+            "app_id": "wx",
+            "app_secret": "secret",
+            "mock_openid": "local",
+        },
+        {
+            "debug": False,
+            "auth_mode": "wechat",
+            "app_id": "",
+            "app_secret": "secret",
+            "mock_openid": "",
+        },
+        {
+            "debug": False,
+            "auth_mode": "wechat",
+            "app_id": "wx",
+            "app_secret": "",
+            "mock_openid": "",
+        },
+        {
+            "debug": True,
+            "auth_mode": "mock",
+            "app_id": "",
+            "app_secret": "",
+            "mock_openid": "",
+        },
+    ],
+)
+def test_invalid_wechat_identity_settings_fail_closed(kwargs):
+    with pytest.raises(ImproperlyConfigured):
+        validate_wechat_miniapp_settings(**kwargs)
+
+
+def test_wechat_identity_settings_default_to_local_mock_mode():
+    assert settings.WECHAT_MINIAPP_AUTH_MODE == "mock"
+    assert settings.WECHAT_MINIAPP_MOCK_OPENID == "local-openid"
+    assert settings.WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS == 5
+    assert settings.WECHAT_MINIAPP_READ_TIMEOUT_SECONDS == 10
+    assert settings.PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_REQUESTS == 60
+    assert settings.PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_WINDOW_SECONDS == 60
+    assert settings.PATIENT_APP_BIND_RATE_LIMIT_REQUESTS == 30
+    assert settings.PATIENT_APP_BIND_RATE_LIMIT_WINDOW_SECONDS == 900
+    assert settings.PATIENT_APP_AUTH_RATE_LIMIT_REDIS_URL == settings.REDIS_URL
+
+
+def test_production_settings_refuse_missing_wechat_credentials_in_subprocess():
+    environment = {
+        **os.environ,
+        "DJANGO_DEBUG": "false",
+        "WECHAT_MINIAPP_AUTH_MODE": "wechat",
+        "WECHAT_MINIAPP_APP_ID": "",
+        "WECHAT_MINIAPP_APP_SECRET": "",
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", "import config.settings"],
+        cwd=settings.BASE_DIR,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "微信真实身份模式缺少 AppID 或 AppSecret" in result.stderr
+    assert "WECHAT_MINIAPP_APP_SECRET" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("connect_timeout", "read_timeout"),
+    [("nan", "10"), ("5", "inf")],
+)
+def test_wechat_identity_settings_refuse_non_finite_timeouts_in_subprocess(
+    connect_timeout,
+    read_timeout,
+):
+    environment = {
+        **os.environ,
+        "DJANGO_DEBUG": "true",
+        "WECHAT_MINIAPP_AUTH_MODE": "mock",
+        "WECHAT_MINIAPP_MOCK_OPENID": "local-openid",
+        "WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS": connect_timeout,
+        "WECHAT_MINIAPP_READ_TIMEOUT_SECONDS": read_timeout,
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", "import config.settings"],
+        cwd=settings.BASE_DIR,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "微信身份服务超时配置必须大于 0" in result.stderr
+
+
+def test_wechat_identity_templates_use_safe_credentials_and_modes():
+    root = settings.ROOT_DIR
+    local_values = dotenv_values(root / ".env.example")
+    production_values = dotenv_values(root / "deploy" / "env.production.example")
+    compose = (root / "deploy" / "docker-compose.prod.yml").read_text()
+
+    assert local_values["WECHAT_MINIAPP_AUTH_MODE"] == "mock"
+    assert local_values["WECHAT_MINIAPP_MOCK_OPENID"] == "local-openid"
+    assert production_values["WECHAT_MINIAPP_AUTH_MODE"] == "wechat"
+    assert production_values["WECHAT_MINIAPP_APP_ID"] == ""
+    assert production_values["WECHAT_MINIAPP_APP_SECRET"] == ""
+    assert "WECHAT_MINIAPP_APP_ID: ${WECHAT_MINIAPP_APP_ID}" in compose
+    assert "WECHAT_MINIAPP_APP_SECRET: ${WECHAT_MINIAPP_APP_SECRET}" in compose

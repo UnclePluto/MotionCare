@@ -493,7 +493,10 @@ button:active {
 }
 
 .shoulder-press-page,
-.shoulder-press-upload-page {
+.shoulder-press-upload-page,
+.motion-training-guide-page,
+.motion-training-preview-page,
+.motion-training-upload-page {
   min-height: 100vh;
 }
 
@@ -622,12 +625,15 @@ button:active {
   line-height: 1.4;
 }
 
-.shoulder-press-action-row {
+.shoulder-press-action-row,
+.motion-training-action-row {
   width: 100%;
 }
 
 .shoulder-press-action-row .primary-button,
-.shoulder-press-action-row .secondary-button {
+.shoulder-press-action-row .secondary-button,
+.motion-training-action-row .primary-button,
+.motion-training-action-row .secondary-button {
   min-width: 0;
   padding: 0 14px;
   font-size: 24px;
@@ -721,7 +727,10 @@ button:active {
 
 @media (max-width: 360px) {
   .shoulder-press-page,
-  .shoulder-press-upload-page {
+  .shoulder-press-upload-page,
+  .motion-training-guide-page,
+  .motion-training-preview-page,
+  .motion-training-upload-page {
     padding-right: 22px;
     padding-left: 22px;
   }
@@ -744,7 +753,8 @@ button:active {
     padding-left: 20px;
   }
 
-  .shoulder-press-action-row {
+  .shoulder-press-action-row,
+  .motion-training-action-row {
     gap: 12px;
   }
 }
@@ -1244,7 +1254,8 @@ button:active {
   border-radius: 8px;
 }
 
-.shoulder-instruction-section {
+.shoulder-instruction-section,
+.motion-training-instruction-section {
   margin: 12px 0 30px;
 }
 
@@ -1274,7 +1285,8 @@ button:active {
   color: $mc-text;
 }
 
-.shoulder-action-instruction {
+.shoulder-action-instruction,
+.motion-training-action-instruction {
   display: block;
   margin-top: 24px;
   padding: 22px;
@@ -1292,7 +1304,9 @@ button:active {
 }
 
 .shoulder-guide-actions,
-.shoulder-preview-actions {
+.shoulder-preview-actions,
+.motion-training-guide-actions,
+.motion-training-preview-actions {
   position: sticky;
   bottom: 0;
   z-index: 5;
@@ -1300,7 +1314,8 @@ button:active {
   background: $mc-panel-strong;
 }
 
-.shoulder-preview-video {
+.shoulder-preview-video,
+.motion-training-preview-video {
   width: 100%;
   height: 68vh;
   border-radius: 12px;

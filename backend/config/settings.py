@@ -1,4 +1,5 @@
 from pathlib import Path
+import math
 import os
 
 from celery.schedules import crontab
@@ -6,7 +7,7 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
-from config.environment import env_bool
+from config.environment import env_bool, validate_wechat_miniapp_settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ROOT_DIR = BASE_DIR.parent
@@ -100,8 +101,14 @@ QINIU_SECRET_KEY = os.getenv("QINIU_SECRET_KEY", "")
 QINIU_BUCKET = os.getenv("QINIU_BUCKET", "motioncare-training")
 QINIU_DOWNLOAD_DOMAIN = os.getenv("QINIU_DOWNLOAD_DOMAIN", "")
 QINIU_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.getenv("QINIU_DOWNLOAD_TOKEN_TTL_SECONDS", "600"))
+MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN = os.getenv(
+    "MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN", "https://cdn.whestsun.com"
+)
+MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS = int(
+    os.getenv("MOTION_ACTION_VIDEO_TOKEN_TTL_SECONDS", "7200")
+)
 TRAINING_VIDEO_MAX_DURATION_SECONDS = int(
-    os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "2400")
+    os.getenv("TRAINING_VIDEO_MAX_DURATION_SECONDS", "1800")
 )
 TRAINING_VIDEO_STAGING_ROOT = Path(os.getenv(
     "TRAINING_VIDEO_STAGING_ROOT",
@@ -110,7 +117,10 @@ TRAINING_VIDEO_STAGING_ROOT = Path(os.getenv(
 TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = int(os.getenv(
     "TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES", str(80 * 1024 * 1024)
 ))
-TRAINING_VIDEO_MAX_SEGMENTS = int(os.getenv("TRAINING_VIDEO_MAX_SEGMENTS", "600"))
+TRAINING_VIDEO_MAX_SIZE_BYTES = int(
+    os.getenv("TRAINING_VIDEO_MAX_SIZE_BYTES", str(512 * 1024 * 1024))
+)
+TRAINING_VIDEO_MAX_SEGMENTS = int(os.getenv("TRAINING_VIDEO_MAX_SEGMENTS", "360"))
 TRAINING_VIDEO_STAGING_TTL_SECONDS = int(os.getenv(
     "TRAINING_VIDEO_STAGING_TTL_SECONDS", "86400"
 ))
@@ -151,6 +161,54 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Task 2 will switch to custom user model ("accounts.User").
 AUTH_USER_MODEL = "accounts.User"
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+WECHAT_MINIAPP_AUTH_MODE = os.getenv(
+    "WECHAT_MINIAPP_AUTH_MODE", "mock" if DEBUG else "wechat"
+)
+WECHAT_MINIAPP_APP_ID = os.getenv("WECHAT_MINIAPP_APP_ID", "")
+WECHAT_MINIAPP_APP_SECRET = os.getenv("WECHAT_MINIAPP_APP_SECRET", "")
+WECHAT_MINIAPP_MOCK_OPENID = os.getenv("WECHAT_MINIAPP_MOCK_OPENID", "local-openid")
+WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS", "5")
+)
+WECHAT_MINIAPP_READ_TIMEOUT_SECONDS = float(
+    os.getenv("WECHAT_MINIAPP_READ_TIMEOUT_SECONDS", "10")
+)
+PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_REQUESTS = 60
+PATIENT_APP_WECHAT_SESSION_RATE_LIMIT_WINDOW_SECONDS = 60
+PATIENT_APP_BIND_RATE_LIMIT_REQUESTS = 30
+PATIENT_APP_BIND_RATE_LIMIT_WINDOW_SECONDS = 900
+PATIENT_APP_AUTH_RATE_LIMIT_REDIS_URL = REDIS_URL
+validate_wechat_miniapp_settings(
+    debug=DEBUG,
+    auth_mode=WECHAT_MINIAPP_AUTH_MODE,
+    app_id=WECHAT_MINIAPP_APP_ID,
+    app_secret=WECHAT_MINIAPP_APP_SECRET,
+    mock_openid=WECHAT_MINIAPP_MOCK_OPENID,
+)
+if not all(
+    math.isfinite(timeout) and timeout > 0
+    for timeout in (
+        WECHAT_MINIAPP_CONNECT_TIMEOUT_SECONDS,
+        WECHAT_MINIAPP_READ_TIMEOUT_SECONDS,
+    )
+):
+    raise ImproperlyConfigured("微信身份服务超时配置必须大于 0")
+DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL = os.getenv(
+    "DEMO_MOTION_VIDEO_RATE_LIMIT_REDIS_URL", REDIS_URL
+)
+DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS = int(
+    os.getenv("DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS", "60")
+)
+DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS = int(
+    os.getenv("DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS", "60")
+)
+if min(
+    DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS,
+    DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS,
+) <= 0:
+    raise ImproperlyConfigured("演示视频 Redis 限流配置无效")
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.SessionAuthentication",
@@ -159,7 +217,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["apps.common.permissions.IsAuthenticatedAndPasswordChanged"],
 }
 
-CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_TIMEZONE = "Asia/Shanghai"
 CELERY_ENABLE_UTC = True

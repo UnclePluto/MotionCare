@@ -1,23 +1,30 @@
 from collections.abc import Mapping
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.cache import cache
 from django.db.models import Count, Prefetch
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import ValidationError as DrfValidationError
+from rest_framework.authentication import get_authorization_header
+from rest_framework.exceptions import APIException, ValidationError as DrfValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
+from apps.prescriptions.action_library import is_official_motion_action
 from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.prescriptions.motion_videos import (
+    MotionVideoResolution,
+    build_demo_motion_video_manifest,
+    resolve_motion_video_url,
+)
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
 from apps.training.video_services import (
     SegmentConflict,
     SessionConflict,
-    SHOULDER_PRESS_SOURCE_KEY,
     create_training_video_session,
     finalize_training_video_session,
     store_training_video_segment,
@@ -26,14 +33,29 @@ from apps.training.video_services import (
 from apps.training.views import validation_detail
 
 from .authentication import PatientAppTokenAuthentication
+from .throttles import (
+    DemoMotionVideoRateThrottle,
+    PatientAppBindRateThrottle,
+    PatientAppWechatSessionRateThrottle,
+)
 from .serializers import (
     PatientAppBindSerializer,
     PatientAppTrainingRecordCreateSerializer,
     PatientAppTrainingVideoFinalizeSerializer,
     PatientAppTrainingVideoSegmentSerializer,
     PatientAppTrainingVideoSessionSerializer,
+    PatientAppWechatSessionSerializer,
 )
-from .services import bind_project_patient_with_code
+from .services import (
+    PatientAppBindingConflict,
+    bind_project_patient_with_code,
+    recover_patient_app_session,
+)
+from .wechat_identity import (
+    WechatIdentityUnavailable,
+    WechatLoginCodeInvalid,
+    exchange_login_code,
+)
 
 
 def current_week_bounds(today=None):
@@ -41,6 +63,13 @@ def current_week_bounds(today=None):
     start = today - timezone.timedelta(days=today.weekday())
     end = start + timezone.timedelta(days=6)
     return start, end
+
+
+def resolve_motion_video_url_safely(object_key, legacy_url):
+    try:
+        return resolve_motion_video_url(object_key, legacy_url)
+    except Exception:
+        return MotionVideoResolution(url="", unavailable=True)
 
 
 def serialize_me(project_patient):
@@ -55,6 +84,33 @@ def serialize_me(project_patient):
             "name": project_patient.project.name,
         },
     }
+
+
+def optional_bearer_token(request):
+    parts = get_authorization_header(request).split()
+    if len(parts) != 2 or parts[0].lower() != b"bearer" or not parts[1]:
+        return None
+    try:
+        return parts[1].decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def wechat_identity_error_response(exc):
+    if isinstance(exc, WechatLoginCodeInvalid):
+        return Response(
+            {"detail": "微信登录凭证无效，请重试"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if isinstance(exc, PatientAppBindingConflict):
+        return Response(
+            {"detail": "账号绑定发生冲突，请重试"},
+            status=status.HTTP_409_CONFLICT,
+        )
+    return Response(
+        {"detail": "微信登录服务暂时不可用，请稍后重试"},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 
 def current_prescription_for(project_patient):
@@ -121,16 +177,13 @@ def serialize_prescription(project_patient):
     ).order_by("prescription_action_id", "-training_date", "-id"):
         recent_records.setdefault(record.prescription_action_id, record)
 
-    return {
-        "id": prescription.id,
-        "version": prescription.version,
-        "status": prescription.status,
-        "effective_at": prescription.effective_at.isoformat()
-        if prescription.effective_at
-        else None,
-        "week_start": week_start.isoformat(),
-        "week_end": week_end.isoformat(),
-        "actions": [
+    serialized_actions = []
+    for action in actions:
+        resolution = resolve_motion_video_url_safely(
+            action.video_object_key_snapshot,
+            action.video_url_snapshot,
+        )
+        serialized_actions.append(
             {
                 "id": action.id,
                 "action_library_item": action.action_library_item_id,
@@ -140,7 +193,8 @@ def serialize_prescription(project_patient):
                 "internal_type": action.internal_type_snapshot,
                 "action_type": action.action_type_snapshot,
                 "action_instruction": action.action_instruction_snapshot,
-                "video_url": action.video_url_snapshot,
+                "video_url": resolution.url,
+                "video_unavailable": resolution.unavailable,
                 "has_ai_supervision": action.has_ai_supervision_snapshot,
                 "weekly_frequency": action.weekly_frequency,
                 "duration_minutes": action.duration_minutes,
@@ -151,26 +205,100 @@ def serialize_prescription(project_patient):
                 "sort_order": action.sort_order,
                 "recent_record": serialize_training_record(recent_records.get(action.id)),
             }
-            for action in actions
-        ],
+        )
+
+    return {
+        "id": prescription.id,
+        "version": prescription.version,
+        "status": prescription.status,
+        "effective_at": prescription.effective_at.isoformat()
+        if prescription.effective_at
+        else None,
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "actions": serialized_actions,
     }
 
 
 class PatientAppBindView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [PatientAppBindRateThrottle]
 
     def post(self, request):
         serializer = PatientAppBindSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            token, session = bind_project_patient_with_code(**serializer.validated_data)
+            wx_openid = exchange_login_code(serializer.validated_data["wx_code"])
+            token, session = bind_project_patient_with_code(
+                code=serializer.validated_data["code"],
+                wx_openid=wx_openid,
+            )
+        except (WechatLoginCodeInvalid, WechatIdentityUnavailable, PatientAppBindingConflict) as exc:
+            return wechat_identity_error_response(exc)
         except DjangoValidationError as exc:
             return Response(
                 {"detail": validation_detail(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response({"token": token, **serialize_me(session.project_patient)})
+
+
+class PatientAppWechatSessionView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [PatientAppWechatSessionRateThrottle]
+
+    def post(self, request):
+        serializer = PatientAppWechatSessionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            wx_openid = exchange_login_code(serializer.validated_data["wx_code"])
+            recovery = recover_patient_app_session(
+                wx_openid=wx_openid,
+                presented_token=optional_bearer_token(request),
+            )
+        except (WechatLoginCodeInvalid, WechatIdentityUnavailable, PatientAppBindingConflict) as exc:
+            return wechat_identity_error_response(exc)
+
+        if recovery.status == "unbound":
+            return Response({"status": "unbound"})
+        return Response(
+            {
+                "status": "authenticated",
+                "token": recovery.token,
+                **serialize_me(recovery.session.project_patient),
+            }
+        )
+
+
+class DemoMotionVideoManifestView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [DemoMotionVideoRateThrottle]
+    cache_key = "patient-app:demo-motion-videos:v1"
+    cache_timeout_seconds = 60
+
+    def handle_exception(self, exc):
+        if isinstance(exc, APIException):
+            return super().handle_exception(exc)
+        return Response(
+            {"detail": "演示视频暂时不可用，请稍后重试"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    def get(self, request):
+        try:
+            response_data = cache.get(self.cache_key)
+            if response_data is None:
+                response_data = {"videos": build_demo_motion_video_manifest()}
+                cache.set(self.cache_key, response_data, self.cache_timeout_seconds)
+        except Exception:
+            return Response(
+                {"detail": "演示视频暂时不可用，请稍后重试"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(response_data)
 
 
 class PatientAppBaseView(APIView):
@@ -224,9 +352,9 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
                     {"detail": "处方已更新，请返回当前处方重新进入"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if action.action_library_item.source_key == SHOULDER_PRESS_SOURCE_KEY:
+            if is_official_motion_action(action.action_library_item.source_key):
                 return Response(
-                    {"detail": "肩部推举必须完成录像上传"},
+                    {"detail": "运动动作必须完成录像上传"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             record = create_training_record(

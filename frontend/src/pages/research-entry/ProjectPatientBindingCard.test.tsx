@@ -290,6 +290,8 @@ describe("ProjectPatientBindingCard", () => {
   it("can revoke an active binding", async () => {
     mockGet.mockResolvedValue({
       data: {
+        has_wechat_binding: false,
+        wechat_bound_at: null,
         has_active_session: true,
         has_active_binding_code: false,
         binding_code_expires_at: null,
@@ -307,5 +309,24 @@ describe("ProjectPatientBindingCard", () => {
     await waitFor(() => {
       expect(mockPost).toHaveBeenCalledWith("/studies/project-patients/12/revoke-binding/");
     });
+  });
+
+  it("token 过期后仍按持久微信绑定显示并允许撤销", async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        has_wechat_binding: true,
+        wechat_bound_at: "2026-08-30T10:00:00+08:00",
+        has_active_session: false,
+        has_active_binding_code: false,
+        binding_code_expires_at: null,
+        last_bound_at: null,
+        active_session_expires_at: null,
+      },
+    });
+
+    renderCard();
+
+    expect(await screen.findByText("已绑定")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "撤销绑定" })).toBeEnabled();
   });
 });

@@ -239,38 +239,38 @@ describe('ShoulderPressRecorder', () => {
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
 
-  it('uses the remaining duration for generation 480 and never records past the upload contract', async () => {
+  it('uses the remaining duration for generation 360 and never records past the upload contract', async () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
     const onMaxDuration = vi.fn()
     const recorder = new ShoulderPressRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 2_397_000,
+      maxDurationMs: 1_797_000,
       onMaxDuration,
       onSegment: vi.fn(async () => undefined)
     })
 
     await recorder.start()
-    for (let index = 0; index < 479; index += 1) {
+    for (let index = 0; index < 359; index += 1) {
       now = (index + 1) * 5_000
       startOptions[index].timeoutCallback?.({ tempVideoPath: `wxfile://store/segment-${index}.mp4` })
       await flushPromises()
     }
 
-    expect(camera.startRecord).toHaveBeenCalledTimes(480)
-    expect(startOptions.slice(0, 479).every((options) => options.timeout === 5)).toBe(true)
-    expect(startOptions[479].timeout).toBe(2)
+    expect(camera.startRecord).toHaveBeenCalledTimes(360)
+    expect(startOptions.slice(0, 359).every((options) => options.timeout === 5)).toBe(true)
+    expect(startOptions[359].timeout).toBe(2)
 
-    now = 2_397_000
-    startOptions[479].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-479.mp4' })
+    now = 1_797_000
+    startOptions[359].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-359.mp4' })
     const finishPromise = recorder.finish()
     await flushPromises()
 
-    expect(camera.startRecord).toHaveBeenCalledTimes(480)
+    expect(camera.startRecord).toHaveBeenCalledTimes(360)
     const segments = await finishPromise
-    expect(segments).toHaveLength(480)
-    expect(segments.reduce((total, segment) => total + segment.durationMs, 0)).toBe(2_397_000)
+    expect(segments).toHaveLength(360)
+    expect(segments.reduce((total, segment) => total + segment.durationMs, 0)).toBe(1_797_000)
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
 

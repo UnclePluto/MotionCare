@@ -118,7 +118,7 @@ export default function HomePage() {
         <Text className='title'>今日运动</Text>
         <Text className='muted'>
           {demoMode
-            ? '体验运动计划中的全部游戏功能。'
+            ? '体验运动计划中的全部功能。'
             : '按运动计划完成训练，查看本周进度与历史记录。'}
         </Text>
       </View>

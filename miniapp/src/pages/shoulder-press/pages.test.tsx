@@ -13,21 +13,23 @@ import {
   readCurrentPrescriptionCache,
   writeCurrentPrescriptionCache
 } from '../prescription/cache'
-import ShoulderPressCameraPage from './camera'
-import ShoulderPressGuidePage from './index'
-import ShoulderPressPreviewPage from './preview'
+import ShoulderPressCameraPage from '../motion-training/camera'
+import ShoulderPressGuidePage from '../motion-training'
+import ShoulderPressPreviewPage from '../motion-training/preview'
 import {
-  PENDING_SHOULDER_PRESS_SESSION_KEY,
-  type PendingShoulderPressSession
-} from './session'
-import { ShoulderPressTrainingOverlay } from './trainingOverlay'
-import ShoulderPressUploadPage from './upload'
+  LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY,
+  PENDING_MOTION_TRAINING_SESSION_KEY as PENDING_SHOULDER_PRESS_SESSION_KEY,
+  type PendingMotionTrainingSession as PendingShoulderPressSession
+} from '../../features/motion-training/session'
+import { MotionTrainingOverlay as ShoulderPressTrainingOverlay } from '../../features/motion-training/TrainingOverlay'
+import ShoulderPressUploadPage from '../motion-training/upload'
 
 type ReactElement = {
-  type: string
+  type: string | ((props?: Record<string, unknown>) => ReactElement)
   props: Record<string, unknown> & {
     children?: unknown
     onError?: () => unknown
+    onVideoError?: () => Promise<void> | void
     onClick?: () => unknown
     onTouchStart?: (event: { touches: Array<{ clientX: number; clientY: number }> }) => unknown
     onTouchEnd?: (event: { changedTouches: Array<{ clientX: number; clientY: number }> }) => unknown
@@ -137,6 +139,7 @@ const taroHarness = vi.hoisted(() => {
     navigateTo: vi.fn(),
     navigateBack: vi.fn(),
     redirectTo: vi.fn(),
+    openSetting: vi.fn(() => Promise.resolve({ authSetting: {} })),
     showModal: vi.fn(async () => ({ confirm: true, cancel: false })),
     setKeepScreenOn: vi.fn(() => Promise.resolve()),
     saveFile: vi.fn(),
@@ -207,6 +210,7 @@ const alertPlayerHarness = vi.hoisted(() => ({
 }))
 
 const requestMock = vi.hoisted(() => vi.fn())
+const publicRequestMock = vi.hoisted(() => vi.fn())
 const apiMocks = vi.hoisted(() => ({
   createVideoSession: vi.fn(),
   getVideoSessionStatus: vi.fn(),
@@ -327,13 +331,16 @@ vi.mock('@tarojs/taro', () => ({
   }
 }))
 
-vi.mock('../../api/client', () => ({ request: requestMock }))
+vi.mock('../../api/client', () => ({
+  request: requestMock,
+  publicRequest: publicRequestMock,
+}))
 vi.mock('../game-session/retryUpload', () => retryMocks)
-vi.mock('./api', () => apiMocks)
-vi.mock('./recorder', () => ({ ShoulderPressRecorder: recorderHarness.MockShoulderPressRecorder }))
-vi.mock('./alertAudio', () => ({
-  createShoulderPressAlertPlayer: () => alertPlayerHarness,
-  SHOULDER_PRESS_ALERT_TEXT: {
+vi.mock('../../features/motion-training/api', () => apiMocks)
+vi.mock('../../features/motion-training/recorder', () => ({ MotionTrainingRecorder: recorderHarness.MockShoulderPressRecorder }))
+vi.mock('../../features/motion-training/alertAudio', () => ({
+  createMotionTrainingAlertPlayer: () => alertPlayerHarness,
+  MOTION_TRAINING_ALERT_TEXT: {
     pause: '网络较慢，训练已暂停，请保持页面打开，等待视频上传。',
     ready: '视频上传已恢复，可以继续训练。'
   }
@@ -366,6 +373,103 @@ const PRESCRIPTION: NonNullable<CurrentPrescription> = {
     sort_order: 1,
     recent_record: null
   }]
+}
+
+const MOTION_ACTION_CASES = [
+  {
+    id: 41,
+    sourceKey: 'motion-aerobic-high-knee',
+    name: '高抬腿',
+    videoUrl: 'https://cdn.example.com/high-knee.mp4'
+  },
+  {
+    id: 42,
+    sourceKey: 'motion-balance-sit-stand',
+    name: '坐立训练',
+    videoUrl: 'https://cdn.example.com/sit-stand.mp4'
+  },
+  {
+    id: 43,
+    sourceKey: 'motion-resistance-row',
+    name: '坐姿划船',
+    videoUrl: 'https://cdn.example.com/row.mp4'
+  },
+  {
+    id: 44,
+    sourceKey: 'motion-resistance-leg-kickback',
+    name: '腿部后踢',
+    videoUrl: 'https://cdn.example.com/leg-kickback.mp4'
+  },
+  {
+    id: 45,
+    sourceKey: 'motion-resistance-shoulder-press',
+    name: '肩部推举',
+    videoUrl: 'https://cdn.example.com/shoulder-press.mp4'
+  }
+] as const
+
+const DEMO_MOTION_ACTION_CASES = [
+  {
+    id: 888808,
+    sourceKey: 'motion-aerobic-high-knee',
+    name: '椰林步道模拟（原地高抬腿+摆臂）',
+    instruction: '原地高抬腿并自然摆臂，保持躯干稳定。',
+    videoUrl: 'https://signed.example.com/high-knee.mp4'
+  },
+  {
+    id: 888809,
+    sourceKey: 'motion-balance-sit-stand',
+    name: '坐站转移训练',
+    instruction: '双脚稳定踩地，从坐姿平稳站起，再缓慢坐下。',
+    videoUrl: 'https://signed.example.com/sit-stand.mp4'
+  },
+  {
+    id: 888810,
+    sourceKey: 'motion-resistance-row',
+    name: '坐姿划船',
+    instruction: '保持背部挺直，双肘贴近身体向后拉，再缓慢还原。',
+    videoUrl: 'https://signed.example.com/row.mp4'
+  },
+  {
+    id: 888811,
+    sourceKey: 'motion-resistance-leg-kickback',
+    name: '腿部后踢',
+    instruction: '保持躯干稳定，单腿缓慢向后伸展，再平稳回到起始位置。',
+    videoUrl: 'https://signed.example.com/leg-kickback.mp4'
+  },
+  {
+    id: 888807,
+    sourceKey: 'motion-resistance-shoulder-press',
+    name: '肩部推举',
+    instruction: '保持身体稳定，双臂缓慢向上推举，再平稳回到起始位置。',
+    videoUrl: 'https://signed.example.com/shoulder-press.mp4'
+  }
+] as const
+
+const DEMO_MOTION_VIDEO_RESPONSE = {
+  videos: DEMO_MOTION_ACTION_CASES.map(({ sourceKey, videoUrl }) => ({
+    source_key: sourceKey,
+    video_url: videoUrl,
+  }))
+}
+
+function prescriptionForMotionAction(
+  actionCase: typeof MOTION_ACTION_CASES[number],
+  overrides: Partial<NonNullable<CurrentPrescription>['actions'][number]> = {}
+): NonNullable<CurrentPrescription> {
+  return {
+    ...PRESCRIPTION,
+    actions: [{
+      ...PRESCRIPTION.actions[0],
+      id: actionCase.id,
+      action_library_item: actionCase.id,
+      source_key: actionCase.sourceKey,
+      action_name: actionCase.name,
+      action_instruction: `${actionCase.name}动作说明。`,
+      video_url: actionCase.videoUrl,
+      ...overrides
+    }]
+  }
 }
 
 const REAL_GAME_PRESCRIPTION: NonNullable<CurrentPrescription> = {
@@ -434,6 +538,32 @@ function pendingSession(segmentCount = 2) {
   }
 }
 
+function historicalPendingUpload(
+  actualDurationMs: number,
+  compressionState: 'pending_compression' | 'compression_failed'
+) {
+  return {
+    clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+    actionId: 42,
+    trainingDate: '2026-07-11',
+    expectedDurationSeconds: 2400,
+    actualDurationMs,
+    finalized: false,
+    createdAt: 1783692000000,
+    trainingStartedAt: '2026-07-11T09:32:14+08:00',
+    trainingEndedAt: '2026-07-11T10:12:14+08:00',
+    segments: [{
+      index: 0,
+      compressionState,
+      rawSavedFilePath: `wxfile://store/historical-${actualDurationMs}.mp4`,
+      durationMs: actualDurationMs,
+      ...(compressionState === 'compression_failed'
+        ? { compressionError: '历史压缩失败' }
+        : {})
+    }]
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -453,7 +583,10 @@ async function flushPromises(times = 8) {
 function renderPage<T>(Component: (props?: T) => ReactElement, props?: T) {
   const render = () => {
     reactHarness.beginRender()
-    const element = Component(props)
+    let element = Component(props)
+    while (element && typeof element.type === 'function') {
+      element = element.type(element.props)
+    }
     reactHarness.runEffects()
     return element
   }
@@ -567,6 +700,7 @@ beforeEach(async () => {
   recorderHarness.reset()
   clearCurrentPrescriptionCache()
   requestMock.mockResolvedValue(PRESCRIPTION)
+  publicRequestMock.mockResolvedValue(DEMO_MOTION_VIDEO_RESPONSE)
   retryMocks.loadPendingGameUpload.mockReturnValue(null)
   retryMocks.postGameTrainingRecord.mockResolvedValue(undefined)
   retryMocks.savePendingGameUploadAfterActiveRetry.mockImplementation(async (_storage, payload) => ({ payload }))
@@ -683,22 +817,38 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).not.toContain('正在加载当前处方')
   })
 
-  it('offers direct training and a separate muted looping preview', async () => {
+  it.each(MOTION_ACTION_CASES)('$name uses the unified follow-along entry', (actionCase) => {
+    writeCurrentPrescriptionCache(prescriptionForMotionAction(actionCase))
+    const page = renderPage(PrescriptionPage)
+
+    const button = findButtonByText(page.element, '开始跟练')
+    button.props.onClick?.()
+
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: `/pages/motion-training/index?actionId=${actionCase.id}`
+    })
+  })
+
+  it.each(MOTION_ACTION_CASES)(
+    '$name offers direct training and a separate muted looping preview',
+    async (actionCase) => {
+    taroHarness.routerParams.actionId = String(actionCase.id)
+    requestMock.mockResolvedValue(prescriptionForMotionAction(actionCase))
     const guide = renderPage(ShoulderPressGuidePage)
     await flushPromises()
     guide.rerender()
 
     expect(findAll(guide.element, (element) => element.type === 'Video')).toHaveLength(0)
-    expect(textContent(guide.element)).toContain('保持正面，缓慢推举。')
+    expect(textContent(guide.element)).toContain(`${actionCase.name}动作说明。`)
     findButtonByText(guide.element, '动作预览').props.onClick?.()
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/preview?actionId=42'
+      url: `/pages/motion-training/preview?actionId=${actionCase.id}`
     })
 
     findButtonByText(guide.element, '开始训练').props.onClick?.()
 
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/camera?actionId=42'
+      url: `/pages/motion-training/camera?actionId=${actionCase.id}`
     })
 
     reactHarness.reset()
@@ -707,7 +857,7 @@ describe('shoulder press pages', () => {
     preview.rerender()
     const video = findFirstByType(preview.element, 'Video')
     expect(video.props).toMatchObject({
-      src: 'https://cdn.example.com/demo.mp4',
+      src: actionCase.videoUrl,
       autoplay: true,
       loop: true,
       muted: true,
@@ -718,8 +868,43 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.navigateBack).toHaveBeenCalledTimes(1)
     findButtonByText(preview.element, '开始训练').props.onClick?.()
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/camera?actionId=42'
+      url: `/pages/motion-training/camera?actionId=${actionCase.id}`
     })
+  })
+
+  it.each(MOTION_ACTION_CASES)('$name camera creates a session for the current action', async (actionCase) => {
+    taroHarness.routerParams.actionId = String(actionCase.id)
+    requestMock.mockResolvedValue(prescriptionForMotionAction(actionCase))
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(findTrainingOverlay(page.element).props.videoUrl).toBe(actionCase.videoUrl)
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises()
+
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(
+      expect.objectContaining({ actionId: actionCase.id })
+    )
+  })
+
+  it.each(MOTION_ACTION_CASES)('$name upload restores the session for the same action', async (actionCase) => {
+    saveStorageSession({
+      ...pendingSession(1),
+      videoId: undefined,
+      actionId: actionCase.id
+    })
+
+    renderPage(ShoulderPressUploadPage)
+    await taroHarness.showCallbacks[0]?.()
+    await flushPromises(20)
+
+    expect(apiMocks.createVideoSession).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: actionCase.id })
+    )
   })
 
   it('hides the preview entry when the action has no video url', async () => {
@@ -736,28 +921,91 @@ describe('shoulder press pages', () => {
     expect(findButtonByText(guide.element, '开始训练')).toBeTruthy()
   })
 
-  it('retries a failed preview without disabling training', async () => {
+  it('keeps training available when the prescription marks the video unavailable', async () => {
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], video_unavailable: true }]
+    })
+    const guide = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    guide.rerender()
+
+    expect(textContent(guide.element)).not.toContain('动作预览')
+    expect(findButtonByText(guide.element, '开始训练')).toBeTruthy()
+  })
+
+  it.each([
+    { label: '空 URL', override: { video_url: '' } },
+    { label: '不可用标记', override: { video_unavailable: true } }
+  ])('preview treats $label as non-blocking', async ({ override }) => {
+    requestMock.mockResolvedValueOnce({
+      ...PRESCRIPTION,
+      actions: [{ ...PRESCRIPTION.actions[0], ...override }]
+    })
+
+    const preview = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    preview.rerender()
+
+    expect(findAll(preview.element, (element) => element.type === 'Video')).toHaveLength(0)
+    expect(textContent(preview.element)).toContain('仍可直接开始训练')
+    expect(findButtonByText(preview.element, '开始训练')).toBeTruthy()
+  })
+
+  it('refreshes once after preview playback fails and then degrades without disabling training', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockResolvedValueOnce({
+        ...PRESCRIPTION,
+        actions: [{
+          ...PRESCRIPTION.actions[0],
+          video_url: 'https://cdn.example.com/refreshed-demo.mp4'
+        }]
+      })
     const preview = renderPage(ShoulderPressPreviewPage)
     await flushPromises()
     preview.rerender()
 
     findFirstByType(preview.element, 'Video').props.onError?.()
+    await flushPromises()
     preview.rerender()
 
-    expect(textContent(preview.element)).toContain('视频加载失败')
+    expect(requestMock).toHaveBeenCalledTimes(2)
+    expect(findFirstByType(preview.element, 'Video').props.src)
+      .toBe('https://cdn.example.com/refreshed-demo.mp4')
     expect(findButtonByText(preview.element, '开始训练')).toBeTruthy()
-    clickButtonByText(preview.element, '重新加载')
+
+    findFirstByType(preview.element, 'Video').props.onError?.()
+    preview.rerender()
+
+    expect(textContent(preview.element)).toContain('示范视频暂时无法播放')
+    expect(findButtonByText(preview.element, '开始训练')).toBeTruthy()
+    expect(requestMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('reloads preview when the same mounted component receives another action id', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockResolvedValueOnce(prescriptionForMotionAction(MOTION_ACTION_CASES[2]))
+    const preview = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    preview.rerender()
+    expect(findFirstByType(preview.element, 'Video').props.src)
+      .toBe(PRESCRIPTION.actions[0].video_url)
+
+    taroHarness.routerParams.actionId = String(MOTION_ACTION_CASES[2].id)
+    preview.rerender()
+    await flushPromises()
     preview.rerender()
 
     expect(findFirstByType(preview.element, 'Video').props.src)
-      .toBe('https://cdn.example.com/demo.mp4')
-    expect(textContent(preview.element)).not.toContain('视频加载失败')
+      .toBe(MOTION_ACTION_CASES[2].videoUrl)
   })
 
   it('rejects a preview action that is no longer in the current prescription', async () => {
     requestMock.mockResolvedValueOnce({
       ...PRESCRIPTION,
-      actions: [{ ...PRESCRIPTION.actions[0], source_key: 'motion-resistance-row' }]
+      actions: [{ ...PRESCRIPTION.actions[0], source_key: 'motion-custom-unsupported' }]
     })
     const preview = renderPage(ShoulderPressPreviewPage)
     await flushPromises()
@@ -966,6 +1214,38 @@ describe('shoulder press pages', () => {
     expect(textContent(overlay.element)).toContain('剩余02:36')
   })
 
+  it('refreshes a failed overlay URL once and clears the failure when the URL changes', async () => {
+    const refresh = vi.fn(async () => undefined)
+    let overlayProps = {
+      videoUrl: 'https://cdn.example.com/expired.mp4',
+      elapsedMs: 24_000,
+      expectedDurationSeconds: 180,
+      started: true,
+      onVideoError: refresh
+    }
+    const OverlayHost = () => ShoulderPressTrainingOverlay(overlayProps)
+    const overlay = renderPage(OverlayHost)
+
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    await flushPromises()
+    overlay.rerender()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(textContent(overlay.element)).toContain('示范视频暂时无法播放')
+
+    overlayProps = {
+      ...overlayProps,
+      videoUrl: 'https://cdn.example.com/refreshed.mp4'
+    }
+    overlay.rerender()
+    overlay.rerender()
+    expect(findFirstByType(overlay.element, 'Video').props.src)
+      .toBe('https://cdn.example.com/refreshed.mp4')
+
+    findFirstByType(overlay.element, 'Video').props.onError?.()
+    await flushPromises()
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('lets a failed preview slide away and restore without changing the timer', () => {
     const overlay = renderPage(ShoulderPressTrainingOverlay, {
       videoUrl: 'https://cdn.example.com/demo.mp4',
@@ -1054,7 +1334,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/upload'
+      url: '/pages/motion-training/upload'
     })
     expect(taroHarness.getSavedFileListMock).not.toHaveBeenCalled()
     expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
@@ -1141,6 +1421,113 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
   })
 
+  it('creates and persists the server session before constructing or starting the recorder', async () => {
+    const created = deferred<{ video_id: number; status: 'recording'; uploaded_segments: number[] }>()
+    apiMocks.createVideoSession.mockReturnValueOnce(created.promise)
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+
+    created.resolve({ video_id: 77, status: 'recording', uploaded_segments: [] })
+    await flushPromises(30)
+
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 77,
+      trainingStartedAt: expect.any(String),
+      segments: []
+    })
+    expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
+    expect(apiMocks.createVideoSession.mock.invocationCallOrder[0])
+      .toBeLessThan(taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1))
+    expect(taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(recorderHarness.instances[0].start.mock.invocationCallOrder[0])
+  })
+
+  it('does not construct a recorder, start timers, or persist fragments when session creation fails', async () => {
+    apiMocks.createVideoSession.mockRejectedValueOnce(new Error('服务端会话暂时不可用'))
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+    page.rerender()
+
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('服务端会话暂时不可用')
+    expect(findTrainingOverlay(page.element).props.started).toBe(false)
+  })
+
+  it('refreshes the real camera overlay without touching recorder or upload state', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockResolvedValueOnce({
+        ...PRESCRIPTION,
+        actions: [{
+          ...PRESCRIPTION.actions[0],
+          video_url: 'https://cdn.example.com/camera-refreshed.mp4'
+        }]
+      })
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    await findTrainingOverlay(page.element).props.onVideoError?.()
+    await flushPromises(20)
+    page.rerender()
+
+    expect(findTrainingOverlay(page.element).props.videoUrl)
+      .toBe('https://cdn.example.com/camera-refreshed.mp4')
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+  })
+
+  it('keeps recording and segment recovery active when the real overlay refresh fails', async () => {
+    requestMock
+      .mockResolvedValueOnce(PRESCRIPTION)
+      .mockRejectedValueOnce(new Error('video refresh failed'))
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    await flushPromises(20)
+    page.rerender()
+    const recorder = recorderHarness.instances[0]
+
+    const refresh = findTrainingOverlay(page.element).props.onVideoError
+    if (!refresh) throw new Error('真实视频刷新回调缺失')
+    await expect(refresh()).rejects.toThrow('video refresh failed')
+
+    expect(recorder.start).toHaveBeenCalledTimes(1)
+    expect(recorder.pause).not.toHaveBeenCalled()
+    expect(recorder.finish).not.toHaveBeenCalled()
+    expect(findTrainingOverlay(page.element).props.started).toBe(true)
+    await recorder.options.onSegment('wxfile://temp/after-refresh-failure.mp4', 5_000)
+    await flushPromises(20)
+    expect(apiMocks.uploadVideoSegment).toHaveBeenCalledTimes(1)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 9,
+      segments: [expect.objectContaining({ uploadState: 'uploaded' })]
+    })
+  })
+
   it('cancels an unresolved preflight after unmount without creating or starting anything', async () => {
     const before = deferred<Array<{ filePath: string; size: number }>>()
     taroHarness.getSavedFileListMock
@@ -1183,7 +1570,7 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances).toHaveLength(0)
   })
 
-  it('does not persist a start time when the page hides while the recorder is starting', async () => {
+  it('keeps the pre-created server session but records no fragment when the page hides during recorder start', async () => {
     const starting = deferred<void>()
     recorderHarness.setNextStartPromise(starting.promise)
     const page = renderPage(ShoulderPressCameraPage)
@@ -1210,7 +1597,11 @@ describe('shoulder press pages', () => {
     expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
       filePath: 'wxfile://temp/background-start.mp4'
     }))
-    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 9,
+      trainingStartedAt: expect.any(String),
+      segments: []
+    })
   })
 
   it('pauses once at 65MB and only becomes manually resumable below 10MB', async () => {
@@ -1343,8 +1734,13 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).toContain('视频上传已恢复，可以继续训练。')
   })
 
-  it('deletes a local segment immediately when server session creation reports it uploaded', async () => {
+  it('deletes a local segment immediately when the pre-created server session status reports it uploaded', async () => {
     apiMocks.createVideoSession.mockResolvedValueOnce({
+      video_id: 9,
+      status: 'recording',
+      uploaded_segments: []
+    })
+    apiMocks.getVideoSessionStatus.mockResolvedValueOnce({
       video_id: 9,
       status: 'recording',
       uploaded_segments: [0]
@@ -1430,7 +1826,7 @@ describe('shoulder press pages', () => {
     clickButtonByText(page.element, '结束训练')
     await flushPromises(20)
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/upload'
+      url: '/pages/motion-training/upload'
     })
   })
 
@@ -1671,7 +2067,7 @@ describe('shoulder press pages', () => {
       .toHaveLength(1)
   })
 
-  it('records with the low camera resolution and forty-minute safety boundary', async () => {
+  it('records with the low camera resolution and thirty-minute safety boundary', async () => {
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
@@ -1682,7 +2078,7 @@ describe('shoulder press pages', () => {
     findButtonByText(page.element, '开始训练').props.onClick?.()
     await flushPromises()
 
-    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(2_397_000)
+    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(1_797_000)
   })
 
   it('completes recording and upload when the action has no preview video', async () => {
@@ -1709,12 +2105,14 @@ describe('shoulder press pages', () => {
 
     expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/upload'
+      url: '/pages/motion-training/upload'
     })
   })
 
   it('keeps the forced page until all segments and finalize succeed', async () => {
-    saveStorageSession(pendingSession(2))
+    const storedSession = pendingSession(2)
+    saveStorageSession(storedSession)
+    taroHarness.storage.set(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, storedSession)
     const finalize = deferred<{ video_id: number; status: 'queued'; assembly_job_id: number }>()
     apiMocks.uploadVideoSegment
       .mockResolvedValueOnce({ index: 0, sha256: 'sha-0' })
@@ -1738,6 +2136,8 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/prescription/index' })
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.has(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
   })
 
   it('rejects a zero-segment recovery before file work or any video API call', async () => {
@@ -1829,7 +2229,7 @@ describe('shoulder press pages', () => {
       segments: [{ durationMs: 15_000 }, { durationMs: 2_100 }]
     })
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/upload'
+      url: '/pages/motion-training/upload'
     })
   })
 
@@ -1868,7 +2268,7 @@ describe('shoulder press pages', () => {
     }
   })
 
-  it('does not persist start when recorder start fails', async () => {
+  it('keeps the pre-created server session for retry when recorder start fails', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-06T01:32:14Z'))
@@ -1885,18 +2285,20 @@ describe('shoulder press pages', () => {
       start.reject(new Error('camera failed'))
       await flushPromises()
 
-      expect(
-        (taroHarness.storage.get(
-          PENDING_SHOULDER_PRESS_SESSION_KEY
-        ) as PendingShoulderPressSession | undefined)?.trainingStartedAt
-      ).toBeUndefined()
+      expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+        videoId: 9,
+        trainingStartedAt: '2026-08-06T09:32:14+08:00',
+        segments: []
+      })
+      page.rerender()
+      expect(findTrainingOverlay(page.element).props.started).toBe(false)
     } finally {
       page.unmount()
       timezoneOffset.mockRestore()
     }
   })
 
-  it('keeps the first start and recording controls when persistence and compensating stop both fail', async () => {
+  it('never constructs the recorder when pre-created session persistence fails', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     const firstStartMs = new Date('2026-08-06T01:32:14Z').valueOf()
@@ -1911,32 +2313,21 @@ describe('shoulder press pages', () => {
       taroHarness.taroMock.setStorageSync.mockImplementationOnce(() => {
         throw new Error('本地写入失败')
       })
-      recorderHarness.setNextFinishError(new Error('录像停止失败，请稍后重试'))
       findButtonByText(page.element, '开始训练').props.onClick?.()
       await flushPromises()
       page.rerender()
-      const recorder = recorderHarness.instances[0]
 
-      expect(recorder.finish).toHaveBeenCalledTimes(1)
-      expect(findTrainingOverlay(page.element).props.started).toBe(true)
-      expect(findButtonByText(page.element, '结束训练')).toBeTruthy()
-
-      vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
-      await recorder.options.onSegment('wxfile://temp/retained-start.mp4', 15_000)
-      await flushPromises()
-
-      expect(
-        (taroHarness.storage.get(
-          PENDING_SHOULDER_PRESS_SESSION_KEY
-        ) as PendingShoulderPressSession | undefined)?.trainingStartedAt
-      ).toBe('2026-08-06T09:32:14+08:00')
+      expect(recorderHarness.instances).toHaveLength(0)
+      expect(findTrainingOverlay(page.element).props.started).toBe(false)
+      expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+      expect(textContent(page.element)).toContain('本地写入失败')
     } finally {
       page.unmount()
       timezoneOffset.mockRestore()
     }
   })
 
-  it('returns to a retryable non-recording state when compensating stop succeeds', async () => {
+  it('can retry pre-creation after local session persistence fails', async () => {
     const timezoneOffset = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-480)
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-06T01:32:14Z'))
@@ -1954,15 +2345,15 @@ describe('shoulder press pages', () => {
       await flushPromises()
       page.rerender()
 
-      const recorder = recorderHarness.instances[0]
-      expect(recorder.finish).toHaveBeenCalledTimes(1)
-      expect(findButtonByText(page.element, '开始训练')).toBeTruthy()
+      expect(recorderHarness.instances).toHaveLength(0)
+      expect(findButtonByText(page.element, '重试开始')).toBeTruthy()
 
       vi.setSystemTime(new Date('2026-08-06T01:35:00Z'))
-      findButtonByText(page.element, '开始训练').props.onClick?.()
+      findButtonByText(page.element, '重试开始').props.onClick?.()
       await flushPromises()
 
-      expect(recorder.start).toHaveBeenCalledTimes(2)
+      expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
+      expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
       expect(
         (taroHarness.storage.get(
           PENDING_SHOULDER_PRESS_SESSION_KEY
@@ -2174,7 +2565,7 @@ describe('shoulder press pages', () => {
 
       expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
       expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-        url: '/pages/shoulder-press/upload'
+        url: '/pages/motion-training/upload'
       })
       expect(
         taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)
@@ -2268,7 +2659,11 @@ describe('shoulder press pages', () => {
 
     expect(recorderHarness.instances[0].pause).toHaveBeenCalledTimes(1)
     expect(textContent(page.element)).toContain('开始训练')
-    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({
+      videoId: 9,
+      trainingStartedAt: expect.any(String),
+      segments: []
+    })
 
     await taroHarness.showCallbacks[0]()
     findButtonByText(page.element, '开始训练').props.onClick?.()
@@ -2382,6 +2777,83 @@ describe('shoulder press pages', () => {
     }))
   })
 
+  it.each([
+    ['new key at 1800001ms', PENDING_SHOULDER_PRESS_SESSION_KEY, 1_800_001, 'pending_compression'],
+    ['new key at 2400000ms', PENDING_SHOULDER_PRESS_SESSION_KEY, 2_400_000, 'compression_failed'],
+    ['legacy key at 1800001ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 1_800_001, 'compression_failed'],
+    ['legacy key at 2400000ms', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, 2_400_000, 'pending_compression']
+  ] as const)(
+    'promotes and uploads a historical pending segment from the %s',
+    async (_caseName, key, durationMs, compressionState) => {
+      const stored = {
+        ...historicalPendingUpload(durationMs, compressionState),
+        videoId: 9
+      }
+      taroHarness.storage.set(key, stored)
+
+      renderPage(ShoulderPressUploadPage)
+      await taroHarness.showCallbacks[0]()
+      await flushPromises(30)
+
+      expect(taroHarness.taroMock.getFileInfo).toHaveBeenCalledWith({
+        filePath: `wxfile://store/historical-${durationMs}.mp4`
+      })
+      expect(apiMocks.uploadVideoSegment).toHaveBeenCalledWith(expect.objectContaining({
+        filePath: `wxfile://store/historical-${durationMs}.mp4`,
+        durationMs
+      }))
+      expect(apiMocks.finalizeVideoSession).toHaveBeenCalledWith(expect.objectContaining({
+        actualDurationSeconds: Math.ceil(durationMs / 1000)
+      }))
+      expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
+        url: '/pages/prescription/index'
+      })
+    }
+  )
+
+  it('requires cleanup and re-recording for a local-only historical session above 30 minutes', async () => {
+    const stored = historicalPendingUpload(1_800_001, 'compression_failed')
+    taroHarness.storage.set(PENDING_SHOULDER_PRESS_SESSION_KEY, stored)
+    taroHarness.storage.set(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, stored)
+    const page = renderPage(ShoulderPressUploadPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises(20)
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('历史长时录像没有可恢复的服务端会话')
+    expect(taroHarness.taroMock.getFileInfo).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+
+    clickButtonByText(page.element, '重新训练')
+    await flushPromises()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.has(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.unlinkMock).toHaveBeenCalledWith(expect.objectContaining({
+      filePath: 'wxfile://store/historical-1800001.mp4'
+    }))
+  })
+
+  it.each([
+    ['new key', PENDING_SHOULDER_PRESS_SESSION_KEY],
+    ['legacy key', LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY]
+  ])('rejects a historical pending upload above 2400000ms from the %s', async (_caseName, key) => {
+    taroHarness.storage.set(key, historicalPendingUpload(2_400_001, 'pending_compression'))
+
+    const page = renderPage(ShoulderPressUploadPage)
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('无法继续上传')
+    expect(taroHarness.taroMock.getFileInfo).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+  })
+
   it('reuses persisted training timestamps when retrying the upload page', async () => {
     saveStorageSession(pendingSession(1))
     apiMocks.finalizeVideoSession
@@ -2467,7 +2939,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(newerSession)
-    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
     expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
   })
 
@@ -2493,7 +2965,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
 
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBeUndefined()
-    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
     expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
     expect(taroHarness.unlinkMock).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: 'wxfile://temp/old-cleared.mp4' })
@@ -2642,7 +3114,7 @@ describe('shoulder press pages', () => {
       await flushPromises(30)
     }
 
-    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/shoulder-press/upload' })
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/motion-training/upload' })
     expect(taroHarness.taroMock.setKeepScreenOn).toHaveBeenLastCalledWith({
       keepScreenOn: false
     })
@@ -2691,14 +3163,14 @@ describe('shoulder press pages', () => {
     await taroHarness.showCallbacks[0]()
     await flushPromises()
 
-    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/shoulder-press/upload' })
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/motion-training/upload' })
     expect(retryMocks.resetRetryWindowForLaunch).not.toHaveBeenCalled()
     expect(retryMocks.startPendingGameUploadRetryLoop).not.toHaveBeenCalled()
   })
 
   it('keeps the active camera session on app foreground after page-hide pause', async () => {
     setPatientAppToken('real-token')
-    taroHarness.setCurrentRoute('pages/shoulder-press/camera')
+    taroHarness.setCurrentRoute('pages/motion-training/camera')
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
     page.rerender()
@@ -2730,13 +3202,13 @@ describe('shoulder press pages', () => {
 
   it('still sends a cold residual session from camera bootstrap to forced upload', async () => {
     saveStorageSession(pendingSession(1))
-    taroHarness.setCurrentRoute('pages/shoulder-press/camera')
+    taroHarness.setCurrentRoute('pages/motion-training/camera')
 
     renderPage(ShoulderPressCameraPage)
     await flushPromises()
 
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/upload'
+      url: '/pages/motion-training/upload'
     })
     expect(requestMock).not.toHaveBeenCalled()
   })
@@ -2744,7 +3216,7 @@ describe('shoulder press pages', () => {
   it('does not relaunch the forced upload page when app show already happens on that route', async () => {
     setPatientAppToken('real-token')
     saveStorageSession(pendingSession(1))
-    taroHarness.setCurrentRoute('pages/shoulder-press/upload')
+    taroHarness.setCurrentRoute('pages/motion-training/upload')
 
     renderPage(App, { children: null })
     await taroHarness.showCallbacks[0]()
@@ -2892,7 +3364,7 @@ describe('shoulder press pages', () => {
     expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
   })
 
-  it('stops at the safe boundary before 2400 seconds after automatic segment splits', async () => {
+  it('stops at the safe boundary before 1800 seconds after automatic segment splits', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
@@ -2913,25 +3385,25 @@ describe('shoulder press pages', () => {
     await recorderHarness.instances[0].options.onSegment('wxfile://temp/0.mp4', 30_000)
     await flushPromises()
     expect(apiMocks.createVideoSession).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedDurationSeconds: 2400 })
+      expect.objectContaining({ expectedDurationSeconds: 1800 })
     )
-    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(2_397_000)
+    expect(recorderHarness.instances[0].options.maxDurationMs).toBe(1_797_000)
 
-    vi.setSystemTime(startAt + 2_370_000)
+    vi.setSystemTime(startAt + 1_770_000)
     vi.advanceTimersByTime(1000)
     await flushPromises()
 
     expect(recorderHarness.instances[0].finish).not.toHaveBeenCalled()
     expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalled()
 
-    vi.setSystemTime(startAt + 2_397_000)
+    vi.setSystemTime(startAt + 1_797_000)
     vi.advanceTimersByTime(1000)
     await flushPromises()
 
     expect(recorderHarness.instances[0].finish).toHaveBeenCalledTimes(1)
   })
 
-  it('fails closed above 2400000ms and only enters forced upload after tail retry succeeds', async () => {
+  it('fails closed above 1800000ms and only enters forced upload after tail retry succeeds', async () => {
     vi.useFakeTimers()
     const startAt = 1783692000000
     vi.setSystemTime(startAt)
@@ -2940,7 +3412,7 @@ describe('shoulder press pages', () => {
       actions: [{ ...PRESCRIPTION.actions[0], duration_minutes: 45 }]
     })
     taroHarness.taroMock.getVideoInfo.mockImplementation(async ({ src }) => ({
-      duration: src.includes('first-2370') ? 2370 : src.includes('final') ? 30.001 : 30,
+      duration: src.includes('first-1770') ? 1770 : src.includes('final') ? 30.001 : 30,
       size: src.includes('compressed') ? 1 : 2,
       width: src.includes('compressed') ? 720 : 1080,
       height: src.includes('compressed') ? 1280 : 1920
@@ -2955,14 +3427,14 @@ describe('shoulder press pages', () => {
     await flushPromises()
     const recorder = recorderHarness.instances[0]
 
-    await recorder.options.onSegment('wxfile://temp/first-2370.mp4', 2_370_000)
+    await recorder.options.onSegment('wxfile://temp/first-1770.mp4', 1_770_000)
     await expect(
       recorder.options.onSegment('wxfile://temp/final.mp4', 30_001)
     ).rejects.toThrow('录像总时长超过限制')
     recorder.hasFailedSegment.mockReturnValue(true)
     recorder.finish.mockRejectedValue(new Error('录像总时长超过限制，请重新录制'))
-    vi.setSystemTime(startAt + 2_397_000)
-    recorder.options.onMaxDuration?.(startAt + 2_397_000)
+    vi.setSystemTime(startAt + 1_797_000)
+    recorder.options.onMaxDuration?.(startAt + 1_797_000)
     await flushPromises()
     page.rerender()
 
@@ -2970,7 +3442,7 @@ describe('shoulder press pages', () => {
     expect(findButtonByText(page.element, '重试保存尾段')).toBeTruthy()
     expect(findButtonByText(page.element, '重新训练')).toBeTruthy()
     expect(taroHarness.unlinkMock.mock.calls.map(([options]) => options.filePath)).toEqual([
-      'wxfile://temp/first-2370.mp4'
+      'wxfile://temp/first-1770.mp4'
     ])
 
     vi.advanceTimersByTime(2_000)
@@ -2978,7 +3450,7 @@ describe('shoulder press pages', () => {
     expect(recorder.finish).toHaveBeenCalledTimes(1)
 
     taroHarness.taroMock.getVideoInfo.mockImplementation(async ({ src }) => ({
-      duration: src.includes('first-2370') ? 2370 : src.includes('final') ? 27 : 30,
+      duration: src.includes('first-1770') ? 1770 : src.includes('final') ? 27 : 30,
       size: src.includes('compressed') ? 1 : 2,
       width: src.includes('compressed') ? 720 : 1080,
       height: src.includes('compressed') ? 1280 : 1920
@@ -2993,7 +3465,7 @@ describe('shoulder press pages', () => {
 
     expect(taroHarness.taroMock.compressVideo).not.toHaveBeenCalled()
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/upload'
+      url: '/pages/motion-training/upload'
     })
   })
 
@@ -3093,7 +3565,7 @@ describe('shoulder press pages', () => {
     await taroHarness.showCallbacks[0]()
     await flushPromises()
 
-    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/shoulder-press/upload' })
+    expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({ url: '/pages/motion-training/upload' })
     expect(requestMock).not.toHaveBeenCalledWith('/patient-app/home/')
     expect(retryMocks.tryUploadPendingGameRecord).not.toHaveBeenCalled()
   })
@@ -3111,7 +3583,9 @@ describe('shoulder press pages', () => {
   })
 
   it('best-effort deletes every saved segment before clearing a retrained manifest', async () => {
-    saveStorageSession(pendingSession(2))
+    const storedSession = pendingSession(2)
+    saveStorageSession(storedSession)
+    taroHarness.storage.set(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, storedSession)
     apiMocks.finalizeVideoSession.mockResolvedValueOnce({
       video_id: 9,
       status: 'failed',
@@ -3133,8 +3607,9 @@ describe('shoulder press pages', () => {
       'wxfile://store/segment-1.mp4'
     ])
     expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+    expect(taroHarness.storage.has(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
     expect(taroHarness.taroMock.reLaunch).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/index?actionId=42'
+      url: '/pages/motion-training/index?actionId=42'
     })
   })
 
@@ -3153,21 +3628,187 @@ describe('shoulder press pages', () => {
     clickButtonByText(page.element, '继续训练')
 
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
-      url: '/pages/shoulder-press/index?actionId=42'
+      url: '/pages/motion-training/index?actionId=42'
     })
   })
 })
 
 describe('审核演示模式', () => {
-  it('普通绑定码仍执行真实绑定', async () => {
-    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'wx-code' })
+  it('启动检查中不显示绑定码输入', () => {
+    const page = renderPage(BindPage)
+
+    expect(textContent(page.element)).toContain('正在恢复登录')
+    expect(textContent(page.element)).toContain('正在检查登录状态')
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('只有后端明确 unbound 后才显示绑定码', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockResolvedValueOnce({ status: 'unbound' })
+    const page = renderPage(BindPage)
+
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(1)
+  })
+
+  it('清缓存后按微信身份恢复并保存新 token', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
     requestMock.mockResolvedValueOnce({
+      status: 'authenticated',
+      token: 'restored-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(getPatientAppToken()).toBe('restored-token')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
+  })
+
+  it('有效旧 token 静默迁移时保留原 token', async () => {
+    setPatientAppToken('legacy-token')
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockResolvedValueOnce({
+      status: 'authenticated',
+      token: null,
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'startup-code' }
+    })
+    expect(getPatientAppToken()).toBe('legacy-token')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
+  })
+
+  it('恢复成功后的首页跳转失败进入安全重试态并保留新 token', async () => {
+    const navigation = deferred<void>()
+    void navigation.promise.catch(() => undefined)
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    taroHarness.taroMock.redirectTo.mockReturnValueOnce(navigation.promise)
+    requestMock.mockResolvedValueOnce({
+      status: 'authenticated',
+      token: 'restored-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    const page = renderPage(BindPage)
+
+    const check = taroHarness.showCallbacks[0]()
+    await flushPromises()
+    navigation.reject(new Error('private-route-secret'))
+    await check
+    await flushPromises()
+    page.rerender()
+
+    expect(getPatientAppToken()).toBe('restored-token')
+    expect(textContent(page.element)).toContain('进入首页失败，请重新检查登录')
+    expect(textContent(page.element)).not.toContain('private-route-secret')
+    expect(findButtonByText(page.element, '重新检查登录')).toBeTruthy()
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('恢复成功跳转未完成时重复 show 不会发起第二次恢复', async () => {
+    const navigation = deferred<void>()
+    taroHarness.taroMock.login.mockResolvedValue({ code: 'startup-code' })
+    taroHarness.taroMock.redirectTo.mockReturnValueOnce(navigation.promise)
+    requestMock
+      .mockResolvedValueOnce({
+        status: 'authenticated',
+        token: 'restored-token',
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+      .mockResolvedValue({ status: 'unbound' })
+    const page = renderPage(BindPage)
+
+    const firstCheck = taroHarness.showCallbacks[0]()
+    await flushPromises()
+    const repeatedCheck = taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledTimes(1)
+
+    navigation.resolve()
+    await Promise.all([firstCheck, repeatedCheck])
+    await flushPromises()
+    page.rerender()
+
+    expect(getPatientAppToken()).toBe('restored-token')
+    expect(textContent(page.element)).not.toContain('进入首页失败')
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('登录检查失败只显示重试且不显示绑定输入', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockRejectedValueOnce(new Error('网络连接失败，请稍后重试'))
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('网络连接失败，请稍后重试')
+    expect(findButtonByText(page.element, '重新检查登录')).toBeTruthy()
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+  })
+
+  it('点击重新检查后可从 error 进入 unbound', async () => {
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'failed-startup-code' })
+      .mockResolvedValueOnce({ code: 'retry-startup-code' })
+    requestMock
+      .mockRejectedValueOnce(new Error('网络连接失败，请稍后重试'))
+      .mockResolvedValueOnce({ status: 'unbound' })
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    clickButtonByText(page.element, '重新检查登录')
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(2)
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(1)
+  })
+
+  it('普通绑定启动和提交使用两个不同微信 code', async () => {
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'startup-code' })
+      .mockResolvedValueOnce({ code: 'binding-code-login' })
+    requestMock.mockResolvedValueOnce({ status: 'unbound' }).mockResolvedValueOnce({
       token: 'real-token',
       project_patient_id: 1,
       patient: { id: 1, name: '王阿姨' },
       project: { id: 1, name: '居家运动项目' }
     })
     const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
     const onInput = findFirstByType(page.element, 'Input').props.onInput
     if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
     onInput({ detail: { value: '1234' } })
@@ -3176,12 +3817,179 @@ describe('审核演示模式', () => {
     clickButtonByText(page.element, '绑定账号')
     await flushPromises()
 
-    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
-    expect(requestMock).toHaveBeenCalledWith('/patient-app/bind/', {
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(2)
+    expect(requestMock).toHaveBeenNthCalledWith(1, '/patient-app/wechat-session/', {
       method: 'POST',
-      data: { code: '1234', wx_openid: 'wx-code' }
+      data: { wx_code: 'startup-code' }
+    })
+    expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_code: 'binding-code-login' }
     })
     expect(getPatientAppToken()).toBe('real-token')
+  })
+
+  it('真实绑定失败后恢复提交按钮并用新微信 code 再次绑定', async () => {
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'startup-code' })
+      .mockResolvedValueOnce({ code: 'first-binding-code' })
+      .mockResolvedValueOnce({ code: 'retry-binding-code' })
+    requestMock
+      .mockResolvedValueOnce({ status: 'unbound' })
+      .mockRejectedValueOnce(new Error('绑定服务暂时不可用，请重试'))
+      .mockResolvedValueOnce({
+        token: 'real-token',
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+    taroHarness.taroMock.redirectTo.mockResolvedValueOnce(undefined)
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '1234' } })
+    page.rerender()
+
+    await findButtonByText(page.element, '绑定账号').props.onClick?.()
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('绑定服务暂时不可用，请重试')
+    expect(findButtonByText(page.element, '绑定账号').props.loading).toBe(false)
+    expect(findButtonByText(page.element, '绑定账号').props.disabled).toBe(false)
+
+    await findButtonByText(page.element, '绑定账号').props.onClick?.()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(3)
+    expect(requestMock).toHaveBeenNthCalledWith(2, '/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_code: 'first-binding-code' }
+    })
+    expect(requestMock).toHaveBeenNthCalledWith(3, '/patient-app/bind/', {
+      method: 'POST',
+      data: { code: '1234', wx_code: 'retry-binding-code' }
+    })
+    expect(getPatientAppToken()).toBe('real-token')
+  })
+
+  it('绑定成功后的首页跳转失败保留 token 并通过恢复重试', async () => {
+    const navigation = deferred<void>()
+    void navigation.promise.catch(() => undefined)
+    taroHarness.taroMock.login
+      .mockResolvedValueOnce({ code: 'startup-code' })
+      .mockResolvedValueOnce({ code: 'binding-code' })
+      .mockResolvedValueOnce({ code: 'recovery-code' })
+    requestMock
+      .mockResolvedValueOnce({ status: 'unbound' })
+      .mockResolvedValueOnce({
+        token: 'real-token',
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+      .mockResolvedValueOnce({
+        status: 'authenticated',
+        token: null,
+        project_patient_id: 1,
+        patient: { id: 1, name: '王阿姨' },
+        project: { id: 1, name: '居家运动项目' }
+      })
+    taroHarness.taroMock.redirectTo
+      .mockReturnValueOnce(navigation.promise)
+      .mockResolvedValueOnce(undefined)
+    const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
+    const onInput = findFirstByType(page.element, 'Input').props.onInput
+    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
+    onInput({ detail: { value: '1234' } })
+    page.rerender()
+
+    const submit = findButtonByText(page.element, '绑定账号').props.onClick?.()
+    await flushPromises()
+    navigation.reject(new Error('private-binding-route-secret'))
+    await submit
+    await flushPromises()
+    page.rerender()
+
+    expect(getPatientAppToken()).toBe('real-token')
+    expect(textContent(page.element)).toContain('进入首页失败，请重新检查登录')
+    expect(textContent(page.element)).not.toContain('private-binding-route-secret')
+    expect(findButtonByText(page.element, '重新检查登录')).toBeTruthy()
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(0)
+
+    await findButtonByText(page.element, '重新检查登录').props.onClick?.()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(3)
+    expect(requestMock).toHaveBeenNthCalledWith(3, '/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'recovery-code' }
+    })
+    expect(getPatientAppToken()).toBe('real-token')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledTimes(2)
+  })
+
+  it('重复触发页面显示时不会并发恢复登录', async () => {
+    const response = deferred<{ status: 'unbound' }>()
+    taroHarness.taroMock.login.mockResolvedValue({ code: 'startup-code' })
+    requestMock.mockReturnValueOnce(response.promise)
+    const page = renderPage(BindPage)
+
+    const firstCheck = taroHarness.showCallbacks[0]()
+    const repeatedCheck = taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+
+    response.resolve({ status: 'unbound' })
+    await Promise.all([firstCheck, repeatedCheck])
+    await flushPromises()
+    page.rerender()
+
+    expect(findAll(page.element, (element) => element.type === 'Input')).toHaveLength(1)
+  })
+
+  it('页面卸载后忽略迟到的恢复响应', async () => {
+    const response = deferred<{
+      status: 'authenticated'
+      token: string
+      project_patient_id: number
+      patient: { id: number; name: string }
+      project: { id: number; name: string }
+    }>()
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockReturnValueOnce(response.promise)
+    const page = renderPage(BindPage)
+
+    const check = taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'startup-code' }
+    })
+    page.unmount()
+    response.resolve({
+      status: 'authenticated',
+      token: 'late-token',
+      project_patient_id: 1,
+      patient: { id: 1, name: '王阿姨' },
+      project: { id: 1, name: '居家运动项目' }
+    })
+    await check
+    await flushPromises()
+
+    expect(getPatientAppToken()).toBeUndefined()
+    expect(taroHarness.taroMock.redirectTo).not.toHaveBeenCalled()
   })
 
   it('应用演示生命周期在未登录时不恢复真实上传任务', async () => {
@@ -3236,30 +4044,6 @@ describe('审核演示模式', () => {
     expect(retryMocks.tryUploadPendingGameRecord).toHaveBeenCalledTimes(1)
   })
 
-  it('已有真实身份提交 8888 时仅进入真实首页', async () => {
-    setPatientAppToken('real-token')
-    const page = renderPage(BindPage)
-
-    await taroHarness.showCallbacks[0]()
-    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
-
-    const tokenWriteCountBeforeSubmit = taroHarness.taroMock.setStorageSync.mock.calls.length
-    const onInput = findFirstByType(page.element, 'Input').props.onInput
-    if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
-    onInput({ detail: { value: '8888' } })
-    page.rerender()
-
-    clickButtonByText(page.element, '绑定账号')
-    await flushPromises()
-
-    expect(getPatientAppToken()).toBe('real-token')
-    expect(taroHarness.taroMock.setStorageSync).toHaveBeenCalledTimes(tokenWriteCountBeforeSubmit)
-    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
-    expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
-    expect(retryMocks.stopPendingGameUploadRetryLoop).not.toHaveBeenCalled()
-    expect(session.isDemoSession()).toBe(false)
-  })
-
   it('真实游戏提前结束仍播放保存部分记录提示并展示原说明', async () => {
     setPatientAppToken('real-token')
     vi.useFakeTimers()
@@ -3291,7 +4075,13 @@ describe('审核演示模式', () => {
   })
 
   it('演示绑定 8888 不请求真实鉴权并进入首页', async () => {
+    taroHarness.taroMock.login.mockResolvedValueOnce({ code: 'startup-code' })
+    requestMock.mockResolvedValueOnce({ status: 'unbound' })
     const page = renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+    page.rerender()
     const onInput = findFirstByType(page.element, 'Input').props.onInput
     if (typeof onInput !== 'function') throw new Error('绑定码输入事件不存在')
     onInput({ detail: { value: '8888' } })
@@ -3300,12 +4090,33 @@ describe('审核演示模式', () => {
     clickButtonByText(page.element, '绑定账号')
     await flushPromises()
 
-    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.login).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    expect(requestMock).toHaveBeenCalledWith('/patient-app/wechat-session/', {
+      method: 'POST',
+      data: { wx_code: 'startup-code' }
+    })
     expect(requestMock).not.toHaveBeenCalledWith('/patient-app/bind/', expect.anything())
     expect(getPatientAppToken()).toBeUndefined()
     expect(retryMocks.stopPendingGameUploadRetryLoop).toHaveBeenCalledTimes(1)
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
     expect(session.isDemoSession()).toBe(true)
+  })
+
+  it('进程内演示会话重新显示绑定页时跳过真实恢复并进入首页', async () => {
+    setPatientAppToken('preserved-real-token')
+    session.startDemoSession()
+    taroHarness.taroMock.redirectTo.mockResolvedValueOnce(undefined)
+    renderPage(BindPage)
+
+    await taroHarness.showCallbacks[0]()
+    await flushPromises()
+
+    expect(taroHarness.taroMock.login).not.toHaveBeenCalled()
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(getPatientAppToken()).toBe('preserved-real-token')
+    expect(session.isDemoSession()).toBe(true)
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({ url: '/pages/home/index' })
   })
 
   it('应用演示生命周期保持演示状态并隔离真实上传恢复', async () => {
@@ -3332,6 +4143,28 @@ describe('审核演示模式', () => {
     expect(taroHarness.storage.get(PENDING_SHOULDER_PRESS_SESSION_KEY)).toEqual(manifest)
   })
 
+  it('示范视频刷新失败不触碰摄像上下文、录像、上传或本地会话', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises(20)
+    page.rerender()
+    const requestsBeforeRefresh = publicRequestMock.mock.calls.length
+    publicRequestMock.mockRejectedValueOnce(new Error('manifest unavailable'))
+
+    const refresh = findTrainingOverlay(page.element).props.onVideoError
+    if (!refresh) throw new Error('示范视频刷新回调缺失')
+    await expect(refresh()).rejects.toThrow('示范视频暂时无法播放')
+    await flushPromises(20)
+
+    expect(publicRequestMock.mock.calls.length).toBe(requestsBeforeRefresh + 1)
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(recorderHarness.instances).toHaveLength(0)
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(taroHarness.storage.has(PENDING_SHOULDER_PRESS_SESSION_KEY)).toBe(false)
+  })
+
   it('演示首页隔离真实缓存与上传副作用并从首个游戏开始训练', async () => {
     session.startDemoSession()
     writeCurrentPrescriptionCache(PRESCRIPTION)
@@ -3342,7 +4175,7 @@ describe('审核演示模式', () => {
     page.rerender()
 
     expect(textContent(page.element)).toContain('演示模式，仅供功能体验，数据不会保存。')
-    expect(textContent(page.element)).toContain('体验运动计划中的全部游戏功能。')
+    expect(textContent(page.element)).toContain('体验运动计划中的全部功能。')
     expect(textContent(page.element)).not.toContain('历史记录')
     expect(textContent(page.element)).toContain('用户01')
     expect(textContent(page.element)).toContain('功能展示')
@@ -3367,7 +4200,7 @@ describe('审核演示模式', () => {
     })
   })
 
-  it('演示运动计划隔离真实缓存与上传副作用并路由到六个游戏', async () => {
+  it('演示运动计划隔离真实副作用并路由到六个游戏和五个运动动作', async () => {
     session.startDemoSession()
     writeCurrentPrescriptionCache(PRESCRIPTION)
 
@@ -3383,10 +4216,16 @@ describe('审核演示模式', () => {
       element.type === 'Button' && textContent(element).includes('开始游戏')
     ))
     expect(gameButtons).toHaveLength(6)
+    const motionButtons = findAll(page.element, (element) => (
+      element.type === 'Button' && textContent(element).includes('开始跟练')
+    ))
+    expect(motionButtons).toHaveLength(5)
     expect(textContent(page.element)).not.toContain('查看历史')
     expect(textContent(page.element)).not.toContain('最近：')
     expect(textContent(page.element)).not.toContain('待补传')
-    expect(textContent(page.element)).not.toContain('肩部推举')
+    DEMO_MOTION_ACTION_CASES.forEach(({ name }) => {
+      expect(textContent(page.element)).toContain(name)
+    })
     expect(requestMock).not.toHaveBeenCalled()
     expect(retryMocks.loadPendingGameUpload).not.toHaveBeenCalled()
     expect(retryMocks.subscribePendingGameUploadRetryLoop).not.toHaveBeenCalled()
@@ -3405,6 +4244,221 @@ describe('审核演示模式', () => {
         url: `/pages/game-session/index?actionId=${actionIds[index]}`
       })
     }
+
+    for (const [index, button] of motionButtons.entries()) {
+      taroHarness.taroMock.navigateTo.mockClear()
+      button.props.onClick?.()
+      expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+        url: `/pages/motion-training/index?actionId=${DEMO_MOTION_ACTION_CASES[index].id}`
+      })
+    }
+  })
+
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 沿用说明页并保留动作预览入口',
+    async ({ id, name, instruction }) => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = String(id)
+
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain(name)
+    expect(textContent(page.element)).toContain(instruction)
+    expect(textContent(page.element)).not.toContain('动作已失效')
+
+    clickButtonByText(page.element, '动作预览')
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: `/pages/motion-training/preview?actionId=${id}`
+    })
+
+    taroHarness.taroMock.navigateTo.mockClear()
+    clickButtonByText(page.element, '开始训练')
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: `/pages/motion-training/camera?actionId=${id}`
+    })
+    }
+  )
+
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 从审核清单播放预览并进入摄像头',
+    async ({ id, videoUrl }) => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = String(id)
+
+    const page = renderPage(ShoulderPressPreviewPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(findFirstByType(page.element, 'Video').props).toMatchObject({
+      src: videoUrl,
+      autoplay: true,
+      loop: true,
+      muted: true,
+      controls: false
+    })
+    clickButtonByText(page.element, '开始训练')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
+      url: `/pages/motion-training/camera?actionId=${id}`
+    })
+    }
+  )
+
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 只预览摄像头并开始 10 分钟本地计时',
+    async ({ id, videoUrl }) => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = String(id)
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+
+    expect(requestMock).not.toHaveBeenCalled()
+    expect(findFirstByType(page.element, 'Camera').props).toMatchObject({
+      devicePosition: 'front',
+      flash: 'off',
+      mode: 'normal'
+    })
+
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+
+    expect(findTrainingOverlay(page.element).props).toMatchObject({
+      elapsedMs: 0,
+      expectedDurationSeconds: 600,
+      started: true,
+      videoUrl
+    })
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalledWith(
+      PENDING_SHOULDER_PRESS_SESSION_KEY,
+      expect.anything()
+    )
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(DEMO_MOTION_ACTION_CASES)(
+    '演示动作 $name 提前结束后只显示本地完成状态',
+    async ({ id }) => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = String(id)
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+    clickButtonByText(page.element, '提前结束')
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('体验完成')
+    expect(textContent(page.element)).toContain('本次演示不保存')
+    expect(taroHarness.taroMock.showModal).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.reLaunch).not.toHaveBeenCalledWith({
+      url: '/pages/motion-training/upload'
+    })
+
+    clickButtonByText(page.element, '返回运动计划')
+    expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
+      url: '/pages/prescription/index'
+    })
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalledWith(
+      PENDING_SHOULDER_PRESS_SESSION_KEY,
+      expect.anything()
+    )
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(apiMocks.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(apiMocks.finalizeVideoSession).not.toHaveBeenCalled()
+    }
+  )
+
+  it('演示肩部推举在本地计时满十分钟后自动完成', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+    vi.useFakeTimers()
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+
+    await vi.advanceTimersByTimeAsync(600_000)
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('体验完成')
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(600_000)
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+  })
+
+  it('演示肩部推举切到后台时暂停计时并在返回后继续', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+    vi.useFakeTimers()
+    vi.setSystemTime(1787184000000)
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    initializeCamera(page.element)
+    page.rerender()
+    clickButtonByText(page.element, '开始训练')
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(10_000)
+    page.rerender()
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(10_000)
+
+    const hide = taroHarness.hideCallbacks.at(-1)
+    const show = taroHarness.showCallbacks.at(-1)
+    expect(typeof hide).toBe('function')
+    expect(typeof show).toBe('function')
+    if (!hide || !show) return
+
+    await hide()
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(590_000)
+    page.rerender()
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(10_000)
+    expect(textContent(page.element)).not.toContain('体验完成')
+
+    await show()
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(590_000)
+    page.rerender()
+    expect(findTrainingOverlay(page.element).props.elapsedMs).toBe(600_000)
+    expect(textContent(page.element)).toContain('体验完成')
+  })
+
+  it('演示肩部推举在摄像头授权失败时引导打开设置', async () => {
+    session.startDemoSession()
+    taroHarness.routerParams.actionId = '888807'
+
+    const page = renderPage(ShoulderPressCameraPage)
+    await flushPromises()
+    page.rerender()
+    findFirstByType(page.element, 'Camera').props.onError?.()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('请开启摄像头权限')
+    expect(findButtonByText(page.element, '开始训练').props.disabled).toBe(true)
+    clickButtonByText(page.element, '打开设置')
+    expect(taroHarness.taroMock.openSetting).toHaveBeenCalledTimes(1)
   })
 
   it.each(expectedGames)('演示游戏 $name 能从本地运动计划加载', async ({ actionId, name }) => {

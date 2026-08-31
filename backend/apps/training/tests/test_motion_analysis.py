@@ -8,15 +8,28 @@ from unittest.mock import Mock, patch
 
 import pytest
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.test import override_settings
 from django.utils import timezone
 
 from apps.prescriptions.models import ActionLibraryItem
 from apps.training import tasks as training_tasks
 from apps.training.analysis import analyze_shoulder_press_keypoints
+from apps.training.analysis_registry import MotionAnalyzer
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
+from apps.training.pose_inference import PP_TINYPOSE_MODEL_NAME
 from apps.training.tasks import download_private_video, run_motion_analysis_job
 from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY, create_analysis_job
+
+
+OFFICIAL_MOTION_SOURCE_KEYS = (
+    "motion-aerobic-high-knee",
+    "motion-balance-sit-stand",
+    "motion-resistance-leg-kickback",
+    "motion-resistance-row",
+    SHOULDER_PRESS_SOURCE_KEY,
+)
+UNSUPPORTED_ANALYSIS_SOURCE_KEYS = OFFICIAL_MOTION_SOURCE_KEYS[:-1]
 
 
 def _frame(
@@ -333,6 +346,76 @@ def _analysis_job(project_patient, active_prescription):
     return job, video, record
 
 
+@pytest.mark.parametrize(
+    "source_key, expected_available",
+    [
+        ("motion-aerobic-high-knee", False),
+        ("motion-balance-sit-stand", False),
+        ("motion-resistance-leg-kickback", False),
+        ("motion-resistance-row", False),
+        (SHOULDER_PRESS_SOURCE_KEY, True),
+        (None, False),
+    ],
+)
+def test_motion_analysis_registry_only_exposes_shoulder_press(
+    source_key,
+    expected_available,
+):
+    from apps.training.analysis_registry import analysis_available, get_motion_analyzer
+
+    analyzer = get_motion_analyzer(source_key)
+
+    assert analysis_available(source_key) is expected_available
+    if expected_available:
+        assert analyzer is not None
+        assert analyzer.source_key == SHOULDER_PRESS_SOURCE_KEY
+        assert analyzer.algorithm_version == PP_TINYPOSE_MODEL_NAME
+        assert analyzer.analyze_keypoints is analyze_shoulder_press_keypoints
+    else:
+        assert analyzer is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("source_key", UNSUPPORTED_ANALYSIS_SOURCE_KEYS)
+def test_create_analysis_job_rejects_motion_without_registered_analyzer(
+    source_key,
+    project_patient,
+    active_prescription,
+):
+    item = ActionLibraryItem.objects.get(source_key=source_key)
+    action = active_prescription.add_action_snapshot(
+        item,
+        weekly_frequency="2 次/周",
+        weekly_target_count=2,
+        duration_minutes=2,
+    )
+    record = TrainingRecord.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_date=timezone.localdate(),
+        status=TrainingRecord.Status.COMPLETED,
+        actual_duration_minutes=2,
+    )
+    video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_record=record,
+        bucket="motioncare-training",
+        object_key=f"training-videos/{project_patient.id}/{uuid.uuid4().hex}.mp4",
+        object_hash="hash-a",
+        content_type="video/mp4",
+        size_bytes=1024,
+        duration_seconds=120,
+        status=TrainingVideo.Status.ATTACHED,
+        uploaded_at=timezone.now(),
+    )
+
+    with pytest.raises(ValidationError, match="不支持当前动作分析"):
+        create_analysis_job(video=video, requested_by=None)
+
+
 class _DownloadResponse(io.BytesIO):
     def __init__(self, content, *, headers=None, socket_timeout=None):
         super().__init__(content)
@@ -589,8 +672,12 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
             side_effect=fake_extract,
         ),
         patch(
-            "apps.training.tasks.analyze_shoulder_press_keypoints",
-            return_value=result_payload,
+            "apps.training.tasks.get_motion_analyzer",
+            return_value=MotionAnalyzer(
+                source_key=SHOULDER_PRESS_SOURCE_KEY,
+                algorithm_version="test-analyzer-v1",
+                analyze_keypoints=Mock(return_value=result_payload),
+            ),
         ),
     ):
         returned = run_motion_analysis_job.run(job.id)
@@ -606,6 +693,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     assert job.standard_count == 1
     assert job.nonstandard_count == 1
     assert job.result_payload == result_payload
+    assert job.algorithm_version == "test-analyzer-v1"
     assert job.failure_reason == ""
     assert seen_paths and all(not os.path.exists(path) for path in seen_paths)
     assert video.status == TrainingVideo.Status.ATTACHED
@@ -840,8 +928,12 @@ def test_old_worker_success_does_not_overwrite_recovered_failure(
             return_value=[{"timestamp_ms": 0, "keypoints": {}}],
         ),
         patch(
-            "apps.training.tasks.analyze_shoulder_press_keypoints",
-            side_effect=recover_during_analysis,
+            "apps.training.tasks.get_motion_analyzer",
+            return_value=MotionAnalyzer(
+                source_key=SHOULDER_PRESS_SOURCE_KEY,
+                algorithm_version="test-analyzer-v1",
+                analyze_keypoints=recover_during_analysis,
+            ),
         ),
     ):
         run_motion_analysis_job.run(job.id)

@@ -67,39 +67,75 @@ def test_segmented_training_video_models(
 
 
 @pytest.mark.django_db
-def test_training_video_session_accepts_2400_seconds_and_rejects_2401(
+def test_training_video_session_accepts_1800_seconds_and_rejects_1801(
     project_patient,
     active_prescription,
     monkeypatch,
+    settings,
 ):
     action = active_prescription.add_action_snapshot(
         ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press"),
         weekly_frequency="2 次/周",
         weekly_target_count=2,
-        duration_minutes=40,
+        duration_minutes=30,
     )
     monkeypatch.setattr(
         "apps.training.video_services._ensure_staging_available",
         lambda: None,
     )
+    settings.TRAINING_VIDEO_MAX_DURATION_SECONDS = 2_400
 
     accepted, created = create_training_video_session(
         project_patient=project_patient,
         client_session_id=uuid.uuid4(),
         prescription_action_id=action.id,
         training_date=timezone.localdate(),
-        expected_duration_seconds=2400,
+        expected_duration_seconds=1800,
         training_started_at=datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC),
     )
 
     assert created is True
-    assert accepted.expected_duration_seconds == 2400
+    assert accepted.expected_duration_seconds == 1800
     with pytest.raises(ValidationError, match="时长超过限制"):
         create_training_video_session(
             project_patient=project_patient,
             client_session_id=uuid.uuid4(),
             prescription_action_id=action.id,
             training_date=timezone.localdate(),
-            expected_duration_seconds=2401,
+            expected_duration_seconds=1801,
             training_started_at=datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC),
         )
+
+
+@pytest.mark.django_db
+def test_existing_legacy_2400_second_session_remains_idempotently_addressable(
+    project_patient,
+    active_prescription,
+):
+    action = active_prescription.add_action_snapshot(
+        ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press"),
+        duration_minutes=30,
+    )
+    client_session_id = uuid.uuid4()
+    started_at = datetime(2026, 7, 11, 1, 32, 14, tzinfo=UTC)
+    existing = TrainingVideo.objects.create(
+        client_session_id=client_session_id,
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        training_date=started_at.date(),
+        expected_duration_seconds=2_400,
+        training_started_at=started_at,
+    )
+
+    returned, created = create_training_video_session(
+        project_patient=project_patient,
+        client_session_id=client_session_id,
+        prescription_action_id=action.id,
+        training_date=started_at.date(),
+        expected_duration_seconds=2_400,
+        training_started_at=started_at,
+    )
+
+    assert created is False
+    assert returned.id == existing.id

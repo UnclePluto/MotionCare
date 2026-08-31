@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -220,6 +220,7 @@ const trackingDetail = {
       prescription_action: 1000,
       action_name: "肩部推举",
       action_source_key: "motion-resistance-shoulder-press",
+      analysis_available: true,
       internal_type: "motion",
       action_type: "抗阻训练",
       status: "completed",
@@ -251,6 +252,7 @@ const trackingDetail = {
       prescription_action: 1001,
       action_name: "坐站转移训练",
       action_source_key: "motion-balance-sit-stand",
+      analysis_available: false,
       internal_type: "game",
       action_type: "认知训练",
       status: "completed",
@@ -282,6 +284,7 @@ const trackingDetail = {
       prescription_action: 1002,
       action_name: "旧游戏记录",
       action_source_key: null,
+      analysis_available: false,
       internal_type: "game",
       action_type: "认知训练",
       status: "completed",
@@ -313,6 +316,7 @@ const trackingDetail = {
       prescription_action: 1003,
       action_name: "坐站训练",
       action_source_key: "motion-balance-sit-stand",
+      analysis_available: false,
       internal_type: "motion",
       action_type: "下肢训练",
       status: "completed",
@@ -328,7 +332,7 @@ const trackingDetail = {
       game_total_retry_count: 88,
       note: "非游戏记录",
       video_id: 8102,
-      video_status: "attached",
+      video_status: "failed",
       training_started_at: null,
       training_ended_at: null,
       latest_analysis_status: null,
@@ -548,15 +552,42 @@ describe("TrainingTrackingDetailPage", () => {
     expect(screen.getAllByRole("button", { name: "动作分析" })).toHaveLength(1);
   });
 
-  it("使用稳定 source_key 判断肩推视频入口而不是动作显示名", async () => {
-    const renamedDetail = cloneTrackingDetail();
-    renamedDetail.recent_records[0].action_name = "肩推训练改名";
-    renamedDetail.recent_records[0].action_source_key = "motion-resistance-shoulder-press";
-    renamedDetail.recent_records[3].action_name = "肩部推举";
-    renamedDetail.recent_records[3].action_source_key = "motion-balance-sit-stand";
+  it("按后端分析能力展示入口而不依赖动作 source key", async () => {
+    const detailWithConfiguredAnalysis = cloneTrackingDetail();
+    detailWithConfiguredAnalysis.recent_records[0].analysis_available = false;
+    detailWithConfiguredAnalysis.recent_records[3].analysis_available = true;
+    detailWithConfiguredAnalysis.recent_records[3].video_status = "attached";
     mockGet.mockImplementation((url: string) => {
       if (url === "/training/tracking/patients/201/") {
-        return Promise.resolve({ data: renamedDetail });
+        return Promise.resolve({ data: detailWithConfiguredAnalysis });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    const recentRecordsCard = screen.getByText("最近训练记录").closest(".ant-card");
+
+    expect(recentRecordsCard).not.toBeNull();
+    const shoulderPressRow = within(recentRecordsCard!).getByText("肩部推举").closest("tr");
+    const sitStandRow = within(recentRecordsCard!).getByText("坐站训练").closest("tr");
+
+    expect(shoulderPressRow).not.toBeNull();
+    expect(sitStandRow).not.toBeNull();
+    expect(within(shoulderPressRow!).queryByRole("button", { name: "动作分析" })).not.toBeInTheDocument();
+    expect(within(sitStandRow!).getByRole("button", { name: "动作分析" })).toBeInTheDocument();
+  });
+
+  it("已上传视频入口不依赖动作 source key", async () => {
+    const attachedVideoDetail = cloneTrackingDetail();
+    attachedVideoDetail.recent_records[0].action_name = "训练录像已上传";
+    attachedVideoDetail.recent_records[0].action_source_key = null;
+    attachedVideoDetail.recent_records[3].action_name = "肩部推举";
+    attachedVideoDetail.recent_records[3].action_source_key = "motion-resistance-shoulder-press";
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        return Promise.resolve({ data: attachedVideoDetail });
       }
       if (url === "/training/videos/8101/download-url/") {
         return Promise.resolve({ data: { url: "https://signed.example.com/video.mp4?token=secret" } });
@@ -569,7 +600,7 @@ describe("TrainingTrackingDetailPage", () => {
 
     renderAt("/training-tracking/patients/201");
 
-    expect(await screen.findByText("肩推训练改名")).toBeInTheDocument();
+    expect(await screen.findByText("训练录像已上传")).toBeInTheDocument();
     expect(screen.getAllByText("肩部推举").length).toBeGreaterThan(0);
     expect(screen.getAllByRole("button", { name: "播放训练视频" })).toHaveLength(1);
 

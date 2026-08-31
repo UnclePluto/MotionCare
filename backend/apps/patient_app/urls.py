@@ -4,6 +4,7 @@ from .views import (
     PatientAppActionHistoryView,
     PatientAppBindView,
     PatientAppCurrentPrescriptionView,
+    DemoMotionVideoManifestView,
     PatientAppHomeView,
     PatientAppMeView,
     PatientAppTrainingRecordView,
@@ -11,10 +12,21 @@ from .views import (
     PatientAppTrainingVideoSegmentView,
     PatientAppTrainingVideoSessionView,
     PatientAppTrainingVideoStatusView,
+    PatientAppWechatSessionView,
 )
 
 urlpatterns = [
+    path(
+        "wechat-session/",
+        PatientAppWechatSessionView.as_view(),
+        name="patient-app-wechat-session",
+    ),
     path("bind/", PatientAppBindView.as_view(), name="patient-app-bind"),
+    path(
+        "demo-motion-videos/",
+        DemoMotionVideoManifestView.as_view(),
+        name="patient-app-demo-motion-videos",
+    ),
     path("me/", PatientAppMeView.as_view(), name="patient-app-me"),
     path("home/", PatientAppHomeView.as_view(), name="patient-app-home"),
     path(

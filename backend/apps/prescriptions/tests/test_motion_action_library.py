@@ -1,8 +1,14 @@
 import importlib
 
 import pytest
+from django.apps import apps as django_apps
 
+from apps.prescriptions.action_library import (
+    MOTION_ACTION_VIDEO_OBJECT_KEYS,
+    OFFICIAL_MOTION_ACTION_SOURCE_KEYS,
+)
 from apps.prescriptions.models import ActionLibraryItem
+from apps.prescriptions.motion_videos import MotionVideoResolution
 
 
 def test_reverse_instruction_split_handles_leading_key_points_only():
@@ -20,6 +26,68 @@ def test_reverse_instruction_split_handles_leading_key_points_only():
     )
     assert migration.split_instruction_text_for_reverse("步骤一。") == ("步骤一。", "")
     assert migration.split_instruction_text_for_reverse("") == ("", "")
+
+
+def test_official_motion_video_catalog_is_complete():
+    assert OFFICIAL_MOTION_ACTION_SOURCE_KEYS == frozenset(
+        MOTION_ACTION_VIDEO_OBJECT_KEYS
+    )
+    assert set(MOTION_ACTION_VIDEO_OBJECT_KEYS.values()) == {
+        f"motion-action-videos/v1/{source_key}.mp4"
+        for source_key in OFFICIAL_MOTION_ACTION_SOURCE_KEYS
+    }
+
+
+@pytest.mark.django_db
+def test_prescription_snapshot_copies_motion_video_object_key(project_patient, doctor):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    action.video_object_key = MOTION_ACTION_VIDEO_OBJECT_KEYS[action.source_key]
+    action.save(update_fields=["video_object_key", "updated_at"])
+    prescription = project_patient.prescriptions.create(version=19, opened_by=doctor)
+
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
+
+    assert snapshot.video_object_key_snapshot == action.video_object_key
+
+
+@pytest.mark.django_db
+def test_data_migration_replays_frozen_v1_keys_when_runtime_catalog_changes(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
+    action.video_url = "https://old.example.com/shoulder.mp4"
+    action.video_object_key = ""
+    action.save()
+    active = project_patient.prescriptions.create(version=20, opened_by=doctor)
+    archived = project_patient.prescriptions.create(version=21, opened_by=doctor)
+    active_action = active.add_action_snapshot(action, duration_minutes=10)
+    archived_action = archived.add_action_snapshot(action, duration_minutes=10)
+
+    migration = importlib.import_module(
+        "apps.prescriptions.migrations.0012_motion_action_video_object_keys"
+    )
+    monkeypatch.setitem(
+        MOTION_ACTION_VIDEO_OBJECT_KEYS,
+        action.source_key,
+        "motion-action-videos/v2/runtime-only.mp4",
+    )
+    migration.backfill_motion_action_video_keys(django_apps, None)
+
+    action.refresh_from_db()
+    active_action.refresh_from_db()
+    archived_action.refresh_from_db()
+    expected = (
+        "motion-action-videos/v1/"
+        "motion-resistance-shoulder-press.mp4"
+    )
+    assert action.video_object_key == expected
+    assert action.video_url == ""
+    assert active_action.video_object_key_snapshot == expected
+    assert archived_action.video_object_key_snapshot == expected
+    assert active_action.video_url_snapshot == ""
+    assert archived_action.video_url_snapshot == ""
 
 
 @pytest.mark.django_db
@@ -96,6 +164,75 @@ def test_action_library_endpoint_uses_motion_fields(client, doctor):
     assert "parameter_mode" not in first
     assert "execution_description" not in first
     assert "key_points" not in first
+
+
+@pytest.mark.django_db
+def test_doctor_action_serializers_return_signed_urls_and_configuration(
+    client, doctor, project_patient, monkeypatch
+):
+    client.force_login(doctor)
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    prescription = project_patient.prescriptions.create(version=18, opened_by=doctor)
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
+    monkeypatch.setattr(
+        "apps.prescriptions.serializers.resolve_motion_video_url",
+        lambda *args, **kwargs: MotionVideoResolution(
+            url="https://signed.example.com/row.mp4", unavailable=False
+        ),
+        raising=False,
+    )
+
+    action_response = client.get("/api/prescriptions/actions/")
+    prescription_response = client.get("/api/prescriptions/prescription-actions/")
+
+    assert action_response.status_code == 200
+    action_row = next(
+        row
+        for row in action_response.json()
+        if row["source_key"] == "motion-resistance-row"
+    )
+    assert action_row["video_url"] == "https://signed.example.com/row.mp4"
+    assert action_row["video_configured"] is True
+    assert prescription_response.status_code == 200
+    snapshot_row = next(
+        row for row in prescription_response.json() if row["id"] == snapshot.id
+    )
+    assert snapshot_row["video_url_snapshot"] == "https://signed.example.com/row.mp4"
+
+
+@pytest.mark.django_db
+def test_doctor_action_serializers_degrade_when_video_signing_raises(
+    client, doctor, project_patient, monkeypatch
+):
+    client.force_login(doctor)
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    prescription = project_patient.prescriptions.create(version=17, opened_by=doctor)
+    snapshot = prescription.add_action_snapshot(action, duration_minutes=10)
+
+    def raise_signing_error(*args, **kwargs):
+        raise RuntimeError("签名服务不可用")
+
+    monkeypatch.setattr(
+        "apps.prescriptions.serializers.resolve_motion_video_url",
+        raise_signing_error,
+    )
+
+    action_response = client.get("/api/prescriptions/actions/")
+    prescription_response = client.get("/api/prescriptions/prescription-actions/")
+
+    assert action_response.status_code == 200
+    action_row = next(
+        row
+        for row in action_response.json()
+        if row["source_key"] == "motion-resistance-row"
+    )
+    assert action_row["video_url"] == ""
+    assert action_row["video_configured"] is True
+    assert prescription_response.status_code == 200
+    snapshot_row = next(
+        row for row in prescription_response.json() if row["id"] == snapshot.id
+    )
+    assert snapshot_row["video_url_snapshot"] == ""
 
 
 @pytest.mark.django_db

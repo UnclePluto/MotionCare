@@ -234,7 +234,7 @@ def test_process_job_attaches_one_historical_training_record_after_upload(
 
 
 @pytest.mark.django_db
-def test_process_job_assembles_480_ordered_segments_once(
+def test_process_job_assembles_360_ordered_segments_once(
     project_patient,
     active_prescription,
     tmp_path,
@@ -248,11 +248,11 @@ def test_process_job_assembles_480_ordered_segments_once(
         project_patient,
         active_prescription,
         tmp_path,
-        duration=2_400,
-        segment_count=480,
+        duration=1_800,
+        segment_count=360,
         segment_duration_ms=5_000,
     )
-    result = _assembly_result(video, duration=2_400)
+    result = _assembly_result(video, duration=1_800)
     assemble = Mock(return_value=result)
     upload = Mock(return_value=_remote_metadata(result))
     cleanup_delay = Mock()
@@ -267,10 +267,10 @@ def test_process_job_assembles_480_ordered_segments_once(
         first = module.process_video_assembly_job(job.id)
         second = module.process_video_assembly_job(job.id)
 
-    expected_paths = [segment_path(video, index) for index in range(480)]
+    expected_paths = [segment_path(video, index) for index in range(360)]
     assert assemble.call_args.args[0] == expected_paths
     assert TrainingRecord.objects.count() == 1
-    assert TrainingRecord.objects.get().actual_duration_minutes == 40
+    assert TrainingRecord.objects.get().actual_duration_minutes == 30
     job.refresh_from_db()
     assert first.id == second.id == job.id
     assert job.status == VideoAssemblyJob.Status.SUCCEEDED
@@ -278,6 +278,137 @@ def test_process_job_assembles_480_ordered_segments_once(
     upload.assert_called_once()
     cleanup_delay.assert_called_once_with(job.id)
     tombstone_delay.assert_called_once()
+
+
+@pytest.mark.django_db
+def test_oversized_assembly_result_enters_existing_failure_flow_without_upload(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.TRAINING_VIDEO_MAX_SIZE_BYTES = 536_870_912
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    result = _assembly_result(video, duration=60.0)
+    result = AssemblyResult(
+        output_path=result.output_path,
+        probe=result.probe,
+        size_bytes=536_870_913,
+        transcoded=False,
+    )
+    module = _video_tasks()
+    assemble = Mock(return_value=result)
+    upload = Mock()
+    retry = Mock(side_effect=Retry())
+    monkeypatch.setattr(module, "assemble_video", assemble)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
+    monkeypatch.setattr(module.run_video_assembly_job, "retry", retry)
+
+    with pytest.raises(Retry):
+        module.run_video_assembly_job.run(job.id)
+    with pytest.raises(Retry):
+        module.run_video_assembly_job.run(job.id)
+    final = module.run_video_assembly_job.run(job.id)
+
+    job.refresh_from_db()
+    video.refresh_from_db()
+    assert final == {"job_id": job.id, "status": VideoAssemblyJob.Status.FAILED}
+    assert job.status == VideoAssemblyJob.Status.FAILED
+    assert video.status == TrainingVideo.Status.FAILED
+    assert video.size_bytes == 0
+    assert upload.call_count == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("declared_duration", "segment_duration_ms", "probed_duration"),
+    [
+        (1_800, 5_000, 1_800.001),
+        (60, 30_000, 65.001),
+    ],
+)
+def test_invalid_assembled_duration_enters_failure_flow_without_remote_upload(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+    declared_duration,
+    segment_duration_ms,
+    probed_duration,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    segment_count = 360 if declared_duration == 1_800 else 2
+    video, job = _pending_job(
+        project_patient,
+        active_prescription,
+        tmp_path,
+        duration=declared_duration,
+        segment_count=segment_count,
+        segment_duration_ms=segment_duration_ms,
+    )
+    result = _assembly_result(video, duration=probed_duration)
+    module = _video_tasks()
+    assemble = Mock(return_value=result)
+    upload = Mock()
+    retry = Mock(side_effect=Retry())
+    monkeypatch.setattr(module, "assemble_video", assemble)
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
+    monkeypatch.setattr(module.run_video_assembly_job, "retry", retry)
+
+    with pytest.raises(Retry):
+        module.run_video_assembly_job.run(job.id)
+    with pytest.raises(Retry):
+        module.run_video_assembly_job.run(job.id)
+    final = module.run_video_assembly_job.run(job.id)
+
+    job.refresh_from_db()
+    video.refresh_from_db()
+    assert final == {"job_id": job.id, "status": VideoAssemblyJob.Status.FAILED}
+    assert job.status == VideoAssemblyJob.Status.FAILED
+    assert video.status == TrainingVideo.Status.FAILED
+    assert video.size_bytes == 0
+    assert video.duration_seconds == 0
+    upload.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_existing_legacy_server_session_can_assemble_media_at_hard_limit(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    video, job = _pending_job(
+        project_patient,
+        active_prescription,
+        tmp_path,
+        duration=1_800,
+        segment_count=360,
+        segment_duration_ms=5_000,
+    )
+    video.expected_duration_seconds = 2_400
+    video.save(update_fields=["expected_duration_seconds", "updated_at"])
+    result = _assembly_result(video, duration=1_800)
+    module = _video_tasks()
+    monkeypatch.setattr(module, "assemble_video", Mock(return_value=result))
+    upload = Mock(return_value=_remote_metadata(result))
+    monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
+    monkeypatch.setattr(module.cleanup_training_video_files, "delay", Mock())
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", Mock())
+
+    completed = module.process_video_assembly_job(job.id)
+
+    video.refresh_from_db()
+    assert completed.status == VideoAssemblyJob.Status.SUCCEEDED
+    assert video.status == TrainingVideo.Status.ATTACHED
+    assert video.expected_duration_seconds == 2_400
+    upload.assert_called_once()
 
 
 @pytest.mark.django_db

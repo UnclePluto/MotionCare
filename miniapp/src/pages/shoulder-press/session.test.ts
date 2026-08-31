@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY,
+  PENDING_MOTION_TRAINING_SESSION_KEY,
+  clearPendingMotionTrainingSession,
+  loadPendingMotionTrainingSession
+} from '../../features/motion-training/session'
+import {
   PENDING_SHOULDER_PRESS_SESSION_KEY,
   appendUploadableShoulderPressSegment,
   appendPendingSegment,
@@ -34,12 +40,12 @@ function memoryStorage(initial?: unknown) {
 
 describe('shoulder press segmented session helpers', () => {
   it('builds session, preview, and upload urls', () => {
-    expect(buildShoulderPressSessionUrl(42)).toBe('/pages/shoulder-press/index?actionId=42')
-    expect(buildShoulderPressCameraUrl(42)).toBe('/pages/shoulder-press/camera?actionId=42')
+    expect(buildShoulderPressSessionUrl(42)).toBe('/pages/motion-training/index?actionId=42')
+    expect(buildShoulderPressCameraUrl(42)).toBe('/pages/motion-training/camera?actionId=42')
     expect(buildShoulderPressPreviewUrl(42)).toBe(
-      '/pages/shoulder-press/preview?actionId=42'
+      '/pages/motion-training/preview?actionId=42'
     )
-    expect(buildShoulderPressUploadUrl()).toBe('/pages/shoulder-press/upload')
+    expect(buildShoulderPressUploadUrl()).toBe('/pages/motion-training/upload')
   })
 
   it('formats the phone instant with an explicit local offset', () => {
@@ -266,10 +272,10 @@ describe('shoulder press segmented session helpers', () => {
     expect(updated.actualDurationMs).toBe(15_001)
   })
 
-  it('allows 2400 seconds and rejects a manifest duration above 2400000ms', () => {
+  it('allows 1800 seconds and rejects a manifest duration above 1800000ms', () => {
     const session = createPendingShoulderPressSession({
       actionId: 42,
-      expectedDurationSeconds: 2400,
+      expectedDurationSeconds: 1800,
       trainingDate: '2026-07-11',
       clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
       createdAt: 1783692000000
@@ -277,15 +283,15 @@ describe('shoulder press segmented session helpers', () => {
 
     const full = appendUploadableShoulderPressSegment(session, {
       filePath: 'wxfile://temp/raw-0.mp4',
-      durationMs: 2_400_000,
+      durationMs: 1_800_000,
       sizeBytes: 1,
       localFileState: 'temporary'
     })
 
-    expect(full.actualDurationMs).toBe(2_400_000)
+    expect(full.actualDurationMs).toBe(1_800_000)
     expect(() => appendUploadableShoulderPressSegment(session, {
       filePath: 'wxfile://temp/raw-1.mp4',
-      durationMs: 2_400_001,
+      durationMs: 1_800_001,
       sizeBytes: 1,
       localFileState: 'temporary'
     })).toThrow('录像总时长超过限制')
@@ -561,5 +567,30 @@ describe('shoulder press segmented session helpers', () => {
     clearPendingShoulderPressSession(storage)
 
     expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_SHOULDER_PRESS_SESSION_KEY)
+  })
+
+  it('migrates the old shoulder session without deleting it early', () => {
+    const storage = memoryStorage()
+    const pendingSession = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 180,
+      trainingDate: '2026-08-20',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1787193600000
+    })
+    storage.setStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY, pendingSession)
+
+    expect(loadPendingMotionTrainingSession(storage)).toMatchObject({ actionId: 42 })
+    expect(storage.getStorageSync(PENDING_MOTION_TRAINING_SESSION_KEY)).toMatchObject({ actionId: 42 })
+    expect(storage.getStorageSync(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)).toMatchObject({ actionId: 42 })
+  })
+
+  it('clears both session keys after a completed or abandoned motion training session', () => {
+    const storage = memoryStorage()
+
+    clearPendingMotionTrainingSession(storage)
+
+    expect(storage.removeStorageSync).toHaveBeenCalledWith(PENDING_MOTION_TRAINING_SESSION_KEY)
+    expect(storage.removeStorageSync).toHaveBeenCalledWith(LEGACY_PENDING_SHOULDER_PRESS_SESSION_KEY)
   })
 })

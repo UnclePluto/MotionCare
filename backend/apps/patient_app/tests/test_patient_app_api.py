@@ -1,10 +1,60 @@
 import pytest
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from apps.patient_app.services import bind_project_patient_with_code, create_binding_code
+from apps.patient_app.models import PatientAppSession, PatientAppWechatBinding
+from apps.patient_app.throttles import (
+    DemoMotionVideoRateThrottle,
+    PatientAppBindRateThrottle,
+    PatientAppWechatSessionRateThrottle,
+)
+from apps.patient_app.services import (
+    PatientAppBindingConflict,
+    bind_project_patient_with_code,
+    create_binding_code,
+    hash_patient_app_token,
+)
+from apps.patient_app.wechat_identity import (
+    WechatIdentityUnavailable,
+    WechatLoginCodeInvalid,
+)
 from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.prescriptions.motion_videos import MotionVideoResolution
 from apps.training.models import TrainingRecord
+
+
+OFFICIAL_MOTION_SOURCE_KEYS = (
+    "motion-aerobic-high-knee",
+    "motion-balance-sit-stand",
+    "motion-resistance-leg-kickback",
+    "motion-resistance-row",
+    "motion-resistance-shoulder-press",
+)
+
+
+class _IsolatedDemoManifestRedis:
+    def __init__(self):
+        self.count = 0
+
+    def eval(self, *_args):
+        self.count += 1
+        return self.count
+
+
+@pytest.fixture(autouse=True)
+def isolate_demo_manifest_rate_limit(monkeypatch):
+    redis = _IsolatedDemoManifestRedis()
+    for throttle_class in (
+        DemoMotionVideoRateThrottle,
+        PatientAppWechatSessionRateThrottle,
+        PatientAppBindRateThrottle,
+    ):
+        monkeypatch.setattr(
+            throttle_class,
+            "redis_client_factory",
+            staticmethod(lambda _url, redis=redis: redis),
+        )
 
 
 def _auth_client(project_patient, doctor):
@@ -27,13 +77,18 @@ def _game_prescription_action(active_prescription):
 
 
 @pytest.mark.django_db
-def test_bind_api_returns_token_and_bound_identity(project_patient, doctor):
+def test_bind_api_returns_token_and_bound_identity(project_patient, doctor, monkeypatch):
     code, _ = create_binding_code(project_patient=project_patient, created_by=doctor)
     client = APIClient()
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
 
     response = client.post(
         "/api/patient-app/bind/",
-        {"code": code, "wx_openid": "openid-a"},
+        {"code": code, "wx_code": "wx-code"},
         format="json",
     )
 
@@ -44,19 +99,243 @@ def test_bind_api_returns_token_and_bound_identity(project_patient, doctor):
     assert response.data["project"]["name"] == project_patient.project.name
 
 
+@pytest.mark.django_db
+def test_wechat_session_returns_authenticated_and_new_token_for_bound_openid(
+    project_patient,
+    monkeypatch,
+):
+    PatientAppWechatBinding.objects.create(
+        project_patient=project_patient,
+        wx_openid="openid-001",
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "authenticated"
+    assert response.data["token"]
+    assert response.data["project_patient_id"] == project_patient.id
+
+
+@pytest.mark.django_db
+def test_wechat_session_returns_unbound_without_binding_or_valid_legacy_token(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.json() == {"status": "unbound"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "authorization_header",
+    [
+        "Bearer invalid-token",
+        "Bearer",
+        "Bearer invalid-token extra-part",
+        "Basic invalid-token",
+    ],
+)
+def test_wechat_session_ignores_invalid_optional_bearer_and_still_restores_openid(
+    project_patient,
+    monkeypatch,
+    authorization_header,
+):
+    PatientAppWechatBinding.objects.create(
+        project_patient=project_patient,
+        wx_openid="openid-001",
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=authorization_header)
+
+    response = client.post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.status_code != 401
+    assert response.data["status"] == "authenticated"
+
+
+@pytest.mark.django_db
+def test_wechat_session_migrates_valid_legacy_token(project_patient, monkeypatch):
+    legacy_token = "legacy-token"
+    PatientAppSession.objects.create(
+        project_patient=project_patient,
+        patient=project_patient.patient,
+        wx_openid=None,
+        token_hash=hash_patient_app_token(legacy_token),
+        expires_at=timezone.now() + timezone.timedelta(days=30),
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {legacy_token}")
+
+    response = client.post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["status"] == "authenticated"
+    assert response.data["token"] is None
+    assert PatientAppWechatBinding.objects.get(
+        project_patient=project_patient
+    ).wx_openid == "openid-001"
+
+
+@pytest.mark.django_db
+def test_bind_api_requires_wx_code_and_ignores_forged_wx_openid(
+    project_patient,
+    doctor,
+    monkeypatch,
+):
+    code, _ = create_binding_code(project_patient=project_patient, created_by=doctor)
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    client = APIClient()
+
+    missing_code_response = client.post(
+        "/api/patient-app/bind/",
+        {"code": code},
+        format="json",
+    )
+    response = client.post(
+        "/api/patient-app/bind/",
+        {
+            "code": code,
+            "wx_code": "wx-code",
+            "wx_openid": "forged-openid",
+        },
+        format="json",
+    )
+
+    assert missing_code_response.status_code == 400, missing_code_response.data
+    assert response.status_code == 200, response.data
+    assert PatientAppWechatBinding.objects.get(
+        project_patient=project_patient
+    ).wx_openid == "openid-001"
+
+
+@pytest.mark.django_db
+def test_invalid_wechat_code_returns_safe_400(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: (_ for _ in ()).throw(
+            WechatLoginCodeInvalid("wx-code=private-single-use-code")
+        ),
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "private-single-use-code"},
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert response.json() == {"detail": "微信登录凭证无效，请重试"}
+    assert "private-single-use-code" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_unavailable_wechat_identity_returns_safe_503(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: (_ for _ in ()).throw(
+            WechatIdentityUnavailable(
+                "app-secret session_key redis://user:password@example.invalid"
+            )
+        ),
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 503, response.data
+    assert response.json() == {"detail": "微信登录服务暂时不可用，请稍后重试"}
+    assert "app-secret" not in response.content.decode()
+    assert "session_key" not in response.content.decode()
+    assert "password" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_binding_conflict_returns_safe_409(monkeypatch):
+    monkeypatch.setattr(
+        "apps.patient_app.views.exchange_login_code",
+        lambda wx_code: "openid-001",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "apps.patient_app.views.recover_patient_app_session",
+        lambda **kwargs: (_ for _ in ()).throw(
+            PatientAppBindingConflict("Bearer private-token code=1234")
+        ),
+        raising=False,
+    )
+
+    response = APIClient().post(
+        "/api/patient-app/wechat-session/",
+        {"wx_code": "wx-code"},
+        format="json",
+    )
+
+    assert response.status_code == 409, response.data
+    assert response.json() == {"detail": "账号绑定发生冲突，请重试"}
+    assert "private-token" not in response.content.decode()
+    assert "1234" not in response.content.decode()
+
+
 @pytest.mark.parametrize(
     "payload",
     [
-        {"code": "12AB", "wx_openid": "openid-a"},
-        {"code": "１２３４", "wx_openid": "openid-a"},
-        {"code": "", "wx_openid": "openid-a"},
-        {"code": "123", "wx_openid": "openid-a"},
-        {"code": "12345", "wx_openid": "openid-a"},
-        {"code": " 1234 ", "wx_openid": "openid-a"},
-        {"code": "\t1234\n", "wx_openid": "openid-a"},
-        {"code": 1234, "wx_openid": "openid-a"},
-        {"code": None, "wx_openid": "openid-a"},
-        {"wx_openid": "openid-a"},
+        {"code": "12AB", "wx_code": "wx-code"},
+        {"code": "１２３４", "wx_code": "wx-code"},
+        {"code": "", "wx_code": "wx-code"},
+        {"code": "123", "wx_code": "wx-code"},
+        {"code": "12345", "wx_code": "wx-code"},
+        {"code": " 1234 ", "wx_code": "wx-code"},
+        {"code": "\t1234\n", "wx_code": "wx-code"},
+        {"code": 1234, "wx_code": "wx-code"},
+        {"code": None, "wx_code": "wx-code"},
+        {"wx_code": "wx-code"},
     ],
 )
 @pytest.mark.django_db
@@ -131,6 +410,215 @@ def test_current_prescription_includes_action_source_key(
 
 
 @pytest.mark.django_db
+def test_current_prescription_keeps_business_data_when_video_signing_fails(
+    project_patient, doctor, prescription_action, monkeypatch
+):
+    client = _auth_client(project_patient, doctor)
+    monkeypatch.setattr(
+        "apps.patient_app.views.resolve_motion_video_url",
+        lambda *args, **kwargs: MotionVideoResolution(url="", unavailable=True),
+        raising=False,
+    )
+
+    response = client.get("/api/patient-app/current-prescription/")
+
+    assert response.status_code == 200
+    action = response.json()["actions"][0]
+    assert action["video_url"] == ""
+    assert action["video_unavailable"] is True
+
+
+@pytest.mark.django_db
+def test_current_prescription_keeps_other_actions_when_one_video_signing_raises(
+    project_patient, doctor, active_prescription, prescription_action, monkeypatch
+):
+    prescription_action.video_object_key_snapshot = "failing-video-key"
+    prescription_action.save(update_fields=["video_object_key_snapshot", "updated_at"])
+    successful_action = _game_prescription_action(active_prescription)
+    successful_action.video_object_key_snapshot = "working-video-key"
+    successful_action.save(update_fields=["video_object_key_snapshot", "updated_at"])
+    client = _auth_client(project_patient, doctor)
+
+    def resolve_video(object_key, legacy_url):
+        if object_key == "failing-video-key":
+            raise RuntimeError("签名服务不可用")
+        return MotionVideoResolution(
+            url="https://signed.example.com/working.mp4", unavailable=False
+        )
+
+    monkeypatch.setattr(
+        "apps.patient_app.views.resolve_motion_video_url", resolve_video
+    )
+
+    response = client.get("/api/patient-app/current-prescription/")
+
+    assert response.status_code == 200
+    actions = {action["id"]: action for action in response.json()["actions"]}
+    failed_action = actions[prescription_action.id]
+    assert failed_action["action_name"] == prescription_action.action_name_snapshot
+    assert failed_action["weekly_target_count"] == prescription_action.weekly_target_count
+    assert failed_action["video_url"] == ""
+    assert failed_action["video_unavailable"] is True
+    assert actions[successful_action.id]["video_url"] == "https://signed.example.com/working.mp4"
+    assert actions[successful_action.id]["video_unavailable"] is False
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_has_no_patient_queries(
+    client, django_assert_num_queries, monkeypatch
+):
+    cache.clear()
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        lambda: [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ],
+        raising=False,
+    )
+
+    with django_assert_num_queries(0):
+        response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "videos": [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ]
+    }
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_ignores_object_key_query_parameter(client, monkeypatch):
+    cache.clear()
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        lambda: [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ],
+        raising=False,
+    )
+
+    response = client.get(
+        "/api/patient-app/demo-motion-videos/?object_key=training-videos/private.mp4"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "videos": [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ]
+    }
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_hides_signing_failure_details(client, monkeypatch):
+    cache.clear()
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError("token=secret-key-motion-action-videos/v1/row.mp4")
+        ),
+        raising=False,
+    )
+
+    response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "演示视频暂时不可用，请稍后重试"}
+    assert "token" not in response.content.decode()
+    assert "secret-key" not in response.content.decode()
+    assert "motion-action-videos" not in response.content.decode()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("cache_method", ["get", "set"])
+def test_demo_motion_manifest_hides_cache_failure_details(client, monkeypatch, cache_method):
+    cache.clear()
+    if cache_method == "set":
+        monkeypatch.setattr(
+            "apps.patient_app.views.build_demo_motion_video_manifest",
+            lambda: [
+                {
+                    "source_key": "motion-resistance-row",
+                    "video_url": "https://signed.example.com/row.mp4",
+                }
+            ],
+        )
+
+    def raise_cache_error(*args, **kwargs):
+        if args[0] != "patient-app:demo-motion-videos:v1":
+            return original_cache_method(*args, **kwargs)
+        raise RuntimeError("cache token=secret")
+
+    original_cache_method = getattr(cache, cache_method)
+    monkeypatch.setattr(f"apps.patient_app.views.cache.{cache_method}", raise_cache_error)
+
+    response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "演示视频暂时不可用，请稍后重试"}
+    assert "token" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_hides_throttle_cache_failure_details(client, monkeypatch):
+    cache.clear()
+
+    def raise_cache_error(*args, **kwargs):
+        raise RuntimeError("cache token=secret")
+
+    monkeypatch.setattr("apps.patient_app.views.cache.get", raise_cache_error)
+
+    response = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "演示视频暂时不可用，请稍后重试"}
+    assert "token" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_demo_motion_manifest_caches_full_response_for_60_seconds(client, monkeypatch):
+    cache.clear()
+    calls = 0
+
+    def build_manifest():
+        nonlocal calls
+        calls += 1
+        return [
+            {
+                "source_key": "motion-resistance-row",
+                "video_url": "https://signed.example.com/row.mp4",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "apps.patient_app.views.build_demo_motion_video_manifest",
+        build_manifest,
+        raising=False,
+    )
+
+    first = client.get("/api/patient-app/demo-motion-videos/")
+    second = client.get("/api/patient-app/demo-motion-videos/")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert calls == 1
+
+
+@pytest.mark.django_db
 def test_training_record_api_allows_multiple_records_same_day(
     project_patient,
     doctor,
@@ -157,12 +645,14 @@ def test_training_record_api_allows_multiple_records_same_day(
 
 
 @pytest.mark.django_db
-def test_training_record_api_rejects_shoulder_press_without_video(
+@pytest.mark.parametrize("source_key", OFFICIAL_MOTION_SOURCE_KEYS)
+def test_training_record_api_rejects_official_motion_action_without_video(
+    source_key,
     project_patient,
     doctor,
     active_prescription,
 ):
-    item = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
+    item = ActionLibraryItem.objects.get(source_key=source_key)
     action = active_prescription.add_action_snapshot(
         item,
         weekly_frequency="2 次/周",
@@ -183,8 +673,83 @@ def test_training_record_api_rejects_shoulder_press_without_video(
     )
 
     assert response.status_code == 400, response.data
-    assert response.data["detail"] == "肩部推举必须完成录像上传"
+    assert response.data["detail"] == "运动动作必须完成录像上传"
     assert not TrainingRecord.objects.filter(prescription_action=action).exists()
+
+
+def _activate_now_payload(action, duration_minutes):
+    return {
+        "expected_active_version": 1,
+        "actions": [
+            {
+                "action_library_item": action.id,
+                "weekly_frequency": "3 次/周",
+                "weekly_target_count": 3,
+                "duration_minutes": duration_minutes,
+            }
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_activate_now_rejects_official_motion_action_over_30_minutes(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        _activate_now_payload(action, 31),
+        format="json",
+    )
+
+    assert response.status_code == 400, response.data
+    assert "运动动作时长不能超过 30 分钟" in str(response.data)
+    assert Prescription.objects.filter(project_patient=project_patient).count() == 1
+
+
+@pytest.mark.django_db
+def test_activate_now_accepts_official_motion_action_at_30_minutes(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        _activate_now_payload(action, 30),
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    assert response.data["actions"][0]["duration_minutes"] == 30
+
+
+@pytest.mark.django_db
+def test_activate_now_does_not_apply_motion_duration_limit_to_game(
+    project_patient,
+    doctor,
+    active_prescription,
+):
+    action = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    client = APIClient()
+    client.force_authenticate(user=doctor)
+
+    response = client.post(
+        f"/api/studies/project-patients/{project_patient.id}/prescriptions/activate-now/",
+        _activate_now_payload(action, 31),
+        format="json",
+    )
+
+    assert response.status_code == 201, response.data
+    assert response.data["actions"][0]["duration_minutes"] == 31
 
 
 @pytest.mark.django_db

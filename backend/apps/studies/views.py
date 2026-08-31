@@ -12,7 +12,11 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
-from apps.patient_app.models import PatientAppBindingCode, PatientAppSession
+from apps.patient_app.models import (
+    PatientAppBindingCode,
+    PatientAppSession,
+    PatientAppWechatBinding,
+)
 from apps.patient_app.services import create_binding_code, revoke_project_patient_binding
 from apps.prescriptions.serializers import ActivateNowPrescriptionSerializer, PrescriptionSerializer
 from apps.prescriptions.services import create_active_prescription_now
@@ -304,6 +308,10 @@ class ProjectPatientViewSet(ModelViewSet):
 
     def _binding_status_payload(self, project_patient):
         now = timezone.now()
+        try:
+            wechat_binding = project_patient.patient_app_wechat_binding
+        except PatientAppWechatBinding.DoesNotExist:
+            wechat_binding = None
         active_code = (
             PatientAppBindingCode.objects.filter(
                 project_patient=project_patient,
@@ -330,6 +338,10 @@ class ProjectPatientViewSet(ModelViewSet):
             "patient_name": project_patient.patient.name,
             "project_id": project_patient.project_id,
             "project_name": project_patient.project.name,
+            "has_wechat_binding": wechat_binding is not None,
+            "wechat_bound_at": (
+                wechat_binding.created_at.isoformat() if wechat_binding else None
+            ),
             "has_active_binding_code": active_code is not None,
             "binding_code_expires_at": (
                 active_code.expires_at.isoformat() if active_code else None

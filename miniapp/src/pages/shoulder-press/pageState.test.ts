@@ -6,13 +6,17 @@ import {
   computeShoulderPressEffectiveDuration,
   formatShoulderPressTimer,
   isServerSafeFinalizeStatus,
+  loadOwnedPendingShoulderPressSession,
   nextShoulderPressPreviewVisibility,
   remainingShoulderPressSeconds,
   resolveShoulderPressAction,
+  saveOwnedPendingShoulderPressSession,
   SHOULDER_PRESS_RECORDING_STOP_MS,
   shoulderPressUploadCounters,
   shouldAutoFinishShoulderPressTraining
 } from './pageState'
+import { PENDING_MOTION_TRAINING_SESSION_KEY } from '../../features/motion-training/session'
+import { createPendingShoulderPressSession } from './session'
 
 function prescription(): NonNullable<CurrentPrescription> {
   return {
@@ -45,13 +49,17 @@ function prescription(): NonNullable<CurrentPrescription> {
   }
 }
 
-describe('shoulder press page state', () => {
-  it('resolves only the requested active shoulder press action', () => {
+describe('shoulder press compatibility page state', () => {
+  it('resolves the requested active official motion action', () => {
     expect(resolveShoulderPressAction(prescription(), 42)?.action_name).toBe('肩部推举')
     expect(resolveShoulderPressAction(prescription(), 99)).toBeNull()
 
+    const anotherMotion = prescription()
+    anotherMotion.actions[0].source_key = 'motion-resistance-row'
+    expect(resolveShoulderPressAction(anotherMotion, 42)?.action_name).toBe('肩部推举')
+
     const wrongSource = prescription()
-    wrongSource.actions[0].source_key = 'motion-resistance-row'
+    wrongSource.actions[0].source_key = 'motion-unknown'
     expect(resolveShoulderPressAction(wrongSource, 42)).toBeNull()
   })
 
@@ -60,6 +68,28 @@ describe('shoulder press page state', () => {
     expect(canStartShoulderPressRecording({ actionReady: false, cameraReady: true, busy: false })).toBe(false)
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: false, busy: false })).toBe(false)
     expect(canStartShoulderPressRecording({ actionReady: true, cameraReady: true, busy: true })).toBe(false)
+  })
+
+  it('keeps old owned-session aliases compatible with get/set storage only', () => {
+    const pending = createPendingShoulderPressSession({
+      actionId: 42,
+      expectedDurationSeconds: 120,
+      trainingDate: '2026-08-06',
+      clientSessionId: '8cf99c30-9b03-4bda-b4d3-b492f3a2db12',
+      createdAt: 1783692000000
+    })
+    const values = new Map<string, unknown>([[PENDING_MOTION_TRAINING_SESSION_KEY, pending]])
+    const storage = {
+      getStorageSync: (key: string) => values.get(key),
+      setStorageSync: (key: string, value: unknown) => values.set(key, value)
+    }
+
+    expect(storage).not.toHaveProperty('removeStorageSync')
+    expect(loadOwnedPendingShoulderPressSession(storage, pending.clientSessionId)).toEqual(pending)
+    expect(saveOwnedPendingShoulderPressSession(storage, {
+      ...pending,
+      lastError: '等待网络恢复'
+    })).toMatchObject({ lastError: '等待网络恢复' })
   })
 
   it('computes a clamped prescription countdown from effective recording time', () => {
@@ -138,14 +168,14 @@ describe('shoulder press page state', () => {
       recording: true,
       recordingBaseDurationMs: 0,
       recordingStartedAtMs: 1_000,
-      nowMs: 2_401_000
-    })).toBe(2_400_000)
+      nowMs: 1_801_000
+    })).toBe(1_800_000)
   })
 
   it('formats the fixed-size recording timer', () => {
     expect(formatShoulderPressTimer(0)).toBe('00:00')
     expect(formatShoulderPressTimer(61_400)).toBe('01:01')
-    expect(formatShoulderPressTimer(2_400_000)).toBe('40:00')
+    expect(formatShoulderPressTimer(1_800_000)).toBe('30:00')
   })
 
   it('counts uploaded and pending segments for stable page status', () => {

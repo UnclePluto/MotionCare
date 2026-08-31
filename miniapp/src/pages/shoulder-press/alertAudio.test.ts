@@ -48,8 +48,8 @@ describe('shoulder press alert audio', () => {
       ready: '视频上传已恢复，可以继续训练。',
     })
     expect(SHOULDER_PRESS_ALERT_SRC).toEqual({
-      pause: '/pages/shoulder-press/assets/audio/network_slow_paused.m4a',
-      ready: '/pages/shoulder-press/assets/audio/upload_recovered.m4a',
+      pause: '/features/motion-training/assets/audio/network_slow_paused.m4a',
+      ready: '/features/motion-training/assets/audio/upload_recovered.m4a',
     })
   })
 
@@ -62,7 +62,7 @@ describe('shoulder press alert audio', () => {
     callbacks.ended?.()
 
     await expect(playback).resolves.toBe(true)
-    expect(audio.src).toBe('/pages/shoulder-press/assets/audio/network_slow_paused.m4a')
+    expect(audio.src).toBe('/features/motion-training/assets/audio/network_slow_paused.m4a')
     expect(audio.destroy).toHaveBeenCalledTimes(1)
   })
 
