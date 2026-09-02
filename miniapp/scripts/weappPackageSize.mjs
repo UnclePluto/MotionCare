@@ -99,15 +99,17 @@ function largestFiles(files) {
     .slice(0, 10)
 }
 
-function budgetError(label, report, threshold) {
+function packageDiagnostic(label, report, threshold) {
   const files = largestFiles(report.files)
   const details = files.length
     ? files.map((file) => `- ${file.path}: ${file.bytes} 字节`).join('\n')
     : '- 无文件'
-  return new Error(
-    `包体预算超限：${label} (${report.name})，实际 ${report.bytes} 字节，阈值 ${threshold} 字节。\n` +
-      `最大的 10 个文件（最多展示 10 个）：\n${details}`,
-  )
+  return `${label} (${report.name})，实际 ${report.bytes} 字节，阈值 ${threshold} 字节。\n` +
+    `最大的 10 个文件（最多展示 10 个）：\n${details}`
+}
+
+function budgetError(label, report, threshold) {
+  return new Error(`包体预算超限：${packageDiagnostic(label, report, threshold)}`)
 }
 
 function assertThreshold(label, report, threshold) {
@@ -120,7 +122,18 @@ export function assertPackageBudgets(report, budgets) {
   for (const forbiddenDirectory of budgets.forbiddenDirectories ?? []) {
     const normalized = normalizeRelativePath(forbiddenDirectory, '禁止目录')
     if (report.directories.includes(normalized)) {
-      throw new Error(`小程序代码包中存在禁止目录：${normalized}`)
+      const subpackageName = Object.keys(report.subpackages)
+        .sort((left, right) => right.length - left.length)
+        .find((name) => normalized === name || normalized.startsWith(`${name}/`))
+      const packageReport = subpackageName ? report.subpackages[subpackageName] : report.main
+      const label = subpackageName ? '分包' : '主包'
+      const threshold = subpackageName
+        ? budgets.subpackageOverrides?.[subpackageName] ?? budgets.subpackage
+        : budgets.main
+      throw new Error(
+        `小程序代码包中存在禁止目录：${normalized}\n` +
+          packageDiagnostic(label, packageReport, threshold),
+      )
     }
   }
 

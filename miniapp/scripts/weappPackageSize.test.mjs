@@ -156,22 +156,71 @@ describe('assertPackageBudgets', () => {
   })
 
   it.each([
-    'pages/game-session/assets/images',
-    'features/motion-training/assets/audio/instructions',
-  ])('rejects the forbidden output directory %s even when it is empty', async (forbiddenDirectory) => {
-    const distRoot = await createDistFixture()
-    await mkdir(join(distRoot, forbiddenDirectory), { recursive: true })
-    const report = await measureWeappPackages({ appConfig: {}, distRoot })
+    {
+      absentFile: 'pages/index/index.js',
+      expectedActual: 950,
+      expectedFiles: [
+        'pages/game-session/index.js: 500 字节',
+        'pages/game-session/assets/audio/correct.m4a: 400 字节',
+        'pages/game-session/assets/images/residual.png: 50 字节',
+      ],
+      expectedPackage: '分包 (pages/game-session)',
+      expectedThreshold: 1363148.8,
+      forbiddenDirectory: 'pages/game-session/assets/images',
+      residualFile: 'residual.png',
+    },
+    {
+      absentFile: 'pages/game-session/index.js',
+      expectedActual: 450,
+      expectedFiles: [
+        'pages/index/index.js: 300 字节',
+        'project.config.json: 100 字节',
+        'features/motion-training/assets/audio/instructions/residual.m4a: 50 字节',
+      ],
+      expectedPackage: '主包 (main)',
+      expectedThreshold: 1228800,
+      forbiddenDirectory: 'features/motion-training/assets/audio/instructions',
+      residualFile: 'residual.m4a',
+    },
+  ])(
+    'reports the owning package budget and its Top 10 files for forbidden directory $forbiddenDirectory',
+    async ({
+      absentFile,
+      expectedActual,
+      expectedFiles,
+      expectedPackage,
+      expectedThreshold,
+      forbiddenDirectory,
+      residualFile,
+    }) => {
+      const { appConfig, distRoot } = await createClassifiedFixture()
+      await writeSizedFile(distRoot, `${forbiddenDirectory}/${residualFile}`, 50)
+      const report = await measureWeappPackages({ appConfig, distRoot })
 
-    expect(() =>
-      assertPackageBudgets(
-        report,
-        projectBudgets({
-          forbiddenDirectories: [forbiddenDirectory],
-        }),
-      ),
-    ).toThrow(new RegExp(`禁止目录.*${forbiddenDirectory.replaceAll('/', '\\/')}`))
-  })
+      let message = ''
+      try {
+        assertPackageBudgets(
+          report,
+          projectBudgets({
+            forbiddenDirectories: [forbiddenDirectory],
+            subpackageOverrides: { 'pages/game-session': 1.3 * 1024 * 1024 },
+          }),
+        )
+      } catch (error) {
+        message = error.message
+      }
+
+      expect(message).toContain(`禁止目录：${forbiddenDirectory}`)
+      expect(message).toContain(expectedPackage)
+      expect(message).toContain(`实际 ${expectedActual} 字节`)
+      expect(message).toContain(`阈值 ${expectedThreshold} 字节`)
+      expect(message).toContain('最大的 10 个文件（最多展示 10 个）')
+      for (const expectedFile of expectedFiles) {
+        expect(message).toContain(expectedFile)
+      }
+      expect(message).not.toContain(absentFile)
+    },
+  )
 
   it('shows only the ten largest files in descending byte order', async () => {
     const distRoot = await createDistFixture()
