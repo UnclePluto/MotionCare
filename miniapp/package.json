@@ -36,6 +36,7 @@
     "build:static-assets": "node scripts/build-static-assets.mjs",
     "check:static-assets": "node scripts/build-static-assets.mjs --check",
     "verify:static-assets": "node scripts/verify-static-assets.mjs",
+    "check:weapp-package-size": "node scripts/check-weapp-package-size.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
