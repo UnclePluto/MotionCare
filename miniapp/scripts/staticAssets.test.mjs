@@ -1,0 +1,133 @@
+import { createHash } from 'node:crypto'
+import { cp, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+
+import { buildStaticAssets } from './staticAssets.mjs'
+
+const expectedGameImageKeys = [
+  'pattern_sun', 'pattern_coconut', 'pattern_boat', 'pattern_lighthouse', 'pattern_shell',
+  'category_pineapple', 'category_bird', 'category_train', 'category_drum', 'category_phone',
+  'sound_bird', 'sound_train', 'sound_phone', 'sound_laugh', 'sound_drum',
+  'puzzle_beach', 'puzzle_garden', 'puzzle_lighthouse',
+]
+
+const expectedMotionAudioKeys = [
+  'motion-aerobic-high-knee',
+  'motion-balance-sit-stand',
+  'motion-resistance-row',
+  'motion-resistance-leg-kickback',
+  'motion-resistance-shoulder-press',
+]
+
+const repositoryRoot = join(import.meta.dirname, '..')
+let fixtureRoot = ''
+
+function sha256(buffer) {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+function fixtureOptions() {
+  return {
+    projectRoot: fixtureRoot,
+    outputRoot: join(fixtureRoot, 'output', 'static-assets'),
+    check: false,
+  }
+}
+
+beforeAll(async () => {
+  fixtureRoot = await mkdtemp(join(tmpdir(), 'motioncare-static-assets-'))
+  await Promise.all([
+    cp(join(repositoryRoot, 'resources', 'game-images'), join(fixtureRoot, 'resources', 'game-images'), { recursive: true }),
+    cp(join(repositoryRoot, 'resources', 'motion-instruction-audio'), join(fixtureRoot, 'resources', 'motion-instruction-audio'), { recursive: true }),
+  ])
+})
+
+afterAll(async () => {
+  if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true })
+})
+
+describe('buildStaticAssets', () => {
+  it('builds 18 images and 5 unchanged motion audios with a deterministic version', async () => {
+    const first = await buildStaticAssets(fixtureOptions())
+    const second = await buildStaticAssets(fixtureOptions())
+
+    expect(first.assetVersion).toMatch(/^v-[a-f0-9]{12}$/)
+    expect(second.assetVersion).toBe(first.assetVersion)
+    expect(first.entries.filter((item) => item.kind === 'game-image').map((item) => item.key)).toEqual(expectedGameImageKeys)
+    expect(first.entries.filter((item) => item.kind === 'motion-instruction-audio').map((item) => item.key)).toEqual(expectedMotionAudioKeys)
+  })
+
+  it('resizes card images and puzzle images to their fixed dimensions', async () => {
+    const result = await buildStaticAssets(fixtureOptions())
+    const { default: sharp } = await import('sharp')
+
+    for (const entry of result.entries.filter((item) => item.kind === 'game-image')) {
+      const metadata = await sharp(join(fixtureOptions().outputRoot, entry.relativePath)).metadata()
+      const expectedSize = entry.key.startsWith('puzzle_') ? 384 : 256
+
+      expect(metadata.width).toBe(expectedSize)
+      expect(metadata.height).toBe(expectedSize)
+      expect(entry.width).toBe(expectedSize)
+      expect(entry.height).toBe(expectedSize)
+    }
+  })
+
+  it('copies each motion audio byte-for-byte and includes every output hash in its filename', async () => {
+    const result = await buildStaticAssets(fixtureOptions())
+
+    for (const entry of result.entries) {
+      const output = await readFile(join(fixtureOptions().outputRoot, entry.relativePath))
+
+      expect(sha256(output)).toBe(entry.sha256)
+      expect(basename(entry.relativePath)).toContain(entry.sha256.slice(0, 12))
+
+      if (entry.kind === 'motion-instruction-audio') {
+        const source = await readFile(join(fixtureRoot, 'resources', 'motion-instruction-audio', 'source', `${entry.key}.m4a`))
+        expect(sha256(output)).toBe(sha256(source))
+        expect(entry.contentType).toBe('audio/mp4')
+        expect('width' in entry).toBe(false)
+        expect('height' in entry).toBe(false)
+      }
+    }
+  })
+
+  it('rejects check mode when a generated output drifts', async () => {
+    const result = await buildStaticAssets(fixtureOptions())
+    const outputPath = join(fixtureOptions().outputRoot, result.entries[0].relativePath)
+    const original = await readFile(outputPath)
+
+    try {
+      await writeFile(outputPath, 'drift')
+      await expect(buildStaticAssets({ ...fixtureOptions(), check: true })).rejects.toThrow(/drift/i)
+      expect((await stat(outputPath)).size).toBe(Buffer.byteLength('drift'))
+    } finally {
+      await writeFile(outputPath, original)
+    }
+  })
+
+  it('writes the canonical manifest, current version, and separate TypeScript path maps', async () => {
+    const result = await buildStaticAssets(fixtureOptions())
+    const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8'))
+    const currentVersion = await readFile(join(fixtureOptions().outputRoot, 'current-version.txt'), 'utf8')
+    const gameMap = await readFile(join(fixtureRoot, 'src', 'pages', 'game-session', 'gameImageAssetManifest.generated.ts'), 'utf8')
+    const audioMap = await readFile(join(fixtureRoot, 'src', 'features', 'motion-training', 'instructionAudioAssetManifest.generated.ts'), 'utf8')
+
+    expect(manifest).toEqual({ assetVersion: result.assetVersion, entries: result.entries })
+    expect(currentVersion).toBe(result.assetVersion)
+    expect(gameMap).toContain('export const GAME_IMAGE_ASSET_PATHS')
+    expect(gameMap).toContain('export type GeneratedGameImageKey = keyof typeof GAME_IMAGE_ASSET_PATHS')
+    expect(audioMap).toContain('export const MOTION_INSTRUCTION_AUDIO_ASSET_PATHS: Record<MotionSourceKey, string>')
+
+    for (const entry of result.entries.filter((item) => item.kind === 'game-image')) {
+      expect(gameMap).toContain(entry.relativePath)
+      expect(audioMap).not.toContain(entry.key)
+    }
+
+    for (const entry of result.entries.filter((item) => item.kind === 'motion-instruction-audio')) {
+      expect(audioMap).toContain(entry.relativePath)
+      expect(gameMap).not.toContain(entry.key)
+    }
+  })
+})
