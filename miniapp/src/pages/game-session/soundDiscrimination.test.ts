@@ -120,18 +120,19 @@ describe('createSoundDiscriminationRound', () => {
     expect(round.timeoutMs).toBe(8000)
   })
 
-  it('keeps same-category variants on the same image while preserving distinct sound ids', () => {
+  it('keeps same-category variants on the same image key while preserving distinct sound ids', () => {
     const round = createSoundDiscriminationRound('简单', SOURCES.slice(0, 4), () => 0)
     const birds = round.cards.filter((card) => card.category === 'bird')
 
-    expect(new Set(birds.map((card) => card.imageSrc)).size).toBe(1)
+    expect(new Set(birds.map((card) => card.imageKey))).toEqual(new Set(['sound_bird']))
     expect(new Set(birds.map((card) => card.soundId))).toEqual(new Set(['bird_1', 'bird_2']))
   })
 
-  it('uses png artwork for every card', () => {
+  it('uses stable game image keys without retaining local image paths', () => {
     const round = createSoundDiscriminationRound('简单', SOURCES, () => 0)
 
-    expect(round.cards.every((card) => card.imageSrc.endsWith('.png'))).toBe(true)
+    expect(round.cards.every((card) => card.imageKey.startsWith('sound_'))).toBe(true)
+    expect(round.cards.every((card) => !('imageSrc' in card))).toBe(true)
   })
 
   it('creates paired categories from shuffled source input', () => {

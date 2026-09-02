@@ -9,9 +9,10 @@ describe('createPatternSequenceRound', () => {
     expect(round.patterns.map((pattern) => pattern.id)).toEqual(['sun', 'coconut', 'boat'])
     expect(round.sequence.map((item) => item.id)).toEqual(['sun', 'sun', 'sun'])
     expect(round.sequence[0]).toMatchObject({
-      imageSrc: '/pages/game-session/assets/images/game-session/pattern_sun.png',
+      imageKey: 'pattern_sun',
       label: '太阳',
     })
+    expect(round.patterns.every((pattern) => !('imageSrc' in pattern))).toBe(true)
     expect(round.revealMs).toBe(900)
     expect(round.inputTimeoutMs).toBe(8000)
   })

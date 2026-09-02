@@ -715,6 +715,7 @@ function saveStorageSession(storedSession: unknown) {
 }
 
 beforeEach(async () => {
+  vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/assets')
   vi.useRealTimers()
   await flushPromises(50)
   vi.clearAllMocks()
@@ -761,6 +762,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await flushPromises(50)
   taroHarness.storage.clear()
+  vi.unstubAllEnvs()
   vi.useRealTimers()
 })
 

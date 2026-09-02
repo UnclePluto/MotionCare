@@ -4,14 +4,14 @@ import type {
   SoundDiscriminationCategory,
 } from './gameAudio'
 import type { GameDifficulty } from './gameTypes'
+import type { GameImageKey } from './gameImageAssets'
 
 export type SoundCard = {
   id: string
   soundId: SoundDiscriminationAudioId
   label: string
   category: SoundDiscriminationCategory
-  imageKey: SoundDiscriminationCategory
-  imageSrc: string
+  imageKey: GameImageKey
   audioSrc: string
   previewed: boolean
 }
@@ -49,12 +49,12 @@ export type SoundPreviewAfterShowOptions = {
   startPreview: () => void
 }
 
-export const CATEGORY_IMAGE_SRC: Record<SoundDiscriminationCategory, string> = {
-  bird: '/pages/game-session/assets/images/game-session/sound_bird.png',
-  train: '/pages/game-session/assets/images/game-session/sound_train.png',
-  phone: '/pages/game-session/assets/images/game-session/sound_phone.png',
-  laugh: '/pages/game-session/assets/images/game-session/sound_laugh.png',
-  drum: '/pages/game-session/assets/images/game-session/sound_drum.png',
+const SOUND_IMAGE_KEY: Record<SoundDiscriminationCategory, GameImageKey> = {
+  bird: 'sound_bird',
+  train: 'sound_train',
+  phone: 'sound_phone',
+  laugh: 'sound_laugh',
+  drum: 'sound_drum',
 }
 
 const CONFIG: Record<GameDifficulty, { pairCount: number; timeoutMs: number }> = {
@@ -100,8 +100,7 @@ function toCard(source: SoundDiscriminationAudio): SoundCard {
     soundId: source.id,
     label: source.label,
     category: source.category,
-    imageKey: source.imageKey,
-    imageSrc: CATEGORY_IMAGE_SRC[source.imageKey],
+    imageKey: SOUND_IMAGE_KEY[source.imageKey],
     audioSrc: source.src,
     previewed: false,
   }

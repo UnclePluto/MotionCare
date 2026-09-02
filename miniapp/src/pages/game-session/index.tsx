@@ -28,6 +28,7 @@ import {
   type GameAudioKey,
 } from './gameAudio'
 import type { GameActionSummary, GameCode, GameDifficulty, GameEndReason, GameTrainingPayload } from './gameTypes'
+import { gameImageRemoteUrl } from './gameImageAssets'
 import { createInhibitionRound, evaluateInhibitionAttempt, type InhibitionRound } from './inhibition'
 import {
   createPatternSequenceRound,
@@ -1601,7 +1602,7 @@ export default function GameSessionPage() {
                   <Text className='sequence-transition-cue'>下一项</Text>
                 ) : currentPattern ? (
                   <View className='sequence-memory-pattern'>
-                    <Image className='sequence-memory-image' src={currentPattern.imageSrc} mode='aspectFit' />
+                    <Image className='sequence-memory-image' src={gameImageRemoteUrl(currentPattern.imageKey)} mode='aspectFit' />
                     <Text className='sequence-memory-label'>{currentPattern.label}</Text>
                   </View>
                 ) : null}
@@ -1622,7 +1623,7 @@ export default function GameSessionPage() {
                   >
                     {selectedPattern ? (
                       <View className='sequence-answer-pattern'>
-                        <Image className='sequence-answer-image' src={selectedPattern.imageSrc} mode='aspectFit' />
+                        <Image className='sequence-answer-image' src={gameImageRemoteUrl(selectedPattern.imageKey)} mode='aspectFit' />
                         <Text className='sequence-answer-label'>{selectedPattern.label}</Text>
                       </View>
                     ) : (
@@ -1649,7 +1650,7 @@ export default function GameSessionPage() {
               onClick={() => selectPattern(pattern)}
             >
               <View className='game-card-face'>
-                <Image className='game-image game-card-image' src={pattern.imageSrc} mode='aspectFit' />
+                <Image className='game-image game-card-image' src={gameImageRemoteUrl(pattern.imageKey)} mode='aspectFit' />
                 <Text className='game-card-label'>{pattern.label}</Text>
               </View>
             </Button>
@@ -1669,7 +1670,7 @@ export default function GameSessionPage() {
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>{phase === 'paused' ? '训练已暂停' : activeCategoryRound.ruleLabel}</Text>
         <View className='game-stage category-card'>
-          <Image className='category-image' src={activeCategoryRound.item.imageSrc} mode='aspectFit' />
+          <Image className='category-image' src={gameImageRemoteUrl(activeCategoryRound.item.imageKey)} mode='aspectFit' />
           <Text className='category-label'>{activeCategoryRound.item.label}</Text>
         </View>
         <View className='category-options'>
@@ -1742,7 +1743,7 @@ export default function GameSessionPage() {
                     <View className='sound-card-face sound-card-front'>
                       <Image
                         className='sound-card-image'
-                        src={card.imageSrc}
+                        src={gameImageRemoteUrl(card.imageKey)}
                         mode='aspectFit'
                         onError={() => markSoundCardImageFailed(card.id)}
                       />
@@ -1776,7 +1777,7 @@ export default function GameSessionPage() {
         </Text>
         {puzzlePreviewing || phase === 'paused' ? (
           <View className='game-stage puzzle-preview-board'>
-            <Image className='puzzle-preview-image' src={activePuzzleRound.imageSrc} mode='aspectFill' />
+            <Image className='puzzle-preview-image' src={gameImageRemoteUrl(activePuzzleRound.imageAssetKey)} mode='aspectFill' />
           </View>
         ) : (
           <View className={`game-stage puzzle-grid puzzle-grid-${activePuzzleRound.cols}`}>
@@ -1789,7 +1790,7 @@ export default function GameSessionPage() {
                 <View className='puzzle-tile-slice'>
                   <Image
                     className='puzzle-tile-image'
-                    src={activePuzzleRound.imageSrc}
+                    src={gameImageRemoteUrl(activePuzzleRound.imageAssetKey)}
                     mode='scaleToFill'
                     style={puzzleTileImageStyle(activePuzzleRound, tile)}
                   />

@@ -331,6 +331,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/assets')
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-08-31T08:00:00+08:00'))
   vi.spyOn(Math, 'random').mockReturnValue(0)
@@ -345,11 +346,34 @@ beforeEach(() => {
 afterEach(async () => {
   reactHarness.reset()
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   vi.clearAllTimers()
   vi.useRealTimers()
 })
 
 describe('GameSessionPage 生命周期与反馈接线', () => {
+  it.each([
+    ['game-memory-pattern-sequence', '图案顺序记忆', 'sequence-memory-image', '/pattern_sun.'],
+    ['game-executive-category-switch', '分类切换', 'category-image', '/category_pineapple.'],
+    ['game-audiovisual-sound-discrimination', '声音辨别', 'sound-card-image', '/sound_'],
+    ['game-audiovisual-puzzle', '图片拼图', 'puzzle-preview-image', '/puzzle_beach.'],
+  ])('%s 页面只渲染 CDN 游戏图片 URL', async (sourceKey, actionName, imageClass, assetMarker) => {
+    const soundPreviewAudio = sourceKey === 'game-audiovisual-sound-discrimination'
+      ? deferred<boolean>()
+      : null
+    if (soundPreviewAudio) audioHarness.playAudioSrc.mockReturnValueOnce(soundPreviewAudio.promise)
+    const page = await renderGame(sourceKey, actionName)
+    await enterPlaying(page)
+    page.rerender()
+
+    const imageSrc = String(findByClass(page.element, imageClass).props.src)
+    expect(imageSrc).toMatch(/^https:\/\/cdn\.example\.com\/assets\/v-[a-f0-9]+\//)
+    expect(imageSrc).toContain(assetMarker)
+    expect(imageSrc).not.toContain('/pages/game-session/assets/images/')
+    soundPreviewAudio?.resolve(true)
+    page.unmount()
+  })
+
   it('后台挂起 item 与整场计时，并从各自剩余毫秒恢复', async () => {
     const page = await renderGame('game-memory-color-sequence', '颜色顺序记忆')
     await enterPlaying(page)

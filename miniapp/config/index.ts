@@ -54,10 +54,6 @@ export default defineConfig<'webpack5'>(async (merge) => {
         {
           from: 'src/pages/game-session/assets/audio/sound-discrimination',
           to: 'dist/pages/game-session/assets/audio/sound-discrimination'
-        },
-        {
-          from: 'src/pages/game-session/assets/images/game-session',
-          to: 'dist/pages/game-session/assets/images/game-session'
         }
       ],
       options: {

@@ -1,11 +1,12 @@
 import type { GameDifficulty } from './gameTypes'
+import type { GameImageKey } from './gameImageAssets'
 
 export type CategoryRule = 'kind' | 'color' | 'scene'
 
 export type CategoryItem = {
   id: string
   label: string
-  imageSrc: string
+  imageKey: GameImageKey
   fallback: string
   kind: string
   color: string
@@ -30,7 +31,7 @@ export const CATEGORY_ITEMS: CategoryItem[] = [
   {
     id: 'pineapple',
     label: '菠萝',
-    imageSrc: '/pages/game-session/assets/images/game-session/category_pineapple.png',
+    imageKey: 'category_pineapple',
     fallback: '果',
     kind: '水果',
     color: '黄色',
@@ -39,7 +40,7 @@ export const CATEGORY_ITEMS: CategoryItem[] = [
   {
     id: 'bird',
     label: '小鸟',
-    imageSrc: '/pages/game-session/assets/images/game-session/category_bird.png',
+    imageKey: 'category_bird',
     fallback: '鸟',
     kind: '动物',
     color: '蓝色',
@@ -48,7 +49,7 @@ export const CATEGORY_ITEMS: CategoryItem[] = [
   {
     id: 'train',
     label: '火车',
-    imageSrc: '/pages/game-session/assets/images/game-session/category_train.png',
+    imageKey: 'category_train',
     fallback: '车',
     kind: '交通',
     color: '蓝色',
@@ -57,7 +58,7 @@ export const CATEGORY_ITEMS: CategoryItem[] = [
   {
     id: 'drum',
     label: '鼓',
-    imageSrc: '/pages/game-session/assets/images/game-session/category_drum.png',
+    imageKey: 'category_drum',
     fallback: '鼓',
     kind: '乐器',
     color: '红色',
@@ -66,7 +67,7 @@ export const CATEGORY_ITEMS: CategoryItem[] = [
   {
     id: 'phone',
     label: '电话',
-    imageSrc: '/pages/game-session/assets/images/game-session/category_phone.png',
+    imageKey: 'category_phone',
     fallback: '话',
     kind: '工具',
     color: '蓝色',

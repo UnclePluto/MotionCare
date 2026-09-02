@@ -20,8 +20,10 @@ describe('createCategorySwitchRound', () => {
     expect(round.item).toMatchObject({
       id: 'pineapple',
       label: '菠萝',
+      imageKey: 'category_pineapple',
       kind: '水果',
     })
+    expect('imageSrc' in round.item).toBe(false)
     expect(round.correctOption).toBe('水果')
     expect(round.options).toHaveLength(3)
     expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
