@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  createMotionTrainingAudioPlayer,
   createMotionTrainingAlertPlayer,
   MOTION_TRAINING_ALERT_SRC,
   MOTION_TRAINING_ALERT_TEXT,
@@ -180,5 +181,74 @@ describe('motion training alert audio', () => {
 
     await expect(firstPlayback).resolves.toBe(false)
     expect(first.audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses the player for an arbitrary local source with a configurable timeout', async () => {
+    const { audio, callbacks } = audioContextHarness()
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+    const player = createMotionTrainingAudioPlayer({ timeoutMs: 90_000 })
+
+    const playback = player.play('/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a')
+
+    expect(audio.src).toBe('/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a')
+    expect(audio.play).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(89_999)
+    expect(audio.destroy).not.toHaveBeenCalled()
+    callbacks.ended?.()
+    await expect(playback).resolves.toBe(true)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('exposes an idempotent stop for page lifecycle cleanup', async () => {
+    const { audio } = audioContextHarness()
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+    const player = createMotionTrainingAudioPlayer({ timeoutMs: 90_000 })
+    const playback = player.play('/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a')
+
+    player.stop()
+    player.stop()
+
+    await expect(playback).resolves.toBe(false)
+    expect(audio.stop).toHaveBeenCalledTimes(1)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  it('settles once and destroys once when audio stop throws', async () => {
+    const { audio, callbacks } = audioContextHarness()
+    audio.stop.mockImplementation(() => {
+      throw new Error('stop failed')
+    })
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+    const player = createMotionTrainingAudioPlayer({ timeoutMs: 90_000 })
+    const playback = player.play('/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a')
+
+    player.stop()
+    callbacks.ended?.()
+    callbacks.error?.()
+
+    await expect(playback).resolves.toBe(false)
+    expect(audio.stop).toHaveBeenCalledTimes(1)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('settles once when audio destroy throws', async () => {
+    const { audio, callbacks } = audioContextHarness()
+    audio.destroy.mockImplementation(() => {
+      throw new Error('destroy failed')
+    })
+    taroMock.createInnerAudioContext.mockReturnValue(audio)
+    const player = createMotionTrainingAudioPlayer({ timeoutMs: 90_000 })
+    const playback = player.play('/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a')
+
+    player.stop()
+    callbacks.ended?.()
+    callbacks.error?.()
+
+    await expect(playback).resolves.toBe(false)
+    expect(audio.stop).toHaveBeenCalledTimes(1)
+    expect(audio.destroy).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

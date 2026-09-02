@@ -20,26 +20,39 @@ export type MotionTrainingAlertPlayer = {
   dispose: () => void
 }
 
-const ALERT_PLAYBACK_TIMEOUT_MS = 15_000
+export type MotionTrainingAudioPlayerOptions = {
+  timeoutMs?: number
+}
 
-type AlertAudioContext = ReturnType<typeof Taro.createInnerAudioContext> & {
+export type MotionTrainingAudioPlayer = {
+  play: (src: string) => Promise<boolean>
+  stop: () => void
+  dispose: () => void
+}
+
+const DEFAULT_PLAYBACK_TIMEOUT_MS = 15_000
+
+type MotionTrainingAudioContext = ReturnType<typeof Taro.createInnerAudioContext> & {
   stop?: () => void
 }
 
-type ActiveAlertPlayback = {
+type ActiveMotionTrainingPlayback = {
   stop: () => void
 }
 
-export function createMotionTrainingAlertPlayer(): MotionTrainingAlertPlayer {
-  let activePlayback: ActiveAlertPlayback | undefined
+export function createMotionTrainingAudioPlayer(
+  options: MotionTrainingAudioPlayerOptions = {},
+): MotionTrainingAudioPlayer {
+  let activePlayback: ActiveMotionTrainingPlayback | undefined
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PLAYBACK_TIMEOUT_MS
 
-  const play = (kind: MotionTrainingAlertKind): Promise<boolean> => {
+  const play = (src: string): Promise<boolean> => {
     activePlayback?.stop()
 
     return new Promise((resolve) => {
-      let audio: AlertAudioContext | undefined
+      let audio: MotionTrainingAudioContext | undefined
       let timeout: ReturnType<typeof setTimeout> | undefined
-      let playback: ActiveAlertPlayback | undefined
+      let playback: ActiveMotionTrainingPlayback | undefined
       let settled = false
 
       const destroyAudio = () => {
@@ -69,8 +82,8 @@ export function createMotionTrainingAlertPlayer(): MotionTrainingAlertPlayer {
       }
 
       try {
-        audio = Taro.createInnerAudioContext() as AlertAudioContext
-        audio.src = MOTION_TRAINING_ALERT_SRC[kind]
+        audio = Taro.createInnerAudioContext() as MotionTrainingAudioContext
+        audio.src = src
         playback = {
           stop: () => {
             if (!settle()) return
@@ -88,7 +101,7 @@ export function createMotionTrainingAlertPlayer(): MotionTrainingAlertPlayer {
         if (settled) return
         audio.onError(() => finish(false))
         if (settled) return
-        timeout = setTimeout(() => finish(false), ALERT_PLAYBACK_TIMEOUT_MS)
+        timeout = setTimeout(() => finish(false), timeoutMs)
         if (settled) return
         audio.play()
       } catch {
@@ -99,6 +112,16 @@ export function createMotionTrainingAlertPlayer(): MotionTrainingAlertPlayer {
 
   return {
     play,
+    stop: () => activePlayback?.stop(),
     dispose: () => activePlayback?.stop(),
+  }
+}
+
+export function createMotionTrainingAlertPlayer(): MotionTrainingAlertPlayer {
+  const player = createMotionTrainingAudioPlayer({ timeoutMs: 15_000 })
+
+  return {
+    play: (kind) => player.play(MOTION_TRAINING_ALERT_SRC[kind]),
+    dispose: player.dispose,
   }
 }

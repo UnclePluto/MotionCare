@@ -209,6 +209,17 @@ const alertPlayerHarness = vi.hoisted(() => ({
   dispose: vi.fn()
 }))
 
+const motionInstructionAudioHarness = vi.hoisted(() => ({
+  play: vi.fn(async () => true),
+  stop: vi.fn(),
+  dispose: vi.fn(),
+  getSrc: vi.fn((sourceKey: unknown) => (
+    typeof sourceKey === 'string' && sourceKey.startsWith('motion-')
+      ? `/features/motion-training/assets/audio/instructions/${sourceKey}.m4a`
+      : undefined
+  )),
+}))
+
 const requestMock = vi.hoisted(() => vi.fn())
 const publicRequestMock = vi.hoisted(() => vi.fn())
 const apiMocks = vi.hoisted(() => ({
@@ -340,10 +351,14 @@ vi.mock('../../features/motion-training/api', () => apiMocks)
 vi.mock('../../features/motion-training/recorder', () => ({ MotionTrainingRecorder: recorderHarness.MockShoulderPressRecorder }))
 vi.mock('../../features/motion-training/alertAudio', () => ({
   createMotionTrainingAlertPlayer: () => alertPlayerHarness,
+  createMotionTrainingAudioPlayer: () => motionInstructionAudioHarness,
   MOTION_TRAINING_ALERT_TEXT: {
     pause: '网络较慢，训练已暂停，请保持页面打开，等待视频上传。',
     ready: '视频上传已恢复，可以继续训练。'
   }
+}))
+vi.mock('../../features/motion-training/instructionAudioManifest', () => ({
+  getMotionInstructionAudioSrc: motionInstructionAudioHarness.getSrc,
 }))
 
 const PRESCRIPTION: NonNullable<CurrentPrescription> = {
@@ -701,6 +716,14 @@ beforeEach(async () => {
   clearCurrentPrescriptionCache()
   requestMock.mockResolvedValue(PRESCRIPTION)
   publicRequestMock.mockResolvedValue(DEMO_MOTION_VIDEO_RESPONSE)
+  motionInstructionAudioHarness.play.mockReset().mockResolvedValue(true)
+  motionInstructionAudioHarness.stop.mockReset()
+  motionInstructionAudioHarness.dispose.mockReset()
+  motionInstructionAudioHarness.getSrc.mockReset().mockImplementation((sourceKey: unknown) => (
+    typeof sourceKey === 'string' && sourceKey.startsWith('motion-')
+      ? `/features/motion-training/assets/audio/instructions/${sourceKey}.m4a`
+      : undefined
+  ))
   retryMocks.loadPendingGameUpload.mockReturnValue(null)
   retryMocks.postGameTrainingRecord.mockResolvedValue(undefined)
   retryMocks.savePendingGameUploadAfterActiveRetry.mockImplementation(async (_storage, payload) => ({ payload }))
@@ -840,6 +863,12 @@ describe('shoulder press pages', () => {
 
     expect(findAll(guide.element, (element) => element.type === 'Video')).toHaveLength(0)
     expect(textContent(guide.element)).toContain(`${actionCase.name}动作说明。`)
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledWith(
+      `/features/motion-training/assets/audio/instructions/${actionCase.sourceKey}.m4a`,
+    )
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+    guide.rerender()
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
     findButtonByText(guide.element, '动作预览').props.onClick?.()
     expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
       url: `/pages/motion-training/preview?actionId=${actionCase.id}`
@@ -870,6 +899,167 @@ describe('shoulder press pages', () => {
     expect(taroHarness.taroMock.redirectTo).toHaveBeenCalledWith({
       url: `/pages/motion-training/camera?actionId=${actionCase.id}`
     })
+  })
+
+  it('自动播放一次并在完成后提供重新播放', async () => {
+    const autoPlayback = deferred<boolean>()
+    motionInstructionAudioHarness.play.mockReturnValueOnce(autoPlayback.promise)
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledWith(
+      '/features/motion-training/assets/audio/instructions/motion-resistance-shoulder-press.m4a',
+    )
+    expect(findButtonByText(page.element, '正在播放说明').props.disabled).toBe(true)
+
+    autoPlayback.resolve(true)
+    await flushPromises()
+    page.rerender()
+    clickButtonByText(page.element, '重新播放说明')
+
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(2)
+    page.rerender()
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(2)
+  })
+
+  it('语音失败后保留文字、恢复重播并允许继续训练', async () => {
+    motionInstructionAudioHarness.play.mockResolvedValueOnce(false)
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('保持正面，缓慢推举。')
+    expect(textContent(page.element)).toContain('语音播放失败，请阅读文字说明')
+    expect(findButtonByText(page.element, '重新播放说明').props.disabled).not.toBe(true)
+
+    clickButtonByText(page.element, '开始训练')
+    expect(motionInstructionAudioHarness.stop).toHaveBeenCalled()
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/motion-training/camera?actionId=42',
+    })
+  })
+
+  it('进入预览、页面隐藏和卸载都会停止或销毁语音', async () => {
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    clickButtonByText(page.element, '动作预览')
+    expect(motionInstructionAudioHarness.stop).toHaveBeenCalledTimes(1)
+
+    taroHarness.hideCallbacks[0]?.()
+    expect(motionInstructionAudioHarness.stop).toHaveBeenCalledTimes(2)
+
+    page.unmount()
+    expect(motionInstructionAudioHarness.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('播放中隐藏后恢复重播并忽略旧播放的失败结果', async () => {
+    const autoPlayback = deferred<boolean>()
+    motionInstructionAudioHarness.play.mockReturnValueOnce(autoPlayback.promise)
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(findButtonByText(page.element, '正在播放说明').props.disabled).toBe(true)
+    taroHarness.hideCallbacks[0]?.()
+    page.rerender()
+
+    expect(findButtonByText(page.element, '重新播放说明').props.disabled).not.toBe(true)
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+
+    autoPlayback.resolve(false)
+    await flushPromises()
+    page.rerender()
+
+    expect(textContent(page.element)).not.toContain('语音播放失败')
+    expect(findButtonByText(page.element, '重新播放说明').props.disabled).not.toBe(true)
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+  })
+
+  it('请求期间隐藏时不在后台播放并在首次显示后补播一次', async () => {
+    const prescription = deferred<typeof PRESCRIPTION>()
+    requestMock.mockReturnValueOnce(prescription.promise)
+    const page = renderPage(ShoulderPressGuidePage)
+
+    taroHarness.hideCallbacks[0]?.()
+    prescription.resolve(PRESCRIPTION)
+    await flushPromises()
+    page.rerender()
+
+    expect(motionInstructionAudioHarness.play).not.toHaveBeenCalled()
+
+    taroHarness.showCallbacks[0]?.()
+    await flushPromises()
+    page.rerender()
+
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledWith(
+      '/features/motion-training/assets/audio/instructions/motion-resistance-shoulder-press.m4a',
+    )
+
+    taroHarness.showCallbacks[0]?.()
+    page.rerender()
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+  })
+
+  it('actionId 切换时立即停止旧语音且新请求失败不遗留旧动作', async () => {
+    const oldPlayback = deferred<boolean>()
+    motionInstructionAudioHarness.play.mockReturnValueOnce(oldPlayback.promise)
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+    expect(findButtonByText(page.element, '正在播放说明')).toBeTruthy()
+
+    motionInstructionAudioHarness.stop.mockClear()
+    requestMock.mockRejectedValueOnce(new Error('新动作加载失败'))
+    taroHarness.routerParams.actionId = '43'
+    page.rerender()
+
+    expect(motionInstructionAudioHarness.stop).toHaveBeenCalledTimes(1)
+
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('新动作加载失败')
+    expect(textContent(page.element)).not.toContain('保持正面，缓慢推举。')
+    expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+
+    oldPlayback.resolve(false)
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).not.toContain('语音播放失败')
+  })
+
+  it('播放器停止异常不阻断动作预览或开始训练导航', async () => {
+    motionInstructionAudioHarness.stop.mockImplementation(() => {
+      throw new Error('stop failed')
+    })
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(() => clickButtonByText(page.element, '动作预览')).not.toThrow()
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/motion-training/preview?actionId=42',
+    })
+
+    expect(() => clickButtonByText(page.element, '开始训练')).not.toThrow()
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/motion-training/camera?actionId=42',
+    })
+  })
+
+  it('无映射动作不播放也不展示语音按钮', async () => {
+    motionInstructionAudioHarness.getSrc.mockReturnValue(undefined)
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+
+    expect(motionInstructionAudioHarness.play).not.toHaveBeenCalled()
+    expect(textContent(page.element)).not.toContain('播放说明')
+    expect(textContent(page.element)).not.toContain('语音播放失败')
   })
 
   it.each(MOTION_ACTION_CASES)('$name camera creates a session for the current action', async (actionCase) => {

@@ -1485,6 +1485,24 @@ button:active {
   white-space: pre-wrap;
 }
 
+.motion-training-instruction-audio-controls {
+  margin-top: 18px;
+}
+
+.motion-training-instruction-audio-button {
+  min-height: 72px;
+  font-size: 24px;
+  font-weight: 800;
+}
+
+.motion-training-instruction-audio-error {
+  display: block;
+  margin-top: 12px;
+  color: #b42318;
+  font-size: 22px;
+  line-height: 1.5;
+}
+
 .shoulder-guide-start {
   width: 100%;
   margin-top: 30px;
