@@ -21,6 +21,14 @@ const expectedMotionAudioKeys = [
   'motion-resistance-shoulder-press',
 ]
 
+const expectedMotionAudioSha256 = {
+  'motion-aerobic-high-knee': 'd5650f7b5bee482aa32953e1f06e974cea6d97aa18bc007c5fbc7b5ec9302674',
+  'motion-balance-sit-stand': 'b6e32e46d40466ded6a451aafab13dc3e6ca746e5dd53643055aa00168f66e24',
+  'motion-resistance-row': '4e47b657633bf1527d68d15d7c687626ccedaa1c27a9402ae258eee6aa7a64cf',
+  'motion-resistance-leg-kickback': '725ea66457c3ff7fac511a7fc3713eb2848f45c6fc96c070029fbb70342882e1',
+  'motion-resistance-shoulder-press': '3fed2a4235efa9343b68fbcb30d453cfb763c63f8b145bc6308fad7773382809',
+}
+
 const repositoryRoot = join(import.meta.dirname, '..')
 let fixtureRoot = ''
 
@@ -86,6 +94,7 @@ describe('buildStaticAssets', () => {
       if (entry.kind === 'motion-instruction-audio') {
         const source = await readFile(join(fixtureRoot, 'resources', 'motion-instruction-audio', 'source', `${entry.key}.m4a`))
         expect(sha256(output)).toBe(sha256(source))
+        expect(entry.sha256).toBe(expectedMotionAudioSha256[entry.key])
         expect(entry.contentType).toBe('audio/mp4')
         expect('width' in entry).toBe(false)
         expect('height' in entry).toBe(false)
@@ -129,5 +138,12 @@ describe('buildStaticAssets', () => {
       expect(audioMap).toContain(entry.relativePath)
       expect(gameMap).not.toContain(entry.key)
     }
+  })
+
+  it('rejects a motion audio source whose SHA-256 differs from the accepted recording', async () => {
+    const key = 'motion-resistance-row'
+    await writeFile(join(fixtureRoot, 'resources', 'motion-instruction-audio', 'source', `${key}.m4a`), 'replaced audio')
+
+    await expect(buildStaticAssets(fixtureOptions())).rejects.toThrow(new RegExp(`${key}.*SHA-256`, 'i'))
   })
 })
