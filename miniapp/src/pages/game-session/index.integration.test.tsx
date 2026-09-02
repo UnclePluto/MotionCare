@@ -517,10 +517,97 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     page.rerender()
     const startButton = findButtonByText(page.element, '开始游戏')
     expect(startButton.props.disabled).toBe(true)
+    expect(textContent(page.element)).toContain('正在准备训练图片')
+    expect(textContent(page.element)).toContain('已完成 0/5')
+    expect(textContent(page.element)).not.toContain('训练图片已准备完成')
+    expect(textContent(page.element)).not.toContain('100%')
     click(startButton)
     await vi.advanceTimersByTimeAsync(5000)
     page.rerender()
     expect(textContent(page.element)).not.toContain('提前结束')
+    page.unmount()
+  })
+
+  it('重试开始后忽略旧题树第二个迟到的图片错误', async () => {
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(3700)
+    page.rerender()
+    const oldImages = findAll(page.element, (item) => hasClass(item, 'game-card-image'))
+    expect(oldImages.length).toBeGreaterThanOrEqual(2)
+    const firstOldOnError = oldImages[0].props.onError
+    const secondOldOnError = oldImages[1].props.onError
+    expect(typeof firstOldOnError).toBe('function')
+    expect(typeof secondOldOnError).toBe('function')
+
+    firstOldOnError?.()
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片加载失败')
+
+    const retryImage = deferred<{ path: string }>()
+    taroHarness.taroMock.getImageInfo.mockImplementation(() => retryImage.promise)
+    click(findButtonByText(page.element, '重新加载'))
+    page.rerender()
+    expect(textContent(page.element)).toContain('正在准备训练图片')
+
+    secondOldOnError?.()
+    page.rerender()
+    expect(textContent(page.element)).toContain('正在准备训练图片')
+    expect(textContent(page.element)).not.toContain('训练图片加载失败')
+
+    retryImage.resolve({ path: 'wxfile://game-images/retry.webp' })
+    await flushPromises(30)
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).toContain('5/5')
+    page.unmount()
+  })
+
+  it('新动作准备完成后忽略旧动作题树迟到的图片错误', async () => {
+    const firstPrescription = prescriptionFor('game-memory-pattern-sequence', '图案顺序记忆')
+    prescriptionHarness.current = {
+      ...firstPrescription,
+      actions: [
+        ...firstPrescription.actions,
+        {
+          ...firstPrescription.actions[0],
+          id: 102,
+          action_library_item: 102,
+          source_key: 'game-executive-category-switch',
+          action_name: '分类切换',
+        },
+      ],
+    }
+    const page = renderPage()
+    taroHarness.showCallbacks.at(-1)?.()
+    await flushPromises(20)
+    page.rerender()
+    await flushPromises(20)
+    page.rerender()
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(3700)
+    page.rerender()
+    const oldImages = findAll(page.element, (item) => hasClass(item, 'game-card-image'))
+    expect(oldImages.length).toBeGreaterThanOrEqual(2)
+    const firstOldOnError = oldImages[0].props.onError
+    const secondOldOnError = oldImages[1].props.onError
+
+    firstOldOnError?.()
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片加载失败')
+
+    taroHarness.routerParams.actionId = '102'
+    page.rerender()
+    await flushPromises(20)
+    page.rerender()
+    expect(textContent(page.element)).toContain('分类切换')
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+
+    secondOldOnError?.()
+    page.rerender()
+    expect(textContent(page.element)).toContain('分类切换')
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).not.toContain('训练图片加载失败')
     page.unmount()
   })
 

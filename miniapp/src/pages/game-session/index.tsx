@@ -87,6 +87,15 @@ type SessionPhase = 'loading' | 'setup' | 'intro' | 'playing' | 'paused' | 'resu
 
 type ImageAssetStatus = 'idle' | 'loading' | 'ready' | 'failed'
 
+type ImageAssetToken = Readonly<{
+  actionId: number
+  generation: number
+}>
+
+type ReadyGameImageAssets = ImageAssetToken & Readonly<{
+  paths: LoadedGameImagePathMap
+}>
+
 type UnitResult = {
   correct: boolean
   detail?: Record<string, unknown>
@@ -200,7 +209,8 @@ export default function GameSessionPage() {
     total: 0,
     percent: 0,
   })
-  const [loadedGameImagePaths, setLoadedGameImagePaths] = useState<LoadedGameImagePathMap | null>(null)
+  const [imageAssetToken, setImageAssetToken] = useState<ImageAssetToken | null>(null)
+  const [readyGameImageAssets, setReadyGameImageAssets] = useState<ReadyGameImageAssets | null>(null)
   const activeColorInputRef = useRef<ColorToken[]>([])
   const activeColorRoundRef = useRef<ColorSequenceRound | null>(null)
   const activePatternInputRef = useRef<string[]>([])
@@ -244,7 +254,7 @@ export default function GameSessionPage() {
   const loadedRef = useRef(false)
   const introRunIdRef = useRef(0)
   const imageAssetGenerationRef = useRef(0)
-  const preparedImageActionIdRef = useRef<number | null>(null)
+  const readyGameImageAssetsRef = useRef<ReadyGameImageAssets | null>(null)
 
   const action = useMemo<PrescriptionAction | null>(() => {
     return prescription?.actions.find((item) => item.id === actionId) ?? null
@@ -252,6 +262,23 @@ export default function GameSessionPage() {
   const actionIsGame = action?.internal_type === 'game'
   const gameCode = action ? gameCodeForActionSource(action.source_key) : null
   const requiredImageKeys = requiredGameImageKeys(gameCode)
+  const imageAssetTokenMatchesAction = imageAssetToken?.actionId === action?.id
+  const effectiveImageAssetStatus: ImageAssetStatus = imageAssetTokenMatchesAction
+    ? imageAssetStatus
+    : requiredImageKeys.length > 0
+      ? 'loading'
+      : 'idle'
+  const effectiveImageAssetProgress: GameImageLoadProgress = imageAssetTokenMatchesAction
+    ? imageAssetProgress
+    : { completed: 0, total: requiredImageKeys.length, percent: 0 }
+  const currentReadyGameImageAssets = (
+    effectiveImageAssetStatus === 'ready'
+    && readyGameImageAssets?.actionId === action?.id
+    && readyGameImageAssets.generation === imageAssetToken?.generation
+    && readyGameImageAssets.generation === imageAssetGenerationRef.current
+  )
+    ? readyGameImageAssets
+    : null
   const difficulty = DIFFICULTY_OPTIONS[difficultyIndex] ?? '简单'
   const prescribedDifficulty = normalizeDifficulty(action?.difficulty ?? '')
   const adjustedDifficulty = difficulty !== prescribedDifficulty
@@ -378,15 +405,18 @@ export default function GameSessionPage() {
   async function prepareGameImages(gameCodeValue: GameCode, actionIdValue: number): Promise<void> {
     const generation = imageAssetGenerationRef.current + 1
     imageAssetGenerationRef.current = generation
-    preparedImageActionIdRef.current = null
+    const token: ImageAssetToken = { actionId: actionIdValue, generation }
+    readyGameImageAssetsRef.current = null
+    setReadyGameImageAssets(null)
+    setImageAssetToken(token)
     const requiredKeys = requiredGameImageKeys(gameCodeValue)
     const isCurrent = () => imageAssetGenerationRef.current === generation
 
-    setLoadedGameImagePaths(null)
     if (requiredKeys.length === 0) {
+      const readyAssets: ReadyGameImageAssets = { ...token, paths: {} }
       setImageAssetProgress({ completed: 0, total: 0, percent: 100 })
-      setLoadedGameImagePaths({})
-      preparedImageActionIdRef.current = actionIdValue
+      readyGameImageAssetsRef.current = readyAssets
+      setReadyGameImageAssets(readyAssets)
       setImageAssetStatus('ready')
       return
     }
@@ -402,30 +432,33 @@ export default function GameSessionPage() {
         },
       })
       if (!isCurrent()) return
-      setLoadedGameImagePaths(paths)
-      preparedImageActionIdRef.current = actionIdValue
+      const readyAssets: ReadyGameImageAssets = { ...token, paths }
+      readyGameImageAssetsRef.current = readyAssets
+      setReadyGameImageAssets(readyAssets)
       setImageAssetStatus('ready')
     } catch (loadError) {
       if (loadError instanceof GameImagePreloadCancelledError || !isCurrent()) return
-      preparedImageActionIdRef.current = null
-      setLoadedGameImagePaths(null)
+      readyGameImageAssetsRef.current = null
+      setReadyGameImageAssets(null)
       setImageAssetStatus('failed')
     }
   }
 
-  function handleGameImageRenderError() {
-    if (imageAssetStatus !== 'ready') return
+  function handleGameImageRenderError(renderedAssets: ReadyGameImageAssets | null) {
+    if (!renderedAssets) return
+    if (readyGameImageAssetsRef.current !== renderedAssets) return
+    if (imageAssetGenerationRef.current !== renderedAssets.generation) return
     imageAssetGenerationRef.current += 1
-    preparedImageActionIdRef.current = null
+    readyGameImageAssetsRef.current = null
     resetSessionState()
-    setLoadedGameImagePaths(null)
+    setReadyGameImageAssets(null)
     setImageAssetStatus('failed')
     setError('')
     setSessionPhase('setup')
   }
 
   function preparedGameImagePath(key: GameImageKey): string {
-    return loadedGameImagePath(loadedGameImagePaths ?? {}, key)
+    return loadedGameImagePath(currentReadyGameImageAssets?.paths ?? {}, key)
   }
 
   function returnToCurrentExercisePlan() {
@@ -533,6 +566,7 @@ export default function GameSessionPage() {
     void prepareGameImages(gameCode, action.id)
     return () => {
       imageAssetGenerationRef.current += 1
+      readyGameImageAssetsRef.current = null
     }
   }, [action, actionIsGame, gameCode, loaded])
 
@@ -577,6 +611,7 @@ export default function GameSessionPage() {
     return () => {
       introRunIdRef.current += 1
       imageAssetGenerationRef.current += 1
+      readyGameImageAssetsRef.current = null
       invalidateSoundPreviewRun()
       clearRoundTimers({ suppressStateUpdates: true })
       clearSessionTimer()
@@ -979,7 +1014,7 @@ export default function GameSessionPage() {
   }
 
   async function startIntro() {
-    if (imageAssetStatus !== 'ready' || preparedImageActionIdRef.current !== action?.id) return
+    if (effectiveImageAssetStatus !== 'ready' || !currentReadyGameImageAssets) return
     if (phaseRef.current !== 'setup') return
     if (!actionIsGame || !action) {
       setError('游戏动作无效，请返回当前运动计划重新进入')
@@ -1691,7 +1726,7 @@ export default function GameSessionPage() {
                       className='sequence-memory-image'
                       src={preparedGameImagePath(currentPattern.imageKey)}
                       mode='aspectFit'
-                      onError={handleGameImageRenderError}
+                      onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
                     />
                     <Text className='sequence-memory-label'>{currentPattern.label}</Text>
                   </View>
@@ -1717,7 +1752,7 @@ export default function GameSessionPage() {
                           className='sequence-answer-image'
                           src={preparedGameImagePath(selectedPattern.imageKey)}
                           mode='aspectFit'
-                          onError={handleGameImageRenderError}
+                          onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
                         />
                         <Text className='sequence-answer-label'>{selectedPattern.label}</Text>
                       </View>
@@ -1749,7 +1784,7 @@ export default function GameSessionPage() {
                   className='game-image game-card-image'
                   src={preparedGameImagePath(pattern.imageKey)}
                   mode='aspectFit'
-                  onError={handleGameImageRenderError}
+                  onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
                 />
                 <Text className='game-card-label'>{pattern.label}</Text>
               </View>
@@ -1774,7 +1809,7 @@ export default function GameSessionPage() {
             className='category-image'
             src={preparedGameImagePath(activeCategoryRound.item.imageKey)}
             mode='aspectFit'
-            onError={handleGameImageRenderError}
+            onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
           />
           <Text className='category-label'>{activeCategoryRound.item.label}</Text>
         </View>
@@ -1847,7 +1882,7 @@ export default function GameSessionPage() {
                         className='sound-card-image'
                         src={preparedGameImagePath(card.imageKey)}
                         mode='aspectFit'
-                        onError={handleGameImageRenderError}
+                        onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
                       />
                     </View>
                   ) : (
@@ -1883,7 +1918,7 @@ export default function GameSessionPage() {
               className='puzzle-preview-image'
               src={preparedGameImagePath(activePuzzleRound.imageAssetKey)}
               mode='aspectFill'
-              onError={handleGameImageRenderError}
+              onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
             />
           </View>
         ) : (
@@ -1900,7 +1935,7 @@ export default function GameSessionPage() {
                     src={preparedGameImagePath(activePuzzleRound.imageAssetKey)}
                     mode='scaleToFill'
                     style={puzzleTileImageStyle(activePuzzleRound, tile)}
-                    onError={handleGameImageRenderError}
+                    onError={() => handleGameImageRenderError(currentReadyGameImageAssets)}
                   />
                 </View>
               </Button>
@@ -1957,7 +1992,7 @@ export default function GameSessionPage() {
     )
   }
 
-  if (imageAssetStatus === 'failed') {
+  if (effectiveImageAssetStatus === 'failed') {
     return (
       <View className='page game-session-page hainan-game-page game-state-page image-asset-error-page'>
         <View className='image-asset-error-panel'>
@@ -2028,18 +2063,18 @@ export default function GameSessionPage() {
         ) : null}
 
         {requiredImageKeys.length > 0 ? (
-          <View className={`image-asset-progress-panel image-asset-progress-${imageAssetStatus}`}>
+          <View className={`image-asset-progress-panel image-asset-progress-${effectiveImageAssetStatus}`}>
             <Text className='image-asset-progress-title'>
-              {imageAssetStatus === 'ready' ? '训练图片已准备完成' : '正在准备训练图片'}
+              {effectiveImageAssetStatus === 'ready' ? '训练图片已准备完成' : '正在准备训练图片'}
             </Text>
             <View className='image-asset-progress-summary'>
-              <Text>已完成 {imageAssetProgress.completed}/{imageAssetProgress.total}</Text>
-              <Text>{imageAssetProgress.percent}%</Text>
+              <Text>已完成 {effectiveImageAssetProgress.completed}/{effectiveImageAssetProgress.total}</Text>
+              <Text>{effectiveImageAssetProgress.percent}%</Text>
             </View>
             <View className='image-asset-progress-track'>
               <View
                 className='image-asset-progress-fill'
-                style={{ width: `${imageAssetProgress.percent}%` }}
+                style={{ width: `${effectiveImageAssetProgress.percent}%` }}
               />
             </View>
             <Text className='muted'>全部图片准备完成后，才能开始本次训练。</Text>
@@ -2052,8 +2087,8 @@ export default function GameSessionPage() {
           className='primary-button full-button'
           disabled={
             phase !== 'setup'
-            || imageAssetStatus !== 'ready'
-            || preparedImageActionIdRef.current !== action.id
+            || effectiveImageAssetStatus !== 'ready'
+            || !currentReadyGameImageAssets
           }
           onClick={startIntro}
         >
