@@ -4,7 +4,31 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 
-const ALLOWED_CONTENT_TYPES = new Set(['image/webp', 'audio/mp4'])
+const CANONICAL_ASSET_SPECS = new Map([
+  ['pattern_sun', ['game-image', 'image/webp', 'webp']],
+  ['pattern_coconut', ['game-image', 'image/webp', 'webp']],
+  ['pattern_boat', ['game-image', 'image/webp', 'webp']],
+  ['pattern_lighthouse', ['game-image', 'image/webp', 'webp']],
+  ['pattern_shell', ['game-image', 'image/webp', 'webp']],
+  ['category_pineapple', ['game-image', 'image/webp', 'webp']],
+  ['category_bird', ['game-image', 'image/webp', 'webp']],
+  ['category_train', ['game-image', 'image/webp', 'webp']],
+  ['category_drum', ['game-image', 'image/webp', 'webp']],
+  ['category_phone', ['game-image', 'image/webp', 'webp']],
+  ['sound_bird', ['game-image', 'image/webp', 'webp']],
+  ['sound_train', ['game-image', 'image/webp', 'webp']],
+  ['sound_phone', ['game-image', 'image/webp', 'webp']],
+  ['sound_laugh', ['game-image', 'image/webp', 'webp']],
+  ['sound_drum', ['game-image', 'image/webp', 'webp']],
+  ['puzzle_beach', ['game-image', 'image/webp', 'webp']],
+  ['puzzle_garden', ['game-image', 'image/webp', 'webp']],
+  ['puzzle_lighthouse', ['game-image', 'image/webp', 'webp']],
+  ['motion-aerobic-high-knee', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
+  ['motion-balance-sit-stand', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
+  ['motion-resistance-row', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
+  ['motion-resistance-leg-kickback', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
+  ['motion-resistance-shoulder-press', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
+])
 
 function sha256(body) {
   return createHash('sha256').update(body).digest('hex')
@@ -42,26 +66,43 @@ async function loadManifest(manifestPath) {
   if (typeof manifest.assetVersion !== 'string' || !manifest.assetVersion) {
     throw new Error('固定素材清单版本无效')
   }
+  if (!/^[A-Za-z0-9_-]+$/.test(manifest.assetVersion)) {
+    throw new Error('固定素材清单版本无效')
+  }
   return manifest
+}
+
+function validateCanonicalKeySet(entries) {
+  if (entries.some((entry) => !entry || typeof entry !== 'object')) {
+    throw new Error('固定素材清单项格式无效')
+  }
+  const keys = entries.map((entry) => entry.key)
+  if (keys.some((key) => typeof key !== 'string' || !key)) {
+    throw new Error('固定素材清单 key 无效')
+  }
+  const uniqueKeys = new Set(keys)
+  if (
+    uniqueKeys.size !== CANONICAL_ASSET_SPECS.size
+    || [...uniqueKeys].some((key) => !CANONICAL_ASSET_SPECS.has(key))
+  ) {
+    throw new Error('固定素材清单必须包含 23 项规范素材')
+  }
 }
 
 function validateEntry(entry, assetVersion) {
   if (!entry || typeof entry !== 'object') {
     throw new Error('固定素材清单项格式无效')
   }
-  const requiredFields = ['key', 'contentType', 'sizeBytes', 'sha256', 'relativePath']
+  const requiredFields = ['kind', 'key', 'contentType', 'sizeBytes', 'sha256', 'relativePath']
   if (requiredFields.some((field) => !(field in entry))) {
     throw new Error('固定素材清单项缺少字段')
   }
   if (typeof entry.key !== 'string' || !entry.key) {
     throw new Error('固定素材清单 key 无效')
   }
-  if (entry.kind !== 'game-image' && entry.kind !== 'motion-instruction-audio') {
-    throw new Error(`固定素材 kind 无效：${entry.key}`)
-  }
-  const expectedContentType = entry.kind === 'game-image' ? 'image/webp' : 'audio/mp4'
-  if (!ALLOWED_CONTENT_TYPES.has(entry.contentType) || entry.contentType !== expectedContentType) {
-    throw new Error(`固定素材媒体类型不允许：${entry.key}`)
+  const [expectedKind, expectedContentType, extension] = CANONICAL_ASSET_SPECS.get(entry.key)
+  if (entry.kind !== expectedKind || entry.contentType !== expectedContentType) {
+    throw new Error(`固定素材规范类型或媒体类型不匹配：${entry.key}`)
   }
   if (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0) {
     throw new Error(`固定素材字节数无效：${entry.key}`)
@@ -72,13 +113,11 @@ function validateEntry(entry, assetVersion) {
   if (typeof entry.relativePath !== 'string' || !entry.relativePath) {
     throw new Error(`固定素材相对路径无效：${entry.key}`)
   }
-  const parts = entry.relativePath.split('/')
-  if (
-    entry.relativePath.includes('\\')
-    || parts.some((part) => !part || part === '.' || part === '..')
-    || parts[0] !== assetVersion
-  ) {
-    throw new Error(`固定素材相对路径无效：${entry.key}`)
+  const expectedRelativePath = (
+    `${assetVersion}/${entry.key}.${entry.sha256.slice(0, 12)}.${extension}`
+  )
+  if (entry.relativePath !== expectedRelativePath) {
+    throw new Error(`固定素材相对路径不符合规范路径：${entry.key}`)
   }
 }
 
@@ -137,6 +176,7 @@ async function verifyEntry({ entry, assetVersion, baseUrl, fetchImpl }) {
 
 export async function verifyStaticAssets({ manifestPath, baseUrl, fetchImpl = fetch }) {
   const manifest = await loadManifest(manifestPath)
+  validateCanonicalKeySet(manifest.entries)
   const canonicalBaseUrl = publicBaseUrl(baseUrl)
   const verified = []
   for (const entry of manifest.entries) {

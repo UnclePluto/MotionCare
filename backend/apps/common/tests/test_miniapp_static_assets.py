@@ -36,6 +36,15 @@ EXPECTED_KEYS = [
     "motion-resistance-shoulder-press",
 ]
 
+CANONICAL_ASSET_SPECS = {
+    key: (
+        ("motion-instruction-audio", "audio/mp4", "m4a")
+        if key.startswith("motion-")
+        else ("game-image", "image/webp", "webp")
+    )
+    for key in EXPECTED_KEYS
+}
+
 
 def _write_manifest(source_root: Path, payload: dict) -> None:
     (source_root / "manifest.json").write_text(
@@ -48,15 +57,13 @@ def static_asset_fixture(tmp_path: Path) -> Path:
     source_root.mkdir()
     entries = []
     for index, key in enumerate(EXPECTED_KEYS):
-        is_audio = key.startswith("motion-")
-        suffix = "m4a" if is_audio else "webp"
-        content_type = "audio/mp4" if is_audio else "image/webp"
+        kind, content_type, suffix = CANONICAL_ASSET_SPECS[key]
         body = f"fixture-{index}-{key}".encode()
         filename = f"{key}.{hashlib.sha256(body).hexdigest()[:12]}.{suffix}"
         (source_root / filename).write_bytes(body)
         entries.append(
             {
-                "kind": "motion-instruction-audio" if is_audio else "game-image",
+                "kind": kind,
                 "key": key,
                 "contentType": content_type,
                 "sizeBytes": len(body),
@@ -140,7 +147,12 @@ def test_manifest_rejects_a_symlink_that_escapes_the_version_directory(tmp_path)
 def test_manifest_sha256_must_match_local_response_bytes(tmp_path):
     source_root = static_asset_fixture(tmp_path)
     manifest = _manifest(source_root)
+    original_path = source_root.parent / manifest["entries"][0]["relativePath"]
     manifest["entries"][0]["sha256"] = "0" * 64
+    manifest["entries"][0]["relativePath"] = (
+        f"{source_root.name}/{manifest['entries'][0]['key']}.{'0' * 12}.webp"
+    )
+    original_path.rename(source_root.parent / manifest["entries"][0]["relativePath"])
     _write_manifest(source_root, manifest)
 
     with pytest.raises(CommandError, match="SHA-256"):
@@ -164,6 +176,84 @@ def test_manifest_rejects_an_unapproved_media_type(tmp_path):
     _write_manifest(source_root, manifest)
 
     with pytest.raises(CommandError, match="媒体类型"):
+        assets.validate_miniapp_static_assets(source_root)
+
+
+def test_manifest_rejects_a_canonical_key_classified_as_the_other_asset_type(
+    tmp_path,
+):
+    source_root = static_asset_fixture(tmp_path)
+    manifest = _manifest(source_root)
+    manifest["entries"][0]["kind"] = "motion-instruction-audio"
+    manifest["entries"][0]["contentType"] = "audio/mp4"
+    _write_manifest(source_root, manifest)
+
+    with pytest.raises(CommandError, match="规范类型"):
+        assets.validate_miniapp_static_assets(source_root)
+
+
+def test_manifest_rejects_a_duplicate_key_even_when_entry_count_stays_23(tmp_path):
+    source_root = static_asset_fixture(tmp_path)
+    manifest = _manifest(source_root)
+    manifest["entries"][-1]["key"] = manifest["entries"][0]["key"]
+    _write_manifest(source_root, manifest)
+
+    with pytest.raises(CommandError, match="23 项规范素材"):
+        assets.validate_miniapp_static_assets(source_root)
+
+
+def test_manifest_rejects_an_unknown_key_even_when_entry_count_stays_23(tmp_path):
+    source_root = static_asset_fixture(tmp_path)
+    manifest = _manifest(source_root)
+    manifest["entries"][-1]["key"] = "unknown-static-asset"
+    _write_manifest(source_root, manifest)
+
+    with pytest.raises(CommandError, match="23 项规范素材"):
+        assets.validate_miniapp_static_assets(source_root)
+
+
+def _move_first_fixture_asset(source_root: Path, relative_path: str) -> None:
+    manifest = _manifest(source_root)
+    original_path = source_root.parent / manifest["entries"][0]["relativePath"]
+    replacement_path = source_root.parent / relative_path
+    replacement_path.parent.mkdir(parents=True, exist_ok=True)
+    original_path.rename(replacement_path)
+    manifest["entries"][0]["relativePath"] = relative_path
+    _write_manifest(source_root, manifest)
+
+
+@pytest.mark.parametrize(
+    "relative_path_builder",
+    [
+        lambda version, key, prefix: f"{version}/nested/{key}.{prefix}.webp",
+        lambda version, _key, prefix: f"{version}/wrong-business-key.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/{key}.extra.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/{key}.000000000000.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/{key}.{prefix}.m4a",
+        lambda version, key, prefix: f"{version}/./{key}.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/%2e/{key}.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/%252e/{key}.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/%2e%2e/{key}.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/%252e%252e/{key}.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/{key}%2fescape.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/{key}%252fescape.{prefix}.webp",
+        lambda version, key, prefix: f"{version}/{key}%ZZ.{prefix}.webp",
+    ],
+)
+def test_manifest_requires_the_exact_canonical_two_segment_relative_path(
+    tmp_path, relative_path_builder
+):
+    source_root = static_asset_fixture(tmp_path)
+    manifest = _manifest(source_root)
+    first = manifest["entries"][0]
+    relative_path = relative_path_builder(
+        source_root.name,
+        first["key"],
+        first["sha256"][:12],
+    )
+    _move_first_fixture_asset(source_root, relative_path)
+
+    with pytest.raises(CommandError, match="规范路径"):
         assets.validate_miniapp_static_assets(source_root)
 
 

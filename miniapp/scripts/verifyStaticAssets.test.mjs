@@ -9,22 +9,39 @@ import { verifyStaticAssets } from './verify-static-assets.mjs'
 
 let fixtureRoot = ''
 
+const canonicalImageKeys = [
+  'pattern_sun', 'pattern_coconut', 'pattern_boat', 'pattern_lighthouse', 'pattern_shell',
+  'category_pineapple', 'category_bird', 'category_train', 'category_drum', 'category_phone',
+  'sound_bird', 'sound_train', 'sound_phone', 'sound_laugh', 'sound_drum',
+  'puzzle_beach', 'puzzle_garden', 'puzzle_lighthouse',
+]
+
+const canonicalAudioKeys = [
+  'motion-aerobic-high-knee',
+  'motion-balance-sit-stand',
+  'motion-resistance-row',
+  'motion-resistance-leg-kickback',
+  'motion-resistance-shoulder-press',
+]
+
+const canonicalKeys = [...canonicalImageKeys, ...canonicalAudioKeys]
+
 function sha256(body) {
   return createHash('sha256').update(body).digest('hex')
 }
 
 function buildFixtureEntries() {
-  return Array.from({ length: 23 }, (_, index) => {
-    const isAudio = index >= 18
+  return canonicalKeys.map((key, index) => {
+    const isAudio = canonicalAudioKeys.includes(key)
     const body = Buffer.from(`public-static-asset-${index}`)
     const suffix = isAudio ? 'm4a' : 'webp'
     return {
       kind: isAudio ? 'motion-instruction-audio' : 'game-image',
-      key: `asset-${index}`,
+      key,
       contentType: isAudio ? 'audio/mp4' : 'image/webp',
       sizeBytes: body.byteLength,
       sha256: sha256(body),
-      relativePath: `v-fixture/asset-${index}.${sha256(body).slice(0, 12)}.${suffix}`,
+      relativePath: `v-fixture/${key}.${sha256(body).slice(0, 12)}.${suffix}`,
       body,
     }
   })
@@ -76,7 +93,7 @@ describe('verifyStaticAssets', () => {
 
     expect(verified).toHaveLength(23)
     expect(verified[0].url).toBe(
-      'https://cdn.example.test/motioncare/static-assets/v-fixture/asset-0.b6793b4f9525.webp',
+      'https://cdn.example.test/motioncare/static-assets/v-fixture/pattern_sun.b6793b4f9525.webp',
     )
   })
 
@@ -94,13 +111,75 @@ describe('verifyStaticAssets', () => {
   it('rejects a manifest kind whose media type belongs to the other asset class', async () => {
     const entries = buildFixtureEntries()
     entries[0].contentType = 'audio/mp4'
+    entries[0].kind = 'motion-instruction-audio'
     const manifestPath = await writeManifest(entries)
+    let responseIndex = 0
 
     await expect(verifyStaticAssets({
       manifestPath,
       baseUrl: 'https://cdn.example.test/motioncare/static-assets',
-      fetchImpl: async () => responseFor(entries[0]),
+      fetchImpl: async () => responseFor(entries[responseIndex++]),
     })).rejects.toThrow(/媒体类型/)
+  })
+
+  it('rejects a duplicate canonical key even when the entry count stays 23', async () => {
+    const entries = buildFixtureEntries()
+    entries.at(-1).key = entries[0].key
+    const manifestPath = await writeManifest(entries)
+    let responseIndex = 0
+
+    await expect(verifyStaticAssets({
+      manifestPath,
+      baseUrl: 'https://cdn.example.test/motioncare/static-assets',
+      fetchImpl: async () => responseFor(entries[responseIndex++]),
+    })).rejects.toThrow(/23 项规范素材/)
+  })
+
+  it('rejects an unknown key even when the entry count stays 23', async () => {
+    const entries = buildFixtureEntries()
+    entries.at(-1).key = 'unknown-static-asset'
+    const manifestPath = await writeManifest(entries)
+    let responseIndex = 0
+
+    await expect(verifyStaticAssets({
+      manifestPath,
+      baseUrl: 'https://cdn.example.test/motioncare/static-assets',
+      fetchImpl: async () => responseFor(entries[responseIndex++]),
+    })).rejects.toThrow(/23 项规范素材/)
+  })
+
+  it.each([
+    ['extra directory', ({ version, key, prefix }) => `${version}/nested/${key}.${prefix}.webp`],
+    ['wrong business key', ({ version, prefix }) => `${version}/wrong-key.${prefix}.webp`],
+    ['extra filename segment', ({ version, key, prefix }) => `${version}/${key}.extra.${prefix}.webp`],
+    ['wrong hash prefix', ({ version, key, prefix }) => `${version}/${key}.000000000000.${prefix}.webp`],
+    ['wrong extension', ({ version, key, prefix }) => `${version}/${key}.${prefix}.m4a`],
+    ['absolute path', ({ key, prefix }) => `/tmp/${key}.${prefix}.webp`],
+    ['literal current segment', ({ version, key, prefix }) => `${version}/./${key}.${prefix}.webp`],
+    ['encoded current segment', ({ version, key, prefix }) => `${version}/%2e/${key}.${prefix}.webp`],
+    ['double-encoded current segment', ({ version, key, prefix }) => `${version}/%252e/${key}.${prefix}.webp`],
+    ['literal parent segment', ({ version, key, prefix }) => `${version}/../${key}.${prefix}.webp`],
+    ['encoded parent segment', ({ version, key, prefix }) => `${version}/%2e%2e/${key}.${prefix}.webp`],
+    ['double-encoded parent segment', ({ version, key, prefix }) => `${version}/%252e%252e/${key}.${prefix}.webp`],
+    ['encoded slash', ({ version, key, prefix }) => `${version}/${key}%2fescape.${prefix}.webp`],
+    ['double-encoded slash', ({ version, key, prefix }) => `${version}/${key}%252fescape.${prefix}.webp`],
+    ['invalid percent escape', ({ version, key, prefix }) => `${version}/${key}%ZZ.${prefix}.webp`],
+  ])('rejects a non-canonical path: %s', async (_name, buildPath) => {
+    const entries = buildFixtureEntries()
+    const first = entries[0]
+    first.relativePath = buildPath({
+      version: 'v-fixture',
+      key: first.key,
+      prefix: first.sha256.slice(0, 12),
+    })
+    const manifestPath = await writeManifest(entries)
+    let responseIndex = 0
+
+    await expect(verifyStaticAssets({
+      manifestPath,
+      baseUrl: 'https://cdn.example.test/motioncare/static-assets',
+      fetchImpl: async () => responseFor(entries[responseIndex++]),
+    })).rejects.toThrow(/规范路径/)
   })
 
   it.each([

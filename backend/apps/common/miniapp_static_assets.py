@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Literal
 
 import qiniu
@@ -25,38 +25,57 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 OBJECT_PREFIX = "motioncare/static-assets"
-EXPECTED_ASSET_KEYS = frozenset(
-    {
-        "pattern_sun",
-        "pattern_coconut",
-        "pattern_boat",
-        "pattern_lighthouse",
-        "pattern_shell",
-        "category_pineapple",
-        "category_bird",
-        "category_train",
-        "category_drum",
-        "category_phone",
-        "sound_bird",
-        "sound_train",
-        "sound_phone",
-        "sound_laugh",
-        "sound_drum",
-        "puzzle_beach",
-        "puzzle_garden",
-        "puzzle_lighthouse",
-        "motion-aerobic-high-knee",
-        "motion-balance-sit-stand",
-        "motion-resistance-row",
-        "motion-resistance-leg-kickback",
-        "motion-resistance-shoulder-press",
-    }
-)
-ALLOWED_CONTENT_TYPES = frozenset({"image/webp", "audio/mp4"})
+CANONICAL_ASSET_SPECS = {
+    "pattern_sun": ("game-image", "image/webp", "webp"),
+    "pattern_coconut": ("game-image", "image/webp", "webp"),
+    "pattern_boat": ("game-image", "image/webp", "webp"),
+    "pattern_lighthouse": ("game-image", "image/webp", "webp"),
+    "pattern_shell": ("game-image", "image/webp", "webp"),
+    "category_pineapple": ("game-image", "image/webp", "webp"),
+    "category_bird": ("game-image", "image/webp", "webp"),
+    "category_train": ("game-image", "image/webp", "webp"),
+    "category_drum": ("game-image", "image/webp", "webp"),
+    "category_phone": ("game-image", "image/webp", "webp"),
+    "sound_bird": ("game-image", "image/webp", "webp"),
+    "sound_train": ("game-image", "image/webp", "webp"),
+    "sound_phone": ("game-image", "image/webp", "webp"),
+    "sound_laugh": ("game-image", "image/webp", "webp"),
+    "sound_drum": ("game-image", "image/webp", "webp"),
+    "puzzle_beach": ("game-image", "image/webp", "webp"),
+    "puzzle_garden": ("game-image", "image/webp", "webp"),
+    "puzzle_lighthouse": ("game-image", "image/webp", "webp"),
+    "motion-aerobic-high-knee": (
+        "motion-instruction-audio",
+        "audio/mp4",
+        "m4a",
+    ),
+    "motion-balance-sit-stand": (
+        "motion-instruction-audio",
+        "audio/mp4",
+        "m4a",
+    ),
+    "motion-resistance-row": (
+        "motion-instruction-audio",
+        "audio/mp4",
+        "m4a",
+    ),
+    "motion-resistance-leg-kickback": (
+        "motion-instruction-audio",
+        "audio/mp4",
+        "m4a",
+    ),
+    "motion-resistance-shoulder-press": (
+        "motion-instruction-audio",
+        "audio/mp4",
+        "m4a",
+    ),
+}
+EXPECTED_ASSET_KEYS = frozenset(CANONICAL_ASSET_SPECS)
 REQUIRED_ENTRY_FIELDS = frozenset(
     {"kind", "key", "contentType", "sizeBytes", "sha256", "relativePath"}
 )
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+ASSET_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -90,31 +109,29 @@ def _load_manifest(source_root: Path) -> dict:
 
 
 def _resolve_asset_path(
-    *, source_root: Path, relative_path_value: object
+    *,
+    source_root: Path,
+    relative_path_value: object,
+    key: str,
+    sha256: str,
+    extension: str,
 ) -> tuple[Path, str]:
     if not isinstance(relative_path_value, str) or not relative_path_value:
         raise CommandError("固定素材路径无效")
-    if "\\" in relative_path_value:
-        raise CommandError("固定素材路径无效")
-
-    raw_parts = relative_path_value.split("/")
-    relative_path = PurePosixPath(relative_path_value)
-    if (
-        relative_path.is_absolute()
-        or any(part in {"", ".", ".."} for part in raw_parts)
-        or not relative_path.parts
-        or relative_path.parts[0] != source_root.name
-    ):
-        raise CommandError("固定素材路径必须位于指定版本目录")
+    expected_relative_path = (
+        f"{source_root.name}/{key}.{sha256[:12]}.{extension}"
+    )
+    if relative_path_value != expected_relative_path:
+        raise CommandError("固定素材路径不符合规范路径")
 
     try:
-        candidate = (source_root.parent / Path(*relative_path.parts)).resolve(strict=True)
+        candidate = (source_root.parent / expected_relative_path).resolve(strict=True)
         candidate.relative_to(source_root)
     except (OSError, RuntimeError, ValueError) as exc:
         raise CommandError("固定素材路径越界或不存在") from exc
     if not candidate.is_file():
         raise CommandError("固定素材路径不是普通文件")
-    return candidate, relative_path.as_posix()
+    return candidate, expected_relative_path
 
 
 def _sha256(path: Path) -> str:
@@ -142,6 +159,8 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
         raise CommandError("固定素材版本目录不存在") from exc
     if not source_root.is_dir():
         raise CommandError("固定素材版本目录无效")
+    if not ASSET_VERSION_PATTERN.fullmatch(source_root.name):
+        raise CommandError("固定素材版本目录名无效")
 
     manifest = _load_manifest(source_root)
     if manifest.get("assetVersion") != source_root.name:
@@ -155,6 +174,8 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
         raise CommandError("固定素材清单项缺少字段")
 
     manifest_keys = [entry["key"] for entry in entries]
+    if any(not isinstance(key, str) or not key for key in manifest_keys):
+        raise CommandError("固定素材清单 key 无效")
     if len(set(manifest_keys)) != len(manifest_keys) or set(manifest_keys) != EXPECTED_ASSET_KEYS:
         raise CommandError("固定素材清单必须包含 23 项规范素材")
 
@@ -166,15 +187,9 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
         content_type = entry["contentType"]
         size_bytes = entry["sizeBytes"]
         expected_sha256 = entry["sha256"]
-        if not isinstance(key, str) or not key:
-            raise CommandError("固定素材清单 key 无效")
-        if kind not in {"game-image", "motion-instruction-audio"}:
-            raise CommandError(f"固定素材 kind 无效：{key}")
-        expected_content_type = (
-            "audio/mp4" if kind == "motion-instruction-audio" else "image/webp"
-        )
-        if content_type not in ALLOWED_CONTENT_TYPES or content_type != expected_content_type:
-            raise CommandError(f"固定素材媒体类型不允许：{key}")
+        expected_kind, expected_content_type, extension = CANONICAL_ASSET_SPECS[key]
+        if kind != expected_kind or content_type != expected_content_type:
+            raise CommandError(f"固定素材规范类型或媒体类型不匹配：{key}")
         if type(size_bytes) is not int or size_bytes < 0:
             raise CommandError(f"固定素材字节数无效：{key}")
         if not isinstance(expected_sha256, str) or not SHA256_PATTERN.fullmatch(
@@ -185,6 +200,9 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
         path, relative_path = _resolve_asset_path(
             source_root=source_root,
             relative_path_value=entry["relativePath"],
+            key=key,
+            sha256=expected_sha256,
+            extension=extension,
         )
         if relative_path in seen_paths:
             raise CommandError(f"固定素材路径重复：{key}")
@@ -193,9 +211,6 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
             raise CommandError(f"固定素材字节数不匹配：{key}")
         if _sha256(path) != expected_sha256:
             raise CommandError(f"固定素材 SHA-256 不匹配：{key}")
-        if f".{expected_sha256[:12]}." not in path.name:
-            raise CommandError(f"固定素材文件名缺少内容哈希：{key}")
-
         prepared.append(
             PreparedStaticAsset(
                 key=key,
