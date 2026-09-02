@@ -85,8 +85,8 @@ const reactHarness = vi.hoisted(() => {
       const index = hookCursor
       hookCursor += 1
       if (!depsChanged(hookEntries[index], deps)) return
-      effectCleanups[index]?.()
       queuedEffects.push(() => {
+        effectCleanups[index]?.()
         const cleanup = callback()
         effectCleanups[index] = typeof cleanup === 'function' ? cleanup : undefined
       })
@@ -263,11 +263,11 @@ function click(element: ReactElement): void {
 }
 
 function renderPage() {
-  const render = () => {
+  const render = (runEffects = true) => {
     reactHarness.beginRender()
     let element = GameSessionPage() as ReactElement
     while (element && typeof element.type === 'function') element = element.type(element.props)
-    reactHarness.runEffects()
+    if (runEffects) reactHarness.runEffects()
     return element
   }
   let element = render()
@@ -277,6 +277,10 @@ function renderPage() {
     },
     rerender() {
       element = render()
+      return element
+    },
+    rerenderWithoutEffects() {
+      element = render(false)
       return element
     },
     unmount() {
@@ -607,6 +611,44 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     page.rerender()
     expect(textContent(page.element)).toContain('分类切换')
     expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).not.toContain('训练图片加载失败')
+    page.unmount()
+  })
+
+  it('新 action 已渲染但 effect 未执行时立即忽略旧图片错误', async () => {
+    const firstPrescription = prescriptionFor('game-memory-pattern-sequence', '图案顺序记忆 A')
+    prescriptionHarness.current = {
+      ...firstPrescription,
+      actions: [
+        ...firstPrescription.actions,
+        {
+          ...firstPrescription.actions[0],
+          id: 102,
+          action_library_item: 102,
+          action_name: '图案顺序记忆 B',
+        },
+      ],
+    }
+    const page = renderPage()
+    taroHarness.showCallbacks.at(-1)?.()
+    await flushPromises(20)
+    page.rerender()
+    await flushPromises(20)
+    page.rerender()
+    await enterPlaying(page)
+    const staleOnError = findByClass(page.element, 'sequence-memory-image').props.onError
+    expect(typeof staleOnError).toBe('function')
+
+    click(findButtonByText(page.element, '提前结束'))
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练结果')
+
+    taroHarness.routerParams.actionId = '102'
+    page.rerenderWithoutEffects()
+    staleOnError?.()
+    page.rerenderWithoutEffects()
+
+    expect(textContent(page.element)).toContain('训练结果')
     expect(textContent(page.element)).not.toContain('训练图片加载失败')
     page.unmount()
   })

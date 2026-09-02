@@ -255,10 +255,12 @@ export default function GameSessionPage() {
   const introRunIdRef = useRef(0)
   const imageAssetGenerationRef = useRef(0)
   const readyGameImageAssetsRef = useRef<ReadyGameImageAssets | null>(null)
+  const currentRenderedActionIdRef = useRef<number | null>(null)
 
   const action = useMemo<PrescriptionAction | null>(() => {
     return prescription?.actions.find((item) => item.id === actionId) ?? null
   }, [actionId, prescription])
+  currentRenderedActionIdRef.current = action?.id ?? null
   const actionIsGame = action?.internal_type === 'game'
   const gameCode = action ? gameCodeForActionSource(action.source_key) : null
   const requiredImageKeys = requiredGameImageKeys(gameCode)
@@ -446,6 +448,7 @@ export default function GameSessionPage() {
 
   function handleGameImageRenderError(renderedAssets: ReadyGameImageAssets | null) {
     if (!renderedAssets) return
+    if (renderedAssets.actionId !== currentRenderedActionIdRef.current) return
     if (readyGameImageAssetsRef.current !== renderedAssets) return
     if (imageAssetGenerationRef.current !== renderedAssets.generation) return
     imageAssetGenerationRef.current += 1
