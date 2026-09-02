@@ -93,6 +93,10 @@ export async function preloadGameImages(
     await Promise.all(Array.from({ length: Math.min(workerCount, total) }, () => worker()))
   } catch (error) {
     terminal = true
+    if (!isCurrent()) {
+      terminalError = new GameImagePreloadCancelledError()
+      throw terminalError
+    }
     if (terminalError === undefined) terminalError = error
     throw terminalError
   }

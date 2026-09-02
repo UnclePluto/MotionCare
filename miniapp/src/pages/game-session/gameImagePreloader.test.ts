@@ -35,12 +35,14 @@ function createControlledImageInfo() {
   let active = 0
   let peak = 0
   const pending: DeferredImageInfo[] = []
+  const startedKeys: GameImageKey[] = []
   const sourceToKey = new Map(KEYS.map((key) => [gameImageRemoteUrl(key), key]))
 
   const getImageInfo = ({ src }: { src: string }) => {
     const key = sourceToKey.get(src)
     if (!key) throw new Error(`unexpected source: ${src}`)
 
+    startedKeys.push(key)
     active += 1
     peak = Math.max(peak, active)
     return new Promise<{ path: string }>((resolve, reject) => {
@@ -67,6 +69,7 @@ function createControlledImageInfo() {
     },
     getImageInfo,
     pending,
+    startedKeys,
   }
 }
 
@@ -187,26 +190,33 @@ describe('preloadGameImages', () => {
     ])
   })
 
-  it('rejects on one failed image without exposing a partial map or reporting a late worker', async () => {
+  it('does not start queued images after one of three active requests fails', async () => {
     const controlled = createControlledImageInfo()
     const onProgress = vi.fn<(progress: GameImageLoadProgress) => void>()
-    const loading = preloadGameImages(['pattern_sun', 'pattern_coconut'], {
+    const loading = preloadGameImages(KEYS, {
       getImageInfo: controlled.getImageInfo,
       isCurrent: () => true,
       onProgress,
     })
 
     await flushWorkers()
+    expect(controlled.startedKeys).toEqual(['pattern_sun', 'pattern_coconut', 'pattern_boat'])
     const failedRequest = controlled.pending.shift()
-    const lateRequest = controlled.pending.shift()
-    if (!failedRequest || !lateRequest) throw new Error('expected two pending image requests')
+    const lateRequestOne = controlled.pending.shift()
+    const lateRequestTwo = controlled.pending.shift()
+    if (!failedRequest || !lateRequestOne || !lateRequestTwo) {
+      throw new Error('expected three pending image requests')
+    }
 
-    failedRequest.reject(new Error('network unavailable'))
-    await expect(loading).rejects.toThrow('network unavailable')
+    const networkError = new Error('network unavailable')
+    failedRequest.reject(networkError)
+    await expect(loading).rejects.toBe(networkError)
     expect(onProgress).toHaveBeenCalledTimes(1)
 
-    lateRequest.resolve({ path: 'wxfile://prepared/late.webp' })
+    lateRequestOne.resolve({ path: 'wxfile://prepared/late-one.webp' })
+    lateRequestTwo.resolve({ path: 'wxfile://prepared/late-two.webp' })
     await flushWorkers()
+    expect(controlled.startedKeys).toEqual(['pattern_sun', 'pattern_coconut', 'pattern_boat'])
     expect(onProgress).toHaveBeenCalledTimes(1)
   })
 
@@ -280,6 +290,27 @@ describe('preloadGameImages', () => {
     request.reject(new Error('network unavailable'))
 
     await expect(loading).rejects.toBeInstanceOf(GameImagePreloadCancelledError)
+  })
+
+  it('cancels when the session becomes stale after a worker records a network failure', async () => {
+    const controlled = createControlledImageInfo()
+    const onProgress = vi.fn<(progress: GameImageLoadProgress) => void>()
+    let current = true
+    const loading = preloadGameImages(['pattern_sun'], {
+      getImageInfo: controlled.getImageInfo,
+      isCurrent: () => current,
+      onProgress,
+    })
+
+    await flushWorkers()
+    const request = controlled.pending.shift()
+    if (!request) throw new Error('expected a pending image request')
+    request.reject(new Error('network unavailable'))
+    await Promise.resolve()
+    current = false
+
+    await expect(loading).rejects.toBeInstanceOf(GameImagePreloadCancelledError)
+    expect(onProgress).toHaveBeenCalledTimes(1)
   })
 })
 
