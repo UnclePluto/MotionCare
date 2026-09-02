@@ -36,3 +36,26 @@ export function resolveApiBaseUrl(input: {
   }
   return value
 }
+
+export function resolveAssetBaseUrl(input: {
+  configuredUrl?: string
+  target?: string
+  environment: ConfigEnvironment
+}): string {
+  const value = input.configuredUrl?.trim() || ''
+  if (input.target !== 'weapp') return value.replace(/\/+$/, '')
+
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    throw new Error('微信小程序必须配置绝对素材地址')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('微信小程序素材地址必须使用 HTTP 或 HTTPS')
+  }
+  if (input.environment === 'production' && parsed.protocol !== 'https:') {
+    throw new Error('正式微信小程序素材地址必须使用 HTTPS')
+  }
+  return value.replace(/\/+$/, '')
+}
