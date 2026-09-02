@@ -5,6 +5,7 @@
 > 范围：为微信小程序 5 个正式运动动作的文字说明增加预生成语音、自动播放和手动重播能力。
 > 关联：`docs/superpowers/plans/2026-09-01-motion-instruction-voice.md`
 > 实施记录（2026-09-02, Codex）：代码提交 `3cefec4` 已合并至 `main`；微信开发版 `7.0.3` 已上传并由用户完成体验验收。
+> 局部覆盖（2026-09-02）：本设计 §2.3、§4.3 和相关验收项中的“5 段 M4A 本地内置”决策，已由 `docs/superpowers/specs/2026-09-02-wechat-miniapp-package-size-and-game-assets-cdn-design.md` 覆盖为“预生成 M4A 使用稳定公开 CDN URL”。声音内容、自动播放、重播、生命周期与文字降级保持不变。
 
 ## 1. 背景
 
