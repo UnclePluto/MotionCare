@@ -1,11 +1,13 @@
 # 微信小程序包体与固定素材 CDN 优化设计
 
-> 状态：approved
+> 状态：implementing
 > 日期：2026-09-02
 > 范围：外置 18 张固定游戏图片和 5 段动作说明语音，缩小主包与游戏分包并建立可持续的包体预算；游戏音频继续本地内置。
 > 关联：`docs/superpowers/specs/2026-06-01-wechat-miniapp-game-experience-polish-design.md`、`docs/superpowers/specs/2026-08-09-wechat-shoulder-press-fullscreen-storage-guard-design.md`、`docs/superpowers/specs/2026-09-01-motion-instruction-voice-design.md`
 > 实施计划：`docs/superpowers/plans/2026-09-02-wechat-miniapp-package-size-and-static-assets-cdn.md`
 > 实施基线 commit：`8e6f3c2`
+> Codex 本地实施记录（2026-09-02）：Task 1 `125b38c`、`355c174`（固定素材生成与音频锁定）；Task 2 `5d28fda`、`601da05`（CDN 配置与路径校验）；Task 3 `fc702fb`、`d216bf1`（本地发布/check-only 与公开 URL 校验实现）；Task 4 `1936f39`（动作语音 CDN 接线）；Task 5 `a118aa0`（游戏图片 key 与移除本地图片）；Task 6 `ae04475`、`1fc0d8c`（预取器与取消竞态）；Task 7 `99b9409`、`7d160a3`、`6e1601a`（页面门禁与迟到错误隔离）；Task 8 `a62cea3`（包体预算门禁）。
+> 本地生产构建实测：主包 `490570` 字节，`pages/game-session` 分包 `1033774` 字节，总包 `1524344` 字节。真实七牛上传、正式 CDN 探测与缓存头、微信合法域名、开发者工具、iOS/Android 真机和微信版本上传均待用户授权，因此本 spec 保持 `implementing`。
 
 ## 1. 背景与测量基线
 

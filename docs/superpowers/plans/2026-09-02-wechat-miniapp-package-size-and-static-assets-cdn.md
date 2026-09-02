@@ -10,10 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-02-wechat-miniapp-package-size-and-game-assets-cdn-design.md`
 
-> 状态：approved
+> 状态：implementing
 > 日期：2026-09-02
 > 范围：18 张游戏图片、5 段动作说明语音、CDN 发布、运行时预取和包体预算。
 > 实施基线 commit：`8e6f3c2`
+> Codex 本地实施记录（2026-09-02）：Task 1 `125b38c`、`355c174`（固定素材生成与音频锁定）；Task 2 `5d28fda`、`601da05`（CDN 配置与路径校验）；Task 3 `fc702fb`、`d216bf1`（本地发布/check-only 与公开 URL 校验实现）；Task 4 `1936f39`（动作语音 CDN 接线）；Task 5 `a118aa0`（游戏图片 key 与移除本地图片）；Task 6 `ae04475`、`1fc0d8c`（预取器与取消竞态）；Task 7 `99b9409`、`7d160a3`、`6e1601a`（页面门禁与迟到错误隔离）；Task 8 `a62cea3`（包体预算门禁）。
+> 本地验证记录（2026-09-02）：23 项素材 `build/check/check-only` 通过；后端 `905` 项、小程序 `826` 项、前端 `265` 项测试通过；前端 lint `0` error（`5` 个既有 warning）且 build 通过；使用示例 HTTPS API/CDN 构建变量完成生产微信构建，实测主包 `490570` 字节、游戏分包 `1033774` 字节、总包 `1524344` 字节。
+> 外部延期：真实七牛上传、正式 CDN 正文/媒体类型/缓存头探测、微信合法域名确认、开发者工具依赖分析、iOS/Android 真机及微信体验版/正式版上传均待用户授权，未纳入本地完成范围。
 
 ## Global Constraints
 
@@ -28,7 +31,7 @@
 - 不新增 `Taro.saveFile`；不得改变肩部推举录像持久化文件清理和空间预检语义。
 - 不修改后端模型、migration、API、训练记录结构、游戏玩法、计分、难度或补传契约。
 - 不启用 Taro `mini.optimizeMainPackage`，不继续拆分页面或修改现有 `pages/game-session` 分包边界。
-- 当前用户未授权 Git 提交；每个提交步骤只有在用户明确授权后才执行，否则保留建议提交信息并跳过。
+- 用户已授权本隔离分支使用中文规范提交；仍禁止 merge、push、真实七牛上传、正式 CDN 探测和微信版本上传。
 - 保留其它会话的未提交文件，不修改 `.impeccable/critique/` 和 `.风格复制模式.swn`。
 
 ## File Structure
@@ -94,7 +97,7 @@
 - Produces: `MOTION_INSTRUCTION_AUDIO_ASSET_PATHS: Record<MotionSourceKey, string>`，值为 `<asset-version>/<hashed-file>.m4a`。
 - Produces: `miniapp/output/static-assets/current-version.txt`，只包含本次确定性 `assetVersion`。
 
-- [ ] **Step 1: 写素材规格和确定性失败测试**
+- [x] **Step 1: 写素材规格和确定性失败测试**
 
 在 `staticAssets.test.mjs` 固定全部业务 key，不能用目录扫描结果替代期望集合：
 
@@ -126,7 +129,7 @@ it('builds 18 images and 5 unchanged motion audios with a deterministic version'
 
 再断言：15 张卡片图为 `256×256`、3 张拼图为 `384×384`、M4A 输出 SHA-256 与源文件相同、每个文件名包含其 SHA-256 前 12 位、`--check` 在生成文件漂移时失败。
 
-- [ ] **Step 2: 运行测试并确认模块不存在**
+- [x] **Step 2: 运行测试并确认模块不存在**
 
 Run:
 
@@ -137,7 +140,7 @@ npx vitest run scripts/staticAssets.test.mjs
 
 Expected: FAIL，错误包含 `Cannot find module './staticAssets.mjs'`。
 
-- [ ] **Step 3: 安装仅用于开发构建的 Sharp**
+- [x] **Step 3: 安装仅用于开发构建的 Sharp**
 
 Run:
 
@@ -148,7 +151,7 @@ npm install --save-dev sharp
 
 Expected: `sharp` 只出现在 `devDependencies`，不会进入小程序运行包。
 
-- [ ] **Step 4: 复制源素材到 Taro sourceRoot 之外的权威目录**
+- [x] **Step 4: 复制源素材到 Taro sourceRoot 之外的权威目录**
 
 先复制而不删除 `src` 中的运行时文件，使 Task 1 独立完成后现有小程序仍可构建；本地运行时副本分别在
 Task 4 和 Task 5 接线完成后删除：
@@ -162,7 +165,7 @@ cp miniapp/src/features/motion-training/assets/audio/instructions/*.m4a miniapp/
 
 Expected: 18 张 PNG 与 5 段 M4A 数量不变；M4A SHA-256 仍为现有验收值。
 
-- [ ] **Step 5: 实现转换、哈希、版本和生成清单**
+- [x] **Step 5: 实现转换、哈希、版本和生成清单**
 
 `staticAssets.mjs` 必须使用 `node:crypto` 计算 SHA-256，使用 Sharp 对卡片图执行
 `resize(256, 256).webp({ quality: 85 })`，对拼图执行 `resize(384, 384).webp({ quality: 85 })`。
@@ -187,7 +190,7 @@ Expected: 18 张 PNG 与 5 段 M4A 数量不变；M4A SHA-256 仍为现有验收
 `output/static-assets/<asset-version>/`，写入 `output/static-assets/current-version.txt`，并生成两份无交叉条目的
 TypeScript 清单。
 
-- [ ] **Step 6: 生成真实产物并验证测试通过**
+- [x] **Step 6: 生成真实产物并验证测试通过**
 
 Run:
 
@@ -200,7 +203,7 @@ npm run check:static-assets
 
 Expected: 23 个外部文件生成；图片合计约 `298 KiB`；音频合计约 `1,028 KiB`；测试与 check 模式通过。
 
-- [ ] **Step 7: 仅在用户授权后提交本任务**
+- [x] **Step 7: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/package.json miniapp/package-lock.json miniapp/.gitignore miniapp/resources miniapp/scripts miniapp/src/pages/game-session/gameImageAssetManifest.generated.ts miniapp/src/features/motion-training/instructionAudioAssetManifest.generated.ts
@@ -226,7 +229,7 @@ git commit -m "feat(小程序): 建立固定素材生成管线"
 - Produces: `staticAssetUrl(relativePath: string, baseUrl?: string): string`，供两个运行时清单调用。
 - Defines: `process.env.TARO_APP_ASSET_BASE_URL`。
 
-- [ ] **Step 1: 写构建环境和运行时 URL 失败测试**
+- [x] **Step 1: 写构建环境和运行时 URL 失败测试**
 
 在 `buildEnvironment.test.ts` 追加：
 
@@ -241,7 +244,7 @@ it('正式微信构建要求绝对 HTTPS 素材地址', () => {
 在 `staticAssetUrl.test.ts` 断言：基础 URL 尾斜杠和相对路径首斜杠均被规范化；空相对路径、`..`、绝对 URL
 和协议相对 URL 被拒绝；结果等于 `https://cdn.example.com/assets/v-a1/file.webp`。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run:
 
@@ -252,7 +255,7 @@ npx vitest run config/buildEnvironment.test.ts src/assets/staticAssetUrl.test.ts
 
 Expected: FAIL，缺少 `resolveAssetBaseUrl` 和 `staticAssetUrl`。
 
-- [ ] **Step 3: 实现构建期校验与运行时拼接**
+- [x] **Step 3: 实现构建期校验与运行时拼接**
 
 正式微信构建为空、非绝对地址或非 HTTPS 时抛错；development 微信构建允许绝对 HTTP/HTTPS，非微信目标
 未配置时返回空字符串。`staticAssetUrl` 默认读取 `process.env.TARO_APP_ASSET_BASE_URL`，并拒绝路径穿越：
@@ -267,7 +270,7 @@ export function staticAssetUrl(relativePath: string, baseUrl = process.env.TARO_
 }
 ```
 
-- [ ] **Step 4: 接入 Taro 配置和环境样例**
+- [x] **Step 4: 接入 Taro 配置和环境样例**
 
 `config/index.ts` 读取 `TARO_APP_ASSET_BASE_URL`，通过 `resolveAssetBaseUrl` 校验，并注入：
 
@@ -281,7 +284,7 @@ defineConstants: {
 `.env.development` 与 `.env.production` 增加公开 URL 配置行；`project.config.json` 把
 `setting.minified` 改为 `true`。基础 URL 可以公开，但不得加入七牛 Access Key、Secret Key 或上传 token。
 
-- [ ] **Step 5: 运行测试与生产配置探针**
+- [x] **Step 5: 运行测试与生产配置探针**
 
 Run:
 
@@ -293,7 +296,7 @@ TARO_APP_API_BASE_URL=https://api.example.com/api TARO_APP_ASSET_BASE_URL=https:
 
 Expected: 测试通过，生产构建成功，`dist/app.js` 中不含七牛密钥或上传 token。
 
-- [ ] **Step 6: 仅在用户授权后提交本任务**
+- [x] **Step 6: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/config miniapp/src/assets miniapp/.env.development miniapp/.env.production miniapp/project.config.json
@@ -318,7 +321,7 @@ git commit -m "feat(小程序): 配置固定素材 CDN 地址"
 - CLI: `python manage.py publish_miniapp_static_assets --source-root <version-dir> [--check-only]`。
 - CLI: `node scripts/verify-static-assets.mjs --manifest <manifest.json> --base-url <https-url>`。
 
-- [ ] **Step 1: 写本地清单与七牛幂等失败测试**
+- [x] **Step 1: 写本地清单与七牛幂等失败测试**
 
 测试必须覆盖：清单缺项、路径越界、SHA-256 不匹配、媒体类型不允许、远端不存在后上传、远端 hash/大小匹配时跳过、
 远端冲突时拒绝覆盖、七牛异常不泄露 Access Key/Secret Key、`--check-only` 不发起网络操作，以及发布模块不暴露删除旧对象的路径。
@@ -340,7 +343,7 @@ def test_conflicting_remote_object_is_rejected_without_overwrite(tmp_path, monke
     upload.assert_not_called()
 ```
 
-- [ ] **Step 2: 运行后端测试并确认模块不存在**
+- [x] **Step 2: 运行后端测试并确认模块不存在**
 
 Run:
 
@@ -351,20 +354,20 @@ pytest apps/common/tests/test_miniapp_static_assets.py -q
 
 Expected: FAIL，缺少 `apps.common.miniapp_static_assets`。
 
-- [ ] **Step 3: 实现本地校验和幂等上传**
+- [x] **Step 3: 实现本地校验和幂等上传**
 
 复用 `apps.training.qiniu.stat_object_metadata_or_none` 和现有七牛配置；上传使用 `qiniu.put_file`，token
 采用 `insertOnly: 1`，并显式传入清单媒体类型。上传前后都校验七牛 etag、字节数和媒体类型；远端存在但不一致时
 抛 `CommandError`，绝不覆盖。该模块不得导入或调用七牛删除接口，旧版本目录由存储生命周期策略显式排除清理。
 日志和命令错误只包含业务 key/object key，不包含 SDK 原始异常或凭据。
 
-- [ ] **Step 4: 实现管理命令和公开 URL 校验脚本**
+- [x] **Step 4: 实现管理命令和公开 URL 校验脚本**
 
 管理命令输出每项的 `key object_key size_bytes 已存在|已上传`。`verify-static-assets.mjs` 对 manifest 的 23 项逐一
 `fetch`，要求 200、正文 SHA-256 匹配、图片 `image/webp`、音频 `audio/mp4`，并要求
 `Cache-Control` 同时含 `max-age=31536000` 与 `immutable`。
 
-- [ ] **Step 5: 运行单元测试与本地 check-only**
+- [x] **Step 5: 运行单元测试与本地 check-only**
 
 Run:
 
@@ -377,7 +380,9 @@ python manage.py publish_miniapp_static_assets --source-root "../miniapp/output/
 
 Expected: 测试通过；check-only 输出 23 项本地校验结果且不访问七牛。
 
-- [ ] **Step 6: 外部发布检查点**
+- [ ] **Step 6: 外部发布检查点（待用户授权）**
+
+> 本地实施未读取真实凭据、未上传七牛、未探测正式 CDN，也未确认微信合法域名；待用户授权并提供合规发布环境后执行。
 
 在已有七牛凭据和公开 CDN 域名的环境执行：
 
@@ -394,7 +399,7 @@ npm run verify:static-assets -- --manifest "output/static-assets/$motioncare_ass
 不可变缓存头全部通过。若 CDN 域名尚未配置 `immutable` 缓存头，先在七牛控制台完成域名响应头配置，再重跑验证，
 不能降低脚本要求。
 
-- [ ] **Step 7: 仅在用户授权后提交本任务**
+- [x] **Step 7: 仅在用户授权后提交本任务**
 
 ```bash
 git add backend/apps/common/miniapp_static_assets.py backend/apps/common/management/commands/publish_miniapp_static_assets.py backend/apps/common/tests/test_miniapp_static_assets.py miniapp/scripts/verify-static-assets.mjs miniapp/package.json
@@ -418,7 +423,7 @@ git commit -m "feat(部署): 增加小程序固定素材发布校验"
 - Preserves: `MOTION_INSTRUCTION_AUDIO_SRC: Record<MotionSourceKey, string>`。
 - Preserves: `getMotionInstructionAudioSrc(sourceKey: unknown): string | undefined`。
 
-- [ ] **Step 1: 把本地资源测试改为 CDN 契约并确认失败**
+- [x] **Step 1: 把本地资源测试改为 CDN 契约并确认失败**
 
 将现有 `existsSync` 断言替换为：
 
@@ -438,7 +443,7 @@ it('maps every official motion source key to one immutable CDN m4a', () => {
 运行后应因当前结果仍是本地
 `/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a` 而失败。
 
-- [ ] **Step 2: 删除静态导入并接入生成清单**
+- [x] **Step 2: 删除静态导入并接入生成清单**
 
 `instructionAudioManifest.ts` 的实现收敛为：
 
@@ -454,13 +459,13 @@ export const MOTION_INSTRUCTION_AUDIO_SRC = Object.fromEntries(
 不得修改运动说明页、播放器 90 秒超时、自动播放代次隔离、重播、隐藏/卸载停止和错误文案。
 同步把 `pages.test.tsx` 中 5 个本地动作说明路径断言改成与生成清单一致的 CDN URL；只改资源地址期望，不弱化行为断言。
 
-- [ ] **Step 3: 删除已外置说明语音与未使用重复告警音频**
+- [x] **Step 3: 删除已外置说明语音与未使用重复告警音频**
 
 删除 `features/motion-training/assets/audio/instructions/` 下 5 个已外置文件；删除
 `pages/shoulder-press/assets/audio/` 下两个未被引用的文件；保留
 `features/motion-training/assets/audio/` 下公共文件。运行 `rg` 确认源码没有肩部推举旧资源路径。
 
-- [ ] **Step 4: 运行语音和页面回归测试**
+- [x] **Step 4: 运行语音和页面回归测试**
 
 Run:
 
@@ -471,7 +476,7 @@ npx vitest run src/features/motion-training/instructionAudioManifest.test.ts src
 
 Expected: 5 个 URL 映射、未知 key、自动播放、重播、失败文字降级和页面生命周期测试全部通过。
 
-- [ ] **Step 5: 仅在用户授权后提交本任务**
+- [x] **Step 5: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/src/features/motion-training/instructionAudioManifest.ts miniapp/src/features/motion-training/instructionAudioManifest.test.ts miniapp/src/pages/shoulder-press/pages.test.tsx miniapp/src/pages/shoulder-press/assets/audio
@@ -505,7 +510,7 @@ git commit -m "feat(小程序): 动作说明语音改用 CDN"
 - Produces: `gameImageRemoteUrl(key: GameImageKey): string`。
 - Produces: `loadedGameImagePath(paths: GameImagePathMap, key: GameImageKey): string`。
 
-- [ ] **Step 1: 写 18 项映射和按游戏需求失败测试**
+- [x] **Step 1: 写 18 项映射和按游戏需求失败测试**
 
 ```ts
 it('loads only the image set required by each game', () => {
@@ -522,7 +527,7 @@ it('loads only the image set required by each game', () => {
 
 同一测试文件还要完整断言分类 5 项、声音 5 项、所有集合并集恰好等于生成清单 18 项，未知/空 game code 返回空集合。
 
-- [ ] **Step 2: 运行测试并确认模块不存在**
+- [x] **Step 2: 运行测试并确认模块不存在**
 
 Run:
 
@@ -533,12 +538,12 @@ npx vitest run src/pages/game-session/gameImageAssets.test.ts
 
 Expected: FAIL，缺少 `gameImageAssets.ts`。
 
-- [ ] **Step 3: 实现 key、需求集合和远端 URL**
+- [x] **Step 3: 实现 key、需求集合和远端 URL**
 
 `gameImageRemoteUrl` 只组合生成清单和 `staticAssetUrl`；`loadedGameImagePath` 在完整映射缺 key 时抛
 `游戏图片尚未准备完成：<key>`，不静默退回远端 URL。
 
-- [ ] **Step 4: 把四个玩法模块改为 key，不改变研究数据 key**
+- [x] **Step 4: 把四个玩法模块改为 key，不改变研究数据 key**
 
 - `PatternToken`：把 `imageSrc` 改为 `imageKey: GameImageKey`。
 - `CategoryItem`：把 `imageSrc` 改为 `imageKey: GameImageKey`。
@@ -551,7 +556,7 @@ Expected: FAIL，缺少 `gameImageAssets.ts`。
 为保持本任务独立可构建，页面在 Task 5 暂时通过 `gameImageRemoteUrl(imageKey)` 渲染 CDN URL；Task 7 再统一替换为
 预取完成的 `wxfile://` 临时路径。集成测试必须断言 Task 5 后页面不再渲染本地图片路径。
 
-- [ ] **Step 5: 删除本地游戏图片和复制规则并运行玩法测试**
+- [x] **Step 5: 删除本地游戏图片和复制规则并运行玩法测试**
 
 删除 `src/pages/game-session/assets/images/game-session/` 下 18 张已外置 PNG；从 `config/index.ts` 删除对应 copy pattern，
 保留两个音频 copy pattern。
@@ -565,7 +570,7 @@ npx vitest run src/pages/game-session/gameImageAssets.test.ts src/pages/game-ses
 
 Expected: 全部通过；玩法返回结构除图片字段外保持现有计分和数据语义。
 
-- [ ] **Step 6: 仅在用户授权后提交本任务**
+- [x] **Step 6: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/src/pages/game-session miniapp/config/index.ts
@@ -587,7 +592,7 @@ git commit -m "refactor(小游戏): 使用固定图片资源键"
 - Options: `{ getImageInfo, onProgress, isCurrent, concurrency?: number }`，默认并发 `3`。
 - Produces: `GameImagePreloadCancelledError`，调用方静默忽略；其它失败进入可重试错误态。
 
-- [ ] **Step 1: 写成功、并发和全有或全无失败测试**
+- [x] **Step 1: 写成功、并发和全有或全无失败测试**
 
 核心测试使用可控 Promise 证明任意时刻最多 3 个请求：
 
@@ -617,7 +622,7 @@ it('limits requests to three and returns a complete map', async () => {
 另写测试：空 key 立即返回并报告 100%；单项失败时 Promise reject 且不返回部分 map；`isCurrent` 变 false 时抛取消错误；
 进度依次单调到 100；重复 key 去重；`concurrency: 0` 被规范为 1。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run:
 
@@ -628,7 +633,7 @@ npx vitest run src/pages/game-session/gameImagePreloader.test.ts
 
 Expected: FAIL，缺少预取模块。
 
-- [ ] **Step 3: 实现 worker-pool 预取器**
+- [x] **Step 3: 实现 worker-pool 预取器**
 
 实现固定 worker 数量从共享索引取 key；每次调用前后检查 `isCurrent()`；仅当全部 key 成功且当前轮次仍有效时，
 把 `Partial<Record<GameImageKey, string>>` 收窄为完整 `GameImagePathMap`。Taro 适配器调用：
@@ -639,7 +644,7 @@ Expected: FAIL，缺少预取模块。
 
 不得调用 `downloadFile`、`saveFile` 或文件系统 API。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run:
 
@@ -650,7 +655,7 @@ npx vitest run src/pages/game-session/gameImagePreloader.test.ts
 
 Expected: 所有预取状态、并发和取消测试通过。
 
-- [ ] **Step 5: 仅在用户授权后提交本任务**
+- [x] **Step 5: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/src/pages/game-session/gameImagePreloader.ts miniapp/src/pages/game-session/gameImagePreloader.test.ts
@@ -673,7 +678,7 @@ git commit -m "feat(小游戏): 增加图片素材预取器"
 - Adds page state: `imageAssetProgress: GameImageLoadProgress`、`loadedGameImagePaths: GameImagePathMap | null`。
 - Adds: `prepareGameImages(): Promise<void>`，使用递增 generation 让旧回调失效。
 
-- [ ] **Step 1: 在页面集成测试中先写素材门禁失败用例**
+- [x] **Step 1: 在页面集成测试中先写素材门禁失败用例**
 
 在 Taro mock 增加 `getImageInfo`。至少覆盖：
 
@@ -695,7 +700,7 @@ it('keeps non-image games independent from the CDN', async () => {
 再写：5 项全部成功后启用开始；部分失败显示“训练图片加载失败”；重试创建新 generation；卸载后迟到回调不更新；
 点击开始前不会写训练记录；四款图片游戏渲染使用 `wxfile://` 临时路径。
 
-- [ ] **Step 2: 运行页面测试并确认当前仍可直接开始**
+- [x] **Step 2: 运行页面测试并确认当前仍可直接开始**
 
 Run:
 
@@ -706,24 +711,24 @@ npx vitest run src/pages/game-session/index.integration.test.tsx
 
 Expected: 新测试 FAIL，当前“开始游戏”未受图片状态控制。
 
-- [ ] **Step 3: 接入准备状态和重试流程**
+- [x] **Step 3: 接入准备状态和重试流程**
 
 动作/游戏 code 确认后自动调用 `prepareGameImages()`：无图片游戏同步设为 `ready`；图片游戏设为 `loading` 并显示
 `已完成/总数` 与百分比。`startIntro()` 首行增加 `imageAssetStatus !== 'ready'` 拦截；失败状态只提供“重新加载”和
 “返回当前运动计划”。页面卸载、动作变化和重试前递增 generation。
 
-- [ ] **Step 4: 所有图片渲染统一解析临时路径**
+- [x] **Step 4: 所有图片渲染统一解析临时路径**
 
 图案、分类、声音卡和拼图 `<Image src>` 都调用 `loadedGameImagePath(loadedGameImagePaths, imageKey)`；拼图上传明细继续使用
 `beach|garden|lighthouse`。预取成功后不再依赖单张 `onError` 继续训练；若渲染阶段仍触发错误，立即暂停/阻止本题并
 回到可重试素材错误态，不能用文字占位提交正式结果。
 
-- [ ] **Step 5: 增加适老化准备与失败样式**
+- [x] **Step 5: 增加适老化准备与失败样式**
 
 在 `.game-session-page` 作用域内增加进度轨道、百分比、错误文案和两个大按钮；复用现有颜色 token 和最小触控尺寸，
 不得影响主包其它页面或底部训练控制条。
 
-- [ ] **Step 6: 运行页面与全游戏回归测试**
+- [x] **Step 6: 运行页面与全游戏回归测试**
 
 Run:
 
@@ -734,7 +739,7 @@ npx vitest run src/pages/game-session/index.integration.test.tsx src/pages/game-
 
 Expected: 图片门禁、失败、重试、取消、临时路径，以及现有六款游戏计分/暂停/上传测试全部通过。
 
-- [ ] **Step 7: 仅在用户授权后提交本任务**
+- [x] **Step 7: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/src/pages/game-session/index.tsx miniapp/src/pages/game-session/index.integration.test.tsx miniapp/src/app.scss
@@ -759,7 +764,7 @@ git commit -m "feat(小游戏): 训练前预取固定图片"
 - Produces: `assertPackageBudgets(report, budgets): void`。
 - CLI: `npm run check:weapp-package-size`。
 
-- [ ] **Step 1: 写主包/分包分类和预算失败测试**
+- [x] **Step 1: 写主包/分包分类和预算失败测试**
 
 临时 `dist` fixture 包含根文件、普通页面、`pages/game-session` 分包和第二个假分包。断言：
 
@@ -778,7 +783,7 @@ expect(() => assertPackageBudgets(report, {
 再分别制造主包软预算、分包软预算、2 MiB 硬上限、20 MiB 总上限和禁止目录存在，确认错误包含包名、实际字节、阈值和
 最大的 10 个文件。
 
-- [ ] **Step 2: 运行测试并确认模块不存在**
+- [x] **Step 2: 运行测试并确认模块不存在**
 
 Run:
 
@@ -789,7 +794,7 @@ npx vitest run scripts/weappPackageSize.test.mjs
 
 Expected: FAIL，缺少 `weappPackageSize.mjs`。
 
-- [ ] **Step 3: 实现真实字节统计和 CLI**
+- [x] **Step 3: 实现真实字节统计和 CLI**
 
 递归使用 `fs.stat().size`，从 `dist/app.json` 的 `subPackages` 或 `subpackages` 读取 root；任何位于分包 root 下的文件只计入
 该分包，其余计入主包。CLI 项目预算固定为主包 `1.2 MiB`、任一分包 `1.5 MiB`，并额外断言：
@@ -800,7 +805,7 @@ dist/features/motion-training/assets/audio/instructions 不存在
 pages/game-session <= 1.3 MiB
 ```
 
-- [ ] **Step 4: 运行完整自动化验证**
+- [x] **Step 4: 运行完整自动化验证**
 
 Run:
 
@@ -821,7 +826,7 @@ npm run build
 Expected: 后端与小程序全量测试通过；生产构建成功；主包约 `477 KiB`、游戏分包约 `1,005 KiB`、总包约
 `1,482 KiB`，允许代码与清单产生少量差异，但必须满足全部预算。
 
-- [ ] **Step 5: 验证代码包没有固定外部素材和密钥**
+- [x] **Step 5: 验证代码包没有固定外部素材和密钥**
 
 Run:
 
@@ -833,18 +838,20 @@ rg -n "QINIU_ACCESS_KEY|QINIU_SECRET_KEY|uploadToken" dist
 
 Expected: 两条命令均无输出；游戏本地 M4A 和公共网络告警 M4A 仍存在。
 
-- [ ] **Step 6: 微信开发者工具与真机验收**
+- [ ] **Step 6: 微信开发者工具与真机验收（待用户授权）**
+
+> 本地实施未打开微信开发者工具、未上传微信版本，也未执行 iOS/Android 真机发布验收；待用户授权后执行。
 
 在微信开发者工具确认代码依赖分析与脚本报告一致；在 iOS、Android 各检查图案、分类、声音、拼图首次加载、缓存后再次进入、
 断网失败和重试；检查 5 个动作说明语音自动播放、重播、断网文字降级；确认颜色顺序和数字抑制在 CDN 故障时仍可开始，
 游戏声音辨别音频无额外网络等待。
 
-- [ ] **Step 7: 更新执行记录但不删除历史**
+- [x] **Step 7: 更新本地执行记录但不删除历史**
 
-实施完成后把 spec 状态改为 `implemented`，在本 plan 顶部追加执行记录并勾选完成项；如包体实测与预估不同，记录实际主包、
-游戏分包和总包字节。只追加 changelog 新条目，不修改 0.24 及更早历史。
+本地代码落地后保持 spec 与 plan 状态为 `implementing`，在顶部追加 Task 1–8 commit 与范围并勾选已完成的本地项；记录实际主包、
+游戏分包和总包字节。只追加 changelog 新条目，不修改 0.24 及更早历史；外部发布和真机项完成前不得标记为 `implemented`。
 
-- [ ] **Step 8: 仅在用户授权后提交本任务**
+- [x] **Step 8: 仅在用户授权后提交本任务**
 
 ```bash
 git add miniapp/scripts/weappPackageSize.mjs miniapp/scripts/weappPackageSize.test.mjs miniapp/scripts/check-weapp-package-size.mjs miniapp/package.json docs/superpowers/specs/2026-09-02-wechat-miniapp-package-size-and-game-assets-cdn-design.md docs/superpowers/plans/2026-09-02-wechat-miniapp-package-size-and-static-assets-cdn.md specs/patient-rehab-system/changelog.md
@@ -855,12 +862,12 @@ git commit -m "test(小程序): 增加代码包体预算门禁"
 
 ## 实施完成检查表
 
-- [ ] 23 个 CDN 固定素材使用内容哈希文件名并通过远端正文与缓存头校验。
-- [ ] 5 段动作说明 M4A 与已验收源文件 SHA-256 一致。
-- [ ] 游戏分包仍包含 37 段本地游戏 M4A，不包含 18 张游戏图片。
-- [ ] 主包不包含 5 段动作说明 M4A，语音失败不阻塞训练。
-- [ ] 图片型游戏全量预取成功后才开始；无图片游戏不请求 CDN。
-- [ ] 小程序未新增 `saveFile`、`downloadFile` 或固定素材文件系统持久化。
-- [ ] 主包、游戏分包、任一分包和总包均通过软预算与微信硬上限。
-- [ ] 后端 pytest、小程序 Vitest、生产构建、静态资源 check、包体 check 全部通过。
-- [ ] 微信开发者工具、iOS、Android 真机验收通过。
+- [ ] 23 个 CDN 固定素材使用内容哈希文件名并通过远端正文与缓存头校验。（本地内容哈希与文件校验已完成；远端正文和缓存头待用户授权）
+- [x] 5 段动作说明 M4A 与已验收源文件 SHA-256 一致。
+- [x] 游戏分包仍包含 37 段本地游戏 M4A，不包含 18 张游戏图片。
+- [x] 主包不包含 5 段动作说明 M4A，语音失败不阻塞训练。
+- [x] 图片型游戏全量预取成功后才开始；无图片游戏不请求 CDN。
+- [x] 小程序未新增 `saveFile`、`downloadFile` 或固定素材文件系统持久化。
+- [x] 主包、游戏分包、任一分包和总包均通过软预算与微信硬上限。
+- [x] 后端 pytest、小程序 Vitest、生产构建、静态资源 check、包体 check 全部通过。
+- [ ] 微信开发者工具、iOS、Android 真机验收通过。（待用户授权）
