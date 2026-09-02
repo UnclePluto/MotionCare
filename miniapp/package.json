@@ -35,6 +35,7 @@
     "generate-game-audio:dry-run": "node scripts/generate-game-audio.mjs --dry-run",
     "build:static-assets": "node scripts/build-static-assets.mjs",
     "check:static-assets": "node scripts/build-static-assets.mjs --check",
+    "verify:static-assets": "node scripts/verify-static-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
