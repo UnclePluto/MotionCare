@@ -1,8 +1,9 @@
-> 状态：review
+> 状态：implemented
 > 日期：2026-08-31
 > 范围：微信小程序六款认知游戏的记忆展示尺寸、顺序切换、卡片反馈与分类判定收口。
 > 关联：`docs/superpowers/specs/2026-05-16-wechat-miniapp-remaining-real-games-design.md`、`docs/superpowers/specs/2026-06-01-wechat-miniapp-game-experience-polish-design.md`
 > 评审依据：`.impeccable/critique/2026-08-31T06-58-20Z__miniapp-src-pages-game-session-index-tsx.md`
+> 实施记录（2026-09-02, Codex）：代码提交 `a8dec36` 已合并至 `main`；用户完成体验验收。
 
 # 微信小程序认知游戏大图展示与选择反馈设计
 

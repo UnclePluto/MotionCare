@@ -34,7 +34,8 @@ docs/superpowers/
 | `specs/2026-08-09-wearable-management-permission-design.md` | 穿戴设备管理权限 + IMEI 单字段录入 | implemented |
 | `specs/2026-08-20-motion-action-official-video-recording-design.md` | 五运动动作正式视频与统一录像跟练 | implementing |
 | `specs/2026-08-21-game-question-analytics-design.md` | 六款认知游戏逐题数据与长期统计 | approved |
-| `specs/2026-08-31-cognitive-game-ui-scale-and-feedback-design.md` | 六款认知游戏大图展示、顺序切换与选择反馈 | review |
+| `specs/2026-08-31-cognitive-game-ui-scale-and-feedback-design.md` | 六款认知游戏大图展示、顺序切换与选择反馈 | implemented |
+| `specs/2026-09-01-motion-instruction-voice-design.md` | 五个运动动作说明预生成语音 | implemented |
 
 ## 实施计划（plans/）当前清单
 
@@ -57,6 +58,8 @@ docs/superpowers/
 | `plans/2026-08-09-wearable-management-permission-and-imei-entry.md` | 穿戴设备管理权限 + IMEI 单字段录入 | implemented | `specs/2026-08-09-wearable-management-permission-design.md` |
 | `plans/2026-08-20-motion-action-official-video-recording.md` | 五运动动作正式视频与统一录像跟练 | implementing | `specs/2026-08-20-motion-action-official-video-recording-design.md` |
 | `plans/2026-08-21-game-question-analytics.md` | 六款认知游戏逐题数据与长期统计 | review | `specs/2026-08-21-game-question-analytics-design.md` |
+| `plans/2026-08-31-cognitive-game-ui-scale-and-feedback.md` | 六款认知游戏大图展示、顺序切换与选择反馈 | implemented | `specs/2026-08-31-cognitive-game-ui-scale-and-feedback-design.md` |
+| `plans/2026-09-01-motion-instruction-voice.md` | 五个运动动作说明预生成语音 | implemented | `specs/2026-09-01-motion-instruction-voice-design.md` |
 
 ## 状态语义
 
