@@ -1,18 +1,13 @@
-import { isOfficialMotionSourceKey, type MotionSourceKey } from './catalog'
+import { staticAssetUrl } from '../../assets/staticAssetUrl'
+import { OFFICIAL_MOTION_SOURCE_KEYS, isOfficialMotionSourceKey, type MotionSourceKey } from './catalog'
+import { MOTION_INSTRUCTION_AUDIO_ASSET_PATHS } from './instructionAudioAssetManifest.generated'
 
-import './assets/audio/instructions/motion-aerobic-high-knee.m4a'
-import './assets/audio/instructions/motion-balance-sit-stand.m4a'
-import './assets/audio/instructions/motion-resistance-row.m4a'
-import './assets/audio/instructions/motion-resistance-leg-kickback.m4a'
-import './assets/audio/instructions/motion-resistance-shoulder-press.m4a'
-
-export const MOTION_INSTRUCTION_AUDIO_SRC: Record<MotionSourceKey, string> = {
-  'motion-aerobic-high-knee': '/features/motion-training/assets/audio/instructions/motion-aerobic-high-knee.m4a',
-  'motion-balance-sit-stand': '/features/motion-training/assets/audio/instructions/motion-balance-sit-stand.m4a',
-  'motion-resistance-row': '/features/motion-training/assets/audio/instructions/motion-resistance-row.m4a',
-  'motion-resistance-leg-kickback': '/features/motion-training/assets/audio/instructions/motion-resistance-leg-kickback.m4a',
-  'motion-resistance-shoulder-press': '/features/motion-training/assets/audio/instructions/motion-resistance-shoulder-press.m4a',
-}
+export const MOTION_INSTRUCTION_AUDIO_SRC = Object.fromEntries(
+  OFFICIAL_MOTION_SOURCE_KEYS.map((sourceKey) => [
+    sourceKey,
+    staticAssetUrl(MOTION_INSTRUCTION_AUDIO_ASSET_PATHS[sourceKey]),
+  ]),
+) as Record<MotionSourceKey, string>
 
 export function getMotionInstructionAudioSrc(sourceKey: unknown): string | undefined {
   return isOfficialMotionSourceKey(sourceKey)

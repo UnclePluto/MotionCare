@@ -209,13 +209,21 @@ const alertPlayerHarness = vi.hoisted(() => ({
   dispose: vi.fn()
 }))
 
+const motionInstructionAudioCdnSrc = vi.hoisted(() => ({
+  'motion-aerobic-high-knee': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-aerobic-high-knee.d5650f7b5bee.m4a',
+  'motion-balance-sit-stand': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-balance-sit-stand.b6e32e46d404.m4a',
+  'motion-resistance-row': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-row.4e47b657633b.m4a',
+  'motion-resistance-leg-kickback': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-leg-kickback.725ea66457c3.m4a',
+  'motion-resistance-shoulder-press': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-shoulder-press.3fed2a4235ef.m4a',
+} as const))
+
 const motionInstructionAudioHarness = vi.hoisted(() => ({
   play: vi.fn(async () => true),
   stop: vi.fn(),
   dispose: vi.fn(),
   getSrc: vi.fn((sourceKey: unknown) => (
-    typeof sourceKey === 'string' && sourceKey.startsWith('motion-')
-      ? `/features/motion-training/assets/audio/instructions/${sourceKey}.m4a`
+    typeof sourceKey === 'string' && sourceKey in motionInstructionAudioCdnSrc
+      ? motionInstructionAudioCdnSrc[sourceKey as keyof typeof motionInstructionAudioCdnSrc]
       : undefined
   )),
 }))
@@ -720,8 +728,8 @@ beforeEach(async () => {
   motionInstructionAudioHarness.stop.mockReset()
   motionInstructionAudioHarness.dispose.mockReset()
   motionInstructionAudioHarness.getSrc.mockReset().mockImplementation((sourceKey: unknown) => (
-    typeof sourceKey === 'string' && sourceKey.startsWith('motion-')
-      ? `/features/motion-training/assets/audio/instructions/${sourceKey}.m4a`
+    typeof sourceKey === 'string' && sourceKey in motionInstructionAudioCdnSrc
+      ? motionInstructionAudioCdnSrc[sourceKey as keyof typeof motionInstructionAudioCdnSrc]
       : undefined
   ))
   retryMocks.loadPendingGameUpload.mockReturnValue(null)
@@ -864,7 +872,7 @@ describe('shoulder press pages', () => {
     expect(findAll(guide.element, (element) => element.type === 'Video')).toHaveLength(0)
     expect(textContent(guide.element)).toContain(`${actionCase.name}动作说明。`)
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledWith(
-      `/features/motion-training/assets/audio/instructions/${actionCase.sourceKey}.m4a`,
+      motionInstructionAudioCdnSrc[actionCase.sourceKey],
     )
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
     guide.rerender()
@@ -910,7 +918,7 @@ describe('shoulder press pages', () => {
 
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledWith(
-      '/features/motion-training/assets/audio/instructions/motion-resistance-shoulder-press.m4a',
+      motionInstructionAudioCdnSrc['motion-resistance-shoulder-press'],
     )
     expect(findButtonByText(page.element, '正在播放说明').props.disabled).toBe(true)
 
@@ -997,7 +1005,7 @@ describe('shoulder press pages', () => {
 
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledWith(
-      '/features/motion-training/assets/audio/instructions/motion-resistance-shoulder-press.m4a',
+      motionInstructionAudioCdnSrc['motion-resistance-shoulder-press'],
     )
 
     taroHarness.showCallbacks[0]?.()
