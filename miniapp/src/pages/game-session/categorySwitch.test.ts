@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createCategorySwitchRound, evaluateCategorySwitchAttempt } from './categorySwitch'
+import { CATEGORY_ITEMS, createCategorySwitchRound, evaluateCategorySwitchAttempt } from './categorySwitch'
 
 function randomSequence(values: number[]) {
   let index = 0
@@ -40,10 +40,10 @@ describe('createCategorySwitchRound', () => {
     expect(round.timeoutMs).toBe(5500)
   })
 
-  it('creates a difficult round from kind color or scene rules', () => {
+  it('creates a difficult round from kind or color rules', () => {
     const round = createCategorySwitchRound('困难', { random: () => 0.99 })
 
-    expect(['kind', 'color', 'scene']).toContain(round.rule)
+    expect(['kind', 'color']).toContain(round.rule)
     expect(round.options).toContain(round.correctOption)
     expect(round.options).toHaveLength(4)
     expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
@@ -78,6 +78,24 @@ describe('createCategorySwitchRound', () => {
     const round = createCategorySwitchRound('简单', { previousRule: 'kind', random: () => 0 })
 
     expect(round.rule).toBe('kind')
+  })
+
+  it('never generates the ambiguous scene rule at any difficulty', () => {
+    ;(['简单', '中等', '困难'] as const).forEach((difficulty) => {
+      for (const randomValue of [0, 0.25, 0.5, 0.75, 0.99]) {
+        expect(createCategorySwitchRound(difficulty, { random: () => randomValue }).rule).not.toBe('scene')
+      }
+    })
+  })
+
+  it('matches approved dominant colors for the five current images', () => {
+    expect(Object.fromEntries(CATEGORY_ITEMS.map((item) => [item.id, item.color]))).toEqual({
+      pineapple: '黄色',
+      bird: '蓝色',
+      train: '蓝色',
+      drum: '红色',
+      phone: '蓝色',
+    })
   })
 })
 

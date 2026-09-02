@@ -3,9 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   createSoundDiscriminationRound,
   evaluateSoundDiscriminationAttempt,
+  finishSoundCardPreview,
   markCardPreviewed,
   nextSoundPreviewCard,
+  resumeSoundPreviewAfterShow,
+  SOUND_CARD_RETURN_MS,
+  soundCardVisualState,
 } from './soundDiscrimination'
+import type { SoundAttemptOutcome } from './soundDiscrimination'
 import type { SoundDiscriminationAudio } from './gameAudio'
 
 const SOURCES: SoundDiscriminationAudio[] = [
@@ -89,6 +94,14 @@ const THREE_VARIANT_SOURCES: SoundDiscriminationAudio[] = [
 function randomSequence(values: number[]) {
   let index = 0
   return () => values[Math.min(index++, values.length - 1)]
+}
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
 }
 
 describe('createSoundDiscriminationRound', () => {
@@ -237,5 +250,140 @@ describe('evaluateSoundDiscriminationAttempt', () => {
       correctSoundId: 'bird_2',
       selectedSoundId: 'bird_1',
     })
+  })
+})
+
+describe('soundCardVisualState', () => {
+  const correct: SoundAttemptOutcome = { selectedCardId: 'card-2', correct: true }
+  const wrong: SoundAttemptOutcome = { selectedCardId: 'card-2', correct: false }
+
+  it('shows only the actively previewing card face', () => {
+    expect(soundCardVisualState('card-2', 'card-2', null)).toBe('preview')
+    expect(soundCardVisualState('card-1', 'card-2', null)).toBe('back')
+  })
+
+  it('reveals a correct choice but keeps a wrong choice on its back', () => {
+    expect(soundCardVisualState('card-2', null, correct)).toBe('correct')
+    expect(soundCardVisualState('card-2', null, wrong)).toBe('wrong')
+    expect(soundCardVisualState('card-1', null, wrong)).toBe('back')
+  })
+
+  it('gives preview priority while audio is active', () => {
+    expect(soundCardVisualState('card-2', 'card-2', wrong)).toBe('preview')
+  })
+})
+
+describe('finishSoundCardPreview', () => {
+  it('does not clear a newer preview when the returning run is already stale', async () => {
+    const events: string[] = []
+
+    const canContinue = await finishSoundCardPreview({
+      previewPlayed: true,
+      isRunCurrent: () => false,
+      clearPreviewingCard: () => events.push('back'),
+      waitForReturn: async (ms) => events.push(`wait:${ms}`),
+      onPreviewPlaybackFailure: () => events.push('playback-failed'),
+    })
+
+    expect({ canContinue, events }).toEqual({ canContinue: false, events: [] })
+  })
+
+  it('returns a valid card to its back before waiting 180ms and allowing the next card', async () => {
+    const events: string[] = []
+    const returnAnimation = deferred<void>()
+    const completion = finishSoundCardPreview({
+      previewPlayed: true,
+      isRunCurrent: () => true,
+      clearPreviewingCard: () => events.push('back'),
+      waitForReturn: (ms) => {
+        events.push(`wait:${ms}`)
+        return returnAnimation.promise
+      },
+      onPreviewPlaybackFailure: () => events.push('playback-failed'),
+    })
+
+    await Promise.resolve()
+    expect(events).toEqual(['back', `wait:${SOUND_CARD_RETURN_MS}`])
+    returnAnimation.resolve()
+    await expect(completion).resolves.toBe(true)
+  })
+
+  it('does not allow the next card when the run becomes stale during the return animation', async () => {
+    const events: string[] = []
+    const returnAnimation = deferred<void>()
+    let current = true
+    const completion = finishSoundCardPreview({
+      previewPlayed: true,
+      isRunCurrent: () => current,
+      clearPreviewingCard: () => events.push('back'),
+      waitForReturn: (ms) => {
+        events.push(`wait:${ms}`)
+        return returnAnimation.promise
+      },
+      onPreviewPlaybackFailure: () => events.push('playback-failed'),
+    })
+
+    await Promise.resolve()
+    current = false
+    returnAnimation.resolve()
+    await expect(completion).resolves.toBe(false)
+    expect(events).toEqual(['back', `wait:${SOUND_CARD_RETURN_MS}`])
+  })
+
+  it('uses the same return sequence after successful and failed audio', async () => {
+    const outcomes = await Promise.all([true, false].map(async (previewPlayed) => {
+      const events: string[] = []
+      const canContinue = await finishSoundCardPreview({
+        previewPlayed,
+        isRunCurrent: () => true,
+        clearPreviewingCard: () => events.push('back'),
+        waitForReturn: async (ms) => events.push(`wait:${ms}`),
+        onPreviewPlaybackFailure: () => events.push('playback-failed'),
+      })
+      return { canContinue, events }
+    }))
+
+    expect(outcomes).toEqual([
+      { canContinue: true, events: ['back', `wait:${SOUND_CARD_RETURN_MS}`] },
+      { canContinue: true, events: ['back', `wait:${SOUND_CARD_RETURN_MS}`, 'playback-failed'] },
+    ])
+  })
+})
+
+describe('resumeSoundPreviewAfterShow', () => {
+  it('starts exactly one remaining preview run after returning to a playing sound preview', () => {
+    const starts: string[] = []
+
+    const resumed = resumeSoundPreviewAfterShow({
+      sessionIsPlaying: true,
+      isSoundGame: true,
+      soundPhase: 'preview',
+      hasActiveRound: true,
+      previewInFlight: false,
+      startPreview: () => starts.push('preview'),
+    })
+
+    expect({ resumed, starts }).toEqual({ resumed: true, starts: ['preview'] })
+  })
+
+  it('does not restart preview outside the resumable sound-preview state', () => {
+    const cases = [
+      { sessionIsPlaying: false, isSoundGame: true, soundPhase: 'preview' as const, hasActiveRound: true, previewInFlight: false },
+      { sessionIsPlaying: true, isSoundGame: false, soundPhase: 'preview' as const, hasActiveRound: true, previewInFlight: false },
+      { sessionIsPlaying: true, isSoundGame: true, soundPhase: 'choose' as const, hasActiveRound: true, previewInFlight: false },
+      { sessionIsPlaying: true, isSoundGame: true, soundPhase: 'preview' as const, hasActiveRound: false, previewInFlight: false },
+      { sessionIsPlaying: true, isSoundGame: true, soundPhase: 'preview' as const, hasActiveRound: true, previewInFlight: true },
+    ]
+
+    const results = cases.map((state) => {
+      const starts: string[] = []
+      const resumed = resumeSoundPreviewAfterShow({
+        ...state,
+        startPreview: () => starts.push('preview'),
+      })
+      return { resumed, starts }
+    })
+
+    expect(results).toEqual(cases.map(() => ({ resumed: false, starts: [] })))
   })
 })

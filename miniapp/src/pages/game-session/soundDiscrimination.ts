@@ -23,6 +23,32 @@ export type SoundDiscriminationRound = {
   timeoutMs: number
 }
 
+export type SoundAttemptOutcome = {
+  selectedCardId: string
+  correct: boolean
+}
+
+export type SoundCardVisualState = 'back' | 'preview' | 'correct' | 'wrong'
+
+export const SOUND_CARD_RETURN_MS = 180
+
+export type SoundCardPreviewReturnOptions = {
+  previewPlayed: boolean
+  isRunCurrent: () => boolean
+  clearPreviewingCard: () => void
+  waitForReturn: (ms: number) => Promise<void>
+  onPreviewPlaybackFailure: () => void
+}
+
+export type SoundPreviewAfterShowOptions = {
+  sessionIsPlaying: boolean
+  isSoundGame: boolean
+  soundPhase: 'preview' | 'choose'
+  hasActiveRound: boolean
+  previewInFlight: boolean
+  startPreview: () => void
+}
+
 export const CATEGORY_IMAGE_SRC: Record<SoundDiscriminationCategory, string> = {
   bird: '/pages/game-session/assets/images/game-session/sound_bird.png',
   train: '/pages/game-session/assets/images/game-session/sound_train.png',
@@ -125,4 +151,44 @@ export function evaluateSoundDiscriminationAttempt(round: SoundDiscriminationRou
     correctSoundId: round.target.soundId,
     selectedSoundId,
   }
+}
+
+export function soundCardVisualState(
+  cardId: string,
+  previewingCardId: string | null,
+  outcome: SoundAttemptOutcome | null
+): SoundCardVisualState {
+  if (previewingCardId === cardId) return 'preview'
+  if (outcome?.selectedCardId !== cardId) return 'back'
+  return outcome.correct ? 'correct' : 'wrong'
+}
+
+export async function finishSoundCardPreview({
+  previewPlayed,
+  isRunCurrent,
+  clearPreviewingCard,
+  waitForReturn,
+  onPreviewPlaybackFailure,
+}: SoundCardPreviewReturnOptions): Promise<boolean> {
+  if (!isRunCurrent()) return false
+  clearPreviewingCard()
+  await waitForReturn(SOUND_CARD_RETURN_MS)
+  if (!isRunCurrent()) return false
+  if (!previewPlayed) onPreviewPlaybackFailure()
+  return true
+}
+
+export function resumeSoundPreviewAfterShow({
+  sessionIsPlaying,
+  isSoundGame,
+  soundPhase,
+  hasActiveRound,
+  previewInFlight,
+  startPreview,
+}: SoundPreviewAfterShowOptions): boolean {
+  if (!sessionIsPlaying || !isSoundGame || soundPhase !== 'preview' || !hasActiveRound || previewInFlight) {
+    return false
+  }
+  startPreview()
+  return true
 }

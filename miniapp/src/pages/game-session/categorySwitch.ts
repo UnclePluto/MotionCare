@@ -26,7 +26,7 @@ export type CreateCategorySwitchRoundOptions = {
   random?: () => number
 }
 
-const ITEMS: CategoryItem[] = [
+export const CATEGORY_ITEMS: CategoryItem[] = [
   {
     id: 'pineapple',
     label: '菠萝',
@@ -51,7 +51,7 @@ const ITEMS: CategoryItem[] = [
     imageSrc: '/pages/game-session/assets/images/game-session/category_train.png',
     fallback: '车',
     kind: '交通',
-    color: '灰色',
+    color: '蓝色',
     scene: '室外',
   },
   {
@@ -86,11 +86,11 @@ const OPTIONS: Record<CategoryRule, string[]> = {
   scene: ['海岛', '户外', '室外', '室内'],
 }
 
-const CONFIG: Record<GameDifficulty, { rules: CategoryRule[]; optionLimit: number; timeoutMs: number }> = {
+const CONFIG = {
   简单: { rules: ['kind'], optionLimit: 3, timeoutMs: 7000 },
   中等: { rules: ['kind', 'color'], optionLimit: 4, timeoutMs: 5500 },
-  困难: { rules: ['kind', 'color', 'scene'], optionLimit: 4, timeoutMs: 4200 },
-}
+  困难: { rules: ['kind', 'color'], optionLimit: 4, timeoutMs: 4200 },
+} satisfies Record<GameDifficulty, { rules: CategoryRule[]; optionLimit: number; timeoutMs: number }>
 
 function pickIndex(length: number, random: () => number): number {
   const value = random()
@@ -134,7 +134,7 @@ export function createCategorySwitchRound(
   const random = options.random ?? Math.random
   const previousRule = options.previousRule
   const config = CONFIG[difficulty]
-  const item = ITEMS[pickIndex(ITEMS.length, random)]
+  const item = CATEGORY_ITEMS[pickIndex(CATEGORY_ITEMS.length, random)]
   const rule = pickRule(config.rules, random, previousRule)
   const correctOption = correctFor(item, rule)
 

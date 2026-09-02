@@ -13,6 +13,7 @@ import {
   type ColorToken,
 } from './colorSequence'
 import { createCategorySwitchRound, evaluateCategorySwitchAttempt, type CategoryRule, type CategorySwitchRound } from './categorySwitch'
+import { choiceFeedbackState, type ChoiceOutcome } from './choiceFeedback'
 import { createGameIntroSteps } from './gameIntro'
 import { GAME_CATALOG, gameCodeForActionSource } from '../../game/catalog'
 import {
@@ -35,6 +36,12 @@ import {
   type PatternToken,
 } from './patternSequence'
 import {
+  buildSequenceAnswerSlots,
+  createSequenceRevealScheduler,
+  type SequenceRevealCursor,
+  type SequenceRevealScheduler,
+} from './sequencePresentation'
+import {
   createPuzzleRound,
   evaluatePuzzleCompletion,
   puzzleTileImageStyle,
@@ -52,9 +59,13 @@ import { buildGameTrainingResult } from './scoring'
 import {
   createSoundDiscriminationRound,
   evaluateSoundDiscriminationAttempt,
+  finishSoundCardPreview,
   markCardPreviewed,
   nextSoundPreviewCard,
+  resumeSoundPreviewAfterShow,
+  soundCardVisualState,
   type SoundCard,
+  type SoundAttemptOutcome,
   type SoundDiscriminationRound,
 } from './soundDiscrimination'
 
@@ -87,13 +98,7 @@ const COLOR_LABEL: Record<ColorToken, string> = {
   teal: '青',
 }
 
-const SOUND_CATEGORY_LABEL: Record<SoundCard['category'], string> = {
-  bird: '小鸟',
-  train: '火车',
-  phone: '电话',
-  laugh: '笑声',
-  drum: '鼓声',
-}
+const ROUND_FEEDBACK_MS = 1000
 
 function normalizeDifficulty(value: string): GameDifficulty {
   return DIFFICULTY_OPTIONS.includes(value as GameDifficulty) ? (value as GameDifficulty) : '简单'
@@ -160,13 +165,18 @@ export default function GameSessionPage() {
   const [activeColorInput, setActiveColorInput] = useState<ColorToken[]>([])
   const [colorRevealing, setColorRevealing] = useState(false)
   const [activeInhibitionRound, setActiveInhibitionRound] = useState<InhibitionRound | null>(null)
+  const [inhibitionOutcome, setInhibitionOutcome] = useState<ChoiceOutcome<number> | null>(null)
   const [activePatternRound, setActivePatternRound] = useState<PatternSequenceRound | null>(null)
   const [activePatternInput, setActivePatternInput] = useState<string[]>([])
   const [patternRevealing, setPatternRevealing] = useState(false)
+  const [sequenceRevealCursor, setSequenceRevealCursor] = useState<SequenceRevealCursor | null>(null)
   const [activeCategoryRound, setActiveCategoryRound] = useState<CategorySwitchRound | null>(null)
+  const [categoryOutcome, setCategoryOutcome] = useState<ChoiceOutcome<string> | null>(null)
   const [activeSoundRound, setActiveSoundRound] = useState<SoundDiscriminationRound | null>(null)
   const [soundPhase, setSoundPhase] = useState<'preview' | 'choose'>('preview')
   const [soundPreviewingCardId, setSoundPreviewingCardId] = useState<string | null>(null)
+  const [soundAttemptOutcome, setSoundAttemptOutcome] = useState<SoundAttemptOutcome | null>(null)
+  const [failedSoundCardImageIds, setFailedSoundCardImageIds] = useState<string[]>([])
   const [soundPlaybackError, setSoundPlaybackError] = useState('')
   const [activePuzzleRound, setActivePuzzleRound] = useState<PuzzleRound | null>(null)
   const [selectedPuzzleTileId, setSelectedPuzzleTileId] = useState<string | null>(null)
@@ -175,10 +185,12 @@ export default function GameSessionPage() {
   const activeColorRoundRef = useRef<ColorSequenceRound | null>(null)
   const activePatternInputRef = useRef<string[]>([])
   const activePatternRoundRef = useRef<PatternSequenceRound | null>(null)
+  const sequenceRevealSchedulerRef = useRef<SequenceRevealScheduler | null>(null)
   const activeCategoryRoundRef = useRef<CategorySwitchRound | null>(null)
   const activeSoundRoundRef = useRef<SoundDiscriminationRound | null>(null)
   const activePuzzleRoundRef = useRef<PuzzleRound | null>(null)
   const soundPhaseRef = useRef<'preview' | 'choose'>('preview')
+  const soundPreviewingCardIdRef = useRef<string | null>(null)
   const soundRoundRunIdRef = useRef(0)
   const soundPreviewInFlightRef = useRef(false)
   const targetSecondsRef = useRef(600)
@@ -198,7 +210,13 @@ export default function GameSessionPage() {
   const roundTimeoutDeadlineRef = useRef<number | null>(null)
   const roundTimeoutRemainingMsRef = useRef<number | null>(null)
   const nextRoundTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const nextRoundTimerDeadlineRef = useRef<number | null>(null)
+  const nextRoundTimerRemainingMsRef = useRef<number | null>(null)
   const pendingNextRoundRef = useRef(false)
+  const sessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const sessionTimerDeadlineRef = useRef<number | null>(null)
+  const sessionTimerRemainingMsRef = useRef(1000)
+  const backgroundSuspendedRef = useRef(false)
   const previousCategoryRuleRef = useRef<CategoryRule | undefined>(undefined)
   const roundStartedAtRef = useRef(Date.now())
   const initializedRef = useRef(false)
@@ -226,6 +244,21 @@ export default function GameSessionPage() {
     setSoundPhase(nextPhase)
   }
 
+  function setSequenceCursor(cursor: SequenceRevealCursor | null) {
+    setSequenceRevealCursor(cursor)
+  }
+
+  function setSoundPreviewingCard(cardId: string | null) {
+    soundPreviewingCardIdRef.current = cardId
+    setSoundPreviewingCardId(cardId)
+  }
+
+  function markSoundCardImageFailed(cardId: string) {
+    setFailedSoundCardImageIds((currentIds) => (
+      currentIds.includes(cardId) ? currentIds : [...currentIds, cardId]
+    ))
+  }
+
   function showAttemptFeedback(correct: boolean) {
     const feedbackClip = playGameFeedback(feedbackKind(correct))
     setFeedback(feedbackClip.text)
@@ -235,7 +268,18 @@ export default function GameSessionPage() {
     return soundPhaseRef.current
   }
 
-  function clearRoundTimers(options: { preserveRevealRemaining?: boolean; preserveRoundTimeoutRemaining?: boolean } = {}) {
+  function invalidateSoundPreviewRun() {
+    soundRoundRunIdRef.current += 1
+    soundPreviewInFlightRef.current = false
+    stopActiveGameAudio()
+  }
+
+  function clearRoundTimers(options: {
+    preserveRevealRemaining?: boolean
+    preserveRoundTimeoutRemaining?: boolean
+    preserveNextRoundRemaining?: boolean
+    suppressStateUpdates?: boolean
+  } = {}) {
     if (revealTimerRef.current) {
       clearTimeout(revealTimerRef.current)
       revealTimerRef.current = null
@@ -243,6 +287,9 @@ export default function GameSessionPage() {
     revealTimerDeadlineRef.current = null
     if (!options.preserveRevealRemaining) {
       revealTimerRemainingMsRef.current = null
+      sequenceRevealSchedulerRef.current?.cancel()
+      sequenceRevealSchedulerRef.current = null
+      if (!options.suppressStateUpdates) setSequenceCursor(null)
     }
     if (roundTimeoutTimerRef.current) {
       clearTimeout(roundTimeoutTimerRef.current)
@@ -256,10 +303,17 @@ export default function GameSessionPage() {
       clearTimeout(nextRoundTimerRef.current)
       nextRoundTimerRef.current = null
     }
+    nextRoundTimerDeadlineRef.current = null
+    if (!options.preserveNextRoundRemaining) {
+      nextRoundTimerRemainingMsRef.current = null
+    }
   }
 
   function resetSessionState() {
     clearRoundTimers()
+    clearSessionTimer()
+    sessionTimerRemainingMsRef.current = 1000
+    backgroundSuspendedRef.current = false
     elapsedSecondsRef.current = 0
     unitResultsRef.current = []
     endStartedRef.current = false
@@ -273,8 +327,7 @@ export default function GameSessionPage() {
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
     soundPhaseRef.current = 'preview'
-    soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    invalidateSoundPreviewRun()
     previousCategoryRuleRef.current = undefined
     roundStartedAtRef.current = Date.now()
     introRunIdRef.current += 1
@@ -288,13 +341,18 @@ export default function GameSessionPage() {
     setActiveColorInput([])
     setColorRevealing(false)
     setActiveInhibitionRound(null)
+    setInhibitionOutcome(null)
     setActivePatternRound(null)
     setActivePatternInput([])
     setPatternRevealing(false)
+    setSequenceCursor(null)
     setActiveCategoryRound(null)
+    setCategoryOutcome(null)
     setActiveSoundRound(null)
     setSoundRoundPhase('preview')
-    setSoundPreviewingCardId(null)
+    setSoundPreviewingCard(null)
+    setSoundAttemptOutcome(null)
+    setFailedSoundCardImageIds([])
     setSoundPlaybackError('')
     setActivePuzzleRound(null)
     setSelectedPuzzleTileId(null)
@@ -303,6 +361,23 @@ export default function GameSessionPage() {
 
   useDidShow(() => {
     setMuted(isGameAudioMuted())
+    if (backgroundSuspendedRef.current && phaseRef.current === 'paused') {
+      backgroundSuspendedRef.current = false
+      resumeGame()
+      return
+    }
+    const resumedSoundPreview = resumeSoundPreviewAfterShow({
+      sessionIsPlaying: phaseRef.current === 'playing',
+      isSoundGame: gameCodeRef.current === 'game-audiovisual-sound-discrimination',
+      soundPhase: soundPhaseRef.current,
+      hasActiveRound: activeSoundRoundRef.current !== null,
+      previewInFlight: soundPreviewInFlightRef.current,
+      startPreview: () => {
+        soundPreviewInFlightRef.current = true
+        void autoPreviewSoundRound(soundRoundRunIdRef.current)
+      },
+    })
+    if (resumedSoundPreview) return
     if (phaseRef.current === 'intro' || phaseRef.current === 'playing' || phaseRef.current === 'paused' || phaseRef.current === 'result') {
       return
     }
@@ -344,7 +419,9 @@ export default function GameSessionPage() {
   })
 
   useDidHide(() => {
-    stopActiveGameAudio()
+    if (suspendPlayingSession(true)) return
+    invalidateSoundPreviewRun()
+    setSoundPreviewingCard(null)
   })
 
   useEffect(() => {
@@ -384,18 +461,8 @@ export default function GameSessionPage() {
 
   useEffect(() => {
     if (phase !== 'playing') return undefined
-
-    const timer = setInterval(() => {
-      if (endStartedRef.current || phaseRef.current !== 'playing') return
-      const nextElapsedSeconds = elapsedSecondsRef.current + 1
-      elapsedSecondsRef.current = nextElapsedSeconds
-      setElapsedSeconds(nextElapsedSeconds)
-      if (nextElapsedSeconds >= targetSecondsRef.current) {
-        endSession('timer', targetSecondsRef.current)
-      }
-    }, 1000)
-
-    return () => clearInterval(timer)
+    startSessionTimer(sessionTimerRemainingMsRef.current)
+    return pauseSessionTimer
   }, [phase])
 
   useEffect(() => {
@@ -424,10 +491,50 @@ export default function GameSessionPage() {
   useEffect(() => {
     return () => {
       introRunIdRef.current += 1
-      clearRoundTimers()
-      stopActiveGameAudio()
+      invalidateSoundPreviewRun()
+      clearRoundTimers({ suppressStateUpdates: true })
+      clearSessionTimer()
     }
   }, [])
+
+  function clearSessionTimer() {
+    if (sessionTimerRef.current) {
+      clearTimeout(sessionTimerRef.current)
+      sessionTimerRef.current = null
+    }
+    sessionTimerDeadlineRef.current = null
+  }
+
+  function pauseSessionTimer() {
+    if (!sessionTimerRef.current) return
+    const deadline = sessionTimerDeadlineRef.current
+    clearSessionTimer()
+    if (deadline !== null) {
+      sessionTimerRemainingMsRef.current = Math.max(0, deadline - Date.now())
+    }
+  }
+
+  function startSessionTimer(durationMs = 1000) {
+    clearSessionTimer()
+    if (!canContinueRoundTimers()) return
+    const normalizedDurationMs = Math.max(0, durationMs)
+    sessionTimerRemainingMsRef.current = normalizedDurationMs
+    sessionTimerDeadlineRef.current = Date.now() + normalizedDurationMs
+    sessionTimerRef.current = setTimeout(() => {
+      sessionTimerRef.current = null
+      sessionTimerDeadlineRef.current = null
+      sessionTimerRemainingMsRef.current = 1000
+      if (!canContinueRoundTimers()) return
+      const nextElapsedSeconds = elapsedSecondsRef.current + 1
+      elapsedSecondsRef.current = nextElapsedSeconds
+      setElapsedSeconds(nextElapsedSeconds)
+      if (nextElapsedSeconds >= targetSecondsRef.current) {
+        endSession('timer', targetSecondsRef.current)
+        return
+      }
+      startSessionTimer(1000)
+    }, normalizedDurationMs)
+  }
 
   function canContinueRoundTimers(): boolean {
     return phaseRef.current === 'playing' && !endStartedRef.current && elapsedSecondsRef.current < targetSecondsRef.current
@@ -473,50 +580,32 @@ export default function GameSessionPage() {
     startRoundTimeout(roundTimeoutRemainingMsRef.current ?? defaultTimeoutMs)
   }
 
-  function colorRevealDurationMs(round: ColorSequenceRound): number {
-    return Math.max(1800, round.sequence.length * round.revealMs)
-  }
+  function startSequenceRevealTimer(
+    kind: 'color' | 'pattern',
+    sequenceLength: number,
+    revealMs: number
+  ) {
+    const scheduler = createSequenceRevealScheduler({
+      sequenceLength,
+      revealMs,
+      onCursor: setSequenceCursor,
+      onComplete: () => {
+        if (phaseRef.current !== 'playing') return
 
-  function patternRevealDurationMs(round: PatternSequenceRound): number {
-    return Math.max(1800, round.sequence.length * round.revealMs)
-  }
-
-  function startColorRevealTimer(round: ColorSequenceRound, durationMs = colorRevealDurationMs(round)) {
-    if (revealTimerRef.current) {
-      clearTimeout(revealTimerRef.current)
-    }
-    const normalizedDurationMs = Math.max(0, durationMs)
-    revealTimerDeadlineRef.current = Date.now() + normalizedDurationMs
-    revealTimerRemainingMsRef.current = normalizedDurationMs
-    revealTimerRef.current = setTimeout(() => {
-      revealTimerRef.current = null
-      revealTimerDeadlineRef.current = null
-      revealTimerRemainingMsRef.current = null
-      if (phaseRef.current === 'playing') {
-        setColorRevealing(false)
+        sequenceRevealSchedulerRef.current = null
+        setSequenceCursor(null)
+        if (kind === 'color') setColorRevealing(false)
+        if (kind === 'pattern') setPatternRevealing(false)
         roundStartedAtRef.current = Date.now()
-        startRoundTimeout(round.inputTimeoutMs)
-      }
-    }, normalizedDurationMs)
-  }
-
-  function startPatternRevealTimer(round: PatternSequenceRound, durationMs = patternRevealDurationMs(round)) {
-    if (revealTimerRef.current) {
-      clearTimeout(revealTimerRef.current)
-    }
-    const normalizedDurationMs = Math.max(0, durationMs)
-    revealTimerDeadlineRef.current = Date.now() + normalizedDurationMs
-    revealTimerRemainingMsRef.current = normalizedDurationMs
-    revealTimerRef.current = setTimeout(() => {
-      revealTimerRef.current = null
-      revealTimerDeadlineRef.current = null
-      revealTimerRemainingMsRef.current = null
-      if (phaseRef.current === 'playing') {
-        setPatternRevealing(false)
-        roundStartedAtRef.current = Date.now()
-        startRoundTimeout(round.inputTimeoutMs)
-      }
-    }, normalizedDurationMs)
+        const timeoutMs = kind === 'color'
+          ? activeColorRoundRef.current?.inputTimeoutMs
+          : activePatternRoundRef.current?.inputTimeoutMs
+        if (timeoutMs) startRoundTimeout(timeoutMs)
+      },
+    })
+    sequenceRevealSchedulerRef.current?.cancel()
+    sequenceRevealSchedulerRef.current = scheduler
+    scheduler.start({ index: 0, phase: 'item' })
   }
 
   function startPuzzlePreviewTimer(round: PuzzleRound, durationMs = round.previewMs) {
@@ -551,6 +640,9 @@ export default function GameSessionPage() {
   function startColorRound() {
     if (endStartedRef.current || phaseRef.current !== 'playing') return
     clearRoundTimers()
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
+    setSequenceCursor(null)
     pendingNextRoundRef.current = false
     const round = createColorSequenceRound(difficultyRef.current)
     unitLockedRef.current = false
@@ -560,8 +652,7 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
-    soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    invalidateSoundPreviewRun()
     setActiveColorRound(round)
     setActiveColorInput([])
     setActiveInhibitionRound(null)
@@ -572,15 +663,18 @@ export default function GameSessionPage() {
     setActiveSoundRound(null)
     setActivePuzzleRound(null)
     setSoundPlaybackError('')
+    setSoundAttemptOutcome(null)
     setPuzzlePreviewing(false)
     setFeedback('')
     setColorRevealing(true)
-    startColorRevealTimer(round)
+    startSequenceRevealTimer('color', round.sequence.length, round.revealMs)
   }
 
   function startInhibitionRound() {
     if (endStartedRef.current || phaseRef.current !== 'playing') return
     clearRoundTimers()
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
     pendingNextRoundRef.current = false
     unitLockedRef.current = false
     activeColorInputRef.current = []
@@ -591,8 +685,7 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
-    soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    invalidateSoundPreviewRun()
     setActiveInhibitionRound(round)
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -600,10 +693,12 @@ export default function GameSessionPage() {
     setActivePatternRound(null)
     setActivePatternInput([])
     setPatternRevealing(false)
+    setSequenceCursor(null)
     setActiveCategoryRound(null)
     setActiveSoundRound(null)
     setActivePuzzleRound(null)
     setSoundPlaybackError('')
+    setSoundAttemptOutcome(null)
     setPuzzlePreviewing(false)
     setFeedback('')
     startRoundTimeout(round.timeoutMs)
@@ -612,6 +707,9 @@ export default function GameSessionPage() {
   function startPatternRound() {
     if (endStartedRef.current || phaseRef.current !== 'playing') return
     clearRoundTimers()
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
+    setSequenceCursor(null)
     pendingNextRoundRef.current = false
     const round = createPatternSequenceRound(difficultyRef.current)
     unitLockedRef.current = false
@@ -622,8 +720,7 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
-    soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    invalidateSoundPreviewRun()
     setActivePatternRound(round)
     setActivePatternInput([])
     setPatternRevealing(true)
@@ -635,14 +732,17 @@ export default function GameSessionPage() {
     setActiveSoundRound(null)
     setActivePuzzleRound(null)
     setSoundPlaybackError('')
+    setSoundAttemptOutcome(null)
     setPuzzlePreviewing(false)
     setFeedback('')
-    startPatternRevealTimer(round)
+    startSequenceRevealTimer('pattern', round.sequence.length, round.revealMs)
   }
 
   function startCategoryRound() {
     if (endStartedRef.current || phaseRef.current !== 'playing') return
     clearRoundTimers()
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
     pendingNextRoundRef.current = false
     unitLockedRef.current = false
     activeColorInputRef.current = []
@@ -657,8 +757,7 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = round
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = null
-    soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    invalidateSoundPreviewRun()
     setActiveCategoryRound(round)
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -666,10 +765,12 @@ export default function GameSessionPage() {
     setActivePatternRound(null)
     setActivePatternInput([])
     setPatternRevealing(false)
+    setSequenceCursor(null)
     setActiveInhibitionRound(null)
     setActiveSoundRound(null)
     setActivePuzzleRound(null)
     setSoundPlaybackError('')
+    setSoundAttemptOutcome(null)
     setPuzzlePreviewing(false)
     setFeedback('')
     startRoundTimeout(round.timeoutMs)
@@ -678,6 +779,8 @@ export default function GameSessionPage() {
   function startSoundRound() {
     if (endStartedRef.current || phaseRef.current !== 'playing') return
     clearRoundTimers()
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
     pendingNextRoundRef.current = false
     unitLockedRef.current = false
     activeColorInputRef.current = []
@@ -689,12 +792,14 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = round
     activePuzzleRoundRef.current = null
-    soundRoundRunIdRef.current += 1
+    invalidateSoundPreviewRun()
     const runId = soundRoundRunIdRef.current
     soundPreviewInFlightRef.current = true
     setActiveSoundRound(round)
     setSoundRoundPhase('preview')
-    setSoundPreviewingCardId(null)
+    setSoundPreviewingCard(null)
+    setSoundAttemptOutcome(null)
+    setFailedSoundCardImageIds([])
     setSoundPlaybackError('')
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -702,6 +807,7 @@ export default function GameSessionPage() {
     setActivePatternRound(null)
     setActivePatternInput([])
     setPatternRevealing(false)
+    setSequenceCursor(null)
     setActiveInhibitionRound(null)
     setActiveCategoryRound(null)
     setActivePuzzleRound(null)
@@ -713,6 +819,8 @@ export default function GameSessionPage() {
   function startPuzzleRound() {
     if (endStartedRef.current || phaseRef.current !== 'playing') return
     clearRoundTimers()
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
     pendingNextRoundRef.current = false
     unitLockedRef.current = false
     activeColorInputRef.current = []
@@ -724,8 +832,7 @@ export default function GameSessionPage() {
     activeCategoryRoundRef.current = null
     activeSoundRoundRef.current = null
     activePuzzleRoundRef.current = round
-    soundRoundRunIdRef.current += 1
-    soundPreviewInFlightRef.current = false
+    invalidateSoundPreviewRun()
     setActivePuzzleRound(round)
     setSelectedPuzzleTileId(null)
     setPuzzlePreviewing(true)
@@ -735,15 +842,20 @@ export default function GameSessionPage() {
     setActivePatternRound(null)
     setActivePatternInput([])
     setPatternRevealing(false)
+    setSequenceCursor(null)
     setActiveInhibitionRound(null)
     setActiveCategoryRound(null)
     setActiveSoundRound(null)
     setSoundPlaybackError('')
+    setSoundAttemptOutcome(null)
     setFeedback('')
     startPuzzlePreviewTimer(round)
   }
 
   function startRoundForGame(gameCodeValue: GameCode | null) {
+    if (gameCodeValue !== 'game-audiovisual-sound-discrimination') {
+      setSoundAttemptOutcome(null)
+    }
     if (gameCodeValue === 'game-memory-color-sequence') {
       startColorRound()
     } else if (gameCodeValue === 'game-memory-pattern-sequence') {
@@ -879,43 +991,90 @@ export default function GameSessionPage() {
     setUnitResults(nextResults)
   }
 
-  function scheduleNextRound() {
+  function scheduleNextRound(durationMs = nextRoundTimerRemainingMsRef.current ?? ROUND_FEEDBACK_MS) {
+    const normalizedDurationMs = Math.max(0, durationMs)
     clearRoundTimers()
     pendingNextRoundRef.current = true
+    nextRoundTimerRemainingMsRef.current = normalizedDurationMs
+    nextRoundTimerDeadlineRef.current = Date.now() + normalizedDurationMs
     nextRoundTimerRef.current = setTimeout(() => {
       nextRoundTimerRef.current = null
+      nextRoundTimerDeadlineRef.current = null
+      nextRoundTimerRemainingMsRef.current = null
       if (phaseRef.current !== 'playing' || endStartedRef.current || elapsedSecondsRef.current >= targetSecondsRef.current) return
       startRoundForGame(gameCodeRef.current)
-    }, 650)
+    }, normalizedDurationMs)
   }
 
-  function pauseGame() {
-    if (phaseRef.current !== 'playing') return
-    stopActiveGameAudio()
-    setSoundPreviewingCardId(null)
-    if (colorRevealing || patternRevealing || puzzlePreviewing) {
+  function pauseNextRoundTimer() {
+    if (!nextRoundTimerRef.current) return
+    const deadline = nextRoundTimerDeadlineRef.current
+    clearTimeout(nextRoundTimerRef.current)
+    nextRoundTimerRef.current = null
+    nextRoundTimerDeadlineRef.current = null
+    if (deadline !== null) {
+      nextRoundTimerRemainingMsRef.current = Math.max(0, deadline - Date.now())
+    }
+  }
+
+  function requeueInterruptedSoundPreview() {
+    const cardId = soundPreviewingCardIdRef.current
+    const round = activeSoundRoundRef.current
+    if (!cardId || !round || soundPhaseRef.current !== 'preview') return
+    const nextRound = {
+      ...round,
+      cards: round.cards.map((card) => (card.id === cardId ? { ...card, previewed: false } : card)),
+      previewComplete: false,
+    }
+    activeSoundRoundRef.current = nextRound
+    setActiveSoundRound(nextRound)
+  }
+
+  function suspendPlayingSession(forBackground: boolean): boolean {
+    if (phaseRef.current !== 'playing') return false
+    backgroundSuspendedRef.current = forBackground
+    requeueInterruptedSoundPreview()
+    invalidateSoundPreviewRun()
+    setSoundPreviewingCard(null)
+    if (colorRevealing || patternRevealing) {
+      sequenceRevealSchedulerRef.current?.pause()
+    }
+    if (puzzlePreviewing) {
       pauseRevealTimer()
     }
     pauseRoundTimeout()
-    clearRoundTimers({ preserveRevealRemaining: true, preserveRoundTimeoutRemaining: true })
+    pauseNextRoundTimer()
+    pauseSessionTimer()
+    clearRoundTimers({
+      preserveRevealRemaining: true,
+      preserveRoundTimeoutRemaining: true,
+      preserveNextRoundRemaining: true,
+    })
     setSessionPhase('paused')
+    return true
+  }
+
+  function pauseGame() {
+    backgroundSuspendedRef.current = false
+    suspendPlayingSession(false)
   }
 
   function resumeGame() {
     if (phaseRef.current !== 'paused') return
+    backgroundSuspendedRef.current = false
     setSessionPhase('playing')
     if (pendingNextRoundRef.current || unitLockedRef.current) {
-      scheduleNextRound()
+      scheduleNextRound(nextRoundTimerRemainingMsRef.current ?? ROUND_FEEDBACK_MS)
       return
     }
     if (gameCodeRef.current === 'game-memory-color-sequence' && colorRevealing && activeColorRound) {
       setColorRevealing(true)
-      startColorRevealTimer(activeColorRound, revealTimerRemainingMsRef.current ?? colorRevealDurationMs(activeColorRound))
+      sequenceRevealSchedulerRef.current?.resume()
       return
     }
     if (gameCodeRef.current === 'game-memory-pattern-sequence' && patternRevealing && activePatternRound) {
       setPatternRevealing(true)
-      startPatternRevealTimer(activePatternRound, revealTimerRemainingMsRef.current ?? patternRevealDurationMs(activePatternRound))
+      sequenceRevealSchedulerRef.current?.resume()
       return
     }
     if (gameCodeRef.current === 'game-audiovisual-puzzle' && puzzlePreviewing && activePuzzleRound) {
@@ -977,6 +1136,7 @@ export default function GameSessionPage() {
     unitLockedRef.current = true
     void playGameAudio('tap')
     const attempt = evaluateInhibitionAttempt(activeInhibitionRound, index)
+    setInhibitionOutcome({ selected: index, correct: attempt.correct })
     appendUnitResult(
       attempt.correct,
       withBaseRoundDetail({
@@ -1019,6 +1179,7 @@ export default function GameSessionPage() {
     unitLockedRef.current = true
     void playGameAudio('tap')
     const attempt = evaluateCategorySwitchAttempt(activeCategoryRound, option)
+    setCategoryOutcome({ selected: option, correct: attempt.correct })
     appendUnitResult(
       attempt.correct,
       withBaseRoundDetail({
@@ -1055,20 +1216,24 @@ export default function GameSessionPage() {
         const nextRound = markCardPreviewed(latestRound, card.id)
         activeSoundRoundRef.current = nextRound
         setActiveSoundRound(nextRound)
-        setSoundPreviewingCardId(card.id)
+        setSoundPreviewingCard(card.id)
 
         const previewPlayed = await playAudioSrc(card.audioSrc)
-        if (!canUseSoundPreviewRun(runId)) return
-        if (!previewPlayed) {
-          setSoundPlaybackError('声音播放异常，已继续播放下一张')
-        }
+        const canContinuePreview = await finishSoundCardPreview({
+          previewPlayed,
+          isRunCurrent: () => canUseSoundPreviewRun(runId),
+          clearPreviewingCard: () => setSoundPreviewingCard(null),
+          waitForReturn: wait,
+          onPreviewPlaybackFailure: () => setSoundPlaybackError('声音播放异常，已继续播放下一张'),
+        })
+        if (!canContinuePreview) return
       }
 
       const latestRound = activeSoundRoundRef.current
       if (!latestRound || !latestRound.previewComplete || !canUseSoundPreviewRun(runId)) return
 
       setSoundRoundPhase('choose')
-      setSoundPreviewingCardId(null)
+      setSoundPreviewingCard(null)
       soundPreviewInFlightRef.current = false
       roundStartedAtRef.current = Date.now()
       const targetPlayed = await playAudioSrc(latestRound.target.audioSrc)
@@ -1089,7 +1254,7 @@ export default function GameSessionPage() {
     } finally {
       if (soundRoundRunIdRef.current === runId) {
         soundPreviewInFlightRef.current = false
-        setSoundPreviewingCardId(null)
+        setSoundPreviewingCard(null)
       }
     }
   }
@@ -1127,6 +1292,7 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
+    setSoundAttemptOutcome({ selectedCardId: card.id, correct: attempt.correct })
     showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
@@ -1200,8 +1366,10 @@ export default function GameSessionPage() {
 
     endStartedRef.current = true
     introRunIdRef.current += 1
+    invalidateSoundPreviewRun()
     clearRoundTimers()
-    stopActiveGameAudio()
+    setSequenceCursor(null)
+    setSoundPreviewingCard(null)
     const finalDurationSeconds =
       reason === 'timer'
         ? targetSecondsRef.current
@@ -1242,6 +1410,9 @@ export default function GameSessionPage() {
     setElapsedSeconds(finalDurationSeconds)
     setResultPayload(payload)
     setFeedback('')
+    setInhibitionOutcome(null)
+    setCategoryOutcome(null)
+    setSoundAttemptOutcome(null)
     setSessionPhase('result')
     if (!demoMode || reason !== 'manual') {
       void playGameAudio(reason === 'manual' ? 'manual_end' : 'complete')
@@ -1292,6 +1463,8 @@ export default function GameSessionPage() {
       )
     }
 
+    const colorSlots = buildSequenceAnswerSlots(activeColorRound.sequence, activeColorInput)
+
     return (
       <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
@@ -1299,20 +1472,41 @@ export default function GameSessionPage() {
         <Text className='section-title'>
           {phase === 'paused' ? '训练已暂停' : colorRevealing ? '请记住这个颜色顺序' : '请按刚才的顺序点击颜色'}
         </Text>
-        {phase !== 'paused' ? (
-          <View className='sequence-preview'>
-            {colorRevealing
-              ? activeColorRound.sequence.map((color, index) => (
-                  <Text key={`${color}-${index}`} className={`sequence-chip color-${color}`}>
-                    {COLOR_LABEL[color]}
-                  </Text>
-                ))
-              : activeColorRound.sequence.map((_color, index) => (
-                  <Text key={index} className='sequence-chip hidden-chip'>
-                    {index < activeColorInput.length ? '已选' : index + 1}
-                  </Text>
-                ))}
-          </View>
+        {phase !== 'paused' || pendingNextRoundRef.current ? (
+          sequenceRevealCursor ? (
+            <View className='sequence-memory-wrap'>
+              <Text className='sequence-memory-progress'>
+                第 {sequenceRevealCursor.index + 1} / {activeColorRound.sequence.length} 项
+              </Text>
+              <View className='sequence-memory-stage'>
+                {sequenceRevealCursor.phase === 'transition' ? (
+                  <Text className='sequence-transition-cue'>下一项</Text>
+                ) : (
+                  <View className={`sequence-memory-color color-${activeColorRound.sequence[sequenceRevealCursor.index]}`}>
+                    <Text>{COLOR_LABEL[activeColorRound.sequence[sequenceRevealCursor.index]]}</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          ) : (
+            <View className='sequence-answer-grid'>
+              {colorSlots.map((slot) => (
+                <View
+                  key={slot.index}
+                  className={`sequence-answer-slot ${slot.selected === null ? '' : `color-${slot.selected}`} ${
+                    slot.correct === true ? 'is-correct' : slot.correct === false ? 'is-wrong' : ''
+                  }`}
+                >
+                  {slot.selected === null ? <Text>{slot.index + 1}</Text> : <Text>{COLOR_LABEL[slot.selected]}</Text>}
+                  {slot.correct !== null ? (
+                    <Text className={`sequence-result-mark ${slot.correct ? 'correct' : 'wrong'}`}>
+                      {slot.correct ? '✓' : '✕'}
+                    </Text>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          )
         ) : null}
         <View className='game-stage color-grid'>
           {activeColorRound.colors.map((color) => (
@@ -1347,16 +1541,22 @@ export default function GameSessionPage() {
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title game-task-title inhibition-task-title'>请选择不一样的数字</Text>
         <View className='game-stage number-grid'>
-          {activeInhibitionRound.options.map((value, index) => (
-            <Button
-              key={`${value}-${index}`}
-              className='number-tile'
-              disabled={phase !== 'playing' || unitLockedRef.current}
-              onClick={() => selectInhibition(index)}
-            >
-              {value}
-            </Button>
-          ))}
+          {activeInhibitionRound.options.map((value, index) => {
+            const feedbackState = choiceFeedbackState(index, inhibitionOutcome)
+            return (
+              <Button
+                key={`${value}-${index}`}
+                className={`number-tile ${feedbackState === 'idle' ? '' : `choice-${feedbackState}`}`}
+                disabled={phase !== 'playing' || unitLockedRef.current}
+                onClick={() => selectInhibition(index)}
+              >
+                {value}
+                {feedbackState !== 'idle' ? (
+                  <Text className='choice-result-mark'>{feedbackState === 'correct' ? '✓' : '✕'}</Text>
+                ) : null}
+              </Button>
+            )
+          })}
         </View>
         {feedback ? <Text className='game-feedback'>{feedback}</Text> : null}
       </View>
@@ -1375,6 +1575,14 @@ export default function GameSessionPage() {
   function renderPatternSequenceGame() {
     if (!activePatternRound) return renderLoadingRound()
 
+    const patternSlots = buildSequenceAnswerSlots(
+      activePatternRound.sequence.map((pattern) => pattern.id),
+      activePatternInput
+    )
+    const currentPattern = sequenceRevealCursor
+      ? activePatternRound.sequence[sequenceRevealCursor.index]
+      : null
+
     return (
       <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
@@ -1382,21 +1590,54 @@ export default function GameSessionPage() {
         <Text className='section-title'>
           {phase === 'paused' ? '训练已暂停' : patternRevealing ? '请记住这个图案顺序' : '请按刚才的顺序点击图案'}
         </Text>
-        {phase !== 'paused' ? (
-          <View className='sequence-preview'>
-            {patternRevealing
-              ? activePatternRound.sequence.map((pattern, index) => (
-                  <View key={`${pattern.id}-${index}`} className='image-sequence-chip'>
-                    <Image className='game-image' src={pattern.imageSrc} mode='aspectFit' />
-                    <Text>{pattern.label}</Text>
+        {phase !== 'paused' || pendingNextRoundRef.current ? (
+          sequenceRevealCursor ? (
+            <View className='sequence-memory-wrap'>
+              <Text className='sequence-memory-progress'>
+                第 {sequenceRevealCursor.index + 1} / {activePatternRound.sequence.length} 项
+              </Text>
+              <View className='sequence-memory-stage'>
+                {sequenceRevealCursor.phase === 'transition' ? (
+                  <Text className='sequence-transition-cue'>下一项</Text>
+                ) : currentPattern ? (
+                  <View className='sequence-memory-pattern'>
+                    <Image className='sequence-memory-image' src={currentPattern.imageSrc} mode='aspectFit' />
+                    <Text className='sequence-memory-label'>{currentPattern.label}</Text>
                   </View>
-                ))
-              : activePatternRound.sequence.map((_pattern, index) => (
-                  <Text key={index} className='sequence-chip hidden-chip'>
-                    {index < activePatternInput.length ? '已选' : index + 1}
-                  </Text>
-                ))}
-          </View>
+                ) : null}
+              </View>
+            </View>
+          ) : (
+            <View className='sequence-answer-grid'>
+              {patternSlots.map((slot) => {
+                const selectedPattern = slot.selected === null
+                  ? null
+                  : activePatternRound.patterns.find((pattern) => pattern.id === slot.selected) ?? null
+                return (
+                  <View
+                    key={slot.index}
+                    className={`sequence-answer-slot ${
+                      slot.correct === true ? 'is-correct' : slot.correct === false ? 'is-wrong' : ''
+                    }`}
+                  >
+                    {selectedPattern ? (
+                      <View className='sequence-answer-pattern'>
+                        <Image className='sequence-answer-image' src={selectedPattern.imageSrc} mode='aspectFit' />
+                        <Text className='sequence-answer-label'>{selectedPattern.label}</Text>
+                      </View>
+                    ) : (
+                      <Text>{slot.index + 1}</Text>
+                    )}
+                    {slot.correct !== null ? (
+                      <Text className={`sequence-result-mark ${slot.correct ? 'correct' : 'wrong'}`}>
+                        {slot.correct ? '✓' : '✕'}
+                      </Text>
+                    ) : null}
+                  </View>
+                )
+              })}
+            </View>
+          )
         ) : null}
         <View className='game-stage pattern-grid'>
           {activePatternRound.patterns.map((pattern) => (
@@ -1432,17 +1673,23 @@ export default function GameSessionPage() {
           <Text className='category-label'>{activeCategoryRound.item.label}</Text>
         </View>
         <View className='category-options'>
-          {activeCategoryRound.options.map((option) => (
-            <Button
-              key={option}
-              className='category-option'
-              hoverClass='game-card-pressed'
-              disabled={phase !== 'playing' || unitLockedRef.current}
-              onClick={() => selectCategory(option)}
-            >
-              {option}
-            </Button>
-          ))}
+          {activeCategoryRound.options.map((option) => {
+            const feedbackState = choiceFeedbackState(option, categoryOutcome)
+            return (
+              <Button
+                key={option}
+                className={`category-option ${feedbackState === 'idle' ? '' : `choice-${feedbackState}`}`}
+                hoverClass='game-card-pressed'
+                disabled={phase !== 'playing' || unitLockedRef.current}
+                onClick={() => selectCategory(option)}
+              >
+                {option}
+                {feedbackState !== 'idle' ? (
+                  <Text className='choice-result-mark'>{feedbackState === 'correct' ? '✓' : '✕'}</Text>
+                ) : null}
+              </Button>
+            )
+          })}
         </View>
         {feedback ? <Text className='game-feedback'>{feedback}</Text> : null}
       </View>
@@ -1470,14 +1717,19 @@ export default function GameSessionPage() {
         ) : null}
         {soundPlaybackError ? <Text className='error'>{soundPlaybackError}</Text> : null}
         <View className='game-stage sound-card-grid'>
-          {activeSoundRound.cards.map((card) => {
-            const revealed = card.previewed
-            const previewing = soundPreviewingCardId === card.id
+          {activeSoundRound.cards.map((card, index) => {
+            const imageFailed = failedSoundCardImageIds.includes(card.id)
+            const visualState = imageFailed
+              ? 'back'
+              : soundCardVisualState(card.id, soundPreviewingCardId, soundAttemptOutcome)
+            const showsImage = visualState === 'preview' || visualState === 'correct'
+            const returnedFromPreview = (
+              visualState === 'back' && soundPhase === 'preview' && card.previewed
+            )
             return (
               <Button
                 key={card.id}
-                className={`sound-card ${revealed ? 'revealed' : ''} ${previewing ? 'previewing' : ''}`}
-                hoverClass='game-card-pressed'
+                className={`sound-card sound-card-${visualState}${returnedFromPreview ? ' sound-card-returned' : ''}`}
                 disabled={phase !== 'playing' || unitLockedRef.current || soundPhase === 'preview'}
                 onClick={() => {
                   if (soundPhase === 'choose') {
@@ -1485,19 +1737,29 @@ export default function GameSessionPage() {
                   }
                 }}
               >
-                {revealed ? (
-                  <View className='sound-card-face'>
-                    <Image className='game-image game-card-image' src={card.imageSrc} mode='aspectFit' />
-                    <Text className='game-card-label'>{SOUND_CATEGORY_LABEL[card.category]}</Text>
-                  </View>
-                ) : (
-                  <Text className='card-back'>?</Text>
-                )}
+                <View className='sound-card-flip'>
+                  {showsImage ? (
+                    <View className='sound-card-face sound-card-front'>
+                      <Image
+                        className='sound-card-image'
+                        src={card.imageSrc}
+                        mode='aspectFit'
+                        onError={() => markSoundCardImageFailed(card.id)}
+                      />
+                    </View>
+                  ) : (
+                    <View className='sound-card-back-face'>
+                      <Text className='card-back'>{index + 1}</Text>
+                    </View>
+                  )}
+                </View>
               </Button>
             )
           })}
         </View>
-        {feedback ? <Text className='game-feedback'>{feedback}</Text> : null}
+        {feedback ? (
+          <Text className={`game-feedback ${soundAttemptOutcome?.correct ? 'correct' : 'wrong'}`}>{feedback}</Text>
+        ) : null}
       </View>
     )
   }
@@ -1522,7 +1784,6 @@ export default function GameSessionPage() {
               <Button
                 key={tile.id}
                 className={`puzzle-tile ${selectedPuzzleTileId === tile.id ? 'selected' : ''}`}
-                hoverClass='game-card-pressed'
                 onClick={() => selectPuzzleTile(tile)}
               >
                 <View className='puzzle-tile-slice'>

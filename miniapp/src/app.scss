@@ -924,30 +924,149 @@ button:active {
     line-height: 1.18;
   }
 
-  .sequence-preview {
+  .sequence-memory-stage {
+    display: flex;
+    height: 34vh;
+    min-height: 220px;
+    max-height: 360px;
+    align-items: center;
+    justify-content: center;
+    margin: 14px 0 22px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  .sequence-memory-progress {
+    display: block;
+    color: $mc-muted;
+    font-size: 24px;
+    font-weight: 800;
+    text-align: center;
+  }
+
+  .sequence-memory-color,
+  .sequence-memory-image {
+    width: 320px;
+    max-width: 72vw;
+    height: 28vh;
+    min-height: 180px;
+    max-height: 320px;
+    border-radius: 18px;
+  }
+
+  .sequence-memory-color {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 34px;
+    font-weight: 900;
+  }
+
+  .sequence-memory-pattern {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sequence-memory-image {
+    display: block;
+  }
+
+  .sequence-memory-label {
+    display: block;
+    margin-top: 8px;
+    color: $mc-ink;
+    font-size: 26px;
+    font-weight: 900;
+    text-align: center;
+  }
+
+  .sequence-transition-cue {
+    color: $mc-primary;
+    font-size: 38px;
+    font-weight: 900;
+  }
+
+  .sequence-answer-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 12px;
     margin: 12px 0 22px;
   }
 
-  .sequence-chip {
+  .sequence-answer-slot {
+    position: relative;
     display: flex;
-    min-height: 76px;
+    min-height: 148px;
+    overflow: hidden;
     align-items: center;
     justify-content: center;
+    border: 2px dashed rgba(7, 152, 178, 0.48);
     border-radius: 16px;
-    color: #ffffff;
+    color: $mc-ink;
+    background: rgba(255, 255, 255, 0.88);
     font-size: 26px;
     font-weight: 900;
-    box-shadow: $mc-shadow;
   }
 
-  .hidden-chip {
-    border: 2px dashed rgba(7, 152, 178, 0.48);
+  .sequence-answer-slot.is-correct {
+    border: 4px solid #1f8d63;
+  }
+
+  .sequence-answer-slot.is-wrong {
+    border: 4px solid #b13f31;
+  }
+
+  .sequence-answer-pattern {
+    display: flex;
+    width: 100%;
+    min-height: 148px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sequence-answer-image {
+    display: block;
+    width: 100%;
+    height: 104px;
+  }
+
+  .sequence-answer-label {
+    display: block;
     color: $mc-ink;
-    background: rgba(255, 255, 255, 0.76);
-    box-shadow: none;
+    font-size: 20px;
+    font-weight: 900;
+    line-height: 1.2;
+    text-align: center;
+  }
+
+  .sequence-result-mark {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    width: 42px;
+    height: 42px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 3px solid currentcolor;
+    border-radius: 50%;
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.92);
+    font-size: 30px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .sequence-result-mark.correct {
+    color: #1f8d63;
+  }
+
+  .sequence-result-mark.wrong {
+    color: #b13f31;
   }
 
   .color-grid,
@@ -1018,11 +1137,60 @@ button:active {
     line-height: 1;
   }
 
-  .game-image,
-  .category-image {
+  .number-tile,
+  .category-option {
+    position: relative;
+    transition: border-color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+  }
+
+  .choice-correct {
+    border-color: rgba(17, 163, 106, 0.72);
+    background: rgba(234, 251, 240, 0.96);
+  }
+
+  .choice-wrong {
+    border-color: $mc-danger;
+    background: rgba(255, 235, 229, 0.7);
+    box-shadow: 0 0 0 6px rgba(194, 65, 45, 0.16);
+  }
+
+  .choice-result-mark {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    width: 42px;
+    height: 42px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    border: 3px solid currentcolor;
+    border-radius: 50%;
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.92);
+    font-size: 30px;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .choice-correct .choice-result-mark {
+    color: #1f8d63;
+  }
+
+  .choice-wrong .choice-result-mark {
+    color: #b13f31;
+  }
+
+  .game-image {
     display: block;
     width: 122px;
     height: 122px;
+  }
+
+  .category-image {
+    display: block;
+    width: 190px;
+    height: 190px;
   }
 
   .game-card-face,
@@ -1061,26 +1229,6 @@ button:active {
     transform-style: preserve-3d;
   }
 
-  .image-sequence-chip {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .image-sequence-chip {
-    display: flex;
-    min-height: 126px;
-    align-items: center;
-    justify-content: center;
-    padding: 12px;
-    border-radius: 14px;
-    color: $mc-ink;
-    background: rgba(255, 255, 255, 0.88);
-    box-shadow: $mc-shadow;
-    text-align: center;
-    font-size: 22px;
-    font-weight: 800;
-  }
-
   .category-card {
     display: flex;
     min-height: 260px;
@@ -1099,28 +1247,59 @@ button:active {
   }
 
   .sound-card {
-    min-height: 176px;
-    padding: 18px 12px;
+    min-height: 210px;
+    overflow: hidden;
+    padding: 14px;
     perspective: 800px;
-    transition: transform 180ms ease;
-    transform-style: preserve-3d;
   }
 
-  .sound-card.revealed {
-    animation: card-flip-in 260ms ease-out;
-    border-color: rgba(17, 163, 106, 0.42);
+  .sound-card-flip {
+    display: flex;
+    width: 100%;
+    min-height: 182px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sound-card-preview .sound-card-flip,
+  .sound-card-correct .sound-card-flip {
+    animation: card-flip-in 180ms ease-out;
+  }
+
+  .sound-card-returned .sound-card-flip {
+    animation: card-flip-back 180ms ease-out;
+  }
+
+  .sound-card-image {
+    display: block;
+    width: 158px;
+    max-width: 100%;
+    height: 158px;
+  }
+
+  .sound-card-correct {
+    border-color: rgba(17, 163, 106, 0.72);
     background: rgba(234, 251, 240, 0.96);
-    box-shadow: 0 6px 14px rgba(17, 163, 106, 0.12);
   }
 
-  .sound-card.previewing {
-    border-color: rgba(255, 184, 77, 0.78);
-    box-shadow: 0 0 0 6px rgba(255, 184, 77, 0.2), $mc-shadow;
-    transform: scale(1.02);
+  .sound-card-wrong {
+    border-color: $mc-danger;
+    background: rgba(255, 235, 229, 0.7);
+    box-shadow: 0 0 0 6px rgba(194, 65, 45, 0.16);
   }
 
-  .sound-card.revealed .sound-card-face {
-    animation: card-face-pop 260ms ease-out;
+  .sound-card-face,
+  .sound-card-back-face {
+    display: flex;
+    width: 100%;
+    min-height: 182px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sound-card:active,
+  .puzzle-tile:active {
+    transform: none;
   }
 
   .replay-button {
@@ -1175,9 +1354,8 @@ button:active {
   }
 
   .puzzle-tile.selected {
-    border-color: $mc-coral;
-    background: rgba(255, 244, 214, 0.96);
-    box-shadow: $mc-selection-ring;
+    z-index: 1;
+    border: 4px solid $mc-coral;
   }
 
   .puzzle-tile-slice {
@@ -1207,6 +1385,12 @@ button:active {
     box-shadow: 0 6px 14px rgba(17, 163, 106, 0.12);
   }
 
+  .game-feedback.wrong {
+    color: #9d3022;
+    background: rgba(255, 235, 229, 0.92);
+    box-shadow: 0 6px 14px rgba(194, 65, 45, 0.16);
+  }
+
   .result-panel,
   .result-metrics {
     gap: 16px;
@@ -1217,14 +1401,17 @@ button:active {
   button,
   .image-tile,
   .sound-card,
+  .sound-card-flip,
   .puzzle-tile,
-  .sound-card.revealed,
-  .sound-card.revealed .sound-card-face,
+  .sequence-memory-stage,
+  .sequence-transition-cue,
+  .sequence-result-mark,
   .camera-countdown-number,
   .camera-finalizing-spinner {
     animation: none;
     transition: none;
   }
+
 }
 
 .recording-dot {
@@ -1940,6 +2127,18 @@ button:active {
   0% {
     opacity: 0.62;
     transform: rotateY(88deg) scale(0.96);
+  }
+
+  100% {
+    opacity: 1;
+    transform: rotateY(0deg) scale(1);
+  }
+}
+
+@keyframes card-flip-back {
+  0% {
+    opacity: 0.62;
+    transform: rotateY(-88deg) scale(0.96);
   }
 
   100% {
