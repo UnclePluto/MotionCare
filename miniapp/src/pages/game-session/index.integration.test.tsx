@@ -20,6 +20,8 @@ const reactHarness = vi.hoisted(() => {
   let hookCursor = 0
   let queuedEffects: Array<() => unknown> = []
   let effectCleanups: Array<(() => unknown) | undefined> = []
+  let mounted = false
+  let stateWritesAfterCleanup = 0
 
   function depsChanged(previous: unknown, next: unknown[] | undefined): boolean {
     if (!Array.isArray(previous) || !next) return true
@@ -33,8 +35,11 @@ const reactHarness = vi.hoisted(() => {
       hookCursor = 0
       queuedEffects = []
       effectCleanups = []
+      mounted = false
+      stateWritesAfterCleanup = 0
     },
     beginRender() {
+      mounted = true
       hookCursor = 0
       queuedEffects = []
     },
@@ -46,6 +51,10 @@ const reactHarness = vi.hoisted(() => {
     cleanup() {
       effectCleanups.forEach((cleanup) => cleanup?.())
       effectCleanups = []
+      mounted = false
+    },
+    stateWritesAfterCleanup() {
+      return stateWritesAfterCleanup
     },
     useState(initialValue: unknown) {
       const index = hookCursor
@@ -56,6 +65,10 @@ const reactHarness = vi.hoisted(() => {
           : initialValue
       }
       const setState = (nextValue: unknown) => {
+        if (!mounted) {
+          stateWritesAfterCleanup += 1
+          return
+        }
         hookEntries[index] = typeof nextValue === 'function'
           ? (nextValue as (current: unknown) => unknown)(hookEntries[index])
           : nextValue
@@ -89,6 +102,7 @@ const taroHarness = vi.hoisted(() => {
   const taroMock = {
     getStorageSync: vi.fn(),
     setStorageSync: vi.fn(),
+    getImageInfo: vi.fn<(options: { src: string }) => Promise<{ path: string }>>(),
     redirectTo: vi.fn(),
     navigateBack: vi.fn(),
   }
@@ -108,6 +122,11 @@ const taroHarness = vi.hoisted(() => {
 })
 
 const prescriptionHarness = vi.hoisted(() => ({ current: null as unknown }))
+const retryUploadHarness = vi.hoisted(() => ({
+  postGameTrainingRecord: vi.fn(),
+  savePendingGameUploadAfterActiveRetry: vi.fn(),
+  startPendingGameUploadRetryLoop: vi.fn(),
+}))
 const audioHarness = vi.hoisted(() => ({
   playAudioSrc: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
   playGameAudio: vi.fn(async () => undefined),
@@ -150,9 +169,9 @@ vi.mock('../../demo/session', () => ({
 }))
 
 vi.mock('./retryUpload', () => ({
-  postGameTrainingRecord: vi.fn(),
-  savePendingGameUploadAfterActiveRetry: vi.fn(),
-  startPendingGameUploadRetryLoop: vi.fn(),
+  postGameTrainingRecord: retryUploadHarness.postGameTrainingRecord,
+  savePendingGameUploadAfterActiveRetry: retryUploadHarness.savePendingGameUploadAfterActiveRetry,
+  startPendingGameUploadRetryLoop: retryUploadHarness.startPendingGameUploadRetryLoop,
 }))
 
 vi.mock('./gameAudio', async (importOriginal) => {
@@ -278,6 +297,8 @@ async function renderGame(sourceKey: string, actionName: string): Promise<Render
   taroHarness.showCallbacks.at(-1)?.()
   await flushPromises()
   page.rerender()
+  await flushPromises()
+  page.rerender()
   return page
 }
 
@@ -316,18 +337,14 @@ function puzzleTiles(node: unknown): ReactElement[] {
   return findAll(node, (item) => item.type === 'Button' && hasClass(item, 'puzzle-tile'))
 }
 
-function imageIn(node: unknown): ReactElement {
-  const image = findAll(node, (item) => item.type === 'Image')[0]
-  if (!image) throw new Error(`Image not found in: ${textContent(node)}`)
-  return image
-}
-
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve
+    reject = nextReject
   })
-  return { promise, resolve }
+  return { promise, reject, resolve }
 }
 
 beforeEach(() => {
@@ -337,6 +354,11 @@ beforeEach(() => {
   vi.spyOn(Math, 'random').mockReturnValue(0)
   reactHarness.reset()
   taroHarness.reset()
+  taroHarness.taroMock.getImageInfo.mockReset()
+  taroHarness.taroMock.getImageInfo.mockImplementation(async ({ src }) => ({
+    path: `wxfile://game-images/${src.split('/').at(-1)}`,
+  }))
+  Object.values(retryUploadHarness).forEach((mock) => mock.mockReset())
   audioHarness.playAudioSrc.mockReset()
   audioHarness.playAudioSrc.mockResolvedValue(true)
   audioHarness.playGameAudio.mockClear()
@@ -351,13 +373,206 @@ afterEach(async () => {
   vi.useRealTimers()
 })
 
+describe('GameSessionPage 训练图片准备门禁', () => {
+  it('图片未全部准备完成时禁用开始游戏，且不启动计时或创建训练记录', async () => {
+    const pendingImage = deferred<{ path: string }>()
+    taroHarness.taroMock.getImageInfo.mockReturnValue(pendingImage.promise)
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+
+    expect(textContent(page.element)).toContain('正在准备训练图片')
+    const startButton = findButtonByText(page.element, '开始游戏')
+    expect(startButton.props.disabled).toBe(true)
+    click(startButton)
+    await vi.advanceTimersByTimeAsync(5000)
+    page.rerender()
+
+    expect(textContent(page.element)).not.toContain('提前结束')
+    expect(findAll(page.element, (item) => hasClass(item, 'game-timer-value'))).toHaveLength(0)
+    expect(retryUploadHarness.postGameTrainingRecord).not.toHaveBeenCalled()
+    page.unmount()
+    pendingImage.resolve({ path: 'wxfile://game-images/late.webp' })
+    await flushPromises()
+  })
+
+  it.each([
+    ['game-memory-color-sequence', '颜色顺序记忆'],
+    ['game-executive-inhibition', '反应抑制'],
+  ])('%s 不依赖训练图片，可立即进入现有流程', async (sourceKey, actionName) => {
+    const page = await renderGame(sourceKey, actionName)
+
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(false)
+    expect(taroHarness.taroMock.getImageInfo).not.toHaveBeenCalled()
+    page.unmount()
+  })
+
+  it.each([
+    ['game-memory-pattern-sequence', '图案顺序记忆', '5/5', '100%'],
+    ['game-audiovisual-puzzle', '图片拼图', '3/3', '100%'],
+  ])('%s 全部图片成功后显示完成进度并允许开始', async (sourceKey, actionName, fraction, percent) => {
+    const page = await renderGame(sourceKey, actionName)
+
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).toContain(fraction)
+    expect(textContent(page.element)).toContain(percent)
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(false)
+    page.unmount()
+  })
+
+  it('任一图片失败后只显示可执行错误状态，重试使用新 generation 并忽略旧回调', async () => {
+    const firstImage = deferred<{ path: string }>()
+    const secondImage = deferred<{ path: string }>()
+    taroHarness.taroMock.getImageInfo
+      .mockImplementationOnce(() => firstImage.promise)
+      .mockImplementationOnce(() => secondImage.promise)
+      .mockImplementationOnce(async () => {
+        throw new Error('CDN unavailable')
+      })
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片加载失败')
+    expect(findButtonByText(page.element, '重新加载')).toBeTruthy()
+    expect(findButtonByText(page.element, '返回当前运动计划')).toBeTruthy()
+    expect(findAll(page.element, (item) => item.type === 'Button')).toHaveLength(2)
+
+    click(findButtonByText(page.element, '重新加载'))
+    await flushPromises(20)
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).toContain('5/5')
+
+    firstImage.resolve({ path: 'wxfile://game-images/stale-first.webp' })
+    secondImage.resolve({ path: 'wxfile://game-images/stale-second.webp' })
+    await flushPromises(20)
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).not.toContain('训练图片加载失败')
+    page.unmount()
+  })
+
+  it('动作变化后旧图片回调不能覆盖新动作的准备结果', async () => {
+    const firstPrescription = prescriptionFor('game-memory-pattern-sequence', '图案顺序记忆')
+    const secondAction = {
+      ...firstPrescription.actions[0],
+      id: 102,
+      action_library_item: 102,
+      source_key: 'game-executive-category-switch',
+      action_name: '分类切换',
+    }
+    prescriptionHarness.current = {
+      ...firstPrescription,
+      actions: [...firstPrescription.actions, secondAction],
+    }
+    const staleImages = Array.from({ length: 3 }, () => deferred<{ path: string }>())
+    staleImages.forEach((image) => {
+      taroHarness.taroMock.getImageInfo.mockImplementationOnce(() => image.promise)
+    })
+    const page = renderPage()
+    taroHarness.showCallbacks.at(-1)?.()
+    await flushPromises()
+    page.rerender()
+    page.rerender()
+
+    taroHarness.routerParams.actionId = '102'
+    page.rerender()
+    await flushPromises(20)
+    page.rerender()
+    expect(textContent(page.element)).toContain('分类切换')
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+
+    staleImages.forEach((image, index) => {
+      image.resolve({ path: `wxfile://game-images/stale-${index}.webp` })
+    })
+    await flushPromises(20)
+    page.rerender()
+    expect(textContent(page.element)).toContain('分类切换')
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    page.unmount()
+  })
+
+  it('切换到同一游戏的另一动作时立即关闭旧 ready 门禁', async () => {
+    const firstPrescription = prescriptionFor('game-memory-pattern-sequence', '图案顺序记忆 A')
+    prescriptionHarness.current = {
+      ...firstPrescription,
+      actions: [
+        ...firstPrescription.actions,
+        {
+          ...firstPrescription.actions[0],
+          id: 102,
+          action_library_item: 102,
+          action_name: '图案顺序记忆 B',
+        },
+      ],
+    }
+    const page = renderPage()
+    taroHarness.showCallbacks.at(-1)?.()
+    await flushPromises(20)
+    page.rerender()
+    await flushPromises(20)
+    page.rerender()
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(false)
+
+    taroHarness.routerParams.actionId = '102'
+    page.rerender()
+    const startButton = findButtonByText(page.element, '开始游戏')
+    expect(startButton.props.disabled).toBe(true)
+    click(startButton)
+    await vi.advanceTimersByTimeAsync(5000)
+    page.rerender()
+    expect(textContent(page.element)).not.toContain('提前结束')
+    page.unmount()
+  })
+
+  it('页面卸载后图片迟到回调不再写入页面状态', async () => {
+    const pendingImage = deferred<{ path: string }>()
+    taroHarness.taroMock.getImageInfo.mockReturnValue(pendingImage.promise)
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+
+    page.unmount()
+    pendingImage.resolve({ path: 'wxfile://game-images/late.webp' })
+    await flushPromises(20)
+    expect(reactHarness.stateWritesAfterCleanup()).toBe(0)
+  })
+
+  it.each([
+    ['game-memory-pattern-sequence', '图案顺序记忆', 'sequence-memory-image'],
+    ['game-executive-category-switch', '分类切换', 'category-image'],
+    ['game-audiovisual-sound-discrimination', '声音辨别', 'sound-card-image'],
+    ['game-audiovisual-puzzle', '图片拼图', 'puzzle-preview-image'],
+  ])('%s 渲染图片失败后立即停止本题并进入可重试素材错误态', async (sourceKey, actionName, imageClass) => {
+    const soundPreviewAudio = sourceKey === 'game-audiovisual-sound-discrimination'
+      ? deferred<boolean>()
+      : null
+    if (soundPreviewAudio) audioHarness.playAudioSrc.mockReturnValueOnce(soundPreviewAudio.promise)
+    const page = await renderGame(sourceKey, actionName)
+    await enterPlaying(page)
+    page.rerender()
+
+    const image = findByClass(page.element, imageClass)
+    expect(typeof image.props.onError).toBe('function')
+    image.props.onError?.()
+    page.rerender()
+    expect(textContent(page.element)).toContain('训练图片加载失败')
+    expect(findButtonByText(page.element, '重新加载')).toBeTruthy()
+    expect(textContent(page.element)).not.toContain('提前结束')
+
+    await vi.advanceTimersByTimeAsync(60_000)
+    page.rerender()
+    expect(textContent(page.element)).not.toContain('本次训练已完成')
+    expect(retryUploadHarness.postGameTrainingRecord).not.toHaveBeenCalled()
+    soundPreviewAudio?.resolve(true)
+    page.unmount()
+  })
+})
+
 describe('GameSessionPage 生命周期与反馈接线', () => {
   it.each([
     ['game-memory-pattern-sequence', '图案顺序记忆', 'sequence-memory-image', '/pattern_sun.'],
     ['game-executive-category-switch', '分类切换', 'category-image', '/category_pineapple.'],
     ['game-audiovisual-sound-discrimination', '声音辨别', 'sound-card-image', '/sound_'],
     ['game-audiovisual-puzzle', '图片拼图', 'puzzle-preview-image', '/puzzle_beach.'],
-  ])('%s 页面只渲染 CDN 游戏图片 URL', async (sourceKey, actionName, imageClass, assetMarker) => {
+  ])('%s 页面只渲染 wxfile 临时图片路径', async (sourceKey, actionName, imageClass, assetMarker) => {
     const soundPreviewAudio = sourceKey === 'game-audiovisual-sound-discrimination'
       ? deferred<boolean>()
       : null
@@ -367,9 +582,9 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     page.rerender()
 
     const imageSrc = String(findByClass(page.element, imageClass).props.src)
-    expect(imageSrc).toMatch(/^https:\/\/cdn\.example\.com\/assets\/v-[a-f0-9]+\//)
+    expect(imageSrc).toMatch(/^wxfile:\/\/game-images\//)
     expect(imageSrc).toContain(assetMarker)
-    expect(imageSrc).not.toContain('/pages/game-session/assets/images/')
+    expect(imageSrc).not.toMatch(/^https?:\/\//)
     soundPreviewAudio?.resolve(true)
     page.unmount()
   })
@@ -536,29 +751,6 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     page.unmount()
   })
 
-  it('声音图片在 preview 加载失败后立即回到稳定编号背面', async () => {
-    const previewAudio = deferred<boolean>()
-    audioHarness.playAudioSrc.mockReset()
-    audioHarness.playAudioSrc.mockReturnValueOnce(previewAudio.promise).mockResolvedValue(true)
-    const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
-    await enterPlaying(page)
-    page.rerender()
-
-    const firstCard = soundCards(page.element)[0]
-    expect(hasClass(firstCard, 'sound-card-preview')).toBe(true)
-    const image = imageIn(firstCard)
-    expect(typeof image.props.onError).toBe('function')
-    image.props.onError?.()
-    page.rerender()
-
-    const failedCard = soundCards(page.element)[0]
-    expect(hasClass(failedCard, 'sound-card-back')).toBe(true)
-    expect(textContent(failedCard)).toContain('1')
-    expect(findAll(failedCard, (item) => item.type === 'Image')).toHaveLength(0)
-    previewAudio.resolve(true)
-    page.unmount()
-  })
-
   it('声音卡默认直接渲染编号背面，只有当前试听卡渲染图片', async () => {
     const previewAudio = deferred<boolean>()
     audioHarness.playAudioSrc.mockReset()
@@ -647,35 +839,4 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     page.unmount()
   })
 
-  it('正确反馈阶段图片失败不揭示空白正面，并在新题清理失败与结果状态', async () => {
-    const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
-    await enterPlaying(page)
-    await vi.advanceTimersByTimeAsync(1000)
-    await flushPromises(20)
-    page.rerender()
-    expect(textContent(page.element)).toContain('请听目标声音，选择对应卡片')
-
-    click(soundCards(page.element)[0])
-    page.rerender()
-    expect(hasClass(soundCards(page.element)[0], 'sound-card-correct')).toBe(true)
-    expect(textContent(findByClass(page.element, 'game-feedback'))).toBe('很好')
-
-    imageIn(soundCards(page.element)[0]).props.onError?.()
-    page.rerender()
-    expect(hasClass(soundCards(page.element)[0], 'sound-card-back')).toBe(true)
-    expect(textContent(soundCards(page.element)[0])).toContain('1')
-    expect(textContent(findByClass(page.element, 'game-feedback'))).toBe('很好')
-
-    const nextRoundAudio = deferred<boolean>()
-    audioHarness.playAudioSrc.mockReturnValueOnce(nextRoundAudio.promise)
-    await vi.advanceTimersByTimeAsync(1000)
-    await flushPromises()
-    page.rerender()
-    const nextRoundFirstCard = soundCards(page.element)[0]
-    expect(hasClass(nextRoundFirstCard, 'sound-card-preview')).toBe(true)
-    expect(findAll(nextRoundFirstCard, (item) => item.type === 'Image')).toHaveLength(1)
-    expect(findAll(page.element, (item) => hasClass(item, 'game-feedback'))).toHaveLength(0)
-    nextRoundAudio.resolve(true)
-    page.unmount()
-  })
 })

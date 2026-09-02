@@ -804,6 +804,94 @@ button:active {
     line-height: 1.18;
   }
 
+  .image-asset-progress-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 22px 0;
+    padding: 24px;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 184, 77, 0.42);
+    border-radius: 16px;
+    background: rgba(255, 249, 230, 0.94);
+  }
+
+  .image-asset-progress-ready {
+    border-color: rgba(17, 163, 106, 0.24);
+    background: rgba(234, 251, 240, 0.94);
+  }
+
+  .image-asset-progress-title {
+    display: block;
+    color: #8a4f05;
+    font-size: 27px;
+    font-weight: 900;
+    line-height: 1.35;
+  }
+
+  .image-asset-progress-ready .image-asset-progress-title {
+    color: #087148;
+  }
+
+  .image-asset-progress-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    color: $mc-ink;
+    font-size: 24px;
+    font-weight: 900;
+    line-height: 1.35;
+  }
+
+  .image-asset-progress-track {
+    width: 100%;
+    height: 18px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 184, 77, 0.24);
+  }
+
+  .image-asset-progress-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: $mc-sun;
+  }
+
+  .image-asset-progress-ready .image-asset-progress-fill {
+    background: $mc-action;
+  }
+
+  &.image-asset-error-page {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+    justify-content: center;
+    gap: 24px;
+  }
+
+  .image-asset-error-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 28px;
+    box-sizing: border-box;
+    border: 1px solid rgba(194, 65, 45, 0.2);
+    border-radius: 16px;
+    color: $mc-danger;
+    background: rgba(255, 235, 229, 0.92);
+  }
+
+  .image-asset-error-panel .title,
+  .image-asset-error-panel .paragraph {
+    color: $mc-danger;
+  }
+
+  .image-asset-error-actions {
+    display: grid;
+    gap: 16px;
+  }
+
   .game-hero .paragraph,
   .game-hero .muted {
     color: $mc-muted;

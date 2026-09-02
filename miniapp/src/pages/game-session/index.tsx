@@ -28,7 +28,18 @@ import {
   type GameAudioKey,
 } from './gameAudio'
 import type { GameActionSummary, GameCode, GameDifficulty, GameEndReason, GameTrainingPayload } from './gameTypes'
-import { gameImageRemoteUrl } from './gameImageAssets'
+import {
+  loadedGameImagePath,
+  requiredGameImageKeys,
+  type GameImageKey,
+  type LoadedGameImagePathMap,
+} from './gameImageAssets'
+import {
+  GameImagePreloadCancelledError,
+  preloadGameImages,
+  taroGetImageInfo,
+  type GameImageLoadProgress,
+} from './gameImagePreloader'
 import { createInhibitionRound, evaluateInhibitionAttempt, type InhibitionRound } from './inhibition'
 import {
   createPatternSequenceRound,
@@ -73,6 +84,8 @@ import {
 type PrescriptionAction = NonNullable<CurrentPrescription>['actions'][number]
 
 type SessionPhase = 'loading' | 'setup' | 'intro' | 'playing' | 'paused' | 'result'
+
+type ImageAssetStatus = 'idle' | 'loading' | 'ready' | 'failed'
 
 type UnitResult = {
   correct: boolean
@@ -177,11 +190,17 @@ export default function GameSessionPage() {
   const [soundPhase, setSoundPhase] = useState<'preview' | 'choose'>('preview')
   const [soundPreviewingCardId, setSoundPreviewingCardId] = useState<string | null>(null)
   const [soundAttemptOutcome, setSoundAttemptOutcome] = useState<SoundAttemptOutcome | null>(null)
-  const [failedSoundCardImageIds, setFailedSoundCardImageIds] = useState<string[]>([])
   const [soundPlaybackError, setSoundPlaybackError] = useState('')
   const [activePuzzleRound, setActivePuzzleRound] = useState<PuzzleRound | null>(null)
   const [selectedPuzzleTileId, setSelectedPuzzleTileId] = useState<string | null>(null)
   const [puzzlePreviewing, setPuzzlePreviewing] = useState(false)
+  const [imageAssetStatus, setImageAssetStatus] = useState<ImageAssetStatus>('idle')
+  const [imageAssetProgress, setImageAssetProgress] = useState<GameImageLoadProgress>({
+    completed: 0,
+    total: 0,
+    percent: 0,
+  })
+  const [loadedGameImagePaths, setLoadedGameImagePaths] = useState<LoadedGameImagePathMap | null>(null)
   const activeColorInputRef = useRef<ColorToken[]>([])
   const activeColorRoundRef = useRef<ColorSequenceRound | null>(null)
   const activePatternInputRef = useRef<string[]>([])
@@ -224,12 +243,15 @@ export default function GameSessionPage() {
   const loadingPrescriptionRef = useRef(false)
   const loadedRef = useRef(false)
   const introRunIdRef = useRef(0)
+  const imageAssetGenerationRef = useRef(0)
+  const preparedImageActionIdRef = useRef<number | null>(null)
 
   const action = useMemo<PrescriptionAction | null>(() => {
     return prescription?.actions.find((item) => item.id === actionId) ?? null
   }, [actionId, prescription])
   const actionIsGame = action?.internal_type === 'game'
   const gameCode = action ? gameCodeForActionSource(action.source_key) : null
+  const requiredImageKeys = requiredGameImageKeys(gameCode)
   const difficulty = DIFFICULTY_OPTIONS[difficultyIndex] ?? '简单'
   const prescribedDifficulty = normalizeDifficulty(action?.difficulty ?? '')
   const adjustedDifficulty = difficulty !== prescribedDifficulty
@@ -252,12 +274,6 @@ export default function GameSessionPage() {
   function setSoundPreviewingCard(cardId: string | null) {
     soundPreviewingCardIdRef.current = cardId
     setSoundPreviewingCardId(cardId)
-  }
-
-  function markSoundCardImageFailed(cardId: string) {
-    setFailedSoundCardImageIds((currentIds) => (
-      currentIds.includes(cardId) ? currentIds : [...currentIds, cardId]
-    ))
   }
 
   function showAttemptFeedback(correct: boolean) {
@@ -353,11 +369,71 @@ export default function GameSessionPage() {
     setSoundRoundPhase('preview')
     setSoundPreviewingCard(null)
     setSoundAttemptOutcome(null)
-    setFailedSoundCardImageIds([])
     setSoundPlaybackError('')
     setActivePuzzleRound(null)
     setSelectedPuzzleTileId(null)
     setPuzzlePreviewing(false)
+  }
+
+  async function prepareGameImages(gameCodeValue: GameCode, actionIdValue: number): Promise<void> {
+    const generation = imageAssetGenerationRef.current + 1
+    imageAssetGenerationRef.current = generation
+    preparedImageActionIdRef.current = null
+    const requiredKeys = requiredGameImageKeys(gameCodeValue)
+    const isCurrent = () => imageAssetGenerationRef.current === generation
+
+    setLoadedGameImagePaths(null)
+    if (requiredKeys.length === 0) {
+      setImageAssetProgress({ completed: 0, total: 0, percent: 100 })
+      setLoadedGameImagePaths({})
+      preparedImageActionIdRef.current = actionIdValue
+      setImageAssetStatus('ready')
+      return
+    }
+
+    setImageAssetStatus('loading')
+    setImageAssetProgress({ completed: 0, total: requiredKeys.length, percent: 0 })
+    try {
+      const paths = await preloadGameImages(requiredKeys, {
+        getImageInfo: taroGetImageInfo,
+        isCurrent,
+        onProgress: (progress) => {
+          if (isCurrent()) setImageAssetProgress(progress)
+        },
+      })
+      if (!isCurrent()) return
+      setLoadedGameImagePaths(paths)
+      preparedImageActionIdRef.current = actionIdValue
+      setImageAssetStatus('ready')
+    } catch (loadError) {
+      if (loadError instanceof GameImagePreloadCancelledError || !isCurrent()) return
+      preparedImageActionIdRef.current = null
+      setLoadedGameImagePaths(null)
+      setImageAssetStatus('failed')
+    }
+  }
+
+  function handleGameImageRenderError() {
+    if (imageAssetStatus !== 'ready') return
+    imageAssetGenerationRef.current += 1
+    preparedImageActionIdRef.current = null
+    resetSessionState()
+    setLoadedGameImagePaths(null)
+    setImageAssetStatus('failed')
+    setError('')
+    setSessionPhase('setup')
+  }
+
+  function preparedGameImagePath(key: GameImageKey): string {
+    return loadedGameImagePath(loadedGameImagePaths ?? {}, key)
+  }
+
+  function returnToCurrentExercisePlan() {
+    if (demoMode) {
+      Taro.redirectTo({ url: '/pages/prescription/index' })
+      return
+    }
+    Taro.navigateBack()
   }
 
   useDidShow(() => {
@@ -453,6 +529,14 @@ export default function GameSessionPage() {
   }, [gameCode])
 
   useEffect(() => {
+    if (!loaded || !actionIsGame || !action || !gameCode) return undefined
+    void prepareGameImages(gameCode, action.id)
+    return () => {
+      imageAssetGenerationRef.current += 1
+    }
+  }, [action, actionIsGame, gameCode, loaded])
+
+  useEffect(() => {
     difficultyRef.current = difficulty
   }, [difficulty])
 
@@ -492,6 +576,7 @@ export default function GameSessionPage() {
   useEffect(() => {
     return () => {
       introRunIdRef.current += 1
+      imageAssetGenerationRef.current += 1
       invalidateSoundPreviewRun()
       clearRoundTimers({ suppressStateUpdates: true })
       clearSessionTimer()
@@ -800,7 +885,6 @@ export default function GameSessionPage() {
     setSoundRoundPhase('preview')
     setSoundPreviewingCard(null)
     setSoundAttemptOutcome(null)
-    setFailedSoundCardImageIds([])
     setSoundPlaybackError('')
     setActiveColorRound(null)
     setActiveColorInput([])
@@ -895,6 +979,7 @@ export default function GameSessionPage() {
   }
 
   async function startIntro() {
+    if (imageAssetStatus !== 'ready' || preparedImageActionIdRef.current !== action?.id) return
     if (phaseRef.current !== 'setup') return
     if (!actionIsGame || !action) {
       setError('游戏动作无效，请返回当前运动计划重新进入')
@@ -1602,7 +1687,12 @@ export default function GameSessionPage() {
                   <Text className='sequence-transition-cue'>下一项</Text>
                 ) : currentPattern ? (
                   <View className='sequence-memory-pattern'>
-                    <Image className='sequence-memory-image' src={gameImageRemoteUrl(currentPattern.imageKey)} mode='aspectFit' />
+                    <Image
+                      className='sequence-memory-image'
+                      src={preparedGameImagePath(currentPattern.imageKey)}
+                      mode='aspectFit'
+                      onError={handleGameImageRenderError}
+                    />
                     <Text className='sequence-memory-label'>{currentPattern.label}</Text>
                   </View>
                 ) : null}
@@ -1623,7 +1713,12 @@ export default function GameSessionPage() {
                   >
                     {selectedPattern ? (
                       <View className='sequence-answer-pattern'>
-                        <Image className='sequence-answer-image' src={gameImageRemoteUrl(selectedPattern.imageKey)} mode='aspectFit' />
+                        <Image
+                          className='sequence-answer-image'
+                          src={preparedGameImagePath(selectedPattern.imageKey)}
+                          mode='aspectFit'
+                          onError={handleGameImageRenderError}
+                        />
                         <Text className='sequence-answer-label'>{selectedPattern.label}</Text>
                       </View>
                     ) : (
@@ -1650,7 +1745,12 @@ export default function GameSessionPage() {
               onClick={() => selectPattern(pattern)}
             >
               <View className='game-card-face'>
-                <Image className='game-image game-card-image' src={gameImageRemoteUrl(pattern.imageKey)} mode='aspectFit' />
+                <Image
+                  className='game-image game-card-image'
+                  src={preparedGameImagePath(pattern.imageKey)}
+                  mode='aspectFit'
+                  onError={handleGameImageRenderError}
+                />
                 <Text className='game-card-label'>{pattern.label}</Text>
               </View>
             </Button>
@@ -1670,7 +1770,12 @@ export default function GameSessionPage() {
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
         <Text className='section-title'>{phase === 'paused' ? '训练已暂停' : activeCategoryRound.ruleLabel}</Text>
         <View className='game-stage category-card'>
-          <Image className='category-image' src={gameImageRemoteUrl(activeCategoryRound.item.imageKey)} mode='aspectFit' />
+          <Image
+            className='category-image'
+            src={preparedGameImagePath(activeCategoryRound.item.imageKey)}
+            mode='aspectFit'
+            onError={handleGameImageRenderError}
+          />
           <Text className='category-label'>{activeCategoryRound.item.label}</Text>
         </View>
         <View className='category-options'>
@@ -1719,10 +1824,7 @@ export default function GameSessionPage() {
         {soundPlaybackError ? <Text className='error'>{soundPlaybackError}</Text> : null}
         <View className='game-stage sound-card-grid'>
           {activeSoundRound.cards.map((card, index) => {
-            const imageFailed = failedSoundCardImageIds.includes(card.id)
-            const visualState = imageFailed
-              ? 'back'
-              : soundCardVisualState(card.id, soundPreviewingCardId, soundAttemptOutcome)
+            const visualState = soundCardVisualState(card.id, soundPreviewingCardId, soundAttemptOutcome)
             const showsImage = visualState === 'preview' || visualState === 'correct'
             const returnedFromPreview = (
               visualState === 'back' && soundPhase === 'preview' && card.previewed
@@ -1743,9 +1845,9 @@ export default function GameSessionPage() {
                     <View className='sound-card-face sound-card-front'>
                       <Image
                         className='sound-card-image'
-                        src={gameImageRemoteUrl(card.imageKey)}
+                        src={preparedGameImagePath(card.imageKey)}
                         mode='aspectFit'
-                        onError={() => markSoundCardImageFailed(card.id)}
+                        onError={handleGameImageRenderError}
                       />
                     </View>
                   ) : (
@@ -1777,7 +1879,12 @@ export default function GameSessionPage() {
         </Text>
         {puzzlePreviewing || phase === 'paused' ? (
           <View className='game-stage puzzle-preview-board'>
-            <Image className='puzzle-preview-image' src={gameImageRemoteUrl(activePuzzleRound.imageAssetKey)} mode='aspectFill' />
+            <Image
+              className='puzzle-preview-image'
+              src={preparedGameImagePath(activePuzzleRound.imageAssetKey)}
+              mode='aspectFill'
+              onError={handleGameImageRenderError}
+            />
           </View>
         ) : (
           <View className={`game-stage puzzle-grid puzzle-grid-${activePuzzleRound.cols}`}>
@@ -1790,9 +1897,10 @@ export default function GameSessionPage() {
                 <View className='puzzle-tile-slice'>
                   <Image
                     className='puzzle-tile-image'
-                    src={gameImageRemoteUrl(activePuzzleRound.imageAssetKey)}
+                    src={preparedGameImagePath(activePuzzleRound.imageAssetKey)}
                     mode='scaleToFill'
                     style={puzzleTileImageStyle(activePuzzleRound, tile)}
+                    onError={handleGameImageRenderError}
                   />
                 </View>
               </Button>
@@ -1849,6 +1957,25 @@ export default function GameSessionPage() {
     )
   }
 
+  if (imageAssetStatus === 'failed') {
+    return (
+      <View className='page game-session-page hainan-game-page game-state-page image-asset-error-page'>
+        <View className='image-asset-error-panel'>
+          <Text className='title'>训练图片加载失败</Text>
+          <Text className='paragraph'>本次训练还没有开始，请检查网络后重新加载训练图片。</Text>
+        </View>
+        <View className='image-asset-error-actions'>
+          <Button className='primary-button full-button' onClick={() => void prepareGameImages(gameCode, action.id)}>
+            重新加载
+          </Button>
+          <Button className='secondary-button full-button' onClick={returnToCurrentExercisePlan}>
+            返回当前运动计划
+          </Button>
+        </View>
+      </View>
+    )
+  }
+
   if (phase === 'setup') {
     return (
       <View className='page game-session-page hainan-game-page game-setup-page'>
@@ -1900,9 +2027,36 @@ export default function GameSessionPage() {
           </View>
         ) : null}
 
+        {requiredImageKeys.length > 0 ? (
+          <View className={`image-asset-progress-panel image-asset-progress-${imageAssetStatus}`}>
+            <Text className='image-asset-progress-title'>
+              {imageAssetStatus === 'ready' ? '训练图片已准备完成' : '正在准备训练图片'}
+            </Text>
+            <View className='image-asset-progress-summary'>
+              <Text>已完成 {imageAssetProgress.completed}/{imageAssetProgress.total}</Text>
+              <Text>{imageAssetProgress.percent}%</Text>
+            </View>
+            <View className='image-asset-progress-track'>
+              <View
+                className='image-asset-progress-fill'
+                style={{ width: `${imageAssetProgress.percent}%` }}
+              />
+            </View>
+            <Text className='muted'>全部图片准备完成后，才能开始本次训练。</Text>
+          </View>
+        ) : null}
+
         {error ? <Text className='error'>{error}</Text> : null}
 
-        <Button className='primary-button full-button' disabled={phase !== 'setup'} onClick={startIntro}>
+        <Button
+          className='primary-button full-button'
+          disabled={
+            phase !== 'setup'
+            || imageAssetStatus !== 'ready'
+            || preparedImageActionIdRef.current !== action.id
+          }
+          onClick={startIntro}
+        >
           开始游戏
         </Button>
       </View>

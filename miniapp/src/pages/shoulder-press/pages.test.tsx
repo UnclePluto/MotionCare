@@ -144,6 +144,9 @@ const taroHarness = vi.hoisted(() => {
     setKeepScreenOn: vi.fn(() => Promise.resolve()),
     saveFile: vi.fn(),
     getVideoInfo: vi.fn(),
+    getImageInfo: vi.fn(async ({ src }: { src: string }) => ({
+      path: `wxfile://game-images/${src.split('/').at(-1)}`,
+    })),
     getFileInfo: vi.fn(),
     compressVideo: vi.fn(),
     createCameraContext: vi.fn(() => ({
@@ -636,6 +639,8 @@ async function renderDemoGame(actionId: number): Promise<RenderedPage> {
   await taroHarness.showCallbacks[0]()
   await flushPromises()
   page.rerender()
+  await flushPromises()
+  page.rerender()
   return page
 }
 
@@ -644,6 +649,8 @@ async function renderRealGame(actionId: number): Promise<RenderedPage> {
   requestMock.mockResolvedValueOnce(REAL_GAME_PRESCRIPTION)
   const page = renderPage(GameSessionPage)
   await taroHarness.showCallbacks[0]()
+  await flushPromises()
+  page.rerender()
   await flushPromises()
   page.rerender()
   return page
