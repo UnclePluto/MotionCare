@@ -1,4 +1,5 @@
 import signal
+import traceback
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -60,6 +61,29 @@ def test_command_deletes_input_even_when_benchmark_fails(tmp_path, monkeypatch):
     assert not video.exists()
 
 
+def test_command_failure_traceback_does_not_expose_private_error(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    private_error = "private failure /secret/patient-video.mp4"
+    monkeypatch.setattr(
+        "apps.training.management.commands.run_pose_smoke_benchmark.run_pose_smoke_benchmark",
+        Mock(side_effect=RuntimeError(private_error)),
+    )
+
+    with pytest.raises(CommandError, match="冒烟测试失败") as exc_info:
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+        )
+
+    rendered_traceback = "".join(traceback.format_exception(exc_info.value))
+    assert private_error not in rendered_traceback
+
+
 def test_command_deletes_input_and_restores_handler_when_interrupted(tmp_path, monkeypatch):
     video = tmp_path / "video.mp4"
     video.write_bytes(b"video")
@@ -107,6 +131,32 @@ def test_command_rejects_invalid_identifiers(tmp_path, overrides, message):
         call_command("run_pose_smoke_benchmark", **options)
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"expected_sha256": "bad"},
+        {"git_commit": "not-a-commit"},
+    ],
+)
+def test_command_deletes_input_when_identifier_validation_fails(tmp_path, overrides):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    options = {
+        "video": str(video),
+        "report": str(tmp_path / "reports" / "report.json"),
+        "summary": str(tmp_path / "reports" / "report.txt"),
+        "expected_sha256": "f" * 64,
+        "git_commit": "abc1234",
+        "delete_input": True,
+    }
+    options.update(overrides)
+
+    with pytest.raises(CommandError):
+        call_command("run_pose_smoke_benchmark", **options)
+
+    assert not video.exists()
+
+
 def test_command_rejects_symlink_input(tmp_path):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"video")
@@ -152,3 +202,26 @@ def test_command_rejects_summary_in_input_directory(tmp_path):
             expected_sha256="f" * 64,
             git_commit="abc1234",
         )
+
+
+@pytest.mark.parametrize("invalid_output", ["report", "summary"])
+def test_command_deletes_input_when_output_directory_validation_fails(
+    tmp_path,
+    invalid_output,
+):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    options = {
+        "video": str(video),
+        "report": str(tmp_path / "reports" / "report.json"),
+        "summary": str(tmp_path / "reports" / "report.txt"),
+        "expected_sha256": "f" * 64,
+        "git_commit": "abc1234",
+        "delete_input": True,
+    }
+    options[invalid_output] = str(tmp_path / f"{invalid_output}.txt")
+
+    with pytest.raises(CommandError):
+        call_command("run_pose_smoke_benchmark", **options)
+
+    assert not video.exists()
