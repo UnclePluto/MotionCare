@@ -70,6 +70,8 @@ jobs:
           npm run build
       - name: 验证患者端
         working-directory: miniapp
+        env:
+          TARO_APP_ASSET_BASE_URL: ${{ vars.TARO_APP_ASSET_BASE_URL }}
         run: |
           npm ci
           npm run test
@@ -121,7 +123,9 @@ jobs:
           provenance: false
           sbom: false
           tags: ${{ env.ACR_IMAGE }}:wx-${{ github.sha }}
-          build-args: TARO_APP_API_BASE_URL=/api
+          build-args: |
+            TARO_APP_API_BASE_URL=/api
+            TARO_APP_ASSET_BASE_URL=${{ vars.TARO_APP_ASSET_BASE_URL }}
           cache-from: type=gha,scope=wx
           cache-to: type=gha,mode=max,scope=wx
       - name: 镜像 PostgreSQL 和 Redis

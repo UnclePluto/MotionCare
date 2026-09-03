@@ -188,6 +188,11 @@ describe('verifyStaticAssets', () => {
     ['wrong Content-Length', { headers: { 'content-length': '999' } }, /Content-Length/],
     ['wrong SHA-256', { body: Buffer.from('public-static-asset-X') }, /SHA-256/],
     ['wrong media type', { headers: { 'content-type': 'image/png' } }, /媒体类型/],
+    ['missing public', { headers: { 'cache-control': 'max-age=31536000, immutable' } }, /public/],
+    ['private cache', { headers: { 'cache-control': 'public, private, max-age=31536000, immutable' } }, /private/],
+    ['private field cache', { headers: { 'cache-control': 'public, private="Set-Cookie", max-age=31536000, immutable' } }, /private/],
+    ['no-store cache', { headers: { 'cache-control': 'public, no-store, max-age=31536000, immutable' } }, /no-store/],
+    ['no-cache cache', { headers: { 'cache-control': 'public, no-cache, max-age=31536000, immutable' } }, /no-cache/],
     ['missing max-age', { headers: { 'cache-control': 'public, immutable' } }, /max-age=31536000/],
     ['missing immutable', { headers: { 'cache-control': 'public, max-age=31536000' } }, /immutable/],
   ])('rejects %s', async (_name, override, expectedMessage) => {

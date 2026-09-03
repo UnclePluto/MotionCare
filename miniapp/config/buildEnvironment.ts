@@ -1,3 +1,5 @@
+import { normalizeStaticAssetBaseUrl } from '../src/assets/staticAssetUrl'
+
 type EnvironmentSource = {
   NODE_ENV?: string
   TARO_APP_CONFIG_ENV?: string
@@ -43,19 +45,25 @@ export function resolveAssetBaseUrl(input: {
   environment: ConfigEnvironment
 }): string {
   const value = input.configuredUrl?.trim() || ''
-  if (input.target !== 'weapp') return value.replace(/\/+$/, '')
+  const requiresAssetBaseUrl = input.target === 'weapp'
+    || (input.target === 'h5' && input.environment === 'production')
 
-  let parsed: URL
+  if (!value) {
+    if (requiresAssetBaseUrl) {
+      throw new Error('当前构建目标必须配置绝对素材地址')
+    }
+    return ''
+  }
+
+  let normalized: string
   try {
-    parsed = new URL(value)
+    normalized = normalizeStaticAssetBaseUrl(value)
   } catch {
-    throw new Error('微信小程序必须配置绝对素材地址')
+    throw new Error('素材地址必须是不含凭据、查询参数或片段的绝对 HTTP 或 HTTPS 地址')
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('微信小程序素材地址必须使用 HTTP 或 HTTPS')
+  const parsed = new URL(normalized)
+  if (requiresAssetBaseUrl && input.environment === 'production' && parsed.protocol !== 'https:') {
+    throw new Error('正式构建素材地址必须使用 HTTPS')
   }
-  if (input.environment === 'production' && parsed.protocol !== 'https:') {
-    throw new Error('正式微信小程序素材地址必须使用 HTTPS')
-  }
-  return value.replace(/\/+$/, '')
+  return normalized
 }

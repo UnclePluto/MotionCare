@@ -161,13 +161,27 @@ async function verifyEntry({ entry, assetVersion, baseUrl, fetchImpl }) {
   }
 
   const cacheControl = requireHeader(response, 'Cache-Control', entry.key)
-  const cacheDirectives = new Set(
-    cacheControl.toLowerCase().split(',').map((directive) => directive.trim()),
-  )
-  if (!cacheDirectives.has('max-age=31536000')) {
+  const cacheDirectives = cacheControl.toLowerCase().split(',').map((directive) => {
+    const separator = directive.indexOf('=')
+    if (separator === -1) return { name: directive.trim(), value: null }
+    return {
+      name: directive.slice(0, separator).trim(),
+      value: directive.slice(separator + 1).trim(),
+    }
+  })
+  const conflictingDirective = cacheDirectives.find(({ name }) => (
+    name === 'private' || name === 'no-store' || name === 'no-cache'
+  ))
+  if (conflictingDirective) {
+    throw new Error(`固定素材公开响应不得包含 ${conflictingDirective.name}：${entry.key}`)
+  }
+  if (!cacheDirectives.some(({ name, value }) => name === 'public' && value === null)) {
+    throw new Error(`固定素材公开响应缺少 public：${entry.key}`)
+  }
+  if (!cacheDirectives.some(({ name, value }) => name === 'max-age' && value === '31536000')) {
     throw new Error(`固定素材公开响应缺少 max-age=31536000：${entry.key}`)
   }
-  if (!cacheDirectives.has('immutable')) {
+  if (!cacheDirectives.some(({ name, value }) => name === 'immutable' && value === null)) {
     throw new Error(`固定素材公开响应缺少 immutable：${entry.key}`)
   }
 
