@@ -1,0 +1,154 @@
+import signal
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+from django.core.management import call_command
+from django.core.management.base import CommandError
+
+
+def test_command_passes_fixed_paths_and_deletes_input_after_success(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    report = tmp_path / "reports" / "report.json"
+    summary = tmp_path / "reports" / "report.txt"
+    runner = Mock(return_value={"status": "completed"})
+    monkeypatch.setattr(
+        "apps.training.management.commands.run_pose_smoke_benchmark.run_pose_smoke_benchmark",
+        runner,
+    )
+
+    call_command(
+        "run_pose_smoke_benchmark",
+        video=str(video),
+        report=str(report),
+        summary=str(summary),
+        expected_sha256="f" * 64,
+        git_commit="abc1234",
+        delete_input=True,
+    )
+
+    assert not video.exists()
+    runner.assert_called_once_with(
+        Path(video),
+        report_path=Path(report),
+        summary_path=Path(summary),
+        expected_sha256="f" * 64,
+        git_commit="abc1234",
+    )
+
+
+def test_command_deletes_input_even_when_benchmark_fails(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    monkeypatch.setattr(
+        "apps.training.management.commands.run_pose_smoke_benchmark.run_pose_smoke_benchmark",
+        Mock(side_effect=RuntimeError("private failure /path/video.mp4")),
+    )
+
+    with pytest.raises(CommandError, match="冒烟测试失败"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+            delete_input=True,
+        )
+
+    assert not video.exists()
+
+
+def test_command_deletes_input_and_restores_handler_when_interrupted(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    monkeypatch.setattr(
+        "apps.training.management.commands.run_pose_smoke_benchmark.run_pose_smoke_benchmark",
+        Mock(side_effect=KeyboardInterrupt("received SIGTERM")),
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="received SIGTERM"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+            delete_input=True,
+        )
+
+    assert not video.exists()
+    assert signal.getsignal(signal.SIGTERM) is previous_sigterm
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"expected_sha256": "bad"}, "expected-sha256"),
+        ({"git_commit": "not-a-commit"}, "git-commit"),
+    ],
+)
+def test_command_rejects_invalid_identifiers(tmp_path, overrides, message):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    options = {
+        "video": str(video),
+        "report": str(tmp_path / "reports" / "report.json"),
+        "summary": str(tmp_path / "reports" / "report.txt"),
+        "expected_sha256": "f" * 64,
+        "git_commit": "abc1234",
+    }
+    options.update(overrides)
+
+    with pytest.raises(CommandError, match=message):
+        call_command("run_pose_smoke_benchmark", **options)
+
+
+def test_command_rejects_symlink_input(tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    video = tmp_path / "link.mp4"
+    video.symlink_to(source)
+
+    with pytest.raises(CommandError, match="符号链接"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+        )
+
+
+def test_command_rejects_reports_in_input_directory(tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+
+    with pytest.raises(CommandError, match="报告不能写入输入目录"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+        )
+
+
+def test_command_rejects_summary_in_input_directory(tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+
+    with pytest.raises(CommandError, match="摘要不能写入输入目录"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+        )
