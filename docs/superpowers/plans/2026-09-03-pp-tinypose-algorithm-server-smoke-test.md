@@ -10,7 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-03-pp-tinypose-algorithm-server-smoke-test-design.md`
 
-> 状态：review
+> 状态：implemented
+> 执行记录（2026-09-03, Codex）：实现提交范围 `ee59e19`、`0788513`、`65fd8e8`、`d2395b4`、`c8d961c`、`10d19a9`、`03b3d90`；服务器实测 `run_id=20260903T112938Z`；最终归档 `/tmp/motioncare-analysis-03b3d90aac42.tar.gz`，SHA256 `c8170e38500e237fd972cdcf09328eb3934dfb09259f64db659e99b96452a33c`。首轮 `model_load` 权限问题经 TDD 修复后，第二轮通过。
 > 日期：2026-09-03
 > 范围：本地测试视频、单机 CPU、5 FPS/10 FPS/全帧对照、资源报告与清理；不接七牛和生产服务。
 > 实施基线 commit：`acda988`
@@ -76,7 +77,7 @@
 - Produces: `extract_video_keypoint_frames_with_stats(video_path, *, sample_fps: float | None = DEFAULT_SAMPLE_FPS, model=None, capture=None) -> VideoKeypointExtraction`；`None` 表示每个成功解码帧都推理。
 - Preserves: `extract_video_keypoint_frames(...) -> list[dict]` 继续供 `apps.training.tasks` 使用，默认仍为 5 FPS。
 
-- [ ] **Step 1: 写 CPU 模型、预热、全帧和兼容性失败测试**
+- [x] **Step 1: 写 CPU 模型、预热、全帧和兼容性失败测试**
 
 在 `test_pose_inference.py` 增加：
 
@@ -175,7 +176,7 @@ def test_stats_extractor_rejects_non_positive_fixed_fps(sample_fps):
         )
 ```
 
-- [ ] **Step 2: 运行测试并确认新接口尚不存在**
+- [x] **Step 2: 运行测试并确认新接口尚不存在**
 
 Run:
 
@@ -186,7 +187,7 @@ pytest apps/training/tests/test_pose_inference.py -q
 
 Expected: FAIL，导入错误包含 `VideoKeypointExtraction` 或 `create_pose_model`。
 
-- [ ] **Step 3: 实现固定 CPU 模型工厂与预热**
+- [x] **Step 3: 实现固定 CPU 模型工厂与预热**
 
 在 `pose_inference.py` 顶部增加 `dataclass`，并在运行时加载函数后加入：
 
@@ -229,7 +230,7 @@ def warm_up_pose_model(video_path, *, model, capture=None):
 
 将 `_first_prediction` 保持为唯一调用 `model.predict(frame)` 的低层适配器；不要在预热函数复制 PaddleX 结果迭代逻辑。
 
-- [ ] **Step 4: 实现带统计的固定 FPS/全帧提取，并让旧函数做代理**
+- [x] **Step 4: 实现带统计的固定 FPS/全帧提取，并让旧函数做代理**
 
 用下列两个函数替换现有 `extract_video_keypoint_frames`：
 
@@ -319,7 +320,7 @@ def extract_video_keypoint_frames(
     ).frames
 ```
 
-- [ ] **Step 5: 运行推理适配器和生产任务回归测试**
+- [x] **Step 5: 运行推理适配器和生产任务回归测试**
 
 Run:
 
@@ -330,7 +331,7 @@ pytest apps/training/tests/test_pose_inference.py apps/training/tests/test_motio
 
 Expected: PASS；原有任务测试继续断言默认采样率传入旧接口。
 
-- [ ] **Step 6: 提交 Task 1**
+- [x] **Step 6: 提交 Task 1**
 
 ```bash
 git add backend/apps/training/pose_inference.py backend/apps/training/tests/test_pose_inference.py
@@ -352,7 +353,7 @@ Expected: 提交中只包含上述两个文件。
 - Produces: `read_linux_resource_snapshot(*, meminfo_path=Path("/proc/meminfo"), statm_path=Path("/proc/self/statm"), page_size=None) -> ResourceSnapshot`。
 - Produces: `ResourceSampler(reader=read_linux_resource_snapshot, interval_seconds=0.5)` 上下文管理器，退出后通过 `.peak` 读取逐字段峰值/最低余量。
 
-- [ ] **Step 1: 写 `/proc` 解析与峰值测试**
+- [x] **Step 1: 写 `/proc` 解析与峰值测试**
 
 创建 `test_pose_benchmark_resources.py`：
 
@@ -406,7 +407,7 @@ def test_sampler_keeps_peaks_and_lowest_available_values():
     assert sampler.peak == ResourceSnapshot(300, 700, 600, 40, 960)
 ```
 
-- [ ] **Step 2: 运行测试并确认模块尚不存在**
+- [x] **Step 2: 运行测试并确认模块尚不存在**
 
 Run:
 
@@ -417,7 +418,7 @@ pytest apps/training/tests/test_pose_benchmark_resources.py -q
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'apps.training.pose_benchmark_resources'`。
 
-- [ ] **Step 3: 实现 Linux 资源读取与后台采样**
+- [x] **Step 3: 实现 Linux 资源读取与后台采样**
 
 创建 `pose_benchmark_resources.py`：
 
@@ -514,7 +515,7 @@ class ResourceSampler:
         self.sample_once()
 ```
 
-- [ ] **Step 4: 运行资源采样测试**
+- [x] **Step 4: 运行资源采样测试**
 
 Run:
 
@@ -525,7 +526,7 @@ pytest apps/training/tests/test_pose_benchmark_resources.py -q
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交 Task 2**
+- [x] **Step 5: 提交 Task 2**
 
 ```bash
 git add backend/apps/training/pose_benchmark_resources.py backend/apps/training/tests/test_pose_benchmark_resources.py
@@ -548,7 +549,7 @@ git commit -m "feat(动作分析): 采集冒烟测试资源峰值"
 - Produces: `run_pose_smoke_benchmark(video_path: Path, *, report_path: Path, summary_path: Path, expected_sha256: str, git_commit: str, ...) -> dict`。
 - Produces: `BenchmarkFailure(RuntimeError)`；任何失败都先原子写入当前报告，再抛出该异常。
 
-- [ ] **Step 1: 写探测、成功编排、资源跳过和脱敏失败测试**
+- [x] **Step 1: 写探测、成功编排、资源跳过和脱敏失败测试**
 
 创建 `test_pose_benchmark.py`，使用小型假对象而不导入 PaddleX：
 
@@ -779,7 +780,7 @@ def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
     assert str(video) not in serialized
 ```
 
-- [ ] **Step 2: 运行测试并确认冒烟模块尚不存在**
+- [x] **Step 2: 运行测试并确认冒烟模块尚不存在**
 
 Run:
 
@@ -790,7 +791,7 @@ pytest apps/training/tests/test_pose_benchmark.py -q
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'apps.training.pose_benchmark'`。
 
-- [ ] **Step 3: 实现探测、版本、硬件和原子报告基础函数**
+- [x] **Step 3: 实现探测、版本、硬件和原子报告基础函数**
 
 创建 `pose_benchmark.py`，先实现下列固定结构：
 
@@ -973,7 +974,7 @@ def _write_report(report_path, summary_path, report):
 
 `probe_video` 只公开固定中文错误，不得把 subprocess stderr 原文写入报告。
 
-- [ ] **Step 4: 实现三模式编排、资源门禁和失败收口**
+- [x] **Step 4: 实现三模式编排、资源门禁和失败收口**
 
 在同一文件实现 `run_pose_smoke_benchmark`，固定执行顺序与报告字段：
 
@@ -1170,7 +1171,7 @@ def run_pose_smoke_benchmark(
 
 局部变量每轮先设为 `None`，避免上一轮对象被重复引用。若 5 FPS 或 10 FPS 是资源失败，后续模式均标记 `skipped_for_resource_safety`；非资源异常进入外层失败收口并停止运行。报告 `status=completed` 的含义固定为 5 FPS 和 10 FPS 均完成，全帧允许完成、资源跳过或失败。
 
-- [ ] **Step 5: 运行冒烟编排单元测试**
+- [x] **Step 5: 运行冒烟编排单元测试**
 
 Run:
 
@@ -1181,7 +1182,7 @@ pytest apps/training/tests/test_pose_benchmark.py -q
 
 Expected: PASS；测试生成的 JSON 中不包含输入文件路径或文件名。
 
-- [ ] **Step 6: 提交 Task 3**
+- [x] **Step 6: 提交 Task 3**
 
 ```bash
 git add backend/apps/training/pose_benchmark.py backend/apps/training/tests/test_pose_benchmark.py
@@ -1207,7 +1208,7 @@ git commit -m "feat(动作分析): 增加三档冒烟测试报告"
 - Produces: `run-benchmark.sh COMMIT RUN_ID`，验证参数、以前台单进程运行命令，并在 shell 退出时再次清理固定输入文件。
 - Consumes: Task 3 `run_pose_smoke_benchmark(...)`；成功退出码 0，失败抛 `CommandError` 并返回非零。
 
-- [ ] **Step 1: 写管理命令失败测试**
+- [x] **Step 1: 写管理命令失败测试**
 
 创建命令包的两个空 `__init__.py`，再创建 `test_pose_benchmark_command.py`：
 
@@ -1331,7 +1332,7 @@ def test_command_rejects_reports_in_input_directory(tmp_path):
         )
 ```
 
-- [ ] **Step 2: 运行命令测试并确认命令尚不存在**
+- [x] **Step 2: 运行命令测试并确认命令尚不存在**
 
 Run:
 
@@ -1342,7 +1343,7 @@ pytest apps/training/tests/test_pose_benchmark_command.py -q
 
 Expected: FAIL，错误包含 `Unknown command: 'run_pose_smoke_benchmark'`。
 
-- [ ] **Step 3: 实现管理命令与 SIGTERM 收口**
+- [x] **Step 3: 实现管理命令与 SIGTERM 收口**
 
 创建 `run_pose_smoke_benchmark.py`：
 
@@ -1413,7 +1414,7 @@ class Command(BaseCommand):
 
 `KeyboardInterrupt` 不要转换为包含原始异常的 `CommandError`，但 `finally` 仍必须删除输入文件并恢复原信号处理器。
 
-- [ ] **Step 4: 收紧动作分析依赖版本**
+- [x] **Step 4: 收紧动作分析依赖版本**
 
 将 `backend/pyproject.toml` 的可选依赖改为：
 
@@ -1427,7 +1428,7 @@ motion-analysis = [
 
 普通 `pip install -e ".[dev]"` 仍不安装重型动作分析依赖；服务器使用非 editable 的 `pip install "/opt/motioncare-analysis/app/backend[motion-analysis]"`，避免专用用户向 root 管理的源码目录写入 egg-info。
 
-- [ ] **Step 5: 写幂等服务器初始化脚本**
+- [x] **Step 5: 写幂等服务器初始化脚本**
 
 创建 `deploy/motion-analysis-smoke/bootstrap.sh`：
 
@@ -1501,7 +1502,7 @@ swapon --show "${swap_path}"
 
 脚本不得关闭或重写 SSH 配置；SSH 已在前序步骤完成加固，本任务只读验证。
 
-- [ ] **Step 6: 写带 shell 清理兜底的前台运行脚本**
+- [x] **Step 6: 写带 shell 清理兜底的前台运行脚本**
 
 创建 `deploy/motion-analysis-smoke/run-benchmark.sh`：
 
@@ -1566,7 +1567,7 @@ printf '%s\n' "${report_path}" "${summary_path}"
 
 该脚本本身不进入后台、不使用 `nohup`、不启动第二份推理进程；Python 的 `finally` 与 shell 的 `EXIT` trap 形成两层输入清理。
 
-- [ ] **Step 7: 运行命令测试、依赖解析检查与 Shell 语法检查**
+- [x] **Step 7: 运行命令测试、依赖解析检查与 Shell 语法检查**
 
 Run:
 
@@ -1584,7 +1585,7 @@ bash -n deploy/motion-analysis-smoke/run-benchmark.sh
 
 Expected: pytest PASS；dry-run 显示固定 `paddlepaddle==3.3.0`、`paddlex==3.7.2`；两个 `bash -n` 均退出 0。
 
-- [ ] **Step 8: 提交 Task 4**
+- [x] **Step 8: 提交 Task 4**
 
 ```bash
 git add \
@@ -1610,7 +1611,7 @@ git commit -m "feat(部署): 增加PP-TinyPose冒烟命令与初始化脚本"
 - Consumes: 已提交的 Task 1–4 实现。
 - Produces: 只由 Git 已提交内容生成的部署包和对应 7–40 位 commit 标识。
 
-- [ ] **Step 1: 跑动作分析专项测试**
+- [x] **Step 1: 跑动作分析专项测试**
 
 Run:
 
@@ -1627,7 +1628,7 @@ pytest \
 
 Expected: 全部 PASS。
 
-- [ ] **Step 2: 跑项目要求的后端与前端全量验证**
+- [x] **Step 2: 跑项目要求的后端与前端全量验证**
 
 Run:
 
@@ -1643,7 +1644,7 @@ npm run build
 
 Expected: 后端测试、Ruff、前端测试、lint 和构建全部通过。
 
-- [ ] **Step 3: 检查提交范围与工作区隔离**
+- [x] **Step 3: 检查提交范围与工作区隔离**
 
 Run:
 
@@ -1655,7 +1656,7 @@ git log --oneline -5
 
 Expected: 只保留实施前已经存在的其他会话未提交文件；Task 1–4 文件无未提交漂移，最近四个实施提交分别对应推理、资源、报告编排、命令/部署脚本。
 
-- [ ] **Step 4: 从 Git 提交而不是脏工作区生成部署包**
+- [x] **Step 4: 从 Git 提交而不是脏工作区生成部署包**
 
 Run:
 
@@ -1682,7 +1683,7 @@ Expected: 压缩包只包含 `backend/` 与 `deploy/motion-analysis-smoke/`；�
 - Consumes: SSH 别名 `mcare-pp` 和 Task 5 部署包。
 - Produces: 可运行 Python 3.12 虚拟环境、4 GiB 已启用 Swap、专用 `motioncare-analysis` 用户和受限目录。
 
-- [ ] **Step 1: 再次只读验证主机身份、系统和 SSH 策略**
+- [x] **Step 1: 再次只读验证主机身份、系统和 SSH 策略**
 
 Run locally:
 
@@ -1693,7 +1694,7 @@ ssh -o BatchMode=yes -o PasswordAuthentication=no mcare-pp \
 
 Expected: Ubuntu 24.04、`x86_64`、Python 3.12；`pubkeyauthentication yes`、`passwordauthentication no`、`kbdinteractiveauthentication no`、root 仅密钥方式；根分区剩余空间大于 10 GiB。
 
-- [ ] **Step 2: 上传并执行初始化脚本**
+- [x] **Step 2: 上传并执行初始化脚本**
 
 Run locally:
 
@@ -1705,7 +1706,7 @@ ssh mcare-pp \
 
 Expected: 脚本退出 0，不修改 SSH 配置。
 
-- [ ] **Step 3: 验证用户、目录、Swap 和磁盘余量**
+- [x] **Step 3: 验证用户、目录、Swap 和磁盘余量**
 
 Run locally:
 
@@ -1730,7 +1731,7 @@ Expected: `motioncare-analysis` 是系统用户；`/swapfile` 大小约 4 GiB、
 - Consumes: Task 5 的 `implementation_commit` 与 `archive_path`。
 - Produces: 能以专用用户运行的固定版本 Paddle CPU 环境和已缓存模型。
 
-- [ ] **Step 1: 上传部署包并验证本地/远端 SHA-256 一致**
+- [x] **Step 1: 上传部署包并验证本地/远端 SHA-256 一致**
 
 Run locally from the repository root；该值必须直接从当前已验证的提交计算：
 
@@ -1744,7 +1745,7 @@ ssh mcare-pp 'sha256sum /tmp/motioncare-analysis.tar.gz'
 
 Expected: 远端哈希与 Task 5 完全一致；commit 来自当前 HEAD，不手工填写。
 
-- [ ] **Step 2: 仅在远端 app 目录为空时解包并锁定代码权限**
+- [x] **Step 2: 仅在远端 app 目录为空时解包并锁定代码权限**
 
 Run locally:
 
@@ -1755,7 +1756,7 @@ ssh mcare-pp \
 
 Expected: `/opt/motioncare-analysis/app/backend/manage.py` 存在，代码不可由服务用户修改。若 app 非空则停止，不覆盖原内容，由用户决定是否保留旧版本。
 
-- [ ] **Step 3: 以专用用户安装固定 Python 依赖**
+- [x] **Step 3: 以专用用户安装固定 Python 依赖**
 
 Run locally:
 
@@ -1766,7 +1767,7 @@ ssh mcare-pp \
 
 Expected: 安装退出 0；不使用系统 Python site-packages。
 
-- [ ] **Step 4: 验证版本、Paddle 自检和显式 CPU 模型首次下载**
+- [x] **Step 4: 验证版本、Paddle 自检和显式 CPU 模型首次下载**
 
 Run locally:
 
@@ -1777,7 +1778,7 @@ ssh mcare-pp \
 
 Expected: 版本分别为 3.3.0、3.7.2、4.10–<5；Paddle 检查成功；输出 `MODEL_LOAD_OK`；模型文件落入 `/opt/motioncare-analysis/model-cache`。`PADDLE_PDX_CACHE_HOME` 必须在 Python 导入 PaddleX 前由进程环境设置。
 
-- [ ] **Step 5: 再次加载模型以确认持久缓存可复用**
+- [x] **Step 5: 再次加载模型以确认持久缓存可复用**
 
 Run locally:
 
@@ -1802,7 +1803,7 @@ Expected: 再次输出 `MODEL_LOAD_OK`，两次 `du -sb` 结果不出现一次�
 - Consumes: Task 7 固定环境与 Task 5 `implementation_commit`。
 - Produces: 三模式脱敏 JSON/文本报告；命令始终尝试删除输入视频。
 
-- [ ] **Step 1: 上传前重新核验本地视频**
+- [x] **Step 1: 上传前重新核验本地视频**
 
 Run locally:
 
@@ -1815,7 +1816,7 @@ stat -f '%z bytes' "${video_path}"
 
 Expected: 哈希完全匹配，大小为 `384318737 bytes`；不匹配时停止，不上传。
 
-- [ ] **Step 2: 检查服务器空间并上传视频**
+- [x] **Step 2: 检查服务器空间并上传视频**
 
 Run locally:
 
@@ -1832,7 +1833,7 @@ ssh mcare-pp \
 
 Expected: 远端哈希完全匹配，所有者为专用用户、权限 600、大小 384318737。
 
-- [ ] **Step 3: 通过带清理兜底的脚本串行运行三档冒烟命令**
+- [x] **Step 3: 通过带清理兜底的脚本串行运行三档冒烟命令**
 
 Run locally from the repository root：
 
@@ -1847,7 +1848,7 @@ ssh mcare-pp \
 
 Expected: 命令保持前台串行运行；5 FPS、10 FPS 先完成，全帧按资源门禁完成或明确跳过/失败；Python `finally` 和 shell `EXIT` trap 都尝试删除输入。若命令耗时较长，使用现有终端会话持续等待，不启动第二个并发任务。
 
-- [ ] **Step 4: 即使命令失败也检查报告、OOM 证据和输入清理**
+- [x] **Step 4: 即使命令失败也检查报告、OOM 证据和输入清理**
 
 Run locally，沿用同一 shell 中的 `remote_report`、`remote_summary`：
 
@@ -1858,7 +1859,7 @@ ssh mcare-pp \
 
 Expected: 输入已删除，JSON 可解析；若内核发生 OOM，保留证据并停止，不重复高负载测试。
 
-- [ ] **Step 5: 下载脱敏报告到本地并复核不存在敏感字段**
+- [x] **Step 5: 下载脱敏报告到本地并复核不存在敏感字段**
 
 Run locally:
 
@@ -1877,7 +1878,7 @@ fi
 
 Expected: 本地 JSON 可解析，敏感信息扫描无匹配。报告与测试视频不加入 Git。
 
-- [ ] **Step 6: 验证服务器没有测试视频副本**
+- [x] **Step 6: 验证服务器没有测试视频副本**
 
 Run locally:
 
@@ -1900,7 +1901,7 @@ Expected: input/tmp 没有文件，`/opt/motioncare-analysis` 下不存在 SHA-2
 - Consumes: 三档运行状态、实际推理帧数、耗时、平均单帧耗时、峰值 RSS、内存/Swap、动作次数与质量标记。
 - Produces: 一份用户可直接决策的结论；不改规则、不写生产配置。
 
-- [ ] **Step 1: 校验报告契约和帧数关系**
+- [x] **Step 1: 校验报告契约和帧数关系**
 
 Run locally：
 
@@ -1934,7 +1935,7 @@ PY
 
 Expected: 输出 `REPORT_CONTRACT_OK`；任一硬断言失败都按技术未通过报告，不用人工解释掩盖。
 
-- [ ] **Step 2: 输出三档对照表**
+- [x] **Step 2: 输出三档对照表**
 
 Run locally；若用户提供人工次数，先执行 `export MANUAL_COUNT=实际整数`，否则不设置：
 
@@ -1980,7 +1981,7 @@ PY
 
 Expected: 输出固定列的 Markdown 三档对照表；未提供人工标签时最后一列为 `未提供`。
 
-- [ ] **Step 3: 按固定规则给出容量结论**
+- [x] **Step 3: 按固定规则给出容量结论**
 
 - 5 FPS 失败或发生 OOM：当前实例不可用，建议先升级物理内存后复测。
 - 5/10 FPS 完成但峰值 Swap 使用超过 1 GiB：仅证明勉强可运行，不建议正式任务使用当前 2 GiB 规格。
@@ -1988,6 +1989,6 @@ Expected: 输出固定列的 Markdown 三档对照表；未提供人工标签时
 - 全帧显著更慢且总次数/动作时间无实质改善：正式策略优先 5 FPS；若 10 FPS 明显改善动作边界且成本可接受，则优先 10 FPS。
 - 全帧明显改善计数：不直接切换；先另行设计把连续帧去抖改为按时间语义，再用多段人工标注视频复测。
 
-- [ ] **Step 4: 报告下一阶段边界**
+- [x] **Step 4: 报告下一阶段边界**
 
 明确下一阶段仍需单独设计：专用 Celery `motion-analysis` 队列、生产 Redis/PostgreSQL 受保护网络、七牛私有下载、正式 Worker 守护与告警。不得在本轮冒烟通过后自动接入生产。
