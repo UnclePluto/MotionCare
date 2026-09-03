@@ -5,9 +5,14 @@ import pytest
 
 from apps.training.pose_inference import (
     MotionAnalysisDependencyError,
+    PP_TINYPOSE_MODEL_NAME,
+    VideoKeypointExtraction,
     convert_paddlex_result,
+    create_pose_model,
     extract_video_keypoint_frames,
+    extract_video_keypoint_frames_with_stats,
     load_motion_analysis_runtime,
+    warm_up_pose_model,
 )
 
 
@@ -135,3 +140,88 @@ def test_missing_optional_dependency_fails_only_when_runtime_is_loaded(monkeypat
 
     with pytest.raises(MotionAnalysisDependencyError, match="motion-analysis"):
         load_motion_analysis_runtime()
+
+
+def test_create_pose_model_forces_cpu_and_disables_hpip(monkeypatch):
+    create_model = Mock(return_value=object())
+    monkeypatch.setattr(
+        "apps.training.pose_inference.load_motion_analysis_runtime",
+        lambda: (Mock(), create_model),
+    )
+
+    model = create_pose_model()
+
+    assert model is create_model.return_value
+    create_model.assert_called_once_with(
+        model_name=PP_TINYPOSE_MODEL_NAME,
+        device="cpu",
+        use_hpip=False,
+    )
+
+
+def test_warm_up_uses_first_decoded_frame_and_releases_capture():
+    capture = FakeCapture([0, 100])
+    model = FakeModel()
+
+    warm_up_pose_model("ignored.mp4", model=model, capture=capture)
+
+    assert model.seen_frames == [0]
+    assert capture.released is True
+
+
+def test_full_frame_mode_infers_every_decoded_frame():
+    capture = FakeCapture([0, 100, 200, 300, 400])
+    model = FakeModel()
+
+    result = extract_video_keypoint_frames_with_stats(
+        "ignored.mp4",
+        sample_fps=None,
+        model=model,
+        capture=capture,
+    )
+
+    assert isinstance(result, VideoKeypointExtraction)
+    assert result.decoded_frame_count == 5
+    assert result.inferred_frame_count == 5
+    assert model.seen_frames == [0, 1, 2, 3, 4]
+    assert [frame["timestamp_ms"] for frame in result.frames] == [0, 100, 200, 300, 400]
+
+
+def test_ten_fps_mode_reports_decoded_and_inferred_counts():
+    capture = FakeCapture([0, 50, 100, 150, 200])
+    model = FakeModel()
+
+    result = extract_video_keypoint_frames_with_stats(
+        "ignored.mp4",
+        sample_fps=10,
+        model=model,
+        capture=capture,
+    )
+
+    assert result.decoded_frame_count == 5
+    assert result.inferred_frame_count == 3
+    assert model.seen_frames == [0, 2, 4]
+
+
+def test_existing_extractor_still_returns_only_frame_list():
+    capture = FakeCapture([0, 100, 200])
+    frames = extract_video_keypoint_frames(
+        "ignored.mp4",
+        sample_fps=5,
+        model=FakeModel(),
+        capture=capture,
+    )
+
+    assert isinstance(frames, list)
+    assert [frame["timestamp_ms"] for frame in frames] == [0, 200]
+
+
+@pytest.mark.parametrize("sample_fps", [0, -1])
+def test_stats_extractor_rejects_non_positive_fixed_fps(sample_fps):
+    with pytest.raises(ValueError, match="sample_fps"):
+        extract_video_keypoint_frames_with_stats(
+            "ignored.mp4",
+            sample_fps=sample_fps,
+            model=FakeModel(),
+            capture=FakeCapture([]),
+        )

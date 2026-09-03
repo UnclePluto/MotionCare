@@ -1,5 +1,6 @@
 import importlib
 import json
+from dataclasses import dataclass
 from statistics import mean
 
 
@@ -25,6 +26,14 @@ class MotionAnalysisDependencyError(RuntimeError):
 
 class MotionAnalysisInferenceError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class VideoKeypointExtraction:
+    frames: list[dict]
+    decoded_frame_count: int
+    inferred_frame_count: int
+    source_fps: float
 
 
 def load_motion_analysis_runtime():
@@ -101,6 +110,101 @@ def _first_prediction(model, frame):
         raise MotionAnalysisInferenceError("PP-TinyPose 未返回推理结果") from exc
 
 
+def create_pose_model(*, device="cpu"):
+    _, create_model = load_motion_analysis_runtime()
+    return create_model(
+        model_name=PP_TINYPOSE_MODEL_NAME,
+        device=device,
+        use_hpip=False,
+    )
+
+
+def warm_up_pose_model(video_path, *, model, capture=None):
+    cv2 = None
+    if capture is None:
+        cv2, _ = load_motion_analysis_runtime()
+        capture = cv2.VideoCapture(str(video_path))
+    try:
+        if not capture.isOpened():
+            raise MotionAnalysisInferenceError("训练视频无法解码")
+        ok, frame = capture.read()
+        if not ok:
+            raise MotionAnalysisInferenceError("训练视频没有可分析帧")
+        _first_prediction(model, frame)
+    finally:
+        capture.release()
+
+
+def extract_video_keypoint_frames_with_stats(
+    video_path,
+    *,
+    sample_fps=DEFAULT_SAMPLE_FPS,
+    model=None,
+    capture=None,
+):
+    if sample_fps is not None and sample_fps <= 0:
+        raise ValueError("sample_fps 必须大于 0 或为 None")
+
+    cv2 = None
+    if model is None or capture is None:
+        cv2, _ = load_motion_analysis_runtime()
+    if model is None:
+        model = create_pose_model()
+    if capture is None:
+        capture = cv2.VideoCapture(str(video_path))
+
+    try:
+        if not capture.isOpened():
+            raise MotionAnalysisInferenceError("训练视频无法解码")
+        fallback_fps = sample_fps or DEFAULT_SAMPLE_FPS
+        source_fps = float(capture.get(CAP_PROP_FPS) or fallback_fps)
+        sample_interval_ms = None if sample_fps is None else 1000.0 / sample_fps
+        next_sample_ms = 0.0
+        decoded_frame_count = 0
+        frames = []
+
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            frame_index = decoded_frame_count
+            decoded_frame_count += 1
+            timestamp_ms = float(capture.get(CAP_PROP_POS_MSEC) or 0.0)
+            if timestamp_ms <= 0 and frame_index:
+                timestamp_ms = frame_index * 1000.0 / source_fps
+            if sample_interval_ms is not None and timestamp_ms + 0.5 < next_sample_ms:
+                continue
+
+            try:
+                frame_height, frame_width = frame.shape[:2]
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise MotionAnalysisInferenceError("视频帧尺寸无效") from exc
+            frames.append(
+                {
+                    "timestamp_ms": int(round(timestamp_ms)),
+                    "keypoints": convert_paddlex_result(
+                        _first_prediction(model, frame),
+                        frame_width=frame_width,
+                        frame_height=frame_height,
+                    ),
+                }
+            )
+            if sample_interval_ms is not None:
+                while next_sample_ms <= timestamp_ms + 0.5:
+                    next_sample_ms += sample_interval_ms
+
+        if not frames:
+            raise MotionAnalysisInferenceError("训练视频没有可分析帧")
+        return VideoKeypointExtraction(
+            frames=frames,
+            decoded_frame_count=decoded_frame_count,
+            inferred_frame_count=len(frames),
+            source_fps=source_fps,
+        )
+    finally:
+        capture.release()
+
+
 def extract_video_keypoint_frames(
     video_path,
     *,
@@ -108,58 +212,9 @@ def extract_video_keypoint_frames(
     model=None,
     capture=None,
 ):
-    if sample_fps <= 0:
-        raise ValueError("sample_fps 必须大于 0")
-
-    cv2 = None
-    create_model = None
-    if model is None or capture is None:
-        cv2, create_model = load_motion_analysis_runtime()
-    if model is None:
-        model = create_model(PP_TINYPOSE_MODEL_NAME)
-    if capture is None:
-        capture = cv2.VideoCapture(str(video_path))
-
-    try:
-        if not capture.isOpened():
-            raise MotionAnalysisInferenceError("训练视频无法解码")
-        source_fps = float(capture.get(CAP_PROP_FPS) or sample_fps)
-        sample_interval_ms = 1000.0 / sample_fps
-        next_sample_ms = 0.0
-        frame_index = 0
-        frames = []
-
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            timestamp_ms = float(capture.get(CAP_PROP_POS_MSEC) or 0.0)
-            if timestamp_ms <= 0 and frame_index:
-                timestamp_ms = frame_index * 1000.0 / source_fps
-            frame_index += 1
-            if timestamp_ms + 0.5 < next_sample_ms:
-                continue
-
-            try:
-                frame_height, frame_width = frame.shape[:2]
-            except (AttributeError, TypeError, ValueError) as exc:
-                raise MotionAnalysisInferenceError("视频帧尺寸无效") from exc
-            result = _first_prediction(model, frame)
-            frames.append(
-                {
-                    "timestamp_ms": int(round(timestamp_ms)),
-                    "keypoints": convert_paddlex_result(
-                        result,
-                        frame_width=frame_width,
-                        frame_height=frame_height,
-                    ),
-                }
-            )
-            while next_sample_ms <= timestamp_ms + 0.5:
-                next_sample_ms += sample_interval_ms
-
-        if not frames:
-            raise MotionAnalysisInferenceError("训练视频没有可分析帧")
-        return frames
-    finally:
-        capture.release()
+    return extract_video_keypoint_frames_with_stats(
+        video_path,
+        sample_fps=sample_fps,
+        model=model,
+        capture=capture,
+    ).frames
