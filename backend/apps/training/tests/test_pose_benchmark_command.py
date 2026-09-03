@@ -204,6 +204,35 @@ def test_command_rejects_summary_in_input_directory(tmp_path):
         )
 
 
+def test_command_rejects_same_report_and_summary_path_and_deletes_input(
+    tmp_path,
+    monkeypatch,
+):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    report = tmp_path / "reports" / "report.json"
+    summary = report.parent / "nested" / ".." / report.name
+    runner = Mock(return_value={"status": "completed"})
+    monkeypatch.setattr(
+        "apps.training.management.commands.run_pose_smoke_benchmark.run_pose_smoke_benchmark",
+        runner,
+    )
+
+    with pytest.raises(CommandError, match="报告与摘要不能使用同一路径"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(report),
+            summary=str(summary),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+            delete_input=True,
+        )
+
+    assert not video.exists()
+    runner.assert_not_called()
+
+
 @pytest.mark.parametrize("invalid_output", ["report", "summary"])
 def test_command_deletes_input_when_output_directory_validation_fails(
     tmp_path,

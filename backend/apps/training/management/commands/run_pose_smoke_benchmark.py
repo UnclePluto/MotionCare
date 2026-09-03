@@ -38,6 +38,8 @@ class Command(BaseCommand):
                 raise CommandError("报告不能写入输入目录")
             if summary.parent.resolve() == video.parent.resolve():
                 raise CommandError("摘要不能写入输入目录")
+            if report.resolve() == summary.resolve():
+                raise CommandError("报告与摘要不能使用同一路径")
 
             previous_sigterm = signal.getsignal(signal.SIGTERM)
 

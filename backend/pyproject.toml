@@ -28,7 +28,7 @@ dev = [
 motion-analysis = [
   "paddlepaddle==3.3.0",
   "paddlex[cv]==3.7.2",
-  "opencv-python-headless>=4.10,<5.0",
+  "opencv-contrib-python==4.10.0.84",
 ]
 
 [tool.pytest.ini_options]

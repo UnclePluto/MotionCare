@@ -1,11 +1,16 @@
+import errno
 import json
 import subprocess
+import tomllib
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from apps.training.pose_benchmark import (
     BenchmarkFailure,
     probe_video,
+    read_versions,
     run_pose_smoke_benchmark,
     sha256_file,
 )
@@ -57,6 +62,76 @@ def _probe_payload():
         ),
         stderr="",
     )
+
+
+def test_motion_analysis_extra_has_one_opencv_provider_compatible_with_paddlex():
+    pyproject_path = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    providers = [
+        dependency
+        for dependency in pyproject["project"]["optional-dependencies"]["motion-analysis"]
+        if dependency.lower().startswith("opencv-")
+    ]
+
+    assert providers == ["opencv-contrib-python==4.10.0.84"]
+
+
+def test_read_versions_reports_imported_cv2_runtime_version(monkeypatch):
+    metadata_versions = {
+        "paddlepaddle": "3.3.0",
+        "paddlex": "3.7.2",
+        "opencv-contrib-python": "9.9.9",
+        "opencv-python-headless": "4.14.0.94",
+    }
+    monkeypatch.setattr(
+        "apps.training.pose_benchmark.importlib.metadata.version",
+        metadata_versions.__getitem__,
+    )
+    monkeypatch.setattr(
+        "apps.training.pose_benchmark.importlib.import_module",
+        lambda name: SimpleNamespace(__version__="4.10.0"),
+    )
+    monkeypatch.setattr(
+        "apps.training.pose_benchmark.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="ffmpeg version 6.1.1\n",
+            stderr="",
+        ),
+    )
+
+    versions = read_versions()
+
+    assert versions["opencv-contrib-python"] == "4.10.0"
+
+
+def test_read_versions_rejects_cv2_without_runtime_version(monkeypatch):
+    monkeypatch.setattr(
+        "apps.training.pose_benchmark.importlib.metadata.version",
+        lambda distribution: {
+            "paddlepaddle": "3.3.0",
+            "paddlex": "3.7.2",
+            "opencv-python-headless": "4.14.0.94",
+        }[distribution],
+    )
+    monkeypatch.setattr(
+        "apps.training.pose_benchmark.importlib.import_module",
+        lambda name: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "apps.training.pose_benchmark.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="ffmpeg version 6.1.1\n",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(BenchmarkFailure, match="OpenCV 运行时版本不可用"):
+        read_versions()
 
 
 def test_probe_video_preserves_nominal_and_average_rates(tmp_path):
@@ -207,6 +282,25 @@ def test_hash_mismatch_writes_failed_report_before_model_load(tmp_path):
     assert "private-video" not in json.dumps(payload, ensure_ascii=False)
 
 
+def test_benchmark_rejects_report_and_summary_resolving_to_same_path(tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    report = tmp_path / "reports" / "report.json"
+    summary = report.parent / "nested" / ".." / report.name
+
+    with pytest.raises(BenchmarkFailure, match="报告与摘要不能使用同一路径"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report,
+            summary_path=summary,
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            model_factory=lambda: pytest.fail("路径冲突后不得加载模型"),
+        )
+
+    assert not report.exists()
+
+
 def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
     video = tmp_path / "private-video.mp4"
     video.write_bytes(b"video")
@@ -242,6 +336,68 @@ def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
     assert result["modes"][1]["status"] == "skipped_for_resource_safety"
     assert result["modes"][2]["status"] == "skipped_for_resource_safety"
     serialized = report.read_text(encoding="utf-8")
+    assert "private /path" not in serialized
+    assert str(video) not in serialized
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_summary", "expected_mode_statuses"),
+    [
+        (
+            MemoryError("private /path/video.mp4"),
+            "推理阶段发生资源错误",
+            ["failed", "skipped_for_resource_safety", "skipped_for_resource_safety"],
+        ),
+        (
+            OSError(errno.ENOMEM, "private /path/video.mp4"),
+            "推理阶段发生资源错误",
+            ["failed", "skipped_for_resource_safety", "skipped_for_resource_safety"],
+        ),
+        (
+            OSError(errno.EIO, "private /path/video.mp4"),
+            "推理阶段执行失败",
+            ["failed"],
+        ),
+    ],
+)
+def test_only_memory_allocation_failures_use_resource_safety_flow(
+    tmp_path,
+    failure,
+    expected_summary,
+    expected_mode_statuses,
+):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"video")
+    report = tmp_path / "report.json"
+    calls = []
+
+    def extractor(path, *, sample_fps, model):
+        calls.append(sample_fps)
+        raise failure
+
+    with pytest.raises(BenchmarkFailure):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            extractor=extractor,
+            analyzer=lambda frames: {},
+            sampler_factory=lambda: FakeSampler(_peak()),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
+        )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert calls == [5.0]
+    assert [mode["status"] for mode in payload["modes"]] == expected_mode_statuses
+    assert payload["modes"][0]["error_type"] == type(failure).__name__
+    assert payload["modes"][0]["error_summary"] == expected_summary
+    serialized = json.dumps(payload, ensure_ascii=False)
     assert "private /path" not in serialized
     assert str(video) not in serialized
 

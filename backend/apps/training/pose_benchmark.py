@@ -116,11 +116,19 @@ def probe_video(
 
 def read_versions():
     versions = {"python": platform.python_version()}
-    for distribution in ("paddlepaddle", "paddlex", "opencv-python-headless"):
+    for distribution in ("paddlepaddle", "paddlex"):
         try:
             versions[distribution] = importlib.metadata.version(distribution)
         except importlib.metadata.PackageNotFoundError:
             versions[distribution] = "not_installed"
+    try:
+        cv2 = importlib.import_module("cv2")
+    except (ImportError, OSError) as exc:
+        raise BenchmarkFailure("OpenCV 运行时不可用") from exc
+    opencv_version = getattr(cv2, "__version__", None)
+    if not isinstance(opencv_version, str) or not opencv_version.strip():
+        raise BenchmarkFailure("OpenCV 运行时版本不可用")
+    versions["opencv-contrib-python"] = opencv_version.strip()
     completed = subprocess.run(
         ["/usr/bin/ffmpeg", "-version"],
         check=True,
@@ -245,6 +253,14 @@ def run_pose_smoke_benchmark(
     monotonic=time.monotonic,
 ) -> dict:
     video_path = Path(video_path)
+    report_path = Path(report_path)
+    summary_path = Path(summary_path)
+    try:
+        outputs_are_same = report_path.resolve() == summary_path.resolve()
+    except OSError as exc:
+        raise BenchmarkFailure("报告或摘要路径无法解析") from exc
+    if outputs_are_same:
+        raise BenchmarkFailure("报告与摘要不能使用同一路径")
     started_at = datetime.now(timezone.utc)
     report = {
         "report_format_version": REPORT_FORMAT_VERSION,

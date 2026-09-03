@@ -1,18 +1,106 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-_validate_existing_paths() {
-  local analysis_root="$1"
-  local swap_path="$2"
+_validate_existing_directory() {
+  local path="$1"
+  local expected_realpath="$2"
+  local expected_uid="$3"
+  local expected_gid="$4"
+  local expected_mode="$5"
+  local label="$6"
+  local actual_realpath metadata actual_uid actual_gid actual_mode
 
-  if [[ -L "${analysis_root}" || ( -e "${analysis_root}" && ! -d "${analysis_root}" ) ]]; then
-    echo "分析根目录已存在但不是普通目录，或是符号链接" >&2
+  if [[ -L "${path}" || ( -e "${path}" && ! -d "${path}" ) ]]; then
+    echo "${label} 已存在但不是普通目录，或是符号链接" >&2
     return 1
   fi
+  if [[ ! -e "${path}" ]]; then
+    return 0
+  fi
+
+  actual_realpath="$(readlink -f -- "${path}")" || {
+    echo "${label} 无法解析真实路径" >&2
+    return 1
+  }
+  if [[ "${actual_realpath}" != "${expected_realpath}" ]]; then
+    echo "${label} 的真实路径超出固定分析根目录" >&2
+    return 1
+  fi
+
+  metadata="$(stat -c '%u:%g:%a' -- "${path}")" || {
+    echo "${label} 无法读取安全属性" >&2
+    return 1
+  }
+  IFS=: read -r actual_uid actual_gid actual_mode <<< "${metadata}"
+  if [[ "${actual_uid}" != "${expected_uid}" \
+    || "${actual_gid}" != "${expected_gid}" \
+    || "${actual_mode}" != "${expected_mode}" ]]; then
+    echo "${label} 的所有权或权限不符合要求，停止且不自动修补" >&2
+    return 1
+  fi
+}
+
+_validate_existing_swap() {
+  local swap_path="$1"
+  local metadata owner_uid owner_gid mode link_count size
+
   if [[ -L "${swap_path}" || ( -e "${swap_path}" && ! -f "${swap_path}" ) ]]; then
     echo "swap 路径已存在但不是普通文件，或是符号链接" >&2
     return 1
   fi
+  if [[ ! -e "${swap_path}" ]]; then
+    return 0
+  fi
+
+  metadata="$(stat -c '%u:%g:%a:%h:%s' -- "${swap_path}")" || {
+    echo "swap 文件无法读取安全属性" >&2
+    return 1
+  }
+  IFS=: read -r owner_uid owner_gid mode link_count size <<< "${metadata}"
+  if [[ "${owner_uid}" != "0" || "${owner_gid}" != "0" ]]; then
+    echo "swap 文件必须由 root:root 所有，停止且不自动修补" >&2
+    return 1
+  fi
+  if [[ "${mode}" != "600" ]]; then
+    echo "swap 文件权限不是 0600，停止且不自动修补" >&2
+    return 1
+  fi
+  if [[ "${link_count}" != "1" ]]; then
+    echo "swap 文件存在额外硬链接，停止以避免启用不安全文件" >&2
+    return 1
+  fi
+  if [[ "${size}" != "4294967296" ]]; then
+    echo "swap 文件不是 4 GiB，停止且不自动修补" >&2
+    return 1
+  fi
+}
+
+_validate_existing_paths() {
+  local analysis_root="$1"
+  local swap_path="$2"
+  local service_uid="$3"
+  local service_gid="$4"
+  local child
+
+  _validate_existing_swap "${swap_path}"
+
+  if [[ -e "${analysis_root}" || -L "${analysis_root}" ]]; then
+    if [[ -z "${service_uid}" || -z "${service_gid}" ]]; then
+      echo "服务账号不存在但分析根目录已存在，停止且不自动修补" >&2
+      return 1
+    fi
+  fi
+
+  _validate_existing_directory \
+    "${analysis_root}" "${analysis_root}" "0" "${service_gid}" "750" "分析根目录"
+  _validate_existing_directory \
+    "${analysis_root}/app" "${analysis_root}/app" \
+    "0" "${service_gid}" "750" "应用目录"
+  for child in model-cache input tmp reports logs venv; do
+    _validate_existing_directory \
+      "${analysis_root}/${child}" "${analysis_root}/${child}" \
+      "${service_uid}" "${service_gid}" "700" "受管目录 ${child}"
+  done
 }
 
 _read_login_def_value() {
@@ -89,15 +177,24 @@ _bootstrap_after_root_gate() {
   local swap_path="$2"
   local login_defs="$3"
   local service_user="motioncare-analysis"
-  local passwd_entry
+  local passwd_entry account_name password service_uid service_gid
+  local gecos account_home account_shell
 
-  _validate_existing_paths "${analysis_root}" "${swap_path}"
   passwd_entry="$(getent passwd "${service_user}" || true)"
   _validate_existing_service_account \
     "${passwd_entry}" \
     "${service_user}" \
     "${analysis_root}" \
     "${login_defs}"
+  service_uid=""
+  service_gid=""
+  if [[ -n "${passwd_entry}" ]]; then
+    IFS=: read -r \
+      account_name password service_uid service_gid gecos account_home account_shell \
+      <<< "${passwd_entry}"
+  fi
+  _validate_existing_paths \
+    "${analysis_root}" "${swap_path}" "${service_uid}" "${service_gid}"
 
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -106,10 +203,22 @@ _bootstrap_after_root_gate() {
   if [[ -z "${passwd_entry}" ]]; then
     useradd --system \
       --home-dir "${analysis_root}" \
-      --create-home \
+      --no-create-home \
       --shell /usr/sbin/nologin \
       "${service_user}"
+    passwd_entry="$(getent passwd "${service_user}")"
+    _validate_existing_service_account \
+      "${passwd_entry}" \
+      "${service_user}" \
+      "${analysis_root}" \
+      "${login_defs}"
+    IFS=: read -r \
+      account_name password service_uid service_gid gecos account_home account_shell \
+      <<< "${passwd_entry}"
   fi
+
+  _validate_existing_paths \
+    "${analysis_root}" "${swap_path}" "${service_uid}" "${service_gid}"
 
   install -d -m 0750 -o root -g "${service_user}" "${analysis_root}"
   install -d -m 0750 -o root -g "${service_user}" "${analysis_root}/app"
@@ -123,18 +232,7 @@ _bootstrap_after_root_gate() {
   if [[ ! -e "${swap_path}" ]]; then
     _create_swap_file "${swap_path}"
   fi
-  if [[ -L "${swap_path}" || ! -f "${swap_path}" ]]; then
-    echo "swap 路径不是普通文件，或是符号链接" >&2
-    exit 1
-  fi
-  if [[ "$(stat -c '%s' "${swap_path}")" -ne 4294967296 ]]; then
-    echo "${swap_path} 已存在但不是 4 GiB，停止以避免覆盖" >&2
-    exit 1
-  fi
-  if [[ "$(stat -c '%a' "${swap_path}")" != "600" ]]; then
-    echo "${swap_path} 权限不是 0600，停止以避免不安全启用" >&2
-    exit 1
-  fi
+  _validate_existing_swap "${swap_path}"
   if ! swapon --show=NAME --noheadings --raw | grep -Fxq "${swap_path}"; then
     swapon "${swap_path}"
   fi
@@ -150,7 +248,8 @@ _bootstrap_after_root_gate() {
     runuser -u "${service_user}" -- python3 -m venv "${analysis_root}/venv"
   fi
 
-  test "$(stat -c '%a' "${analysis_root}/input")" = "700"
+  _validate_existing_paths \
+    "${analysis_root}" "${swap_path}" "${service_uid}" "${service_gid}"
   swapon --show "${swap_path}"
 }
 

@@ -6,12 +6,14 @@
 
 **Architecture:** 保留生产侧 `extract_video_keypoint_frames(...) -> list[dict]` 接口，新增可复用模型、全帧采样和提取统计接口；冒烟编排作为不访问数据库的 Django 管理命令运行。服务器只安装代码与 CPU 推理依赖，使用专用无登录用户、4 GiB Swap、持久模型缓存和临时输入目录，最终把脱敏报告取回本地并删除服务器视频。
 
-**Tech Stack:** Python 3.12、Django 5 管理命令、PaddlePaddle CPU 3.3.0、PaddleX 3.7.2、PP-TinyPose_128x96、OpenCV headless 4.10–<5、FFmpeg/FFprobe、pytest、Bash、Ubuntu 24.04
+**Tech Stack:** Python 3.12、Django 5 管理命令、PaddlePaddle CPU 3.3.0、PaddleX 3.7.2、PP-TinyPose_128x96、OpenCV contrib 4.10.0.84、FFmpeg/FFprobe、pytest、Bash、Ubuntu 24.04
 
 **Spec:** `docs/superpowers/specs/2026-09-03-pp-tinypose-algorithm-server-smoke-test-design.md`
 
 > 状态：implemented
 > 执行记录（2026-09-03, Codex）：实现提交范围 `ee59e19`、`0788513`、`65fd8e8`、`d2395b4`、`c8d961c`、`10d19a9`、`03b3d90`；服务器实测 `run_id=20260903T112938Z`；最终归档 `/tmp/motioncare-analysis-03b3d90aac42.tar.gz`，SHA256 `c8170e38500e237fd972cdcf09328eb3934dfb09259f64db659e99b96452a33c`。首轮 `model_load` 权限问题经 TDD 修复后，第二轮通过。
+> 最终审查纠正（2026-09-03, Codex）：OpenCV 改为唯一 `opencv-contrib-python==4.10.0.84` provider，版本报告读取 `cv2.__version__`；bootstrap 在任何包安装或其他写动作前拒绝不安全的既有受管目录与 swap；模型和三档规则不变。
+> 远端第二轮 provenance（2026-09-03, Codex）：远端完整归档基线为 `10d19a9392cae567ed9b1993e93a01dc83e74d80`，其上仅原子替换补丁提交 `03b3d90aac42ffed65d3b0c7ea9faf30d7575a16` 的 `deploy/motion-analysis-smoke/run-benchmark.sh`（SHA-256 `e4ff19f71b551f38ab8d9ba95cfd03237c4f47c979f43ccdbb33f5517e1f37c5`）；报告中的 `git_commit=03b3d90aac42` 标识运行时代码补丁，不表示远端整棵 app 与该提交逐字节一致。
 > 日期：2026-09-03
 > 范围：本地测试视频、单机 CPU、5 FPS/10 FPS/全帧对照、资源报告与清理；不接七牛和生产服务。
 > 实施基线 commit：`acda988`
@@ -22,7 +24,7 @@
 - 目标系统固定为 Ubuntu 24.04 LTS x86-64、Python 3.12、2 vCPU、约 1.6 GiB 可见物理内存、40 GiB 系统盘。
 - 本轮先不扩容物理内存；只创建 4 GiB Swap 作为 OOM 保护，Swap 使用量必须进入报告且不得被解释为内存充足。
 - 推理设备显式设置为 `cpu`，`use_hpip=False`，任务并发为 1，三个模式必须串行运行并复用同一个模型实例。
-- 直接依赖固定为 `paddlepaddle==3.3.0`、`paddlex[cv]==3.7.2`、`opencv-python-headless>=4.10,<5.0`。
+- 直接依赖固定为 `paddlepaddle==3.3.0`、`paddlex[cv]==3.7.2`、`opencv-contrib-python==4.10.0.84`；最终审查要求干净解析中只有这一项拥有 `cv2`，报告记录实际 `cv2.__version__`。
 - 模型固定为 `PP-TinyPose_128x96`；复用 `apps.training.pose_inference` 和 `apps.training.analysis.analyze_shoulder_press_keypoints`，不得另写计数规则。
 - 测试视频固定为 `/Users/nick/my_dev/ai/agents/IMG_0383_SDR_5min.mp4`，预期 SHA-256 固定为 `f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd`。
 - 三种模式固定为 5 FPS、10 FPS、原始全部解码帧；全帧必须以每次成功 `capture.read()` 为准，不能用容器 FPS 计算一个近似抽样数。
@@ -904,11 +906,16 @@ def probe_video(path, *, ffprobe_path="/usr/bin/ffprobe", runner=subprocess.run)
 
 def read_versions():
     versions = {"python": platform.python_version()}
-    for distribution in ("paddlepaddle", "paddlex", "opencv-python-headless"):
+    for distribution in ("paddlepaddle", "paddlex"):
         try:
             versions[distribution] = importlib.metadata.version(distribution)
         except importlib.metadata.PackageNotFoundError:
             versions[distribution] = "not_installed"
+    cv2 = importlib.import_module("cv2")
+    opencv_version = getattr(cv2, "__version__", None)
+    if not isinstance(opencv_version, str) or not opencv_version.strip():
+        raise BenchmarkFailure("OpenCV 运行时版本不可用")
+    versions["opencv-contrib-python"] = opencv_version.strip()
     completed = subprocess.run(
         ["/usr/bin/ffmpeg", "-version"],
         check=True,
@@ -1422,7 +1429,7 @@ class Command(BaseCommand):
 motion-analysis = [
   "paddlepaddle==3.3.0",
   "paddlex[cv]==3.7.2",
-  "opencv-python-headless>=4.10,<5.0",
+  "opencv-contrib-python==4.10.0.84",
 ]
 ```
 
@@ -1583,7 +1590,7 @@ bash -n deploy/motion-analysis-smoke/bootstrap.sh
 bash -n deploy/motion-analysis-smoke/run-benchmark.sh
 ```
 
-Expected: pytest PASS；dry-run 显示固定 `paddlepaddle==3.3.0`、`paddlex==3.7.2`；两个 `bash -n` 均退出 0。
+Expected: pytest PASS；dry-run 显示固定 `paddlepaddle==3.3.0`、`paddlex==3.7.2`、唯一 OpenCV provider `opencv-contrib-python==4.10.0.84`；两个 `bash -n` 均退出 0。
 
 - [x] **Step 8: 提交 Task 4**
 
@@ -1773,10 +1780,10 @@ Run locally:
 
 ```bash
 ssh mcare-pp \
-  'runuser -u motioncare-analysis -- env PADDLE_PDX_CACHE_HOME=/opt/motioncare-analysis/model-cache /opt/motioncare-analysis/venv/bin/python -c "import importlib.metadata as m; import paddle; from apps.training.pose_inference import create_pose_model; print(m.version(\"paddlepaddle\"), m.version(\"paddlex\"), m.version(\"opencv-python-headless\")); paddle.utils.run_check(); create_pose_model(); print(\"MODEL_LOAD_OK\")" && du -sb /opt/motioncare-analysis/model-cache'
+  'runuser -u motioncare-analysis -- env PADDLE_PDX_CACHE_HOME=/opt/motioncare-analysis/model-cache /opt/motioncare-analysis/venv/bin/python -c "import cv2; import importlib.metadata as m; import paddle; from apps.training.pose_inference import create_pose_model; print(m.version(\"paddlepaddle\"), m.version(\"paddlex\"), cv2.__version__); paddle.utils.run_check(); create_pose_model(); print(\"MODEL_LOAD_OK\")" && du -sb /opt/motioncare-analysis/model-cache'
 ```
 
-Expected: 版本分别为 3.3.0、3.7.2、4.10–<5；Paddle 检查成功；输出 `MODEL_LOAD_OK`；模型文件落入 `/opt/motioncare-analysis/model-cache`。`PADDLE_PDX_CACHE_HOME` 必须在 Python 导入 PaddleX 前由进程环境设置。
+Expected: 版本分别为 3.3.0、3.7.2、实际 `cv2.__version__=4.10.0`；Paddle 检查成功；输出 `MODEL_LOAD_OK`；模型文件落入 `/opt/motioncare-analysis/model-cache`。`PADDLE_PDX_CACHE_HOME` 必须在 Python 导入 PaddleX 前由进程环境设置。
 
 - [x] **Step 5: 再次加载模型以确认持久缓存可复用**
 
@@ -1784,7 +1791,7 @@ Run locally:
 
 ```bash
 ssh mcare-pp \
-  'runuser -u motioncare-analysis -- env PADDLE_PDX_CACHE_HOME=/opt/motioncare-analysis/model-cache /opt/motioncare-analysis/venv/bin/python -c "import importlib.metadata as m; import paddle; from apps.training.pose_inference import create_pose_model; print(m.version(\"paddlepaddle\"), m.version(\"paddlex\"), m.version(\"opencv-python-headless\")); paddle.utils.run_check(); create_pose_model(); print(\"MODEL_LOAD_OK\")" && du -sb /opt/motioncare-analysis/model-cache'
+  'runuser -u motioncare-analysis -- env PADDLE_PDX_CACHE_HOME=/opt/motioncare-analysis/model-cache /opt/motioncare-analysis/venv/bin/python -c "import cv2; import importlib.metadata as m; import paddle; from apps.training.pose_inference import create_pose_model; print(m.version(\"paddlepaddle\"), m.version(\"paddlex\"), cv2.__version__); paddle.utils.run_check(); create_pose_model(); print(\"MODEL_LOAD_OK\")" && du -sb /opt/motioncare-analysis/model-cache'
 ```
 
 Expected: 再次输出 `MODEL_LOAD_OK`，两次 `du -sb` 结果不出现一次完整模型的重复增长。

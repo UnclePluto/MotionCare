@@ -26,6 +26,69 @@ def _write_executable(path, content):
     path.chmod(0o755)
 
 
+def _bootstrap_validation_environment(
+    tmp_path,
+    *,
+    analysis_root,
+    swap_path,
+    invalid_path=None,
+    invalid_field=None,
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    marker = tmp_path / "write-attempted"
+    _write_executable(
+        fake_bin / "getent",
+        "#!/bin/sh\n"
+        "printf 'motioncare-analysis:x:500:500::%s:/usr/sbin/nologin\\n' "
+        '"$ANALYSIS_ROOT"\n',
+    )
+    _write_executable(
+        fake_bin / "stat",
+        "#!/bin/sh\n"
+        'format="$2"\n'
+        'path="$4"\n'
+        'if [ "$path" = "$SWAP_PATH" ]; then\n'
+        "  uid=0; gid=0; mode=600; links=1; size=4294967296\n"
+        'elif [ "$path" = "$ANALYSIS_ROOT" ] || '
+        '[ "$path" = "$ANALYSIS_ROOT/app" ]; then\n'
+        "  uid=0; gid=500; mode=750; links=1; size=0\n"
+        "else\n"
+        "  uid=500; gid=500; mode=700; links=1; size=0\n"
+        "fi\n"
+        'if [ -n "${INVALID_PATH:-}" ] && [ "$path" = "$INVALID_PATH" ]; then\n'
+        '  case "${INVALID_FIELD:-}" in\n'
+        "    owner) uid=123 ;;\n"
+        "    group) gid=123 ;;\n"
+        "    mode) mode=777 ;;\n"
+        "    links) links=2 ;;\n"
+        "    size) size=1 ;;\n"
+        "  esac\n"
+        "fi\n"
+        'case "$format" in\n'
+        "  '%u:%g:%a') printf '%s:%s:%s\\n' \"$uid\" \"$gid\" \"$mode\" ;;\n"
+        "  '%u:%g:%a:%h:%s') printf '%s:%s:%s:%s:%s\\n' "
+        '"$uid" "$gid" "$mode" "$links" "$size" ;;\n'
+        "  *) exit 98 ;;\n"
+        "esac\n",
+    )
+    _write_executable(
+        fake_bin / "apt-get",
+        '#!/bin/sh\n: > "$WRITE_MARKER"\nexit 77\n',
+    )
+    login_defs = tmp_path / "login.defs"
+    login_defs.write_text("SYS_UID_MIN 100\nSYS_UID_MAX 999\n", encoding="utf-8")
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "ANALYSIS_ROOT": str(analysis_root),
+        "SWAP_PATH": str(swap_path),
+        "INVALID_PATH": "" if invalid_path is None else str(invalid_path),
+        "INVALID_FIELD": "" if invalid_field is None else invalid_field,
+        "WRITE_MARKER": str(marker),
+    }
+    return env, marker, login_defs
+
+
 def test_shell_scripts_can_be_sourced_without_running_privileged_entrypoints():
     completed = subprocess.run(
         [
@@ -141,6 +204,116 @@ def test_bootstrap_rejects_unsafe_existing_paths_before_writes(tmp_path, unsafe_
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "WRITE_MARKER": str(marker),
     }
+
+    completed = _run_sourced(
+        BOOTSTRAP_SCRIPT,
+        '_bootstrap_after_root_gate "$2" "$3" "$4"',
+        str(analysis_root),
+        str(swap_path),
+        str(login_defs),
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ["app", "model-cache", "input", "tmp", "reports", "logs", "venv"],
+)
+def test_bootstrap_rejects_each_managed_child_symlink_before_writes(
+    tmp_path,
+    relative_path,
+):
+    analysis_root = tmp_path / "analysis"
+    analysis_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (analysis_root / relative_path).symlink_to(outside, target_is_directory=True)
+    swap_path = tmp_path / "swapfile"
+    env, marker, login_defs = _bootstrap_validation_environment(
+        tmp_path,
+        analysis_root=analysis_root,
+        swap_path=swap_path,
+    )
+
+    completed = _run_sourced(
+        BOOTSTRAP_SCRIPT,
+        '_bootstrap_after_root_gate "$2" "$3" "$4"',
+        str(analysis_root),
+        str(swap_path),
+        str(login_defs),
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "invalid_field"),
+    [
+        (relative_path, invalid_field)
+        for relative_path in (
+            None,
+            "app",
+            "model-cache",
+            "input",
+            "tmp",
+            "reports",
+            "logs",
+            "venv",
+        )
+        for invalid_field in ("owner", "group", "mode")
+    ],
+)
+def test_bootstrap_rejects_managed_directory_metadata_before_writes(
+    tmp_path,
+    relative_path,
+    invalid_field,
+):
+    analysis_root = tmp_path / "analysis"
+    for child in ("app", "model-cache", "input", "tmp", "reports", "logs", "venv"):
+        (analysis_root / child).mkdir(parents=True, exist_ok=True)
+    invalid_path = analysis_root if relative_path is None else analysis_root / relative_path
+    swap_path = tmp_path / "swapfile"
+    env, marker, login_defs = _bootstrap_validation_environment(
+        tmp_path,
+        analysis_root=analysis_root,
+        swap_path=swap_path,
+        invalid_path=invalid_path,
+        invalid_field=invalid_field,
+    )
+
+    completed = _run_sourced(
+        BOOTSTRAP_SCRIPT,
+        '_bootstrap_after_root_gate "$2" "$3" "$4"',
+        str(analysis_root),
+        str(swap_path),
+        str(login_defs),
+        env=env,
+    )
+
+    assert completed.returncode == 1
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("invalid_field", ["owner", "group", "mode", "links", "size"])
+def test_bootstrap_rejects_unsafe_existing_swap_metadata_before_writes(
+    tmp_path,
+    invalid_field,
+):
+    analysis_root = tmp_path / "analysis"
+    swap_path = tmp_path / "swapfile"
+    swap_path.write_bytes(b"existing swap")
+    env, marker, login_defs = _bootstrap_validation_environment(
+        tmp_path,
+        analysis_root=analysis_root,
+        swap_path=swap_path,
+        invalid_path=swap_path,
+        invalid_field=invalid_field,
+    )
 
     completed = _run_sourced(
         BOOTSTRAP_SCRIPT,
