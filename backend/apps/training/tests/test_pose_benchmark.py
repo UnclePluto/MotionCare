@@ -217,22 +217,24 @@ def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
         calls.append(sample_fps)
         raise MemoryError("private /path/video.mp4")
 
-    result = run_pose_smoke_benchmark(
-        video,
-        report_path=report,
-        summary_path=tmp_path / "report.txt",
-        expected_sha256=sha256_file(video),
-        git_commit="abc1234",
-        ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
-        model_factory=lambda: object(),
-        warm_up=lambda path, *, model: None,
-        extractor=extractor,
-        analyzer=lambda frames: {},
-        sampler_factory=lambda: FakeSampler(_peak()),
-        version_reader=lambda: {},
-        hardware_reader=lambda: {},
-    )
+    with pytest.raises(BenchmarkFailure, match="硬验收"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            extractor=extractor,
+            analyzer=lambda frames: {},
+            sampler_factory=lambda: FakeSampler(_peak()),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
+        )
 
+    result = json.loads(report.read_text(encoding="utf-8"))
     assert calls == [5.0]
     assert result["status"] == "failed"
     assert result["modes"][0]["status"] == "failed"
@@ -242,6 +244,43 @@ def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
     serialized = report.read_text(encoding="utf-8")
     assert "private /path" not in serialized
     assert str(video) not in serialized
+
+
+def test_non_resource_mode_failure_is_sanitized_and_marks_current_mode_failed(
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"video")
+    report = tmp_path / "report.json"
+
+    def extractor(path, *, sample_fps, model):
+        raise ValueError("private /path/video.mp4")
+
+    with pytest.raises(BenchmarkFailure, match="冒烟测试执行失败"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            extractor=extractor,
+            analyzer=lambda frames: {},
+            sampler_factory=lambda: FakeSampler(_peak()),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
+        )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["modes"][0]["status"] == "failed"
+    assert payload["modes"][0]["failure_stage"] == "5fps_inference"
+    assert payload["modes"][0]["error_type"] == "ValueError"
+    assert payload["modes"][0]["error_summary"] == "推理阶段执行失败"
+    assert "private /path" not in json.dumps(payload, ensure_ascii=False)
+    assert str(video) not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_all_frames_resource_failure_does_not_fail_required_modes(tmp_path):
@@ -287,3 +326,44 @@ def test_all_frames_resource_failure_does_not_fail_required_modes(tmp_path):
     assert result["status"] == "completed"
     assert result["modes"][2]["status"] == "failed"
     assert "private /path" not in report.read_text(encoding="utf-8")
+
+
+def test_summary_write_failure_leaves_failed_json_report_and_is_wrapped(tmp_path):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"video")
+    report = tmp_path / "report.json"
+    summary_directory = tmp_path / "summary-target"
+    summary_directory.mkdir()
+
+    with pytest.raises(BenchmarkFailure, match="摘要写入失败") as raised:
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report,
+            summary_path=summary_directory,
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+        )
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["failure"]["error_summary"] == "冒烟测试执行失败"
+    assert isinstance(raised.value.__cause__, OSError)
+    assert str(summary_directory) not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_json_report_write_failure_is_wrapped_as_benchmark_failure(tmp_path):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"video")
+    report_directory = tmp_path / "report-target"
+    report_directory.mkdir()
+
+    with pytest.raises(BenchmarkFailure, match="报告写入失败") as raised:
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report_directory,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+        )
+
+    assert isinstance(raised.value.__cause__, OSError)

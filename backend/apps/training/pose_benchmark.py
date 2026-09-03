@@ -172,11 +172,14 @@ def _atomic_write_text(path, content):
         raise
 
 
-def _write_report(report_path, summary_path, report):
+def _write_json_report(report_path, report):
     _atomic_write_text(
         report_path,
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
+
+
+def _write_summary(summary_path, report):
     lines = [
         f"状态: {report['status']}",
         f"模型: {report['model']['name']} ({report['model']['device']})",
@@ -190,11 +193,18 @@ def _write_report(report_path, summary_path, report):
     _atomic_write_text(summary_path, "\n".join(lines) + "\n")
 
 
+def _write_report(report_path, summary_path, report):
+    _write_json_report(report_path, report)
+    _write_summary(summary_path, report)
+
+
 def _failure_summary(stage, exc):
     if stage == "hash_validation" and isinstance(exc, BenchmarkFailure):
         return "视频 SHA-256 与预期不一致"
     if stage == "video_probe" and isinstance(exc, BenchmarkFailure):
         return "视频探测失败"
+    if stage == "hard_acceptance" and isinstance(exc, BenchmarkFailure):
+        return "5 FPS 或 10 FPS 硬验收未完成"
     return "冒烟测试执行失败"
 
 
@@ -357,15 +367,20 @@ def run_pose_smoke_benchmark(
                         "result": result,
                     }
                 )
-            except (MemoryError, OSError) as exc:
-                if isinstance(exc, OSError) and exc.errno != errno.ENOMEM:
-                    raise
+            except BaseException as exc:
+                is_resource_failure = isinstance(exc, MemoryError) or (
+                    isinstance(exc, OSError) and exc.errno == errno.ENOMEM
+                )
                 mode_report.update(
                     {
                         "status": "failed",
                         "failure_stage": stage,
                         "error_type": type(exc).__name__,
-                        "error_summary": "推理阶段发生资源错误",
+                        "error_summary": (
+                            "推理阶段发生资源错误"
+                            if is_resource_failure
+                            else "推理阶段执行失败"
+                        ),
                         "resource_peak": (
                             None
                             if sampler is None or sampler.peak is None
@@ -373,18 +388,27 @@ def run_pose_smoke_benchmark(
                         ),
                     }
                 )
-                resource_abort = True
+                if is_resource_failure:
+                    resource_abort = True
+                else:
+                    raise
             finally:
                 if extraction is not None:
                     del extraction
                 gc.collect()
                 persist()
 
-        report["status"] = (
-            "completed"
-            if all(item["status"] == "completed" for item in report["modes"][:2])
-            else "failed"
+        required_modes_completed = all(
+            item["status"] == "completed" for item in report["modes"][:2]
         )
+        if not required_modes_completed:
+            stage = "hard_acceptance"
+            raise BenchmarkFailure("5 FPS 或 10 FPS 硬验收未完成")
+
+        report["status"] = "completed"
+        report["finished_at"] = datetime.now(timezone.utc).isoformat()
+        persist()
+        return report
     except BaseException as exc:
         report["status"] = "failed"
         report["failure"] = {
@@ -393,11 +417,18 @@ def run_pose_smoke_benchmark(
             "error_summary": _failure_summary(stage, exc),
         }
         report["finished_at"] = datetime.now(timezone.utc).isoformat()
-        persist()
+        try:
+            _write_json_report(report_path, report)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as write_exc:
+            raise BenchmarkFailure("冒烟测试报告写入失败") from write_exc
+        try:
+            _write_summary(summary_path, report)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as write_exc:
+            raise BenchmarkFailure("冒烟测试摘要写入失败") from write_exc
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
         raise BenchmarkFailure(report["failure"]["error_summary"]) from exc
-
-    report["finished_at"] = datetime.now(timezone.utc).isoformat()
-    persist()
-    return report
