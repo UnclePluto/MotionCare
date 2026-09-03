@@ -72,6 +72,42 @@ def test_run_script_deletes_fixed_input_when_parameter_validation_fails(
     assert not video.exists()
 
 
+def test_run_script_invokes_runuser_from_deployed_backend_directory(tmp_path):
+    analysis_root = tmp_path / "analysis"
+    backend_directory = analysis_root / "app" / "backend"
+    backend_directory.mkdir(parents=True)
+    video = analysis_root / "input" / "IMG_0383_SDR_5min.mp4"
+    video.parent.mkdir()
+    video.write_bytes(b"private video")
+    caller_directory = tmp_path / "caller"
+    caller_directory.mkdir()
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    cwd_record = tmp_path / "runuser-cwd"
+    _write_executable(
+        fake_bin / "runuser",
+        '#!/bin/sh\npwd > "$CWD_RECORD"\n',
+    )
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "CWD_RECORD": str(cwd_record),
+        "CALLER_DIRECTORY": str(caller_directory),
+    }
+
+    completed = _run_sourced(
+        RUN_SCRIPT,
+        'cd "$CALLER_DIRECTORY"; '
+        '_run_benchmark_after_root_gate "$2" abc1234 20260903T120000Z',
+        str(analysis_root),
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert cwd_record.read_text(encoding="utf-8").strip() == str(backend_directory)
+    assert not video.exists()
+
+
 @pytest.mark.parametrize(
     "unsafe_kind",
     ["analysis_symlink", "analysis_file", "swap_symlink", "swap_dir"],

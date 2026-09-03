@@ -40,6 +40,7 @@ _run_benchmark_after_root_gate() {
     exit 1
   fi
 
+  cd "${analysis_root}/app/backend"
   runuser -u motioncare-analysis -- env \
     PADDLE_PDX_CACHE_HOME="${analysis_root}/model-cache" \
     TMPDIR="${analysis_root}/tmp" \
