@@ -15,9 +15,13 @@ from django.utils import timezone
 from apps.prescriptions.models import ActionLibraryItem
 from apps.training import tasks as training_tasks
 from apps.training.analysis import analyze_shoulder_press_keypoints
-from apps.training.analysis_registry import MotionAnalyzer
+from apps.training.analysis_registry import MotionAnalyzer, get_motion_analyzer
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 from apps.training.pose_inference import PP_TINYPOSE_MODEL_NAME
+from apps.training.shoulder_press_v2 import (
+    SHOULDER_PRESS_RULE_VERSION,
+    analyze_shoulder_press_keypoints_v2,
+)
 from apps.training.tasks import download_private_video, run_motion_analysis_job
 from apps.training.video_services import SHOULDER_PRESS_SOURCE_KEY, create_analysis_job
 
@@ -370,7 +374,8 @@ def test_motion_analysis_registry_only_exposes_shoulder_press(
         assert analyzer is not None
         assert analyzer.source_key == SHOULDER_PRESS_SOURCE_KEY
         assert analyzer.algorithm_version == PP_TINYPOSE_MODEL_NAME
-        assert analyzer.analyze_keypoints is analyze_shoulder_press_keypoints
+        assert analyzer.rule_version == SHOULDER_PRESS_RULE_VERSION
+        assert analyzer.analyze_keypoints is analyze_shoulder_press_keypoints_v2
     else:
         assert analyzer is None
 
@@ -416,6 +421,28 @@ def test_create_analysis_job_rejects_motion_without_registered_analyzer(
         create_analysis_job(video=video, requested_by=None)
 
 
+@pytest.mark.django_db
+def test_create_analysis_job_freezes_registered_versions(
+    project_patient,
+    active_prescription,
+):
+    existing_job, video, _ = _analysis_job(project_patient, active_prescription)
+    existing_job.delete()
+
+    with (
+        patch("apps.training.tasks.run_motion_analysis_job.delay"),
+        patch(
+            "apps.training.video_services.get_motion_analyzer",
+            wraps=get_motion_analyzer,
+        ) as analyzer_lookup,
+    ):
+        job = create_analysis_job(video=video, requested_by=None)
+
+    assert job.algorithm_version == PP_TINYPOSE_MODEL_NAME
+    assert job.rule_version == SHOULDER_PRESS_RULE_VERSION
+    analyzer_lookup.assert_called_once_with(SHOULDER_PRESS_SOURCE_KEY)
+
+
 class _DownloadResponse(io.BytesIO):
     def __init__(self, content, *, headers=None, socket_timeout=None):
         super().__init__(content)
@@ -428,6 +455,26 @@ class _DownloadResponse(io.BytesIO):
 
     def __exit__(self, exc_type, exc, traceback):
         self.close()
+
+
+class FakeKeypointStream:
+    source_fps = 29.763
+    decoded_frame_count = 2
+    inferred_frame_count = 2
+
+    def __init__(self):
+        self.closed = False
+
+    def __iter__(self):
+        yield {"timestamp_ms": 0, "keypoints": {}}
+        yield {"timestamp_ms": 34, "keypoints": {}}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.closed = True
+        return False
 
 
 class _TimeoutAwareSocket:
@@ -639,6 +686,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
         "rep_details": [],
         "quality_flags": ["camera_angle_unverified"],
     }
+    fake_stream = FakeKeypointStream()
 
     def fake_download(
         url,
@@ -656,10 +704,17 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
         destination.write_bytes(b"video")
         seen_paths.append(str(destination))
 
-    def fake_extract(path, *, sample_fps):
+    def fake_open_stream(path, *, sample_fps):
         assert os.path.exists(path)
         assert sample_fps == 4
-        return [{"timestamp_ms": 0, "keypoints": {}}]
+        return fake_stream
+
+    def analyze_frames(frames):
+        assert list(frames) == [
+            {"timestamp_ms": 0, "keypoints": {}},
+            {"timestamp_ms": 34, "keypoints": {}},
+        ]
+        return result_payload
 
     with (
         patch(
@@ -668,15 +723,16 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
         ),
         patch("apps.training.tasks.download_private_video", side_effect=fake_download),
         patch(
-            "apps.training.tasks.extract_video_keypoint_frames",
-            side_effect=fake_extract,
+            "apps.training.tasks.open_video_keypoint_stream",
+            side_effect=fake_open_stream,
         ),
         patch(
             "apps.training.tasks.get_motion_analyzer",
             return_value=MotionAnalyzer(
                 source_key=SHOULDER_PRESS_SOURCE_KEY,
-                algorithm_version="test-analyzer-v1",
-                analyze_keypoints=Mock(return_value=result_payload),
+                algorithm_version="test-analyzer-v2",
+                rule_version=SHOULDER_PRESS_RULE_VERSION,
+                analyze_keypoints=analyze_frames,
             ),
         ),
     ):
@@ -692,12 +748,76 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     assert job.total_count == 2
     assert job.standard_count == 1
     assert job.nonstandard_count == 1
-    assert job.result_payload == result_payload
-    assert job.algorithm_version == "test-analyzer-v1"
+    assert job.result_payload["total_count"] == 2
+    assert job.result_payload["standard_count"] == 1
+    assert job.result_payload["nonstandard_count"] == 1
+    assert job.result_payload["rule_version"] == SHOULDER_PRESS_RULE_VERSION
+    assert job.result_payload["processed_frames"] == 2
+    assert job.result_payload["source_fps"] == pytest.approx(29.763)
+    assert job.result_payload["analysis_elapsed_ms"] >= 0
+    assert job.algorithm_version == "test-analyzer-v2"
+    assert job.rule_version == SHOULDER_PRESS_RULE_VERSION
     assert job.failure_reason == ""
+    assert fake_stream.closed is True
     assert seen_paths and all(not os.path.exists(path) for path in seen_paths)
     assert video.status == TrainingVideo.Status.ATTACHED
     assert record.status == TrainingRecord.Status.COMPLETED
+
+
+@pytest.mark.django_db
+def test_task_closes_stream_and_cleans_temp_file_when_analyzer_raises(
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    seen_paths = []
+    fake_stream = FakeKeypointStream()
+
+    def fake_download(
+        url,
+        destination,
+        *,
+        timeout,
+        max_bytes,
+        deadline_seconds,
+        opener=None,
+    ):
+        destination.write_bytes(b"video")
+        seen_paths.append(str(destination))
+
+    def failing_analysis(frames):
+        list(frames)
+        raise RuntimeError("规则分析失败")
+
+    with (
+        patch(
+            "apps.training.tasks.create_private_download_url",
+            return_value="https://cdn.example.com/private.mp4?token=sensitive",
+        ),
+        patch("apps.training.tasks.download_private_video", side_effect=fake_download),
+        patch(
+            "apps.training.tasks.open_video_keypoint_stream",
+            return_value=fake_stream,
+        ),
+        patch(
+            "apps.training.tasks.get_motion_analyzer",
+            return_value=MotionAnalyzer(
+                source_key=SHOULDER_PRESS_SOURCE_KEY,
+                algorithm_version="test-analyzer-v2",
+                rule_version=SHOULDER_PRESS_RULE_VERSION,
+                analyze_keypoints=failing_analysis,
+            ),
+        ),
+    ):
+        returned = run_motion_analysis_job.run(job.id)
+
+    job.refresh_from_db()
+    assert returned.pk == job.pk
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert "关键点推理与规则分析" in job.failure_reason
+    assert "RuntimeError" in job.failure_reason
+    assert fake_stream.closed is True
+    assert seen_paths and all(not os.path.exists(path) for path in seen_paths)
 
 
 @pytest.mark.django_db
@@ -898,6 +1018,7 @@ def test_old_worker_success_does_not_overwrite_recovered_failure(
         "rep_details": [],
         "quality_flags": ["camera_angle_unverified"],
     }
+    fake_stream = FakeKeypointStream()
 
     def fake_download(
         url,
@@ -924,14 +1045,15 @@ def test_old_worker_success_does_not_overwrite_recovered_failure(
         ),
         patch("apps.training.tasks.download_private_video", side_effect=fake_download),
         patch(
-            "apps.training.tasks.extract_video_keypoint_frames",
-            return_value=[{"timestamp_ms": 0, "keypoints": {}}],
+            "apps.training.tasks.open_video_keypoint_stream",
+            return_value=fake_stream,
         ),
         patch(
             "apps.training.tasks.get_motion_analyzer",
             return_value=MotionAnalyzer(
                 source_key=SHOULDER_PRESS_SOURCE_KEY,
-                algorithm_version="test-analyzer-v1",
+                algorithm_version="test-analyzer-v2",
+                rule_version=SHOULDER_PRESS_RULE_VERSION,
                 analyze_keypoints=recover_during_analysis,
             ),
         ),

@@ -12,7 +12,7 @@ from django.utils import timezone
 
 from .analysis_registry import get_motion_analyzer
 from .models import MotionAnalysisJob
-from .pose_inference import extract_video_keypoint_frames
+from .pose_inference import open_video_keypoint_stream
 from .video_services import create_private_download_url
 
 
@@ -149,7 +149,7 @@ def _validated_counts(result):
     return total, standard, nonstandard
 
 
-def _persist_success(job_id, result, algorithm_version):
+def _persist_success(job_id, result, algorithm_version, rule_version):
     total, standard, nonstandard = _validated_counts(result)
     now = timezone.now()
     MotionAnalysisJob.objects.filter(
@@ -158,6 +158,7 @@ def _persist_success(job_id, result, algorithm_version):
     ).update(
         status=MotionAnalysisJob.Status.SUCCEEDED,
         algorithm_version=algorithm_version,
+        rule_version=rule_version,
         total_count=total,
         standard_count=standard,
         nonstandard_count=nonstandard,
@@ -235,15 +236,29 @@ def run_motion_analysis_job(job_id):
             max_bytes=job.training_video.size_bytes,
             deadline_seconds=settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS,
         )
-        stage = "关键点推理"
-        frames = extract_video_keypoint_frames(
+        stage = "关键点推理与规则分析"
+        analysis_started = time.monotonic()
+        with open_video_keypoint_stream(
             temporary_path,
             sample_fps=settings.MOTION_ANALYSIS_SAMPLE_FPS,
-        )
-        stage = "规则分析"
-        result = analyzer.analyze_keypoints(frames)
+        ) as stream:
+            result = analyzer.analyze_keypoints(stream)
+        result = {
+            **result,
+            "rule_version": analyzer.rule_version,
+            "processed_frames": stream.inferred_frame_count,
+            "source_fps": stream.source_fps,
+            "analysis_elapsed_ms": round(
+                (time.monotonic() - analysis_started) * 1000
+            ),
+        }
         stage = "保存结果"
-        return _persist_success(job.id, result, analyzer.algorithm_version)
+        return _persist_success(
+            job.id,
+            result,
+            analyzer.algorithm_version,
+            analyzer.rule_version,
+        )
     except Exception as exc:
         return _persist_failure(job.id, _safe_failure_reason(stage, exc))
     finally:
