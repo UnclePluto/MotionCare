@@ -61,6 +61,9 @@ def _side_event(
     start_ms,
     peak_ms,
     end_ms,
+    prominence=0.8,
+    peak_wrist_lift=0.8,
+    peak_elbow_angle=180.0,
     coverage_ratio=1.0,
     opposite_coverage_ratio=1.0,
 ):
@@ -69,9 +72,9 @@ def _side_event(
         start_ms=start_ms,
         peak_ms=peak_ms,
         end_ms=end_ms,
-        prominence=0.8,
-        peak_wrist_lift=0.8,
-        peak_elbow_angle=180.0,
+        prominence=prominence,
+        peak_wrist_lift=peak_wrist_lift,
+        peak_elbow_angle=peak_elbow_angle,
         coverage_ratio=coverage_ratio,
         opposite_coverage_ratio=opposite_coverage_ratio,
     )
@@ -95,6 +98,75 @@ def test_overlapping_events_with_600ms_peak_offset_form_two_bilateral_reps():
         ["left", "right"],
         ["left", "right"],
     ]
+
+
+def test_matched_events_keep_nonoverlapping_anchor_timeline():
+    left_events = [
+        _side_event("left", start_ms=0, peak_ms=1_000, end_ms=2_000),
+        _side_event("left", start_ms=2_200, peak_ms=3_000, end_ms=4_000),
+    ]
+    right_events = [
+        _side_event("right", start_ms=400, peak_ms=1_600, end_ms=2_600),
+        _side_event("right", start_ms=2_600, peak_ms=3_600, end_ms=4_600),
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert bilateral_count == 2
+    assert [
+        (
+            detail["start_ms"],
+            detail["peak_ms"],
+            detail["end_ms"],
+            detail["duration_ms"],
+        )
+        for detail in details
+    ] == [(0, 1_000, 2_000, 2_000), (2_200, 3_000, 4_000, 1_800)]
+    assert details[0]["end_ms"] < details[1]["start_ms"]
+    assert [detail["source_sides"] for detail in details] == [
+        ["left", "right"],
+        ["left", "right"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("matched_coverage", "expected_flags"),
+    [
+        pytest.param(0.79, ["low_confidence"], id="unreliable-bad-side"),
+        pytest.param(
+            0.9,
+            ["range_too_small", "elbow_not_extended"],
+            id="reliable-bad-side",
+        ),
+        pytest.param(
+            0.8,
+            ["range_too_small", "elbow_not_extended"],
+            id="exact-reliability-boundary",
+        ),
+    ],
+)
+def test_matched_side_quality_failures_require_reliable_coverage(
+    matched_coverage, expected_flags
+):
+    anchor = _side_event(
+        "left", start_ms=0, peak_ms=1_000, end_ms=2_000
+    )
+    matched = _side_event(
+        "right",
+        start_ms=0,
+        peak_ms=1_000,
+        end_ms=2_000,
+        prominence=0.1,
+        peak_wrist_lift=0.1,
+        peak_elbow_angle=120.0,
+        coverage_ratio=matched_coverage,
+    )
+
+    details, bilateral_count = _merge_events([anchor], [matched])
+
+    assert bilateral_count == 1
+    assert details[0]["source_sides"] == ["left", "right"]
+    assert details[0]["flags"] == expected_flags
 
 
 def test_more_populous_side_anchors_total_without_extra_unmatched_other_side():
@@ -586,8 +658,6 @@ def test_quality_flags_keep_fixed_order_and_counts_keep_invariant():
     result = analyze_shoulder_press_keypoints_v2(iter(frames))
 
     assert result["rep_details"][0]["flags"] == [
-        "range_too_small",
-        "elbow_not_extended",
         "tempo_abnormal",
         "low_confidence",
         "bilateral_mismatch",

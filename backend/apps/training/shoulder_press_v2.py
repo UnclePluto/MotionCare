@@ -284,23 +284,29 @@ def _timestamp(frame: dict[str, Any]) -> int:
     return int(round(timestamp))
 
 
-def _event_flags(events: tuple[SideEvent, ...]) -> list[str]:
+def _event_flags(
+    anchor_event: SideEvent, events: tuple[SideEvent, ...]
+) -> list[str]:
     flags = []
+    reliable_events = tuple(
+        event
+        for event in events
+        if event.coverage_ratio >= STANDARD_MIN_COVERAGE_RATIO
+    )
     if any(
         _below_threshold(event.peak_wrist_lift, STANDARD_MIN_WRIST_LIFT)
         or _below_threshold(event.prominence, STANDARD_MIN_PROMINENCE)
-        for event in events
+        for event in reliable_events
     ):
         flags.append("range_too_small")
     if any(
         _below_threshold(event.peak_elbow_angle, STANDARD_MIN_ELBOW_ANGLE)
-        for event in events
+        for event in reliable_events
     ):
         flags.append("elbow_not_extended")
 
-    start_ms = min(event.start_ms for event in events)
-    end_ms = max(event.end_ms for event in events)
-    if not STANDARD_MIN_DURATION_MS <= end_ms - start_ms <= STANDARD_MAX_DURATION_MS:
+    duration_ms = anchor_event.end_ms - anchor_event.start_ms
+    if not STANDARD_MIN_DURATION_MS <= duration_ms <= STANDARD_MAX_DURATION_MS:
         flags.append("tempo_abnormal")
     if any(event.coverage_ratio < STANDARD_MIN_COVERAGE_RATIO for event in events):
         flags.append("low_confidence")
@@ -309,16 +315,18 @@ def _event_flags(events: tuple[SideEvent, ...]) -> list[str]:
     return flags
 
 
-def _rep_detail(events: tuple[SideEvent, ...]) -> dict[str, Any]:
-    start_ms = min(event.start_ms for event in events)
-    peak_ms = round(sum(event.peak_ms for event in events) / len(events))
-    end_ms = max(event.end_ms for event in events)
-    flags = _event_flags(events)
+def _rep_detail(
+    *, anchor_event: SideEvent, matched_event: SideEvent | None
+) -> dict[str, Any]:
+    events = (
+        (anchor_event, matched_event) if matched_event else (anchor_event,)
+    )
+    flags = _event_flags(anchor_event, events)
     return {
-        "start_ms": start_ms,
-        "peak_ms": peak_ms,
-        "end_ms": end_ms,
-        "duration_ms": end_ms - start_ms,
+        "start_ms": anchor_event.start_ms,
+        "peak_ms": anchor_event.peak_ms,
+        "end_ms": anchor_event.end_ms,
+        "duration_ms": anchor_event.end_ms - anchor_event.start_ms,
         "source_sides": [event.side for event in events],
         "is_standard": not flags,
         "flags": flags,
@@ -380,10 +388,12 @@ def _merge_events(
                 other_index += 1
                 continue
             break
-        detail_events = (
-            (anchor_event, matched_event) if matched_event else (anchor_event,)
+        details.append(
+            _rep_detail(
+                anchor_event=anchor_event,
+                matched_event=matched_event,
+            )
         )
-        details.append(_rep_detail(detail_events))
     return details, bilateral_count
 
 
