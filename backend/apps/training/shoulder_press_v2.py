@@ -26,6 +26,12 @@ STANDARD_MIN_COVERAGE_RATIO = 0.8
 _monotonic = time.monotonic
 
 
+def _below_threshold(value: float, threshold: float) -> bool:
+    return value < threshold and not math.isclose(
+        value, threshold, rel_tol=0.0, abs_tol=1e-9
+    )
+
+
 @dataclass(frozen=True)
 class SideMeasurement:
     side: str
@@ -52,9 +58,14 @@ def _point(keypoints: dict[str, Any], name: str) -> tuple[float, float, float]:
     point = keypoints[name]
     x = float(point["x"])
     y = float(point["y"])
-    score = float(point["score"])
-    if not all(math.isfinite(value) for value in (x, y, score)):
+    if not all(math.isfinite(value) for value in (x, y)):
         raise ValueError
+    try:
+        score = float(point.get("score", 0.0))
+    except (TypeError, ValueError, OverflowError):
+        score = 0.0
+    if not math.isfinite(score):
+        score = 0.0
     return x, y, score
 
 
@@ -114,6 +125,7 @@ class SideEventDetector:
         self.candidate_reliable_frames = 0
         self.candidate_opposite_reliable_frames = 0
         self.last_valid_ms: int | None = None
+        self.missing_since_last_valid = False
         self.last_event_peak_ms: int | None = None
 
     def observe(
@@ -122,7 +134,14 @@ class SideEventDetector:
         *,
         opposite_valid: bool,
     ) -> SideEvent | None:
+        if (
+            self.missing_since_last_valid
+            and self.last_valid_ms is not None
+            and measurement.timestamp_ms - self.last_valid_ms > MAX_MISSING_GAP_MS
+        ):
+            self._clear_candidate()
         self.last_valid_ms = measurement.timestamp_ms
+        self.missing_since_last_valid = False
         self.window.append(measurement)
         cutoff_ms = measurement.timestamp_ms - SMOOTHING_WINDOW_MS
         while self.window and self.window[0].timestamp_ms < cutoff_ms:
@@ -139,7 +158,9 @@ class SideEventDetector:
 
         self._count_candidate_frame(measurement, opposite_valid)
         if self.phase == "seeking":
-            if smoothed_lift - self.trough_lift >= RISE_HYSTERESIS:
+            if not _below_threshold(
+                smoothed_lift - self.trough_lift, RISE_HYSTERESIS
+            ):
                 self.phase = "rising"
                 self.peak = measurement
                 self.peak_lift = smoothed_lift
@@ -149,10 +170,7 @@ class SideEventDetector:
             self.peak = measurement
             self.peak_lift = smoothed_lift
 
-        # 稀疏采样时 200 ms 窗口可能只含峰值与当前值；同时参考当前原始值，
-        # 避免中位数恰好落在二者中点而漏掉已经明确发生的回落。
-        fall_lift = min(smoothed_lift, measurement.wrist_lift)
-        if self.peak_lift - fall_lift < FALL_HYSTERESIS:
+        if _below_threshold(self.peak_lift - smoothed_lift, FALL_HYSTERESIS):
             return None
 
         event = self._complete_event(measurement.timestamp_ms)
@@ -160,6 +178,7 @@ class SideEventDetector:
         return event
 
     def observe_missing(self, timestamp_ms: int, *, opposite_valid: bool) -> None:
+        self.missing_since_last_valid = True
         if self.trough is None:
             return
         self.candidate_total_frames += 1
@@ -207,6 +226,7 @@ class SideEventDetector:
         self.candidate_reliable_frames = 0
         self.candidate_opposite_reliable_frames = 0
         self.last_valid_ms = None
+        self.missing_since_last_valid = False
 
     def _complete_event(self, end_ms: int) -> SideEvent | None:
         if self.trough is None or self.peak is None:
@@ -216,7 +236,9 @@ class SideEventDetector:
             self.last_event_peak_ms is None
             or self.peak.timestamp_ms - self.last_event_peak_ms >= MIN_EVENT_INTERVAL_MS
         )
-        if prominence < MIN_EVENT_PROMINENCE or not far_enough_from_previous:
+        if _below_threshold(
+            prominence, MIN_EVENT_PROMINENCE
+        ) or not far_enough_from_previous:
             return None
 
         total_frames = max(self.candidate_total_frames, 1)
@@ -250,12 +272,15 @@ def _timestamp(frame: dict[str, Any]) -> int:
 def _event_flags(events: tuple[SideEvent, ...]) -> list[str]:
     flags = []
     if any(
-        event.peak_wrist_lift < STANDARD_MIN_WRIST_LIFT
-        or event.prominence < STANDARD_MIN_PROMINENCE
+        _below_threshold(event.peak_wrist_lift, STANDARD_MIN_WRIST_LIFT)
+        or _below_threshold(event.prominence, STANDARD_MIN_PROMINENCE)
         for event in events
     ):
         flags.append("range_too_small")
-    if any(event.peak_elbow_angle < STANDARD_MIN_ELBOW_ANGLE for event in events):
+    if any(
+        _below_threshold(event.peak_elbow_angle, STANDARD_MIN_ELBOW_ANGLE)
+        for event in events
+    ):
         flags.append("elbow_not_extended")
 
     start_ms = min(event.start_ms for event in events)

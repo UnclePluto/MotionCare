@@ -48,7 +48,7 @@ def _triangle_sequence(*, fps, repetitions, period_seconds=3.0):
         yield _frame(timestamp_ms, lift, lift, source_fps=fps)
 
 
-@pytest.mark.parametrize("fps", [5.0, 10.0, 30.0])
+@pytest.mark.parametrize("fps", [5.0, 10.0, 30.0, 60.0])
 def test_counts_same_complete_cycles_at_different_frame_rates(fps):
     result = analyze_shoulder_press_keypoints_v2(
         _triangle_sequence(fps=fps, repetitions=3)
@@ -77,6 +77,24 @@ def test_does_not_count_leading_or_trailing_half_cycle():
     assert result["total_count"] == 0
 
 
+def test_high_fps_single_frame_drop_does_not_confirm_fall():
+    frames = (
+        _frame(timestamp_ms, lift, lift)
+        for timestamp_ms, lift in [
+            (0, 0.0),
+            (50, 0.2),
+            (100, 0.8),
+            (150, 0.8),
+            (200, 0.8),
+            (250, 0.0),
+        ]
+    )
+
+    result = analyze_shoulder_press_keypoints_v2(frames)
+
+    assert result["total_count"] == 0
+
+
 def test_low_amplitude_complete_cycle_counts_as_nonstandard():
     frames = (
         _frame(timestamp_ms, lift, lift)
@@ -86,6 +104,71 @@ def test_low_amplitude_complete_cycle_counts_as_nonstandard():
     assert result["total_count"] == 1
     assert result["nonstandard_count"] == 1
     assert "range_too_small" in result["rep_details"][0]["flags"]
+
+
+@pytest.mark.parametrize(
+    ("peak_lift", "expected_count"),
+    [
+        pytest.param(0.15, 1, id="equal-threshold"),
+        pytest.param(0.149, 0, id="below-threshold"),
+    ],
+)
+def test_event_prominence_threshold_boundary(peak_lift, expected_count):
+    frames = (
+        _frame(timestamp_ms, lift, lift)
+        for timestamp_ms, lift in [(0, 0.0), (400, peak_lift), (800, 0.0)]
+    )
+
+    result = analyze_shoulder_press_keypoints_v2(frames)
+
+    assert result["total_count"] == expected_count
+
+
+@pytest.mark.parametrize(
+    ("peak_difference_ms", "expected_total", "expected_bilateral"),
+    [
+        pytest.param(400, 1, 1, id="equal-threshold"),
+        pytest.param(401, 2, 0, id="above-threshold"),
+    ],
+)
+def test_bilateral_match_threshold_boundary(
+    peak_difference_ms, expected_total, expected_bilateral
+):
+    right_peak_ms = 400 + peak_difference_ms
+    frames = [
+        _frame(0, 0.0, 0.0),
+        _frame(400, 0.8, 0.0),
+        _frame(right_peak_ms, 0.0, 0.8),
+        _frame(right_peak_ms + 400, 0.0, 0.0),
+    ]
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert result["total_count"] == expected_total
+    assert result["bilateral_event_count"] == expected_bilateral
+
+
+@pytest.mark.parametrize(
+    ("duration_ms", "expected_tempo_flag"),
+    [
+        pytest.param(799, True, id="below-minimum"),
+        pytest.param(800, False, id="equal-minimum"),
+        pytest.param(8_000, False, id="equal-maximum"),
+        pytest.param(8_001, True, id="above-maximum"),
+    ],
+)
+def test_tempo_threshold_boundaries(duration_ms, expected_tempo_flag):
+    frames = [
+        _frame(0, 0.0, 0.0),
+        _frame(duration_ms // 2, 0.8, 0.8),
+        _frame(duration_ms, 0.0, 0.0),
+    ]
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert ("tempo_abnormal" in result["rep_details"][0]["flags"]) is (
+        expected_tempo_flag
+    )
 
 
 def test_short_missing_gap_keeps_candidate_but_long_gap_resets_it():
@@ -104,6 +187,19 @@ def test_short_missing_gap_keeps_candidate_but_long_gap_resets_it():
 
     assert analyze_shoulder_press_keypoints_v2(iter(short_gap))["total_count"] == 1
     assert analyze_shoulder_press_keypoints_v2(iter(long_gap))["total_count"] == 0
+
+
+def test_first_measurement_after_long_missing_gap_starts_a_new_candidate():
+    frames = [
+        _frame(0, 0.0, 0.0),
+        _frame(400, 0.8, 0.8),
+        {"timestamp_ms": 500, "source_fps": 10.0, "keypoints": {}},
+        _frame(1000, 0.0, 0.0),
+    ]
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert result["total_count"] == 0
 
 
 def test_merges_synchronized_sides_and_marks_visible_unmatched_side():
@@ -132,7 +228,16 @@ def test_quality_failures_do_not_remove_completed_repetition():
     bent_peak["keypoints"]["left_elbow"].update(x=0.25, y=0.4)
     bent_peak["keypoints"]["right_elbow"].update(x=0.75, y=0.4)
     bent = [_frame(0, 0.0, 0.0), bent_peak, _frame(800, 0.0, 0.0)]
-    fast = [_frame(0, 0.0, 0.0), _frame(200, 0.8, 0.8), _frame(400, 0.0, 0.0)]
+    fast = [
+        _frame(0, 0.0, 0.0),
+        _frame(50, 0.2, 0.2),
+        _frame(100, 0.8, 0.8),
+        _frame(150, 0.8, 0.8),
+        _frame(200, 0.8, 0.8),
+        _frame(250, 0.4, 0.4),
+        _frame(300, 0.0, 0.0),
+        _frame(350, 0.0, 0.0),
+    ]
     unreliable = [
         _frame(0, 0.0, 0.0),
         _frame(200, 0.4, 0.4, left_score=0.3, right_score=0.3),
@@ -151,6 +256,73 @@ def test_quality_failures_do_not_remove_completed_repetition():
         assert result["total_count"] == 1
         assert result["nonstandard_count"] == 1
         assert expected_flag in result["rep_details"][0]["flags"]
+
+
+def test_quality_flags_keep_fixed_order_and_counts_keep_invariant():
+    samples = [
+        (0, 0.0, 0.95),
+        (50, 0.05, 0.3),
+        (100, 0.18, 0.3),
+        (150, 0.18, 0.95),
+        (200, 0.18, 0.95),
+        (250, 0.05, 0.3),
+        (300, 0.0, 0.95),
+        (350, 0.0, 0.95),
+    ]
+    frames = []
+    for timestamp_ms, left_lift, left_score in samples:
+        frame = _frame(
+            timestamp_ms,
+            left_lift,
+            0.0,
+            left_score=left_score,
+        )
+        if left_lift:
+            frame["keypoints"]["left_elbow"].update(x=0.25, y=0.4)
+        frames.append(frame)
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert result["rep_details"][0]["flags"] == [
+        "range_too_small",
+        "elbow_not_extended",
+        "tempo_abnormal",
+        "low_confidence",
+        "bilateral_mismatch",
+    ]
+    assert result["total_count"] == 1
+    assert result["standard_count"] == 0
+    assert result["nonstandard_count"] == 1
+    assert result["total_count"] == (
+        result["standard_count"] + result["nonstandard_count"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("invalid_score", "remove_score"),
+    [
+        pytest.param(None, True, id="missing"),
+        pytest.param("not-a-number", False, id="non-numeric"),
+        pytest.param(math.nan, False, id="nan"),
+        pytest.param(math.inf, False, id="infinity"),
+    ],
+)
+def test_invalid_scores_remain_measurable_but_are_unreliable(
+    invalid_score, remove_score
+):
+    peak = _frame(400, 0.8, 0.8)
+    for point in peak["keypoints"].values():
+        if remove_score:
+            point.pop("score")
+        else:
+            point["score"] = invalid_score
+    frames = [_frame(0, 0.0, 0.0), peak, _frame(800, 0.0, 0.0)]
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert result["total_count"] == 1
+    assert result["keypoint_coverage_ratio"] == pytest.approx(2 / 3)
+    assert "low_confidence" in result["rep_details"][0]["flags"]
 
 
 class OneShotFrames:
