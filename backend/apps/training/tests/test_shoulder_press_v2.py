@@ -6,9 +6,11 @@ import pytest
 from apps.training import shoulder_press_v2
 from apps.training.pose_inference import MotionAnalysisInferenceError
 from apps.training.shoulder_press_v2 import (
+    SideEvent,
     SideEventDetector,
     SideMeasurement,
     _below_threshold,
+    _merge_events,
     analyze_shoulder_press_keypoints_v2,
 )
 
@@ -51,6 +53,208 @@ def _triangle_sequence(*, fps, repetitions, period_seconds=3.0):
         phase = (timestamp_ms / 1000 % period_seconds) / period_seconds
         lift = 1.6 * phase if phase <= 0.5 else 1.6 * (1 - phase)
         yield _frame(timestamp_ms, lift, lift, source_fps=fps)
+
+
+def _side_event(
+    side,
+    *,
+    start_ms,
+    peak_ms,
+    end_ms,
+    coverage_ratio=1.0,
+    opposite_coverage_ratio=1.0,
+):
+    return SideEvent(
+        side=side,
+        start_ms=start_ms,
+        peak_ms=peak_ms,
+        end_ms=end_ms,
+        prominence=0.8,
+        peak_wrist_lift=0.8,
+        peak_elbow_angle=180.0,
+        coverage_ratio=coverage_ratio,
+        opposite_coverage_ratio=opposite_coverage_ratio,
+    )
+
+
+def test_overlapping_events_with_600ms_peak_offset_form_two_bilateral_reps():
+    left_events = [
+        _side_event("left", start_ms=0, peak_ms=1_000, end_ms=2_000),
+        _side_event("left", start_ms=3_000, peak_ms=4_000, end_ms=5_000),
+    ]
+    right_events = [
+        _side_event("right", start_ms=0, peak_ms=1_600, end_ms=2_000),
+        _side_event("right", start_ms=3_000, peak_ms=4_600, end_ms=5_000),
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert len(details) == 2
+    assert bilateral_count == 2
+    assert [detail["source_sides"] for detail in details] == [
+        ["left", "right"],
+        ["left", "right"],
+    ]
+
+
+def test_more_populous_side_anchors_total_without_extra_unmatched_other_side():
+    left_events = [
+        _side_event("left", start_ms=0, peak_ms=1_000, end_ms=2_000),
+        _side_event("left", start_ms=6_000, peak_ms=7_000, end_ms=8_000),
+    ]
+    right_events = [
+        _side_event("right", start_ms=0, peak_ms=1_000, end_ms=2_000),
+        _side_event("right", start_ms=2_000, peak_ms=3_000, end_ms=4_000),
+        _side_event("right", start_ms=4_000, peak_ms=5_000, end_ms=6_000),
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert len(details) == 3
+    assert bilateral_count == 1
+    assert [detail["peak_ms"] for detail in details] == [1_000, 3_000, 5_000]
+
+
+def test_equal_counts_use_side_with_higher_average_coverage_as_anchor():
+    left_events = [
+        _side_event(
+            "left",
+            start_ms=0,
+            peak_ms=1_000,
+            end_ms=2_000,
+            coverage_ratio=0.8,
+            opposite_coverage_ratio=0.0,
+        ),
+        _side_event(
+            "left",
+            start_ms=2_000,
+            peak_ms=3_000,
+            end_ms=4_000,
+            coverage_ratio=0.8,
+            opposite_coverage_ratio=0.0,
+        ),
+    ]
+    right_events = [
+        _side_event(
+            "right",
+            start_ms=9_000,
+            peak_ms=10_000,
+            end_ms=11_000,
+            coverage_ratio=0.9,
+            opposite_coverage_ratio=0.0,
+        ),
+        _side_event(
+            "right",
+            start_ms=11_000,
+            peak_ms=12_000,
+            end_ms=13_000,
+            coverage_ratio=0.9,
+            opposite_coverage_ratio=0.0,
+        ),
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert bilateral_count == 0
+    assert [detail["peak_ms"] for detail in details] == [10_000, 12_000]
+
+
+def test_equal_counts_and_coverage_choose_left_as_deterministic_anchor():
+    left_events = [
+        _side_event(
+            "left",
+            start_ms=0,
+            peak_ms=1_000,
+            end_ms=2_000,
+            opposite_coverage_ratio=0.0,
+        )
+    ]
+    right_events = [
+        _side_event(
+            "right",
+            start_ms=9_000,
+            peak_ms=10_000,
+            end_ms=11_000,
+            opposite_coverage_ratio=0.0,
+        )
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert bilateral_count == 0
+    assert len(details) == 1
+    assert details[0]["peak_ms"] == 1_000
+    assert details[0]["source_sides"] == ["left"]
+
+
+@pytest.mark.parametrize(
+    (
+        "right_start_ms",
+        "right_peak_ms",
+        "right_end_ms",
+        "expected_bilateral_count",
+    ),
+    [
+        pytest.param(1_000, 1_800, 3_000, 1, id="800ms-and-exactly-half-overlap"),
+        pytest.param(0, 1_801, 2_000, 0, id="801ms-despite-full-overlap"),
+        pytest.param(1_001, 1_800, 3_001, 0, id="just-below-half-overlap"),
+    ],
+)
+def test_extended_bilateral_match_boundaries(
+    right_start_ms,
+    right_peak_ms,
+    right_end_ms,
+    expected_bilateral_count,
+):
+    left_events = [
+        _side_event("left", start_ms=0, peak_ms=1_000, end_ms=2_000)
+    ]
+    right_events = [
+        _side_event(
+            "right",
+            start_ms=right_start_ms,
+            peak_ms=right_peak_ms,
+            end_ms=right_end_ms,
+        )
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert len(details) == 1
+    assert bilateral_count == expected_bilateral_count
+    assert (details[0]["source_sides"] == ["left", "right"]) is (
+        expected_bilateral_count == 1
+    )
+
+
+def test_analysis_total_uses_larger_side_count_and_keeps_count_invariants():
+    frames = [
+        _frame(0, 0.0, 0.0),
+        _frame(400, 0.8, 0.8),
+        _frame(800, 0.0, 0.0),
+        _frame(1_200, 0.0, 0.0),
+        _frame(1_600, 0.0, 0.8),
+        _frame(2_000, 0.0, 0.0),
+        _frame(2_400, 0.0, 0.0),
+        _frame(2_800, 0.0, 0.8),
+        _frame(3_200, 0.0, 0.0),
+        _frame(4_400, 0.0, 0.0),
+        _frame(4_800, 0.8, 0.0),
+        _frame(5_200, 0.0, 0.0),
+    ]
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert result["left_event_count"] == 2
+    assert result["right_event_count"] == 3
+    assert result["total_count"] == 3
+    assert len(result["rep_details"]) == 3
+    assert result["bilateral_event_count"] == 1
+    assert result["bilateral_event_count"] <= min(
+        result["left_event_count"], result["right_event_count"]
+    )
+    assert result["bilateral_agreement_ratio"] == pytest.approx(1 / 3)
+    assert result["standard_count"] + result["nonstandard_count"] == 3
 
 
 @pytest.mark.parametrize("fps", [5.0, 10.0, 30.0, 60.0])
@@ -182,7 +386,7 @@ def test_fall_hysteresis_rejects_value_below_threshold_then_accepts_exact_bounda
     ("peak_difference_ms", "expected_total", "expected_bilateral"),
     [
         pytest.param(400, 1, 1, id="equal-threshold"),
-        pytest.param(401, 2, 0, id="above-threshold"),
+        pytest.param(401, 1, 1, id="above-primary-window-with-overlap"),
     ],
 )
 def test_bilateral_match_threshold_boundary(

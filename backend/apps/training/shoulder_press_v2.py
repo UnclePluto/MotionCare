@@ -17,6 +17,7 @@ MIN_EVENT_PROMINENCE = 0.15
 MIN_EVENT_INTERVAL_MS = 800
 MAX_MISSING_GAP_MS = 300
 BILATERAL_MATCH_WINDOW_MS = 400
+BILATERAL_OVERLAP_MATCH_WINDOW_MS = 800
 STANDARD_MIN_WRIST_LIFT = 0.55
 STANDARD_MIN_PROMINENCE = 0.20
 STANDARD_MIN_ELBOW_ANGLE = 150.0
@@ -324,37 +325,63 @@ def _rep_detail(events: tuple[SideEvent, ...]) -> dict[str, Any]:
     }
 
 
+def _events_match(first: SideEvent, second: SideEvent) -> bool:
+    peak_difference_ms = abs(first.peak_ms - second.peak_ms)
+    if peak_difference_ms <= BILATERAL_MATCH_WINDOW_MS:
+        return True
+    overlap_ms = max(
+        0,
+        min(first.end_ms, second.end_ms) - max(first.start_ms, second.start_ms),
+    )
+    shorter_duration_ms = min(
+        first.end_ms - first.start_ms,
+        second.end_ms - second.start_ms,
+    )
+    return (
+        peak_difference_ms <= BILATERAL_OVERLAP_MATCH_WINDOW_MS
+        and overlap_ms * 2 >= shorter_duration_ms
+    )
+
+
 def _merge_events(
     left_events: list[SideEvent], right_events: list[SideEvent]
 ) -> tuple[list[dict[str, Any]], int]:
+    left_average_coverage = sum(
+        event.coverage_ratio for event in left_events
+    ) / max(len(left_events), 1)
+    right_average_coverage = sum(
+        event.coverage_ratio for event in right_events
+    ) / max(len(right_events), 1)
+    if len(right_events) > len(left_events) or (
+        len(right_events) == len(left_events)
+        and right_average_coverage > left_average_coverage
+    ):
+        anchor_events = right_events
+        other_events = left_events
+    else:
+        anchor_events = left_events
+        other_events = right_events
+
     details = []
     bilateral_count = 0
-    left_index = 0
-    right_index = 0
-    while left_index < len(left_events) or right_index < len(right_events):
-        if left_index >= len(left_events):
-            details.append(_rep_detail((right_events[right_index],)))
-            right_index += 1
-            continue
-        if right_index >= len(right_events):
-            details.append(_rep_detail((left_events[left_index],)))
-            left_index += 1
-            continue
-
-        left_event = left_events[left_index]
-        right_event = right_events[right_index]
-        peak_difference = left_event.peak_ms - right_event.peak_ms
-        if abs(peak_difference) <= BILATERAL_MATCH_WINDOW_MS:
-            details.append(_rep_detail((left_event, right_event)))
-            bilateral_count += 1
-            left_index += 1
-            right_index += 1
-        elif peak_difference < 0:
-            details.append(_rep_detail((left_event,)))
-            left_index += 1
-        else:
-            details.append(_rep_detail((right_event,)))
-            right_index += 1
+    other_index = 0
+    for anchor_event in anchor_events:
+        matched_event = None
+        while other_index < len(other_events):
+            other_event = other_events[other_index]
+            if _events_match(anchor_event, other_event):
+                matched_event = other_event
+                other_index += 1
+                bilateral_count += 1
+                break
+            if other_event.peak_ms < anchor_event.peak_ms:
+                other_index += 1
+                continue
+            break
+        detail_events = (
+            (anchor_event, matched_event) if matched_event else (anchor_event,)
+        )
+        details.append(_rep_detail(detail_events))
     return details, bilateral_count
 
 
