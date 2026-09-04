@@ -682,7 +682,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     active_prescription,
 ):
     job, video, record = _analysis_job(project_patient, active_prescription)
-    job.algorithm_version = "test-analyzer-v2"
+    job.algorithm_version = PP_TINYPOSE_MODEL_NAME
     job.rule_version = SHOULDER_PRESS_RULE_VERSION
     job.save(update_fields=["algorithm_version", "rule_version", "updated_at"])
     seen_paths = []
@@ -737,7 +737,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
             "apps.training.tasks.get_motion_analyzer_for_versions",
             return_value=MotionAnalyzer(
                 source_key=SHOULDER_PRESS_SOURCE_KEY,
-                algorithm_version="test-analyzer-v2",
+                algorithm_version=PP_TINYPOSE_MODEL_NAME,
                 rule_version=SHOULDER_PRESS_RULE_VERSION,
                 analyze_keypoints=analyze_frames,
             ),
@@ -758,12 +758,16 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
     assert job.result_payload["total_count"] == 2
     assert job.result_payload["standard_count"] == 1
     assert job.result_payload["nonstandard_count"] == 1
-    assert job.result_payload["algorithm_version"] == "test-analyzer-v2"
+    assert job.result_payload["algorithm_version"] == PP_TINYPOSE_MODEL_NAME
+    assert (
+        job.result_payload["resolved_algorithm_version"]
+        == PP_TINYPOSE_MODEL_NAME
+    )
     assert job.result_payload["rule_version"] == SHOULDER_PRESS_RULE_VERSION
     assert job.result_payload["processed_frames"] == 2
     assert job.result_payload["source_fps"] == pytest.approx(29.763)
     assert job.result_payload["analysis_elapsed_ms"] >= 0
-    assert job.algorithm_version == "test-analyzer-v2"
+    assert job.algorithm_version == PP_TINYPOSE_MODEL_NAME
     assert job.rule_version == SHOULDER_PRESS_RULE_VERSION
     assert job.failure_reason == ""
     assert fake_stream.closed is True
@@ -881,7 +885,11 @@ def test_task_runs_historical_v1_with_its_pinned_versions(
     assert job.status == MotionAnalysisJob.Status.SUCCEEDED
     assert job.algorithm_version == ""
     assert job.rule_version == "shoulder-press-v1"
-    assert job.result_payload["algorithm_version"] == PP_TINYPOSE_MODEL_NAME
+    assert job.result_payload["algorithm_version"] == ""
+    assert (
+        job.result_payload["resolved_algorithm_version"]
+        == PP_TINYPOSE_MODEL_NAME
+    )
     assert job.result_payload["rule_version"] == "shoulder-press-v1"
     assert job.result_payload["rep_details"][0]["side"] == "bilateral"
     assert "source_sides" not in job.result_payload["rep_details"][0]

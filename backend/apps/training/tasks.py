@@ -247,8 +247,9 @@ def run_motion_analysis_job(job_id):
             result = analyzer.analyze_keypoints(stream)
         result = {
             **result,
-            "algorithm_version": analyzer.algorithm_version,
-            "rule_version": analyzer.rule_version,
+            "algorithm_version": job.algorithm_version,
+            "resolved_algorithm_version": analyzer.algorithm_version,
+            "rule_version": job.rule_version,
             "processed_frames": stream.inferred_frame_count,
             "source_fps": stream.source_fps,
             "analysis_elapsed_ms": round(
