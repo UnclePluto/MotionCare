@@ -2,7 +2,6 @@ import os
 
 from django.core.exceptions import ImproperlyConfigured
 
-
 def env_bool(name, *, default=False):
     raw_value = os.getenv(name)
     if raw_value is None:

@@ -547,7 +547,8 @@ def create_analysis_job(*, video, requested_by):
     if locked_video.status != TrainingVideo.Status.ATTACHED or not locked_video.training_record_id:
         raise ValidationError("训练视频尚未绑定训练记录")
     source_key = locked_video.prescription_action.action_library_item.source_key
-    if get_motion_analyzer(source_key) is None:
+    analyzer = get_motion_analyzer(source_key)
+    if analyzer is None:
         raise ValidationError("不支持当前动作分析")
     if MotionAnalysisJob.objects.filter(
         training_video=locked_video,
@@ -563,6 +564,8 @@ def create_analysis_job(*, video, requested_by):
                 project_patient=locked_video.project_patient,
                 prescription_action=locked_video.prescription_action,
                 requested_by=requested_by,
+                algorithm_version=analyzer.algorithm_version,
+                rule_version=analyzer.rule_version,
             )
     except IntegrityError as exc:
         raise ValidationError("已有进行中的分析任务") from exc

@@ -7,7 +7,10 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
-from config.environment import env_bool, validate_wechat_miniapp_settings
+from config.environment import (
+    env_bool,
+    validate_wechat_miniapp_settings,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ROOT_DIR = BASE_DIR.parent
@@ -230,7 +233,6 @@ MOTION_ANALYSIS_DOWNLOAD_TIMEOUT_SECONDS = int(
 MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS = int(
     os.getenv("MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS", "900")
 )
-MOTION_ANALYSIS_SAMPLE_FPS = float(os.getenv("MOTION_ANALYSIS_SAMPLE_FPS", "5"))
 MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS = int(
     os.getenv("MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS", "7200")
 )

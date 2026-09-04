@@ -64,6 +64,15 @@ def test_env_bool_does_not_echo_unknown_environment_value(monkeypatch):
     assert sensitive_value not in str(exc_info.value)
 
 
+def test_motion_analysis_sampling_is_not_runtime_configurable():
+    assert not hasattr(settings, "MOTION_ANALYSIS_SAMPLE_FPS")
+    for example_path in (
+        settings.ROOT_DIR / ".env.example",
+        settings.ROOT_DIR / "deploy" / "env.production.example",
+    ):
+        assert "MOTION_ANALYSIS_SAMPLE_FPS" not in dotenv_values(example_path)
+
+
 def test_local_vite_origins_are_trusted_for_csrf():
     assert "http://127.0.0.1:5173" in settings.CSRF_TRUSTED_ORIGINS
     assert "http://localhost:5173" in settings.CSRF_TRUSTED_ORIGINS

@@ -1,5 +1,8 @@
 import importlib
 import json
+import math
+import time
+from dataclasses import dataclass
 from statistics import mean
 
 
@@ -25,6 +28,14 @@ class MotionAnalysisDependencyError(RuntimeError):
 
 class MotionAnalysisInferenceError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class VideoKeypointExtraction:
+    frames: list[dict]
+    decoded_frame_count: int
+    inferred_frame_count: int
+    source_fps: float
 
 
 def load_motion_analysis_runtime():
@@ -101,6 +112,210 @@ def _first_prediction(model, frame):
         raise MotionAnalysisInferenceError("PP-TinyPose 未返回推理结果") from exc
 
 
+def _next_sample_cursor_ms(timestamp_ms, interval_ms):
+    threshold_ms = timestamp_ms + 0.5
+    if not math.isfinite(threshold_ms) or not math.isfinite(interval_ms):
+        return math.inf
+    interval_index = threshold_ms / interval_ms
+    if not math.isfinite(interval_index):
+        return math.inf
+    next_sample_ms = (math.floor(interval_index) + 1) * interval_ms
+    if not math.isfinite(next_sample_ms) or next_sample_ms <= threshold_ms:
+        return math.inf
+    return next_sample_ms
+
+
+class VideoKeypointStream:
+    def __init__(self, *, capture, model, sample_fps, source_fps):
+        self.capture = capture
+        self.model = model
+        self.sample_fps = sample_fps
+        self._source_fps = source_fps
+        self._decoded_frame_count = 0
+        self._inferred_frame_count = 0
+        self._inference_seconds = 0.0
+        self._next_sample_ms = 0.0
+        self._last_timestamp_ms = -1.0
+        self._last_output_timestamp_ms = -1
+        self._closed = False
+
+    @property
+    def source_fps(self):
+        return self._source_fps
+
+    @property
+    def decoded_frame_count(self):
+        return self._decoded_frame_count
+
+    @property
+    def inferred_frame_count(self):
+        return self._inferred_frame_count
+
+    @property
+    def inference_seconds(self):
+        return self._inference_seconds
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._closed:
+            raise StopIteration
+        try:
+            while True:
+                ok, frame = self.capture.read()
+                if not ok:
+                    self.close()
+                    if self._inferred_frame_count == 0:
+                        raise MotionAnalysisInferenceError("训练视频没有可分析帧")
+                    raise StopIteration
+
+                frame_index = self._decoded_frame_count
+                self._decoded_frame_count += 1
+                timestamp_ms = float(self.capture.get(CAP_PROP_POS_MSEC) or 0.0)
+                fallback_timestamp_ms = frame_index * 1000.0 / self._source_fps
+                if not math.isfinite(timestamp_ms):
+                    timestamp_ms = fallback_timestamp_ms
+                if timestamp_ms <= 0 and frame_index:
+                    timestamp_ms = fallback_timestamp_ms
+                if timestamp_ms <= self._last_timestamp_ms:
+                    timestamp_ms = max(
+                        fallback_timestamp_ms,
+                        self._last_timestamp_ms + 1000.0 / self._source_fps,
+                    )
+                self._last_timestamp_ms = timestamp_ms
+                if (
+                    self.sample_fps is not None
+                    and timestamp_ms + 0.5 < self._next_sample_ms
+                ):
+                    continue
+
+                try:
+                    frame_height, frame_width = frame.shape[:2]
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise MotionAnalysisInferenceError("视频帧尺寸无效") from exc
+                inference_started = time.monotonic()
+                prediction = _first_prediction(self.model, frame)
+                self._inference_seconds += time.monotonic() - inference_started
+                self._inferred_frame_count += 1
+                if self.sample_fps is not None:
+                    interval_ms = 1000.0 / self.sample_fps
+                    self._next_sample_ms = _next_sample_cursor_ms(
+                        timestamp_ms,
+                        interval_ms,
+                    )
+                output_timestamp_ms = int(round(timestamp_ms))
+                if output_timestamp_ms <= self._last_output_timestamp_ms:
+                    output_timestamp_ms = self._last_output_timestamp_ms + 1
+                self._last_output_timestamp_ms = output_timestamp_ms
+                return {
+                    "timestamp_ms": output_timestamp_ms,
+                    "source_fps": self._source_fps,
+                    "keypoints": convert_paddlex_result(
+                        prediction,
+                        frame_width=frame_width,
+                        frame_height=frame_height,
+                    ),
+                }
+        except Exception:
+            self.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+        return False
+
+    def close(self):
+        if not self._closed:
+            self.capture.release()
+            self._closed = True
+
+
+def open_video_keypoint_stream(
+    video_path,
+    *,
+    sample_fps=DEFAULT_SAMPLE_FPS,
+    model=None,
+    capture=None,
+):
+    if sample_fps is not None and (
+        not math.isfinite(sample_fps) or sample_fps <= 0
+    ):
+        raise ValueError("sample_fps 必须大于 0 或为 None")
+
+    cv2 = None
+    if model is None or capture is None:
+        cv2, _ = load_motion_analysis_runtime()
+    if model is None:
+        model = create_pose_model()
+    if capture is None:
+        capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        capture.release()
+        raise MotionAnalysisInferenceError("训练视频无法解码")
+
+    fallback_fps = sample_fps or DEFAULT_SAMPLE_FPS
+    source_fps = float(capture.get(CAP_PROP_FPS) or fallback_fps)
+    if not math.isfinite(source_fps) or source_fps <= 0:
+        source_fps = fallback_fps
+    return VideoKeypointStream(
+        capture=capture,
+        model=model,
+        sample_fps=sample_fps,
+        source_fps=source_fps,
+    )
+
+
+def create_pose_model(*, device="cpu"):
+    _, create_model = load_motion_analysis_runtime()
+    return create_model(
+        model_name=PP_TINYPOSE_MODEL_NAME,
+        device=device,
+        use_hpip=False,
+    )
+
+
+def warm_up_pose_model(video_path, *, model, capture=None):
+    cv2 = None
+    if capture is None:
+        cv2, _ = load_motion_analysis_runtime()
+        capture = cv2.VideoCapture(str(video_path))
+    try:
+        if not capture.isOpened():
+            raise MotionAnalysisInferenceError("训练视频无法解码")
+        ok, frame = capture.read()
+        if not ok:
+            raise MotionAnalysisInferenceError("训练视频没有可分析帧")
+        _first_prediction(model, frame)
+    finally:
+        capture.release()
+
+
+def extract_video_keypoint_frames_with_stats(
+    video_path,
+    *,
+    sample_fps=DEFAULT_SAMPLE_FPS,
+    model=None,
+    capture=None,
+):
+    with open_video_keypoint_stream(
+        video_path,
+        sample_fps=sample_fps,
+        model=model,
+        capture=capture,
+    ) as stream:
+        frames = list(stream)
+    return VideoKeypointExtraction(
+        frames=frames,
+        decoded_frame_count=stream.decoded_frame_count,
+        inferred_frame_count=stream.inferred_frame_count,
+        source_fps=stream.source_fps,
+    )
+
+
 def extract_video_keypoint_frames(
     video_path,
     *,
@@ -108,58 +323,9 @@ def extract_video_keypoint_frames(
     model=None,
     capture=None,
 ):
-    if sample_fps <= 0:
-        raise ValueError("sample_fps 必须大于 0")
-
-    cv2 = None
-    create_model = None
-    if model is None or capture is None:
-        cv2, create_model = load_motion_analysis_runtime()
-    if model is None:
-        model = create_model(PP_TINYPOSE_MODEL_NAME)
-    if capture is None:
-        capture = cv2.VideoCapture(str(video_path))
-
-    try:
-        if not capture.isOpened():
-            raise MotionAnalysisInferenceError("训练视频无法解码")
-        source_fps = float(capture.get(CAP_PROP_FPS) or sample_fps)
-        sample_interval_ms = 1000.0 / sample_fps
-        next_sample_ms = 0.0
-        frame_index = 0
-        frames = []
-
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            timestamp_ms = float(capture.get(CAP_PROP_POS_MSEC) or 0.0)
-            if timestamp_ms <= 0 and frame_index:
-                timestamp_ms = frame_index * 1000.0 / source_fps
-            frame_index += 1
-            if timestamp_ms + 0.5 < next_sample_ms:
-                continue
-
-            try:
-                frame_height, frame_width = frame.shape[:2]
-            except (AttributeError, TypeError, ValueError) as exc:
-                raise MotionAnalysisInferenceError("视频帧尺寸无效") from exc
-            result = _first_prediction(model, frame)
-            frames.append(
-                {
-                    "timestamp_ms": int(round(timestamp_ms)),
-                    "keypoints": convert_paddlex_result(
-                        result,
-                        frame_width=frame_width,
-                        frame_height=frame_height,
-                    ),
-                }
-            )
-            while next_sample_ms <= timestamp_ms + 0.5:
-                next_sample_ms += sample_interval_ms
-
-        if not frames:
-            raise MotionAnalysisInferenceError("训练视频没有可分析帧")
-        return frames
-    finally:
-        capture.release()
+    return extract_video_keypoint_frames_with_stats(
+        video_path,
+        sample_fps=sample_fps,
+        model=model,
+        capture=capture,
+    ).frames

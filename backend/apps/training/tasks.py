@@ -10,9 +10,9 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .analysis_registry import get_motion_analyzer
+from .analysis_registry import get_motion_analyzer_for_versions
 from .models import MotionAnalysisJob
-from .pose_inference import extract_video_keypoint_frames
+from .pose_inference import open_video_keypoint_stream
 from .video_services import create_private_download_url
 
 
@@ -149,7 +149,7 @@ def _validated_counts(result):
     return total, standard, nonstandard
 
 
-def _persist_success(job_id, result, algorithm_version):
+def _persist_success(job_id, result):
     total, standard, nonstandard = _validated_counts(result)
     now = timezone.now()
     MotionAnalysisJob.objects.filter(
@@ -157,7 +157,6 @@ def _persist_success(job_id, result, algorithm_version):
         status=MotionAnalysisJob.Status.RUNNING,
     ).update(
         status=MotionAnalysisJob.Status.SUCCEEDED,
-        algorithm_version=algorithm_version,
         total_count=total,
         standard_count=standard,
         nonstandard_count=nonstandard,
@@ -213,9 +212,13 @@ def run_motion_analysis_job(job_id):
     stage = "选择分析器"
     try:
         source_key = job.prescription_action.action_library_item.source_key
-        analyzer = get_motion_analyzer(source_key)
+        analyzer = get_motion_analyzer_for_versions(
+            source_key,
+            job.algorithm_version,
+            job.rule_version,
+        )
         if analyzer is None:
-            raise ValueError("不支持当前动作分析")
+            raise ValueError("分析任务版本组合不受支持")
 
         stage = "生成下载地址"
         private_url = create_private_download_url(job.training_video)
@@ -235,15 +238,26 @@ def run_motion_analysis_job(job_id):
             max_bytes=job.training_video.size_bytes,
             deadline_seconds=settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS,
         )
-        stage = "关键点推理"
-        frames = extract_video_keypoint_frames(
+        stage = "关键点推理与规则分析"
+        analysis_started = time.monotonic()
+        with open_video_keypoint_stream(
             temporary_path,
-            sample_fps=settings.MOTION_ANALYSIS_SAMPLE_FPS,
-        )
-        stage = "规则分析"
-        result = analyzer.analyze_keypoints(frames)
+            sample_fps=analyzer.fixed_sample_fps,
+        ) as stream:
+            result = analyzer.analyze_keypoints(stream)
+        result = {
+            **result,
+            "algorithm_version": job.algorithm_version,
+            "resolved_algorithm_version": analyzer.algorithm_version,
+            "rule_version": job.rule_version,
+            "processed_frames": stream.inferred_frame_count,
+            "source_fps": stream.source_fps,
+            "analysis_elapsed_ms": round(
+                (time.monotonic() - analysis_started) * 1000
+            ),
+        }
         stage = "保存结果"
-        return _persist_success(job.id, result, analyzer.algorithm_version)
+        return _persist_success(job.id, result)
     except Exception as exc:
         return _persist_failure(job.id, _safe_failure_reason(stage, exc))
     finally:

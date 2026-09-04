@@ -3,6 +3,7 @@
 > 范围：在独立 CPU 服务器上原生部署 PP-TinyPose，并使用本地 5 分钟肩部推举视频完成 5 FPS、10 FPS、全帧三组冒烟对照
 > 关联：`docs/superpowers/specs/2026-07-11-shoulder-press-segmented-server-upload-design.md`
 > 实施基线 commit：8e6f3c2
+> 最终审查纠正（2026-09-03, Codex）：OpenCV 直接依赖统一为 PaddleX 兼容的 `opencv-contrib-python==4.10.0.84`，报告读取实际 `cv2.__version__`；不改变模型、三档采样或硬验收规则。
 
 # PP-TinyPose 独立算法服务器冒烟测试设计
 
@@ -110,7 +111,7 @@ MotionCare 已具备肩部推举视频分析的业务代码：PP-TinyPose 输出
 
 - `paddlepaddle==3.3.0` CPU 版
 - `paddlex[cv]==3.7.2`
-- `opencv-python-headless>=4.10,<5.0`
+- `opencv-contrib-python==4.10.0.84`（唯一直接 OpenCV provider，与 PaddleX `cv` extra 的约束一致）
 - MotionCare backend 当前包及其必要依赖
 
 系统依赖至少包含：
@@ -185,7 +186,7 @@ JSON 报告必须包含：
 
 - 报告格式版本；
 - 运行开始与结束时间；
-- Git commit、Python、PaddlePaddle、PaddleX、OpenCV 和 FFmpeg 版本；
+- Git commit、Python、PaddlePaddle、PaddleX、实际导入的 `cv2.__version__` 和 FFmpeg 版本；
 - CPU 型号、vCPU 数、物理内存、Swap 总量；
 - 视频 SHA-256、字节数、时长、编码、分辨率、标称和平均帧率；
 - 模型名、设备和模型加载/预热耗时；
