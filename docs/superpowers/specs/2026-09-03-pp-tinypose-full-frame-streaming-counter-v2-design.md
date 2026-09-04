@@ -3,8 +3,9 @@
 > 范围：将肩部推举视频分析升级为 PP-TinyPose 全帧流式推理和按时间语义计数 v2，按单条最长 60 分钟、单并发部署
 > 关联：`docs/superpowers/specs/2026-09-03-pp-tinypose-algorithm-server-smoke-test-design.md`、`docs/superpowers/specs/2026-07-08-shoulder-press-video-analysis-design.md`
 > 实施基线 commit：77b0166
-> 最终实现 commit：de56352ce93a987d0d8e0972d64fab6045567963
-> 远端验收：run_id `20260904T045247Z`，5 FPS / 10 FPS / 全帧均为 90 次并通过算法与资源门槛；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
+> 最终实现 commit：0df937f03cfbdfb315c721bb1a90f4062a7e3df8
+> 远端验收：run_id `20260904T081815Z`，5 FPS / 10 FPS / 全帧均为 90 次并通过算法与资源门槛；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
+> 修订（2026-09-04, codex）：同步最终审查后的 v1 固定采样、验收报告自洽校验、锚点时间线和可靠侧质量语义，并记录最终重部署结果
 
 # PP-TinyPose 全帧流式肩部推举计数 v2 设计
 
@@ -107,6 +108,8 @@
 
 内部用 `sample_fps=None` 表示全帧，禁止用 `0` 作为隐式魔法值。既有正数环境变量继续兼容。
 
+任务执行按已固化的 `rule_version` 精确解析分析器：历史 `shoulder-press-v1` 无论当前全局配置为何都固定使用 5 FPS；`shoulder-press-v2` 才跟随全局 `MOTION_ANALYSIS_SAMPLE_FPS` 的 `all` 或正浮点值。这样历史 v1 任务不会被全帧默认值静默改变采样语义。
+
 ### 6.2 单侧特征提取器
 
 左右侧分别使用肩、肘、腕、髋关键点。四个关键点坐标均可解析且躯干长度大于零时，该侧属于“可测量”；四点最低置信度不低于 `0.4` 时，该侧进一步属于“可靠”。可测量值参与运动周期检测，可靠比例用于动作质量和整体置信度，避免低分帧直接切断完整周期。
@@ -163,7 +166,7 @@ torso_length = distance(shoulder, hip)
 
 匹配只影响 `bilateral_event_count`、`bilateral_agreement_ratio`、质量标记和标准/不标准分类，不改变最终次数。若另一侧同期关键点可靠但没有匹配事件，锚点明细标记 `bilateral_mismatch`；若另一侧同期不可见，则保留单侧依据并降低置信度，不直接判定动作不标准。
 
-匹配明细的 `start_ms` 取参与事件的最早开始时间，`peak_ms` 取左右峰值时间的整数中点，`end_ms` 取最晚结束时间；未匹配锚点明细直接使用锚点侧时间。`source_sides` 明确记录质量判断依据。匹配发生在紧凑事件层，不允许重新引入左右坐标平均。
+无论是否匹配，明细的 `start_ms`、`peak_ms`、`end_ms` 和 `duration_ms` 都严格使用锚点事件的时间；`tempo_abnormal` 也只按锚点时长判定。匹配侧不得用更早开始、更晚结束或平均峰值扩张锚点时间线，以免相邻锚点明细发生时间交叠。`source_sides` 仍明确记录锚点侧和成功匹配侧的质量判断依据。匹配发生在紧凑事件层，不允许重新引入左右坐标平均。
 
 ## 7. 计数与质量判定
 
@@ -175,13 +178,13 @@ torso_length = distance(shoulder, hip)
 
 每次动作独立生成质量标记：
 
-- `range_too_small`：峰值抬升未达到 `0.55 torso`，或峰值突出度低于 `0.20 torso`；
-- `elbow_not_extended`：峰值附近肘角小于 150 度；
-- `tempo_abnormal`：动作时长短于 800 ms 或长于 8,000 ms；
+- `range_too_small`：可靠覆盖率不低于 80% 的参与侧中，峰值抬升未达到 `0.55 torso`，或峰值突出度低于 `0.20 torso`；
+- `elbow_not_extended`：可靠覆盖率不低于 80% 的参与侧中，峰值附近肘角小于 150 度；
+- `tempo_abnormal`：锚点动作时长短于 800 ms 或长于 8,000 ms；
 - `low_confidence`：动作周期内置信度不低于 0.4 的可靠测量覆盖率低于 80%；
 - `bilateral_mismatch`：锚点动作期间另一侧可靠可见，但没有按直接峰值或扩展区间规则形成匹配事件。
 
-双侧事件对每个可靠参与侧分别检查幅度和肘角，任一可靠侧未达标即添加对应质量标记；不可见的一侧不据此添加动作质量标记。单侧事件只检查产生该事件的一侧。
+双侧事件只对 `coverage_ratio >= 0.8` 的可靠参与侧检查幅度和肘角，任一可靠侧未达标即添加对应质量标记；低于 80% 的参与侧不贡献 `range_too_small` 或 `elbow_not_extended`，只贡献 `low_confidence`。单侧事件同样只在产生该事件的一侧达到 80% 可靠覆盖率时检查幅度和肘角。
 
 没有质量标记的动作计入 `standard_count`；有任一质量标记的动作计入 `nonstandard_count`。始终满足：
 
@@ -265,10 +268,10 @@ total_count = standard_count + nonstandard_count
 - 正式机器保持当前 2 vCPU，生产接入前把物理内存升级到 4 GiB，并保留现有 4 GiB Swap 作为 OOM 保护。
 - 正常任务不应使用 Swap；发生持续 Swap 表示资源或实现异常。
 - 现有 `MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=7200` 保留，可覆盖当前实测推算的 60 分钟视频约 74 分钟分析时间。
-- 最终全帧实测为 415.576 秒，约为 300 秒视频时长的 1.39 倍；上线硬目标为不超过 2 倍。
+- 最终全帧实测为 421.844 秒，约为 300 秒视频时长的 1.41 倍；上线硬目标为不超过 2 倍。
 - 本期不承诺实时处理，也不允许同一 Worker 并行分析多个视频。
 
-最终 5 分钟全帧实测峰值 RSS 为 660,041,728 B，系统最低可用内存为 775,872,512 B，Swap 使用为零。服务器 `MemTotal` 仍只有 1,691,308,032 B（约 1.58 GiB），功能与算法验收通过但尚未达到 4 GiB 生产目标；内存扩容仍是生产接入前置条件，且不能替代流式改造。
+最终 5 分钟全帧实测峰值 RSS 为 623,902,720 B，系统最低可用内存为 781,955,072 B，Swap 使用为零。服务器 `MemTotal` 仍只有 1,691,308,032 B（约 1.58 GiB），功能与算法验收通过但尚未达到 4 GiB 生产目标；内存扩容仍是生产接入前置条件，且不能替代流式改造。
 
 ## 11. 测试设计
 
@@ -288,6 +291,7 @@ total_count = standard_count + nonstandard_count
 
 - 全帧配置逐个消费解码帧，不跳帧。
 - 正数 FPS 配置继续支持诊断降采样。
+- 历史 v1 任务固定使用 5 FPS；v2 任务跟随全局全帧或正浮点诊断配置。
 - 关键点迭代器为惰性，不在调用前读取完整视频。
 - 正常完成、消费异常和提前关闭时均释放视频句柄。
 - Celery 任务保存 `shoulder-press-v2` 和扩展结果字段。
@@ -301,6 +305,7 @@ total_count = standard_count + nonstandard_count
 - 全帧计数必须等于人工真值 90；
 - 相同环境重复运行结果必须一致；
 - 5 FPS、10 FPS 回归结果与全帧相差不超过 1 次；
+- 三档都必须给出合法的 `result.total_count`，且 `count_error` 必须严格等于 `result.total_count - manual_total_count`；字段缺失、类型非法或计数不自洽时一律 fail-closed 为无效验收报告；
 - 全帧总耗时不超过视频时长的 2 倍；
 - 应用进程峰值 RSS 低于 1.5 GiB；
 - 正常运行 Swap 使用量保持为零；
@@ -325,6 +330,9 @@ total_count = standard_count + nonstandard_count
 - 根因证据为三档左右事件数均为 90 / 90，而旧 400 ms 并集合并只匹配 67 / 72 / 62 对。用户批准按左右较大值计数后，Task 6 由 `3b88626` 实现锚点与扩展质量匹配，由 `de56352` 修复非正时长扩展匹配并通过复审。
 - 第二次使用最终 commit `de56352ce93a987d0d8e0972d64fab6045567963`、归档 SHA-256 `0b6fc49b2ea685511b36e1b82b6777a4662844c97dfb914e2613173908733a4e`、run_id `20260904T045247Z` 验收；5 FPS / 10 FPS / 全帧均为 90 次，耗时分别为 185.103 / 224.840 / 415.576 秒，峰值 RSS 分别为 654,696,448 / 660,058,112 / 660,041,728 B，Swap 均为零。
 - 第二次报告 `acceptance.passed=true`。正式 app 保持最终 v2，v1 完整保留为 previous，首次失败 v2 和所有历史报告均未删除；输入与临时目录已清空，无遗留 benchmark 进程。
+- 最终分支审查由 `b396c25` 固定历史 v1 为 5 FPS、`ebfb832` 增加三档 `total_count` / `count_error` / `manual_total_count` 自洽且 fail-closed 的验收、`0df937f` 固定锚点时间线并限制幅度/肘角只由可靠参与侧判定。
+- 最终重部署使用 commit `0df937f03cfbdfb315c721bb1a90f4062a7e3df8`、归档 SHA-256 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551`、run_id `20260904T081815Z`；5 FPS / 10 FPS / 全帧仍均为 90 次，耗时分别为 183.176 / 225.758 / 421.844 秒，峰值 RSS 分别为 641,409,024 / 641,277,952 / 623,902,720 B，Swap 均为零，`acceptance.passed=true`。
+- 远端正式 app 为最终 `0df937f`；上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 `app.previous-77b0166`、首次失败 v2 和全部历史报告继续保留。输入和 tmp 完全为空，无 benchmark、Celery 或 Web 进程；生产 PostgreSQL、Redis 与 Celery 仍未接入。
 
 ## 13. 后续演进
 

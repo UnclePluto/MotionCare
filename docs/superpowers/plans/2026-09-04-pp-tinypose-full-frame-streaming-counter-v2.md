@@ -14,8 +14,9 @@
 > 日期：2026-09-04
 > 范围：肩部推举 v2 规则、全帧流式推理、任务接入、三档算法验收与独立服务器部署
 > 实施基线 commit：`6c08451`
-> 最终实现 commit：`de56352ce93a987d0d8e0972d64fab6045567963`
-> 最终验收：run_id `20260904T045247Z`，三档均为 90 次且 `acceptance.passed=true`；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
+> 最终实现 commit：`0df937f03cfbdfb315c721bb1a90f4062a7e3df8`
+> 最终验收：run_id `20260904T081815Z`，三档均为 90 次且 `acceptance.passed=true`；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
+> 修订（2026-09-04, codex）：记录最终分支审查修复、从 committed HEAD 重部署和第三次三档验收结果
 
 ## 实施与验收记录
 
@@ -30,16 +31,21 @@
 - 第二次脱敏报告已下载到 `/Users/nick/my_dev/ai/agents/reports/pp-tinypose-v2-20260904T045247Z.json` 和同名前缀 `.txt`；JSON / TXT SHA-256 分别为 `8bce128c527f992b15fd1c64f5a376a592552b0bd75ce51aff0d2061a57913de` / `130cc8f2c678e8ae2f78e6e731ac5d8bfb9987835e3a9849140a2e4c55821017`，敏感路径与凭据模式扫描无命中。
 - 第二次本地门禁：后端 1075 passed，Ruff 通过；前端 37 个文件、265 个测试通过，Lint 0 error、5 个既有 warning，构建和 `git diff --check` 通过。
 - 远端最终状态：正式 app 为最终 v2，v1 保留为 `app.previous-77b0166`，首次失败 v2 和历史报告未删除；输入和 tmp 无文件，无遗留 benchmark 进程。服务器为 2 vCPU、4 GiB Swap，但 `MemTotal=1,691,308,032 B`（约 1.58 GiB），明确不达 4 GiB 生产内存规格。
+- 最终分支审查修复：`b396c25` 固定历史 v1 使用 5 FPS，`ebfb832` 强制三档 `result.total_count`、`count_error` 与 `manual_total_count` 自洽并对损坏报告 fail-closed，`0df937f` 固定明细/tempo 使用锚点时间且只允许可靠覆盖率不低于 80% 的参与侧贡献幅度和肘角质量失败；三次独立复审均为 clean。
+- 最终重部署本地门禁：后端 1096 passed，Ruff 通过；前端 37 个文件、265 个测试通过，Lint 0 error、5 个既有 warning，构建与 `git diff --check` 通过。
+- 最终重部署：committed HEAD `0df937f03cfbdfb315c721bb1a90f4062a7e3df8`，归档 SHA-256 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551`，run_id `20260904T081815Z`。5 FPS / 10 FPS / 全帧均为 90 次且误差均为 0；耗时 183.176 / 225.758 / 421.844 秒；峰值 RSS 641,409,024 / 641,277,952 / 623,902,720 B；Swap 均为 0；报告 `acceptance.passed=true`、失败码为空。
+- 最终脱敏报告已下载到 `/Users/nick/my_dev/ai/agents/reports/pp-tinypose-v2-20260904T081815Z.json` 和同名前缀 `.txt`；JSON / TXT SHA-256 分别为 `460bbc06b74fa34b342068adcde3e1d4584ed642b5b7981e943cab226ad478bc` / `130cc8f2c678e8ae2f78e6e731ac5d8bfb9987835e3a9849140a2e4c55821017`，远端与本地一致，敏感路径和凭据模式扫描无命中。
+- 最终远端状态：正式 app 为 `0df937f`，上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 保留为 `app.previous-77b0166`，首次失败 v2 与所有历史报告均未覆盖或删除；input/tmp 完全为空，无 benchmark、Celery 或 Web 进程，生产 PostgreSQL、Redis 与 Celery 仍未接入。服务器为 2 vCPU、4 GiB Swap 且使用量为 0，但 `MemTotal=1,691,308,032 B`（约 1.58 GiB），明确不达 4 GiB 生产内存规格。
 
 ## Global Constraints
 
 - 当前 2 vCPU 保持不变；生产目标为 4 GiB 物理内存、4 GiB Swap、CPU 推理、动作分析并发 1。
 - 算法输入按最长 60 分钟设计；既有业务上传上限 `TRAINING_VIDEO_MAX_DURATION_SECONDS=1800` 不在本计划内修改，端到端上传 60 分钟需另行设计。
-- 正式默认分析全部成功解码帧；`MOTION_ANALYSIS_SAMPLE_FPS=all` 映射为内部 `None`，正浮点数只保留为诊断和紧急降级能力。
+- 历史 `shoulder-press-v1` 固定使用 5 FPS，不受当前全局配置影响；`shoulder-press-v2` 跟随 `MOTION_ANALYSIS_SAMPLE_FPS`，其中 `all` 映射为内部 `None`，正浮点数只保留为诊断和紧急降级能力。
 - 模型固定为 `PP-TinyPose_128x96`，`device="cpu"`，`use_hpip=False`；不得更换模型或新增推理依赖来规避验收。
 - 新规则版本固定为 `shoulder-press-v2`，v1 文件保留用于历史理解和代码级回退，但注册表默认只启用 v2。
 - v2 初始参数固定为：平滑 200 ms、峰值突出度 0.15 torso、上升/回落迟滞各 0.08 torso、同侧最小间隔 800 ms、缺口 300 ms；双侧质量匹配使用 400 ms 直接峰值窗口，或 800 ms 峰值上限加至少 50% 的正时长区间重叠。
-- 计数与质量分离；肘角不阻断计数。标准性阈值固定为抬升峰值 0.55 torso、突出度 0.20 torso、肘角 150 度、动作时长 800–8,000 ms、动作关键点覆盖率 80%。
+- 计数与质量分离；肘角不阻断计数。标准性阈值固定为抬升峰值 0.55 torso、突出度 0.20 torso、肘角 150 度、动作时长 800–8,000 ms、动作关键点覆盖率 80%；明细和 tempo 严格使用锚点时间，幅度和肘角只由覆盖率不低于 80% 的可靠参与侧判定，低可靠侧只贡献 `low_confidence`。
 - 不新增数据库字段或 migration；扩展指标写入现有 `result_payload`，`total_count = standard_count + nonstandard_count` 必须继续成立。
 - 不改变 HTTP API、医生端页面、视频存储供应商、上传/分段协议、数据库网络或 Redis 网络。
 - 独立服务器本期继续以无数据库、无 Redis 的前台 benchmark 方式验收，不启动常驻 Celery Worker；生产队列接入需要单独取得网络与凭据授权。
@@ -1360,13 +1366,26 @@ Expected: 三份文档记录提交成功；动作分析工作树为空。主检�
 
 ---
 
+### Task 7: 最终分支审查修复与正式重部署
+
+- [x] **Step 1: 用 `b396c25` 固定历史 v1 为 5 FPS，v2 保持跟随全局采样配置**
+- [x] **Step 2: 用 `ebfb832` 校验三档总数、人工真值和声明误差严格自洽，损坏报告 fail-closed**
+- [x] **Step 3: 用 `0df937f` 固定锚点明细/tempo 时间线，并仅让可靠参与侧贡献幅度和肘角质量失败**
+- [x] **Step 4: 从 `0df937f` 重新运行后端、Ruff、前端测试/Lint/构建和 `git diff --check` 完整门禁**
+- [x] **Step 5: 从 committed HEAD 生成 SHA-256 为 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551` 的归档，验证 candidate 后原子切换并把 `de56352` 保留为 `app.previous-de56352`**
+- [x] **Step 6: 用 run_id `20260904T081815Z` 前台串行完成 5 FPS / 10 FPS / 全帧硬验收，三档均为 90 次、误差 0、Swap 0 且 `acceptance.passed=true`**
+- [x] **Step 7: 下载并哈希核验脱敏报告，确认 input/tmp 完全为空、无 benchmark/常驻服务进程且所有历史版本与报告均保留**
+- [x] **Step 8: 同步 design、plan 与追加式 changelog，并只提交这三份正式文档**
+
+---
+
 ## 回退步骤
 
 只有在新版本导入失败、真实视频验收失败或上线后任务异常时执行：
 
 1. 停止新的动作分析任务进入该 Worker；当前设计并发为 1，不中断正在写报告的进程。
-2. 确认 `/opt/motioncare-analysis/app.previous-77b0166` 是普通目录且权限正确。
-3. 把当前 app 移到带失败 commit 的隔离目录，把 previous 目录移动回 `/opt/motioncare-analysis/app`。
-4. 从正式工作目录运行 v1 导入检查和 5 FPS 短冒烟。
+2. 最终重部署回退优先确认 `/opt/motioncare-analysis/app.previous-de56352` 是普通目录且权限正确；`app.previous-77b0166` 继续保留为 v1 二级回退版本。
+3. 把当前 app 移到带失败 commit 的全新隔离目录，把 `app.previous-de56352` 移回 `/opt/motioncare-analysis/app`；任何目标冲突都停止且不得覆盖。
+4. 从恢复后的正式工作目录运行 v2 导入检查；若需要进一步回退到 v1，再单独授权并运行 v1 导入与 5 FPS 短冒烟。
 5. 不修改或删除历史 `MotionAnalysisJob`；通过 `rule_version` 区分已经产生的 v1/v2 结果。
 6. 保留失败版本、脱敏报告和资源数据供诊断，不保留输入视频。
