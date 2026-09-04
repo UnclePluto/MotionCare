@@ -41,20 +41,18 @@ def test_command_passes_fixed_paths_and_deletes_input_after_success(tmp_path, mo
     )
 
 
-def test_command_deletes_input_even_when_benchmark_fails(tmp_path, monkeypatch):
+def test_command_keeps_failed_reports_and_deletes_input_when_benchmark_fails(tmp_path):
     video = tmp_path / "video.mp4"
     video.write_bytes(b"video")
-    monkeypatch.setattr(
-        "apps.training.management.commands.run_pose_smoke_benchmark.run_pose_smoke_benchmark",
-        Mock(side_effect=RuntimeError("private failure /path/video.mp4")),
-    )
+    report = tmp_path / "reports" / "report.json"
+    summary = tmp_path / "reports" / "report.txt"
 
     with pytest.raises(CommandError, match="冒烟测试失败"):
         call_command(
             "run_pose_smoke_benchmark",
             video=str(video),
-            report=str(tmp_path / "reports" / "report.json"),
-            summary=str(tmp_path / "reports" / "report.txt"),
+            report=str(report),
+            summary=str(summary),
             expected_sha256="f" * 64,
             git_commit="abc1234",
             manual_total_count=90,
@@ -62,6 +60,8 @@ def test_command_deletes_input_even_when_benchmark_fails(tmp_path, monkeypatch):
         )
 
     assert not video.exists()
+    assert '"status": "failed"' in report.read_text(encoding="utf-8")
+    assert "状态: failed" in summary.read_text(encoding="utf-8")
 
 
 def test_command_failure_traceback_does_not_expose_private_error(tmp_path, monkeypatch):

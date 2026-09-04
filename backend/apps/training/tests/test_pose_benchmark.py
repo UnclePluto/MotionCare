@@ -73,6 +73,38 @@ def _benchmark_result(total_count):
     }
 
 
+def _valid_acceptance_report():
+    return {
+        "manual_total_count": 90,
+        "video": {"duration_seconds": 300.0},
+        "modes": [
+            {
+                "name": "5fps",
+                "status": "completed",
+                "count_error": 0,
+                "result": {"total_count": 90},
+            },
+            {
+                "name": "10fps",
+                "status": "completed",
+                "count_error": 0,
+                "result": {"total_count": 90},
+            },
+            {
+                "name": "all_frames",
+                "status": "completed",
+                "count_error": 0,
+                "total_seconds": 445.0,
+                "result": {"total_count": 90},
+                "resource_peak": {
+                    "process_rss_bytes": 700 * 1024**2,
+                    "swap_used_bytes": 0,
+                },
+            },
+        ],
+    }
+
+
 def _probe_payload():
     return subprocess.CompletedProcess(
         args=[],
@@ -319,6 +351,105 @@ def test_v2_acceptance_allows_inclusive_time_and_exclusive_rss_boundaries():
     assert pose_benchmark._v2_acceptance_failures(report) == []
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing_status",
+        "missing_result",
+        "missing_resource_peak",
+        "wrong_modes_container",
+        "wrong_result_container",
+        "wrong_resource_peak_container",
+        "bool_count_error",
+        "string_duration",
+        "incomplete_mode_and_bad_duration",
+    ],
+)
+def test_v2_acceptance_rejects_malformed_schema_without_raising(case):
+    report = _valid_acceptance_report()
+    expected = ["invalid_acceptance_report"]
+    if case == "missing_status":
+        report["modes"][0].pop("status")
+        expected.append("required_mode_not_completed")
+    elif case == "missing_result":
+        report["modes"][2].pop("result")
+    elif case == "missing_resource_peak":
+        report["modes"][2].pop("resource_peak")
+    elif case == "wrong_modes_container":
+        report["modes"] = {}
+    elif case == "wrong_result_container":
+        report["modes"][2]["result"] = []
+    elif case == "wrong_resource_peak_container":
+        report["modes"][2]["resource_peak"] = []
+    elif case == "bool_count_error":
+        report["modes"][0]["count_error"] = True
+    elif case == "incomplete_mode_and_bad_duration":
+        report["modes"][2] = {"name": "all_frames", "status": "failed"}
+        report["video"]["duration_seconds"] = float("nan")
+        expected.append("required_mode_not_completed")
+    else:
+        report["video"]["duration_seconds"] = "300"
+
+    assert pose_benchmark._v2_acceptance_failures(report) == expected
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "manual_total_count",
+        "duration_seconds",
+        "count_error",
+        "total_count",
+        "total_seconds",
+        "process_rss_bytes",
+        "swap_used_bytes",
+    ],
+)
+def test_v2_acceptance_rejects_non_finite_numbers_without_fail_open(
+    field,
+    non_finite,
+):
+    report = _valid_acceptance_report()
+    if field == "manual_total_count":
+        report[field] = non_finite
+    elif field == "duration_seconds":
+        report["video"][field] = non_finite
+    elif field == "count_error":
+        report["modes"][0][field] = non_finite
+    elif field == "total_count":
+        report["modes"][2]["result"][field] = non_finite
+    elif field == "total_seconds":
+        report["modes"][2][field] = non_finite
+    else:
+        report["modes"][2]["resource_peak"][field] = non_finite
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
+
+
+def test_v2_acceptance_keeps_stable_order_and_collects_safe_failures():
+    report = _valid_acceptance_report()
+    report["modes"][2]["count_error"] = True
+    report["modes"][2]["result"]["total_count"] = 89
+    report["modes"][0]["count_error"] = -2
+    report["modes"][2]["total_seconds"] = 601.0
+    report["modes"][2]["resource_peak"] = {
+        "process_rss_bytes": int(1.5 * 1024**3),
+        "swap_used_bytes": 4096,
+    }
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report",
+        "all_frame_count_mismatch",
+        "sampled_count_error_over_one",
+        "all_frame_slower_than_two_times_duration",
+        "all_frame_rss_limit_exceeded",
+        "swap_used",
+    ]
+
+
 def test_benchmark_persists_sanitized_report_before_v2_acceptance_failure(tmp_path):
     video = tmp_path / "private-patient-video.mp4"
     video.write_bytes(b"video")
@@ -358,6 +489,87 @@ def test_benchmark_persists_sanitized_report_before_v2_acceptance_failure(tmp_pa
     serialized = json.dumps(payload, ensure_ascii=False)
     assert str(video) not in serialized
     assert video.name not in serialized
+
+
+@pytest.mark.parametrize(
+    "manual_total_count",
+    [0, -1, True, 1.0, "private-manual-value"],
+)
+def test_runner_rejects_invalid_manual_count_and_persists_sanitized_reports(
+    tmp_path,
+    manual_total_count,
+):
+    video = tmp_path / "private-patient-video.mp4"
+    video.write_bytes(b"video")
+    report_path = tmp_path / "report.json"
+    summary_path = tmp_path / "report.txt"
+
+    with pytest.raises(BenchmarkFailure, match="人工真值必须为正整数"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report_path,
+            summary_path=summary_path,
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            manual_total_count=manual_total_count,
+            ffprobe_runner=lambda *args, **kwargs: pytest.fail(
+                "非法人工真值不得进入视频探测"
+            ),
+        )
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["manual_total_count"] is None
+    assert payload["acceptance"]["failures"] == ["invalid_acceptance_report"]
+    assert payload["failure"]["stage"] == "input_validation"
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert str(video) not in serialized
+    assert video.name not in serialized
+    assert "private-manual-value" not in serialized
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "状态: failed" in summary
+    assert "v2验收：失败" in summary
+    assert str(video) not in summary
+
+
+def test_invalid_acceptance_data_still_persists_final_json_and_summary(tmp_path):
+    video = tmp_path / "private-patient-video.mp4"
+    video.write_bytes(b"video")
+    report_path = tmp_path / "report.json"
+    summary_path = tmp_path / "report.txt"
+    peaks = iter([_peak(), _peak(), _peak(process_rss=None)])
+
+    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report_path,
+            summary_path=summary_path,
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            manual_total_count=1,
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            stream_factory=lambda path, *, sample_fps, model: FakeStream(
+                [{"timestamp_ms": 0, "keypoints": {}}]
+            ),
+            analyzer=lambda frames: (list(frames), _benchmark_result(1))[1],
+            sampler_factory=lambda: FakeSampler(next(peaks)),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
+        )
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "failed"
+    assert payload["acceptance"]["failures"] == ["invalid_acceptance_report"]
+    assert payload["failure"]["stage"] == "hard_acceptance"
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert str(video) not in serialized
+    assert video.name not in serialized
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "状态: failed" in summary
+    assert "v2验收：失败" in summary
+    assert str(video) not in summary
 
 
 @pytest.mark.parametrize(

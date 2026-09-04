@@ -3,6 +3,7 @@ import gc
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import subprocess
@@ -209,6 +210,8 @@ def _write_report(report_path, summary_path, report):
 
 
 def _failure_summary(stage, exc):
+    if stage == "input_validation" and isinstance(exc, BenchmarkFailure):
+        return "人工真值必须为正整数"
     if stage == "hash_validation" and isinstance(exc, BenchmarkFailure):
         return "视频 SHA-256 与预期不一致"
     if stage == "video_probe" and isinstance(exc, BenchmarkFailure):
@@ -236,28 +239,147 @@ def _append_resource_skip(report, mode, reason):
     )
 
 
+def _is_finite_number(value):
+    return type(value) is int or (type(value) is float and math.isfinite(value))
+
+
 def _v2_acceptance_failures(report: dict) -> list[str]:
-    modes_by_name = {mode["name"]: mode for mode in report["modes"]}
+    try:
+        return _validated_v2_acceptance_failures(report)
+    except Exception:
+        return ["invalid_acceptance_report"]
+
+
+def _validated_v2_acceptance_failures(report):
+    invalid = not isinstance(report, dict)
+    if invalid:
+        return ["invalid_acceptance_report"]
+
+    manual_total_count = report.get("manual_total_count")
+    manual_count_valid = type(manual_total_count) is int and manual_total_count > 0
+    invalid = invalid or not manual_count_valid
+
+    video = report.get("video")
+    duration_seconds = None
+    duration_valid = False
+    if isinstance(video, dict):
+        duration_seconds = video.get("duration_seconds")
+        duration_valid = (
+            _is_finite_number(duration_seconds) and duration_seconds > 0
+        )
+    if not duration_valid:
+        invalid = True
+
+    modes = report.get("modes")
+    if not isinstance(modes, list):
+        return ["invalid_acceptance_report"]
+
     required_names = ("5fps", "10fps", "all_frames")
-    if any(
-        name not in modes_by_name or modes_by_name[name]["status"] != "completed"
-        for name in required_names
-    ):
-        return ["required_mode_not_completed"]
+    allowed_statuses = {
+        "running",
+        "completed",
+        "failed",
+        "skipped_for_resource_safety",
+    }
+    modes_by_name = {}
+    for mode in modes:
+        if not isinstance(mode, dict):
+            invalid = True
+            continue
+        name = mode.get("name")
+        if name not in required_names or name in modes_by_name:
+            invalid = True
+            continue
+        modes_by_name[name] = mode
+
+    required_mode_not_completed = False
+    for name in required_names:
+        mode = modes_by_name.get(name)
+        if mode is None:
+            required_mode_not_completed = True
+            continue
+        status = mode.get("status")
+        if not isinstance(status, str) or status not in allowed_statuses:
+            invalid = True
+            required_mode_not_completed = True
+        elif status != "completed":
+            required_mode_not_completed = True
+
+    if required_mode_not_completed:
+        failures = ["invalid_acceptance_report"] if invalid else []
+        failures.append("required_mode_not_completed")
+        return failures
 
     sampled_modes = [modes_by_name["5fps"], modes_by_name["10fps"]]
     all_frames = modes_by_name["all_frames"]
-    failures = []
-    if all_frames["result"]["total_count"] != report["manual_total_count"]:
-        failures.append("all_frame_count_mismatch")
-    if any(abs(mode["count_error"]) > 1 for mode in sampled_modes):
-        failures.append("sampled_count_error_over_one")
-    if all_frames["total_seconds"] > report["video"]["duration_seconds"] * 2:
-        failures.append("all_frame_slower_than_two_times_duration")
-    if all_frames["resource_peak"]["process_rss_bytes"] >= int(1.5 * 1024**3):
-        failures.append("all_frame_rss_limit_exceeded")
-    if all_frames["resource_peak"]["swap_used_bytes"] != 0:
-        failures.append("swap_used")
+
+    sampled_errors = []
+    for mode in sampled_modes:
+        count_error = mode.get("count_error")
+        if type(count_error) is int:
+            sampled_errors.append(count_error)
+        else:
+            invalid = True
+
+    all_count_error = all_frames.get("count_error")
+    if type(all_count_error) is not int:
+        invalid = True
+
+    result = all_frames.get("result")
+    result_total_count = None
+    result_total_count_valid = False
+    if isinstance(result, dict):
+        result_total_count = result.get("total_count")
+        result_total_count_valid = (
+            type(result_total_count) is int and result_total_count >= 0
+        )
+    if not result_total_count_valid:
+        invalid = True
+
+    total_seconds = all_frames.get("total_seconds")
+    total_seconds_valid = (
+        _is_finite_number(total_seconds) and total_seconds >= 0
+    )
+    if not total_seconds_valid:
+        invalid = True
+
+    resource_peak = all_frames.get("resource_peak")
+    process_rss_bytes = None
+    swap_used_bytes = None
+    process_rss_valid = False
+    swap_used_valid = False
+    if isinstance(resource_peak, dict):
+        process_rss_bytes = resource_peak.get("process_rss_bytes")
+        swap_used_bytes = resource_peak.get("swap_used_bytes")
+        process_rss_valid = (
+            type(process_rss_bytes) is int and process_rss_bytes >= 0
+        )
+        swap_used_valid = type(swap_used_bytes) is int and swap_used_bytes >= 0
+    if not process_rss_valid or not swap_used_valid:
+        invalid = True
+
+    gate_failures = []
+    if (
+        result_total_count_valid
+        and manual_count_valid
+        and result_total_count != manual_total_count
+    ):
+        gate_failures.append("all_frame_count_mismatch")
+    if any(abs(count_error) > 1 for count_error in sampled_errors):
+        gate_failures.append("sampled_count_error_over_one")
+    if (
+        total_seconds_valid
+        and duration_valid
+        and total_seconds > duration_seconds * 2
+    ):
+        gate_failures.append("all_frame_slower_than_two_times_duration")
+    if process_rss_valid and process_rss_bytes >= int(1.5 * 1024**3):
+        gate_failures.append("all_frame_rss_limit_exceeded")
+    if swap_used_valid and swap_used_bytes != 0:
+        gate_failures.append("swap_used")
+
+    failures = ["invalid_acceptance_report"] if invalid else []
+    failures.extend(gate_failures)
     return failures
 
 
@@ -289,6 +411,7 @@ def run_pose_smoke_benchmark(
         raise BenchmarkFailure("报告或摘要路径无法解析") from exc
     if outputs_are_same:
         raise BenchmarkFailure("报告与摘要不能使用同一路径")
+    manual_count_valid = type(manual_total_count) is int and manual_total_count > 0
     started_at = datetime.now(timezone.utc)
     report = {
         "report_format_version": REPORT_FORMAT_VERSION,
@@ -300,16 +423,23 @@ def run_pose_smoke_benchmark(
         "hardware": {},
         "video": {},
         "model": {"name": PP_TINYPOSE_MODEL_NAME, "device": "cpu"},
-        "manual_total_count": manual_total_count,
+        "manual_total_count": manual_total_count if manual_count_valid else None,
         "modes": [],
-        "acceptance": {"passed": False, "failures": []},
+        "acceptance": {
+            "passed": False,
+            "failures": [] if manual_count_valid else ["invalid_acceptance_report"],
+        },
     }
-    stage = "hash_validation"
+    stage = "input_validation"
 
     def persist():
         _write_report(report_path, summary_path, report)
 
     try:
+        if not manual_count_valid:
+            raise BenchmarkFailure("人工真值必须为正整数")
+
+        stage = "hash_validation"
         actual_sha256 = sha256_file(video_path)
         if actual_sha256 != expected_sha256.lower():
             raise BenchmarkFailure("视频 SHA-256 与预期不一致")
