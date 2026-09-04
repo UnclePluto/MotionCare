@@ -36,8 +36,8 @@ class Command(BaseCommand):
                 raise CommandError("expected-sha256 格式无效")
             if not COMMIT_PATTERN.fullmatch(git_commit):
                 raise CommandError("git-commit 格式无效")
-            if manual_total_count <= 0:
-                raise CommandError("manual-total-count 必须为正整数")
+            if manual_total_count != 90:
+                raise CommandError("manual-total-count 必须为 90")
             if report.parent.resolve() == video.parent.resolve():
                 raise CommandError("报告不能写入输入目录")
             if summary.parent.resolve() == video.parent.resolve():

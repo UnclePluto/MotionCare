@@ -81,6 +81,9 @@ def _valid_acceptance_report():
             {
                 "name": "all_frames",
                 "status": "completed",
+                "sample_fps": None,
+                "decoded_frame_count": 8929,
+                "inferred_frame_count": 8929,
                 "count_error": 0,
                 "total_seconds": 445.0,
                 "result": {"total_count": 90},
@@ -320,6 +323,50 @@ def test_v2_acceptance_rejects_extra_sampled_mode():
     ]
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("sample_fps", "missing"),
+        ("sample_fps", 5.0),
+        ("decoded_frame_count", "missing"),
+        ("decoded_frame_count", True),
+        ("decoded_frame_count", -1),
+        ("inferred_frame_count", "missing"),
+        ("inferred_frame_count", True),
+        ("inferred_frame_count", -1),
+    ],
+)
+def test_v2_acceptance_rejects_non_full_frame_evidence(field, invalid_value):
+    report = _valid_acceptance_report()
+    if invalid_value == "missing":
+        report["modes"][0].pop(field)
+    else:
+        report["modes"][0][field] = invalid_value
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
+
+
+def test_v2_acceptance_rejects_dropped_decoded_frames():
+    report = _valid_acceptance_report()
+    report["modes"][0]["inferred_frame_count"] = 8928
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
+
+
+def test_v2_acceptance_requires_manual_truth_of_90():
+    report = _valid_acceptance_report()
+    report["manual_total_count"] = 89
+    report["modes"][0]["result"]["total_count"] = 89
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
+
+
 def test_v2_acceptance_requires_all_frame_result():
     report = _valid_acceptance_report()
     report["modes"][0].pop("result")
@@ -486,9 +533,9 @@ def test_benchmark_persists_sanitized_report_before_v2_acceptance_failure(tmp_pa
 
 @pytest.mark.parametrize(
     "manual_total_count",
-    [0, -1, True, 1.0, "private-manual-value"],
+    [0, -1, 89, 91, True, 1.0, "private-manual-value"],
 )
-def test_runner_rejects_invalid_manual_count_and_persists_sanitized_reports(
+def test_runner_rejects_manual_count_other_than_90_and_persists_sanitized_reports(
     tmp_path,
     manual_total_count,
 ):
@@ -497,7 +544,7 @@ def test_runner_rejects_invalid_manual_count_and_persists_sanitized_reports(
     report_path = tmp_path / "report.json"
     summary_path = tmp_path / "report.txt"
 
-    with pytest.raises(BenchmarkFailure, match="人工真值必须为正整数"):
+    with pytest.raises(BenchmarkFailure, match="人工真值必须为 90"):
         run_pose_smoke_benchmark(
             video,
             report_path=report_path,
@@ -539,14 +586,14 @@ def test_invalid_acceptance_data_still_persists_final_json_and_summary(tmp_path)
             summary_path=summary_path,
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
             stream_factory=lambda path, *, sample_fps, model: FakeStream(
                 [{"timestamp_ms": 0, "keypoints": {}}]
             ),
-            analyzer=lambda frames: (list(frames), _benchmark_result(1))[1],
+            analyzer=lambda frames: (list(frames), _benchmark_result(90))[1],
             sampler_factory=lambda: FakeSampler(peak),
             version_reader=lambda: {},
             hardware_reader=lambda: {},
@@ -577,7 +624,7 @@ def test_hash_mismatch_writes_failed_report_before_model_load(tmp_path):
             summary_path=tmp_path / "report.txt",
             expected_sha256="0" * 64,
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
             model_factory=lambda: pytest.fail("哈希失败后不得加载模型"),
         )
 
@@ -600,7 +647,7 @@ def test_benchmark_rejects_report_and_summary_resolving_to_same_path(tmp_path):
             summary_path=summary,
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
             model_factory=lambda: pytest.fail("路径冲突后不得加载模型"),
         )
 
@@ -645,7 +692,7 @@ def test_only_memory_allocation_failures_use_resource_safety_flow(
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
@@ -683,7 +730,7 @@ def test_non_resource_mode_failure_is_sanitized_and_marks_current_mode_failed(
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
@@ -724,7 +771,7 @@ def test_all_frames_resource_failure_fails_v2_acceptance(tmp_path):
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
@@ -757,7 +804,7 @@ def test_summary_write_failure_leaves_failed_json_report_and_is_wrapped(tmp_path
             summary_path=summary_directory,
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
         )
 
     payload = json.loads(report.read_text(encoding="utf-8"))
@@ -780,7 +827,7 @@ def test_json_report_write_failure_is_wrapped_as_benchmark_failure(tmp_path):
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
-            manual_total_count=1,
+            manual_total_count=90,
         )
 
     assert isinstance(raised.value.__cause__, OSError)

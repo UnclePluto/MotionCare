@@ -209,7 +209,7 @@ def _write_report(report_path, summary_path, report):
 
 def _failure_summary(stage, exc):
     if stage == "input_validation" and isinstance(exc, BenchmarkFailure):
-        return "人工真值必须为正整数"
+        return "人工真值必须为 90"
     if stage == "hash_validation" and isinstance(exc, BenchmarkFailure):
         return "视频 SHA-256 与预期不一致"
     if stage == "video_probe" and isinstance(exc, BenchmarkFailure):
@@ -254,7 +254,7 @@ def _validated_v2_acceptance_failures(report):
         return ["invalid_acceptance_report"]
 
     manual_total_count = report.get("manual_total_count")
-    manual_count_valid = type(manual_total_count) is int and manual_total_count > 0
+    manual_count_valid = type(manual_total_count) is int and manual_total_count == 90
     invalid = invalid or not manual_count_valid
 
     video = report.get("video")
@@ -309,6 +309,22 @@ def _validated_v2_acceptance_failures(report):
         return failures
 
     all_frames = modes_by_name["all_frames"]
+    decoded_frame_count = all_frames.get("decoded_frame_count")
+    inferred_frame_count = all_frames.get("inferred_frame_count")
+    decoded_frame_count_valid = (
+        type(decoded_frame_count) is int and decoded_frame_count >= 0
+    )
+    inferred_frame_count_valid = (
+        type(inferred_frame_count) is int and inferred_frame_count >= 0
+    )
+    if (
+        "sample_fps" not in all_frames
+        or all_frames.get("sample_fps") is not None
+        or not decoded_frame_count_valid
+        or not inferred_frame_count_valid
+        or decoded_frame_count != inferred_frame_count
+    ):
+        invalid = True
 
     actual_count_errors = {}
     for name in required_names:
@@ -399,7 +415,7 @@ def run_pose_smoke_benchmark(
         raise BenchmarkFailure("报告或摘要路径无法解析") from exc
     if outputs_are_same:
         raise BenchmarkFailure("报告与摘要不能使用同一路径")
-    manual_count_valid = type(manual_total_count) is int and manual_total_count > 0
+    manual_count_valid = type(manual_total_count) is int and manual_total_count == 90
     started_at = datetime.now(timezone.utc)
     report = {
         "report_format_version": REPORT_FORMAT_VERSION,
@@ -425,7 +441,7 @@ def run_pose_smoke_benchmark(
 
     try:
         if not manual_count_valid:
-            raise BenchmarkFailure("人工真值必须为正整数")
+            raise BenchmarkFailure("人工真值必须为 90")
 
         stage = "hash_validation"
         actual_sha256 = sha256_file(video_path)

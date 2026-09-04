@@ -268,8 +268,8 @@ def test_command_deletes_input_when_output_directory_validation_fails(
     assert not video.exists()
 
 
-@pytest.mark.parametrize("manual_total_count", [0, -1, "not-an-integer"])
-def test_command_rejects_non_positive_or_non_integer_manual_count(
+@pytest.mark.parametrize("manual_total_count", [0, -1, 89, 91, "not-an-integer"])
+def test_command_rejects_manual_count_other_than_90(
     tmp_path,
     manual_total_count,
 ):
