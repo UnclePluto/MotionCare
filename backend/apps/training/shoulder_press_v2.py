@@ -27,9 +27,10 @@ _monotonic = time.monotonic
 
 
 def _below_threshold(value: float, threshold: float) -> bool:
-    return value < threshold and not math.isclose(
-        value, threshold, rel_tol=0.0, abs_tol=1e-9
-    )
+    if value >= threshold:
+        return False
+    rounding_tolerance = 4 * max(math.ulp(value), math.ulp(threshold))
+    return threshold - value > rounding_tolerance
 
 
 @dataclass(frozen=True)

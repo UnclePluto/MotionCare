@@ -5,7 +5,11 @@ import pytest
 
 from apps.training import shoulder_press_v2
 from apps.training.pose_inference import MotionAnalysisInferenceError
-from apps.training.shoulder_press_v2 import analyze_shoulder_press_keypoints_v2
+from apps.training.shoulder_press_v2 import (
+    SideEventDetector,
+    SideMeasurement,
+    analyze_shoulder_press_keypoints_v2,
+)
 
 
 def _frame(
@@ -110,6 +114,7 @@ def test_low_amplitude_complete_cycle_counts_as_nonstandard():
     ("peak_lift", "expected_count"),
     [
         pytest.param(0.15, 1, id="equal-threshold"),
+        pytest.param(0.15 - 1e-10, 0, id="below-threshold-by-1e-10"),
         pytest.param(0.149, 0, id="below-threshold"),
     ],
 )
@@ -122,6 +127,54 @@ def test_event_prominence_threshold_boundary(peak_lift, expected_count):
     result = analyze_shoulder_press_keypoints_v2(frames)
 
     assert result["total_count"] == expected_count
+
+
+def test_rise_hysteresis_rejects_below_threshold_and_accepts_exact_boundary():
+    detector = SideEventDetector("left")
+    detector.observe(
+        SideMeasurement("left", 0, 0.0, 180.0, 0.95),
+        opposite_valid=True,
+    )
+
+    event = detector.observe(
+        SideMeasurement("left", 400, 0.08 - 1e-10, 180.0, 0.95),
+        opposite_valid=True,
+    )
+
+    assert event is None
+    assert detector.phase == "seeking"
+
+    exact_threshold_event = detector.observe(
+        SideMeasurement("left", 800, 0.08, 180.0, 0.95),
+        opposite_valid=True,
+    )
+
+    assert exact_threshold_event is None
+    assert detector.phase == "rising"
+
+
+def test_fall_hysteresis_rejects_value_below_threshold_then_accepts_exact_boundary():
+    detector = SideEventDetector("left")
+    detector.observe(
+        SideMeasurement("left", 0, 0.0, 180.0, 0.95),
+        opposite_valid=True,
+    )
+    detector.observe(
+        SideMeasurement("left", 400, 0.2, 180.0, 0.95),
+        opposite_valid=True,
+    )
+
+    below_threshold_event = detector.observe(
+        SideMeasurement("left", 800, 0.2 - (0.08 - 1e-10), 180.0, 0.95),
+        opposite_valid=True,
+    )
+    exact_threshold_event = detector.observe(
+        SideMeasurement("left", 1200, 0.12, 180.0, 0.95),
+        opposite_valid=True,
+    )
+
+    assert below_threshold_event is None
+    assert exact_threshold_event is not None
 
 
 @pytest.mark.parametrize(
