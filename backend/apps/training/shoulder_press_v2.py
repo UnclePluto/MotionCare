@@ -27,6 +27,8 @@ _monotonic = time.monotonic
 
 
 def _below_threshold(value: float, threshold: float) -> bool:
+    if not math.isfinite(value) or not math.isfinite(threshold):
+        return True
     if value >= threshold:
         return False
     rounding_tolerance = 4 * max(math.ulp(value), math.ulp(threshold))
@@ -77,10 +79,17 @@ def _angle(
 ) -> float:
     first_vector = (first[0] - vertex[0], first[1] - vertex[1])
     third_vector = (third[0] - vertex[0], third[1] - vertex[1])
+    if not all(math.isfinite(value) for value in (*first_vector, *third_vector)):
+        return math.nan
     denominator = math.hypot(*first_vector) * math.hypot(*third_vector)
     if denominator <= 0:
         return 0.0
-    cosine = sum(a * b for a, b in zip(first_vector, third_vector, strict=True)) / denominator
+    dot_product = sum(
+        a * b for a, b in zip(first_vector, third_vector, strict=True)
+    )
+    if not math.isfinite(denominator) or not math.isfinite(dot_product):
+        return math.nan
+    cosine = dot_product / denominator
     return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
 
@@ -94,21 +103,25 @@ def _measurement(frame: dict[str, Any], side: str) -> SideMeasurement | None:
         wrist_x, wrist_y, wrist_score = _point(keypoints, f"{side}_wrist")
         hip_x, hip_y, hip_score = _point(keypoints, f"{side}_hip")
         torso_length = math.hypot(shoulder_x - hip_x, shoulder_y - hip_y)
-        if torso_length <= 0:
+        if not math.isfinite(torso_length) or torso_length <= 0:
             return None
         timestamp_ms = int(round(float(frame["timestamp_ms"])))
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
 
+    wrist_lift = (shoulder_y - wrist_y) / torso_length
+    elbow_angle = _angle(
+        (shoulder_x, shoulder_y),
+        (elbow_x, elbow_y),
+        (wrist_x, wrist_y),
+    )
+    if not math.isfinite(wrist_lift) or not math.isfinite(elbow_angle):
+        return None
     return SideMeasurement(
         side=side,
         timestamp_ms=timestamp_ms,
-        wrist_lift=(shoulder_y - wrist_y) / torso_length,
-        elbow_angle=_angle(
-            (shoulder_x, shoulder_y),
-            (elbow_x, elbow_y),
-            (wrist_x, wrist_y),
-        ),
+        wrist_lift=wrist_lift,
+        elbow_angle=elbow_angle,
         score=min(shoulder_score, elbow_score, wrist_score, hip_score),
     )
 

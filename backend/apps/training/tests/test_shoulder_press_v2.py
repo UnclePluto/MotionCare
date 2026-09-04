@@ -8,6 +8,7 @@ from apps.training.pose_inference import MotionAnalysisInferenceError
 from apps.training.shoulder_press_v2 import (
     SideEventDetector,
     SideMeasurement,
+    _below_threshold,
     analyze_shoulder_press_keypoints_v2,
 )
 
@@ -376,6 +377,31 @@ def test_invalid_scores_remain_measurable_but_are_unreliable(
     assert result["total_count"] == 1
     assert result["keypoint_coverage_ratio"] == pytest.approx(2 / 3)
     assert "low_confidence" in result["rep_details"][0]["flags"]
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_nonfinite_values_never_meet_a_minimum_threshold(value):
+    assert _below_threshold(value, 0.08) is True
+
+
+def test_extreme_finite_coordinates_cannot_create_nonfinite_measurement_event():
+    overflow_peak = _frame(400, 0.8, 0.8)
+    for side in ("left", "right"):
+        shoulder_x = overflow_peak["keypoints"][f"{side}_shoulder"]["x"]
+        overflow_peak["keypoints"][f"{side}_shoulder"].update(
+            x=shoulder_x, y=1e308
+        )
+        overflow_peak["keypoints"][f"{side}_hip"].update(x=shoulder_x, y=0.0)
+        overflow_peak["keypoints"][f"{side}_elbow"].update(x=shoulder_x, y=0.0)
+        overflow_peak["keypoints"][f"{side}_wrist"].update(
+            x=shoulder_x, y=-1e308
+        )
+    frames = [_frame(0, 0.0, 0.0), overflow_peak, _frame(800, 0.0, 0.0)]
+
+    result = analyze_shoulder_press_keypoints_v2(iter(frames))
+
+    assert result["total_count"] == 0
+    assert result["keypoint_coverage_ratio"] == pytest.approx(2 / 3)
 
 
 class OneShotFrames:
