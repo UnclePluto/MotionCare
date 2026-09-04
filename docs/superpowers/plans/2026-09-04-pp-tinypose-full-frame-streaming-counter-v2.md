@@ -14,11 +14,12 @@
 > 日期：2026-09-04
 > 范围：肩部推举 v2 规则、全帧流式推理、任务接入、仅全帧算法验收与独立服务器部署
 > 实施基线 commit：`6c08451`
-> 最终实现 commit：`0df937f03cfbdfb315c721bb1a90f4062a7e3df8`
-> 最终验收：run_id `20260904T081815Z`，三档均为 90 次且 `acceptance.passed=true`；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
+> 最终实现 commit：`1d01d8434d11cfb1d55db9dcd9bccf79e5c37274`
+> 最终验收：run_id `20260904T104350Z`，仅运行 `all_frames`，8,929 帧全部推理、计数 90 次且 `acceptance.passed=true`；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
 > 修订（2026-09-04, codex）：记录最终分支审查修复、从 committed HEAD 重部署和第三次三档验收结果
 > 仅全帧边界收口 commit：`b422a4b`；上述三档验收作为历史事实保留，当前生产和验收入口不再提供 5/10 FPS 选择
 > 仅全帧证据收口 commit：`6d0c2e9`；验收固定人工真值 90，并要求解码帧数与推理帧数严格相等
+> 最终归档 SHA-256：`4270b1c3a8a2d66d10e2b59b5c394f5eb81be0f9309ab3cd87d68e07d6bba222`
 
 ## 实施与验收记录
 
@@ -39,6 +40,12 @@
 - 最终脱敏报告已下载到 `/Users/nick/my_dev/ai/agents/reports/pp-tinypose-v2-20260904T081815Z.json` 和同名前缀 `.txt`；JSON / TXT SHA-256 分别为 `460bbc06b74fa34b342068adcde3e1d4584ed642b5b7981e943cab226ad478bc` / `130cc8f2c678e8ae2f78e6e731ac5d8bfb9987835e3a9849140a2e4c55821017`，远端与本地一致，敏感路径和凭据模式扫描无命中。
 - 最终远端状态：正式 app 为 `0df937f`，上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 保留为 `app.previous-77b0166`，首次失败 v2 与所有历史报告均未覆盖或删除；input/tmp 完全为空，无 benchmark、Celery 或 Web 进程，生产 PostgreSQL、Redis 与 Celery 仍未接入。服务器为 2 vCPU、4 GiB Swap 且使用量为 0，但 `MemTotal=1,691,308,032 B`（约 1.58 GiB），明确不达 4 GiB 生产内存规格。
 - 当前仅全帧边界收口：`b422a4b` 移除 v2 正数采样运行时配置并将 v2 固定为全帧；benchmark/smoke 只运行 `all_frames`，仅检查人工真值 90、600 秒、RSS、Swap 和报告自洽。历史 v1 仍在底层固定使用 5 FPS。
+- 异常时间戳修复：`9d497b2` 对固定 FPS 兼容路径的非有限时间戳回退为 `frame_index * 1000 / source_fps` 推导值，对异常巨大有限时间戳以 O(1) 跳算采样游标，避免逐间隔循环阻塞单 Worker；聚焦与相关回归、Ruff、`git diff --check` 均通过。
+- 仅全帧实现与文档收口：`b422a4b`、`e7d05e4` 固定 v2 生产和 benchmark/smoke 只走 `all_frames`；`6d0c2e9`、`a9ecf73`、`1d01d84` 固定人工真值 90，要求 `sample_fps=null`、解码/推理帧数相等并修正参数说明；独立复审为 clean。
+- 最终部署前本地门禁：committed HEAD `1d01d8434d11cfb1d55db9dcd9bccf79e5c37274`；后端 `1089 passed in 126.78s`、Ruff 通过；前端 37 个文件、265 个测试通过，Lint 0 error、5 个既有 warning，构建通过；5 个 Bash 脚本语法、`git diff --check` 和工作树状态均通过。
+- 最终仅全帧部署：归档严格来自 committed HEAD，共 1,090 个条目、6,445,439 B，SHA-256 `4270b1c3a8a2d66d10e2b59b5c394f5eb81be0f9309ab3cd87d68e07d6bba222`；run_id `20260904T104350Z`。唯一 `all_frames` 档 `sample_fps=null`，解码/推理均为 8,929 帧，计数 90、误差 0，耗时 430.125 秒，峰值 RSS 632,373,248 B，Swap 0，`acceptance.passed=true`、失败码为空。
+- 最终脱敏报告已下载到 `/Users/nick/my_dev/ai/agents/reports/pp-tinypose-v2-20260904T104350Z.json` 和同名前缀 `.txt`；JSON / TXT SHA-256 分别为 `71842aa748eafb43bca87e9dd80e094b421169ebb2a207dd3f2a4cc93083142a` / `6f86a3ada1e388c3bb07cabd4250e488e26c0e58daeefd039c54ba6f04c8ca87`，远端与本地一致，敏感路径和凭据模式扫描无命中。
+- 最终远端状态：正式 app 为 `1d01d84`，切换前的 `0df937f` 保留为 `app.previous-0df937f`，`app.previous-de56352`、v1 `app.previous-77b0166`、首次失败 v2 与全部历史报告均未覆盖或删除；input/tmp 为空，无 benchmark、Celery 或 Web 进程，生产 PostgreSQL、Redis 与 Celery 仍未接入。服务器 `MemTotal=1,691,308,032 B`（约 1.58 GiB），Swap 为 0，明确不达 4 GiB 生产内存规格。
 
 ## Global Constraints
 
@@ -1395,13 +1402,24 @@ Expected: 三份文档记录提交成功；动作分析工作树为空。主检�
 
 ---
 
+### Task 9: 最终仅全帧可追溯重部署
+
+- [x] **Step 1: 从 committed HEAD `1d01d84` 重跑后端完整测试/Ruff、前端 test/lint/build、Bash 语法和 Git 差异/状态门禁**
+- [x] **Step 2: 生成并核验 1,090 条目、SHA-256 为 `4270b1c3a8a2d66d10e2b59b5c394f5eb81be0f9309ab3cd87d68e07d6bba222` 的可追溯归档**
+- [x] **Step 3: 远端重复只读预检、验证全新 candidate 后原子切换，并把原正式 `0df937f` 保留为 `app.previous-0df937f`**
+- [x] **Step 4: 用 run_id `20260904T104350Z` 仅运行一次 `all_frames`；8,929 帧全部推理、计数 90、耗时 430.125 秒、峰值 RSS 632,373,248 B、Swap 0，全部硬门槛通过**
+- [x] **Step 5: 下载并哈希/脱敏核验报告，清空 input/tmp 与上传临时归档，确认无进程、权限安全且全部历史版本和报告保留**
+- [x] **Step 6: 同步 design、plan 与追加式 changelog，更新不入提交的 SDD ledger，并只提交三份正式文档**
+
+---
+
 ## 回退步骤
 
 只有在新版本导入失败、真实视频验收失败或上线后任务异常时执行：
 
 1. 停止新的动作分析任务进入该 Worker；当前设计并发为 1，不中断正在写报告的进程。
-2. 最终重部署回退优先确认 `/opt/motioncare-analysis/app.previous-de56352` 是普通目录且权限正确；`app.previous-77b0166` 继续保留为 v1 二级回退版本。
-3. 把当前 app 移到带失败 commit 的全新隔离目录，把 `app.previous-de56352` 移回 `/opt/motioncare-analysis/app`；任何目标冲突都停止且不得覆盖。
+2. 最终仅全帧重部署回退优先确认 `/opt/motioncare-analysis/app.previous-0df937f` 是普通目录且权限正确；`app.previous-de56352` 和 `app.previous-77b0166` 继续分别保留为更早 v2 与 v1 回退版本。
+3. 把当前 app 移到带失败 commit 的全新隔离目录，把 `app.previous-0df937f` 移回 `/opt/motioncare-analysis/app`；任何目标冲突都停止且不得覆盖。
 4. 从恢复后的正式工作目录运行 v2 导入检查；若需要进一步回退到 v1，再单独授权并运行 v1 导入与 5 FPS 短冒烟。
 5. 不修改或删除历史 `MotionAnalysisJob`；通过 `rule_version` 区分已经产生的 v1/v2 结果。
 6. 保留失败版本、脱敏报告和资源数据供诊断，不保留输入视频。

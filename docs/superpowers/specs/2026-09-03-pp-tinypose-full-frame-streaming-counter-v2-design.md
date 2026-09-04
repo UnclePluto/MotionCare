@@ -3,10 +3,11 @@
 > 范围：将肩部推举视频分析升级为 PP-TinyPose 全帧流式推理和按时间语义计数 v2，按单条最长 60 分钟、单并发部署
 > 关联：`docs/superpowers/specs/2026-09-03-pp-tinypose-algorithm-server-smoke-test-design.md`、`docs/superpowers/specs/2026-07-08-shoulder-press-video-analysis-design.md`
 > 实施基线 commit：77b0166
-> 最终实现 commit：0df937f03cfbdfb315c721bb1a90f4062a7e3df8
-> 远端验收：run_id `20260904T081815Z`，5 FPS / 10 FPS / 全帧均为 90 次并通过算法与资源门槛；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
+> 最终实现 commit：1d01d8434d11cfb1d55db9dcd9bccf79e5c37274
+> 最终远端验收：run_id `20260904T104350Z`，仅运行 `all_frames`，8,929 帧全部推理、计数 90 次并通过算法与资源门槛；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
 > 修订（2026-09-04, codex）：同步最终审查后的 v1 固定采样、验收报告自洽校验、锚点时间线和可靠侧质量语义，并记录最终重部署结果
 > 仅全帧边界修订（2026-09-04, codex）：当前 `shoulder-press-v2` 生产任务和 benchmark/smoke 验收只允许全帧；既有三档结果仅作为历史验收事实保留
+> 最终部署修订（2026-09-04, codex）：记录异常时间戳安全回退与固定 FPS 采样游标 O(1) 跳算、仅全帧证据校验和最终单档验收
 
 # PP-TinyPose 全帧流式肩部推举计数 v2 设计
 
@@ -106,6 +107,8 @@
 当前生产配置不再定义 `MOTION_ANALYSIS_SAMPLE_FPS`。内部继续用 `sample_fps=None` 表示全帧，禁止用 `0` 作为隐式魔法值。
 
 任务执行按已固化的 `rule_version` 精确解析分析器：历史 `shoulder-press-v1` 固定使用 5 FPS，保留旧任务执行语义；`shoulder-press-v2` 固定使用 `sample_fps=None`，即使运行环境残留旧的正数设置也不能降采样。底层正数 `sample_fps` 仅为 v1 历史兼容保留，不属于当前 v2 的公开生产、benchmark 或 smoke 入口。
+
+历史 v1 的固定 FPS 兼容路径必须先验证解码器 `CAP_PROP_POS_MSEC` 为有限值；NaN 或正负无穷时间戳回退为 `frame_index * 1000 / source_fps`，再执行严格递增校正。遇到异常巨大的有限时间戳时，下一采样游标按跨过的完整间隔 O(1) 跳算，禁止逐间隔循环推进而占死单 Worker；无法得到有限下一游标时安全停止继续采样。
 
 ### 6.2 单侧特征提取器
 
@@ -265,10 +268,10 @@ total_count = standard_count + nonstandard_count
 - 正式机器保持当前 2 vCPU，生产接入前把物理内存升级到 4 GiB，并保留现有 4 GiB Swap 作为 OOM 保护。
 - 正常任务不应使用 Swap；发生持续 Swap 表示资源或实现异常。
 - 现有 `MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=7200` 保留，可覆盖当前实测推算的 60 分钟视频约 74 分钟分析时间。
-- 最终全帧实测为 421.844 秒，约为 300 秒视频时长的 1.41 倍；上线硬目标为不超过 2 倍。
+- 最终全帧实测为 430.125 秒，约为 300 秒视频时长的 1.43 倍；上线硬目标为不超过 2 倍。
 - 本期不承诺实时处理，也不允许同一 Worker 并行分析多个视频。
 
-最终 5 分钟全帧实测峰值 RSS 为 623,902,720 B，系统最低可用内存为 781,955,072 B，Swap 使用为零。服务器 `MemTotal` 仍只有 1,691,308,032 B（约 1.58 GiB），功能与算法验收通过但尚未达到 4 GiB 生产目标；内存扩容仍是生产接入前置条件，且不能替代流式改造。
+最终 5 分钟全帧实测峰值 RSS 为 632,373,248 B，系统最低可用内存为 778,448,896 B，Swap 使用为零。服务器 `MemTotal` 仍只有 1,691,308,032 B（约 1.58 GiB），功能与算法验收通过但尚未达到 4 GiB 生产目标；内存扩容仍是生产接入前置条件，且不能替代流式改造。
 
 ## 11. 测试设计
 
@@ -316,7 +319,7 @@ total_count = standard_count + nonstandard_count
 2. 将候选版本部署到独立算法服务器，不改变公网端口和 SSH 安全设置。
 3. 使用同一人工标注视频执行全帧验收并保存脱敏报告。
 4. 验收通过后保留独立算法服务器正式 app 为全帧 `shoulder-press-v2`；生产 Worker 的队列、网络和凭据接入仍需另行授权。
-5. 保留当前 `77b0166` 对应的服务器应用目录；若 v2 违反计数、资源或接口验收，回退应用代码和默认规则版本。
+5. 每次切换都把切换前正式 app 保留为独立 previous 目录且不覆盖更早历史版本；若 v2 违反计数、资源或接口验收，优先回退最近一版已通过的应用代码和默认规则版本。
 
 回退只恢复算法应用，不回退数据库记录。历史 `MotionAnalysisJob` 通过各自的 `rule_version` 保持可审计。
 
@@ -331,6 +334,10 @@ total_count = standard_count + nonstandard_count
 - 最终重部署使用 commit `0df937f03cfbdfb315c721bb1a90f4062a7e3df8`、归档 SHA-256 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551`、run_id `20260904T081815Z`；5 FPS / 10 FPS / 全帧仍均为 90 次，耗时分别为 183.176 / 225.758 / 421.844 秒，峰值 RSS 分别为 641,409,024 / 641,277,952 / 623,902,720 B，Swap 均为零，`acceptance.passed=true`。
 - 远端正式 app 为最终 `0df937f`；上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 `app.previous-77b0166`、首次失败 v2 和全部历史报告继续保留。输入和 tmp 完全为空，无 benchmark、Celery 或 Web 进程；生产 PostgreSQL、Redis 与 Celery 仍未接入。
 - 当前生产与验收边界由 `b422a4b` 收紧：移除 `MOTION_ANALYSIS_SAMPLE_FPS` 运行时配置，v2 固定全帧，benchmark/smoke 只运行 `all_frames`，并仅按人工真值 90、600 秒、1.5 GiB RSS、Swap 为零和报告自洽性验收。上述既有三档数据保留为历史事实，不再代表当前入口能力。
+- `9d497b2` 修复固定 FPS 兼容路径的异常时间戳：非有限解码时间戳回退为帧序号推导值，异常巨大有限值使用 O(1) 采样游标跳算，避免历史 v1 的单 Worker 被逐间隔循环阻塞。
+- 仅全帧生产与验收边界由 `b422a4b` 实现、`e7d05e4` 同步文档；`6d0c2e9` 固定人工真值 90，并要求唯一 `all_frames` 的 `sample_fps=null`、解码帧数与推理帧数相等；`a9ecf73`、`1d01d84` 收口证据与参数说明，独立复审为 clean。
+- 最终使用 committed HEAD `1d01d8434d11cfb1d55db9dcd9bccf79e5c37274`、归档 SHA-256 `4270b1c3a8a2d66d10e2b59b5c394f5eb81be0f9309ab3cd87d68e07d6bba222`、run_id `20260904T104350Z` 执行一次前台单进程验收。报告且仅含 `all_frames`，`sample_fps=null`，解码/推理均为 8,929 帧，计数 90、误差 0，耗时 430.125 秒，峰值 RSS 632,373,248 B，Swap 0，`acceptance.passed=true`。
+- 远端正式 app 已更新为最终 `1d01d84`；切换前的 `0df937f` 保留为 `app.previous-0df937f`，`app.previous-de56352`、v1 `app.previous-77b0166`、首次失败 v2 和全部历史报告均保留。input/tmp 为空，无 benchmark、Celery 或 Web 进程；生产 PostgreSQL、Redis 与 Celery 仍未接入。
 
 ## 13. 后续演进
 

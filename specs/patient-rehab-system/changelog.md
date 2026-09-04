@@ -195,3 +195,9 @@
 
 - 仅全帧验收进一步 fail-closed：唯一 `all_frames` 档必须显式记录 `sample_fps=null`，且解码帧数、推理帧数均为非负整数并严格相等，防止抽帧结果伪装为全帧报告。
 - benchmark 函数与管理命令的 `manual_total_count` 均固定为 90：benchmark 函数在视频探测前拒绝其他值并落盘脱敏失败报告，管理命令在调用 benchmark 前拒绝其他值。对应修复提交为 `6d0c2e9`。
+
+## 0.28 - 2026-09-04
+
+- 固定 FPS 内部兼容路径增加异常时间戳保护：非有限解码时间戳回退为帧序号与源帧率推导值，异常巨大有限时间戳以 O(1) 跳算采样游标，避免逐间隔循环占死单 Worker；对应修复提交为 `9d497b2`。该路径仅供历史 `shoulder-press-v1` 固定 5 FPS 使用，当前 v2 生产与验收仍严格只走全帧。
+- 仅全帧边界由 `b422a4b`、`e7d05e4` 收紧，证据与固定人工真值由 `6d0c2e9`、`a9ecf73`、`1d01d84` 收口。最终使用 committed HEAD `1d01d8434d11cfb1d55db9dcd9bccf79e5c37274`、归档 SHA-256 `4270b1c3a8a2d66d10e2b59b5c394f5eb81be0f9309ab3cd87d68e07d6bba222`、run_id `20260904T104350Z` 仅运行一次 `all_frames`：解码/推理均为 8,929 帧，计数 90、误差 0，耗时 430.125 秒，峰值 RSS 632,373,248 B，Swap 0，验收通过。
+- 独立算法服务器正式 app 已更新为 `1d01d84`；原正式 `0df937f` 保留为 `app.previous-0df937f`，`app.previous-de56352`、v1 `app.previous-77b0166`、首次失败 v2 与全部历史脱敏报告均保留。input/tmp 为空，无 benchmark、Celery 或 Web 进程，生产 PostgreSQL、Redis 与 Celery 未接入；服务器物理内存仍约 1.58 GiB，明确不达 4 GiB 生产规格。
