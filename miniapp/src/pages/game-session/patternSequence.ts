@@ -1,11 +1,12 @@
 import type { GameDifficulty } from './gameTypes'
+import type { GameImageKey } from './gameImageAssets'
 
 export type PatternTokenId = 'sun' | 'coconut' | 'boat' | 'lighthouse' | 'shell'
 
 export type PatternToken = {
   id: PatternTokenId
   label: string
-  imageSrc: string
+  imageKey: GameImageKey
   fallback: string
 }
 
@@ -17,11 +18,11 @@ export type PatternSequenceRound = {
 }
 
 const PATTERN_POOL: PatternToken[] = [
-  { id: 'sun', label: '太阳', imageSrc: '/pages/game-session/assets/images/game-session/pattern_sun.png', fallback: '日' },
-  { id: 'coconut', label: '椰子树', imageSrc: '/pages/game-session/assets/images/game-session/pattern_coconut.png', fallback: '椰' },
-  { id: 'boat', label: '小船', imageSrc: '/pages/game-session/assets/images/game-session/pattern_boat.png', fallback: '船' },
-  { id: 'lighthouse', label: '灯塔', imageSrc: '/pages/game-session/assets/images/game-session/pattern_lighthouse.png', fallback: '塔' },
-  { id: 'shell', label: '贝壳', imageSrc: '/pages/game-session/assets/images/game-session/pattern_shell.png', fallback: '贝' },
+  { id: 'sun', label: '太阳', imageKey: 'pattern_sun', fallback: '日' },
+  { id: 'coconut', label: '椰子树', imageKey: 'pattern_coconut', fallback: '椰' },
+  { id: 'boat', label: '小船', imageKey: 'pattern_boat', fallback: '船' },
+  { id: 'lighthouse', label: '灯塔', imageKey: 'pattern_lighthouse', fallback: '塔' },
+  { id: 'shell', label: '贝壳', imageKey: 'pattern_shell', fallback: '贝' },
 ]
 
 const CONFIG: Record<

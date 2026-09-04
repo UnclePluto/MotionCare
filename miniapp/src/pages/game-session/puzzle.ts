@@ -1,4 +1,5 @@
 import type { GameDifficulty } from './gameTypes'
+import type { GameImageKey } from './gameImageAssets'
 
 export type PuzzleTile = {
   id: string
@@ -9,7 +10,7 @@ export type PuzzleImageKey = 'beach' | 'garden' | 'lighthouse'
 
 export type PuzzleRound = {
   imageKey: PuzzleImageKey
-  imageSrc: string
+  imageAssetKey: GameImageKey
   gridSize: {
     rows: number
     cols: number
@@ -33,9 +34,9 @@ export type PuzzleTileImageStyle = {
 }
 
 export const PUZZLE_IMAGES = [
-  { key: 'beach', src: '/pages/game-session/assets/images/game-session/puzzle_beach.png' },
-  { key: 'garden', src: '/pages/game-session/assets/images/game-session/puzzle_garden.png' },
-  { key: 'lighthouse', src: '/pages/game-session/assets/images/game-session/puzzle_lighthouse.png' },
+  { key: 'beach', imageAssetKey: 'puzzle_beach' },
+  { key: 'garden', imageAssetKey: 'puzzle_garden' },
+  { key: 'lighthouse', imageAssetKey: 'puzzle_lighthouse' },
 ] as const
 
 const CONFIG: Record<GameDifficulty, { rows: number; cols: number; previewMs: number }> = {
@@ -89,7 +90,7 @@ export function createPuzzleRound(difficulty: GameDifficulty, random: () => numb
 
   return {
     imageKey: image.key,
-    imageSrc: image.src,
+    imageAssetKey: image.imageAssetKey,
     gridSize: {
       rows: config.rows,
       cols: config.cols,

@@ -12,7 +12,8 @@ describe('createPuzzleRound', () => {
     const round = createPuzzleRound('简单', randomSequence([0, 0, 0, 0]))
 
     expect(round.imageKey).toBe('beach')
-    expect(round.imageSrc).toBe('/pages/game-session/assets/images/game-session/puzzle_beach.png')
+    expect(round.imageAssetKey).toBe('puzzle_beach')
+    expect('imageSrc' in round).toBe(false)
     expect(round.gridSize).toEqual({ rows: 2, cols: 2 })
     expect(round.rows).toBe(2)
     expect(round.cols).toBe(2)
@@ -62,9 +63,9 @@ describe('createPuzzleRound', () => {
     const lighthouseRound = createPuzzleRound('简单', randomSequence([0.99, 0, 0, 0]))
 
     expect(beachRound.imageKey).toBe('beach')
-    expect(beachRound.imageSrc).toBe('/pages/game-session/assets/images/game-session/puzzle_beach.png')
+    expect(beachRound.imageAssetKey).toBe('puzzle_beach')
     expect(lighthouseRound.imageKey).toBe('lighthouse')
-    expect(lighthouseRound.imageSrc).toBe('/pages/game-session/assets/images/game-session/puzzle_lighthouse.png')
+    expect(lighthouseRound.imageAssetKey).toBe('puzzle_lighthouse')
   })
 
   it('uses random to create different tile orders instead of a fixed first-pair swap', () => {
