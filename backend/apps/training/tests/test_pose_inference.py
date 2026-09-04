@@ -12,6 +12,7 @@ from apps.training.pose_inference import (
     extract_video_keypoint_frames,
     extract_video_keypoint_frames_with_stats,
     load_motion_analysis_runtime,
+    open_video_keypoint_stream,
     warm_up_pose_model,
 )
 
@@ -185,6 +186,65 @@ def test_full_frame_mode_infers_every_decoded_frame():
     assert result.inferred_frame_count == 5
     assert model.seen_frames == [0, 1, 2, 3, 4]
     assert [frame["timestamp_ms"] for frame in result.frames] == [0, 100, 200, 300, 400]
+
+
+def test_keypoint_stream_is_lazy_and_infers_every_frame_in_all_mode():
+    capture = FakeCapture([0, 100, 200])
+    model = FakeModel()
+
+    stream = open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=None,
+        model=model,
+        capture=capture,
+    )
+    assert model.seen_frames == []
+
+    with stream:
+        frames = list(stream)
+
+    assert model.seen_frames == [0, 1, 2]
+    assert [item["timestamp_ms"] for item in frames] == [0, 100, 200]
+    assert all(item["source_fps"] == 10.0 for item in frames)
+    assert stream.decoded_frame_count == 3
+    assert stream.inferred_frame_count == 3
+    assert capture.released is True
+
+
+def test_keypoint_stream_context_releases_capture_when_consumer_fails():
+    capture = FakeCapture([0, 100])
+    stream = open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=None,
+        model=FakeModel(),
+        capture=capture,
+    )
+
+    with pytest.raises(RuntimeError, match="consumer failed"):
+        with stream:
+            next(stream)
+            raise RuntimeError("consumer failed")
+
+    assert capture.released is True
+
+
+def test_keypoint_stream_keeps_fixed_fps_sampling_and_stats():
+    capture = FakeCapture([0, 50, 100, 150, 200])
+    model = FakeModel()
+
+    with open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=10.0,
+        model=model,
+        capture=capture,
+    ) as stream:
+        frames = list(stream)
+
+    assert model.seen_frames == [0, 2, 4]
+    assert stream.decoded_frame_count == 5
+    assert stream.inferred_frame_count == 3
+    assert stream.inference_seconds >= 0
+    assert [item["timestamp_ms"] for item in frames] == [0, 100, 200]
 
 
 def test_ten_fps_mode_reports_decoded_and_inferred_counts():
