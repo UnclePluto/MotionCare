@@ -17,19 +17,30 @@ class MotionAnalyzer:
     source_key: str
     algorithm_version: str
     rule_version: str
+    fixed_sample_fps: float | None
     analyze_keypoints: Callable[[Iterable[dict]], dict]
+
+    def resolve_sample_fps(
+        self,
+        configured_sample_fps: float | None,
+    ) -> float | None:
+        if self.fixed_sample_fps is not None:
+            return self.fixed_sample_fps
+        return configured_sample_fps
 
 
 SHOULDER_PRESS_V1_ANALYZER = MotionAnalyzer(
     source_key="motion-resistance-shoulder-press",
     algorithm_version=PP_TINYPOSE_MODEL_NAME,
     rule_version=SHOULDER_PRESS_V1_RULE_VERSION,
+    fixed_sample_fps=5.0,
     analyze_keypoints=analyze_shoulder_press_keypoints,
 )
 SHOULDER_PRESS_V2_ANALYZER = MotionAnalyzer(
     source_key="motion-resistance-shoulder-press",
     algorithm_version=PP_TINYPOSE_MODEL_NAME,
     rule_version=SHOULDER_PRESS_RULE_VERSION,
+    fixed_sample_fps=None,
     analyze_keypoints=analyze_shoulder_press_keypoints_v2,
 )
 

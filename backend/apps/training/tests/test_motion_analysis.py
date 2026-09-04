@@ -739,6 +739,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
                 source_key=SHOULDER_PRESS_SOURCE_KEY,
                 algorithm_version=PP_TINYPOSE_MODEL_NAME,
                 rule_version=SHOULDER_PRESS_RULE_VERSION,
+                fixed_sample_fps=None,
                 analyze_keypoints=analyze_frames,
             ),
         ),
@@ -820,6 +821,7 @@ def test_task_closes_stream_and_cleans_temp_file_when_analyzer_raises(
                 source_key=SHOULDER_PRESS_SOURCE_KEY,
                 algorithm_version="test-analyzer-v2",
                 rule_version=SHOULDER_PRESS_RULE_VERSION,
+                fixed_sample_fps=None,
                 analyze_keypoints=failing_analysis,
             ),
         ),
@@ -894,6 +896,80 @@ def test_task_runs_historical_v1_with_its_pinned_versions(
     assert job.result_payload["rep_details"][0]["side"] == "bilateral"
     assert "source_sides" not in job.result_payload["rep_details"][0]
     assert fake_stream.closed is True
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "algorithm_version",
+        "rule_version",
+        "configured_sample_fps",
+        "expected_sample_fps",
+    ),
+    [
+        ("", "shoulder-press-v1", None, 5.0),
+        ("", "shoulder-press-v1", 10.0, 5.0),
+        (PP_TINYPOSE_MODEL_NAME, SHOULDER_PRESS_RULE_VERSION, None, None),
+        (PP_TINYPOSE_MODEL_NAME, SHOULDER_PRESS_RULE_VERSION, 10.0, 10.0),
+    ],
+)
+def test_task_resolves_sample_fps_from_the_pinned_analyzer_version(
+    algorithm_version,
+    rule_version,
+    configured_sample_fps,
+    expected_sample_fps,
+    project_patient,
+    active_prescription,
+):
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    job.algorithm_version = algorithm_version
+    job.rule_version = rule_version
+    job.save(update_fields=["algorithm_version", "rule_version", "updated_at"])
+    frames = _sequence(
+        [
+            (0, "down", {}),
+            (100, "down", {}),
+            (500, "up", {}),
+            (600, "up", {}),
+            (1200, "down", {}),
+            (1300, "down", {}),
+        ]
+    )
+    seen_sample_fps = []
+
+    def fake_download(
+        url,
+        destination,
+        *,
+        timeout,
+        max_bytes,
+        deadline_seconds,
+        opener=None,
+    ):
+        destination.write_bytes(b"video")
+
+    def fake_open_stream(path, *, sample_fps):
+        seen_sample_fps.append(sample_fps)
+        return FakeKeypointStream(frames, source_fps=10.0)
+
+    with (
+        override_settings(MOTION_ANALYSIS_SAMPLE_FPS=configured_sample_fps),
+        patch(
+            "apps.training.tasks.create_private_download_url",
+            return_value="https://cdn.example.com/private.mp4?token=sensitive",
+        ),
+        patch("apps.training.tasks.download_private_video", side_effect=fake_download),
+        patch(
+            "apps.training.tasks.open_video_keypoint_stream",
+            side_effect=fake_open_stream,
+        ),
+    ):
+        returned = run_motion_analysis_job.run(job.id)
+
+    job.refresh_from_db()
+    assert returned.pk == job.pk
+    assert job.status == MotionAnalysisJob.Status.SUCCEEDED
+    assert seen_sample_fps == [expected_sample_fps]
 
 
 @pytest.mark.django_db
@@ -1185,6 +1261,7 @@ def test_old_worker_success_does_not_overwrite_recovered_failure(
                 source_key=SHOULDER_PRESS_SOURCE_KEY,
                 algorithm_version="test-analyzer-v2",
                 rule_version=SHOULDER_PRESS_RULE_VERSION,
+                fixed_sample_fps=None,
                 analyze_keypoints=recover_during_analysis,
             ),
         ),
