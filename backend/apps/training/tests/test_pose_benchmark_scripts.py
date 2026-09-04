@@ -148,13 +148,15 @@ def test_run_script_invokes_runuser_from_deployed_backend_directory(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     cwd_record = tmp_path / "runuser-cwd"
+    args_record = tmp_path / "runuser-args"
     _write_executable(
         fake_bin / "runuser",
-        '#!/bin/sh\npwd > "$CWD_RECORD"\n',
+        '#!/bin/sh\npwd > "$CWD_RECORD"\nprintf "%s\\n" "$@" > "$ARGS_RECORD"\n',
     )
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "CWD_RECORD": str(cwd_record),
+        "ARGS_RECORD": str(args_record),
         "CALLER_DIRECTORY": str(caller_directory),
     }
 
@@ -168,6 +170,38 @@ def test_run_script_invokes_runuser_from_deployed_backend_directory(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert cwd_record.read_text(encoding="utf-8").strip() == str(backend_directory)
+    arguments = args_record.read_text(encoding="utf-8").splitlines()
+    manual_count_index = arguments.index("--manual-total-count")
+    assert arguments[manual_count_index : manual_count_index + 2] == [
+        "--manual-total-count",
+        "90",
+    ]
+    expected_prefix = str(analysis_root / "reports" / "pp-tinypose-v2-")
+    assert f"{expected_prefix}20260903T120000Z.json" in arguments
+    assert f"{expected_prefix}20260903T120000Z.txt" in arguments
+    assert "pp-tinypose-smoke-" not in completed.stdout
+    assert not video.exists()
+
+
+def test_run_script_deletes_fixed_input_when_benchmark_command_fails(tmp_path):
+    analysis_root = tmp_path / "analysis"
+    (analysis_root / "app" / "backend").mkdir(parents=True)
+    video = analysis_root / "input" / "IMG_0383_SDR_5min.mp4"
+    video.parent.mkdir()
+    video.write_bytes(b"private video")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "runuser", "#!/bin/sh\nexit 7\n")
+    env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+
+    completed = _run_sourced(
+        RUN_SCRIPT,
+        '_run_benchmark_after_root_gate "$2" abc1234 20260903T120000Z',
+        str(analysis_root),
+        env=env,
+    )
+
+    assert completed.returncode == 7
     assert not video.exists()
 
 

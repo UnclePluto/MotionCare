@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from apps.training import pose_benchmark
 from apps.training.pose_benchmark import (
     BenchmarkFailure,
     probe_video,
@@ -15,7 +16,6 @@ from apps.training.pose_benchmark import (
     sha256_file,
 )
 from apps.training.pose_benchmark_resources import ResourceSnapshot
-from apps.training.pose_inference import VideoKeypointExtraction
 
 
 class FakeSampler:
@@ -29,14 +29,48 @@ class FakeSampler:
         return False
 
 
-def _peak(*, available=800 * 1024**2, swap_free=3 * 1024**3):
+class FakeStream:
+    def __init__(self, frames, *, source_fps=30.0):
+        self.frames = frames
+        self.source_fps = source_fps
+        self.decoded_frame_count = len(frames)
+        self.inferred_frame_count = len(frames)
+        self.inference_seconds = 0.1
+
+    def __iter__(self):
+        return iter(self.frames)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+def _peak(
+    *,
+    available=800 * 1024**2,
+    swap_free=3 * 1024**3,
+    swap_used=0,
+    process_rss=400 * 1024**2,
+):
     return ResourceSnapshot(
-        process_rss_bytes=400 * 1024**2,
+        process_rss_bytes=process_rss,
         system_memory_used_bytes=900 * 1024**2,
         memory_available_bytes=available,
-        swap_used_bytes=100 * 1024**2,
+        swap_used_bytes=swap_used,
         swap_free_bytes=swap_free,
     )
+
+
+def _benchmark_result(total_count):
+    return {
+        "total_count": total_count,
+        "standard_count": total_count,
+        "nonstandard_count": 0,
+        "rep_details": [],
+        "quality_flags": ["camera_angle_unverified"],
+    }
 
 
 def _probe_payload():
@@ -149,7 +183,7 @@ def test_probe_video_preserves_nominal_and_average_rates(tmp_path):
     assert result["reported_frame_count"] == 8929
 
 
-def test_runs_all_modes_with_one_model_and_writes_sanitized_reports(tmp_path):
+def test_v2_benchmark_records_manual_count_and_passes_all_gates(tmp_path):
     video = tmp_path / "patient-name-must-not-leak.mp4"
     video.write_bytes(b"video")
     report = tmp_path / "report.json"
@@ -162,16 +196,15 @@ def test_runs_all_modes_with_one_model_and_writes_sanitized_reports(tmp_path):
         model_factory_calls.append(True)
         return model
 
-    def extractor(path, *, sample_fps, model):
+    def stream_factory(path, *, sample_fps, model):
         assert path == video
         assert model is not None
         sample_modes.append(sample_fps)
-        count = {5.0: 2, 10.0: 3, None: 5}[sample_fps]
         frames = [
             {"timestamp_ms": index * 100, "keypoints": {}}
-            for index in range(count)
+            for index in range(3)
         ]
-        return VideoKeypointExtraction(frames, 5, count, 30.0)
+        return FakeStream(frames)
 
     result = run_pose_smoke_benchmark(
         video,
@@ -179,18 +212,13 @@ def test_runs_all_modes_with_one_model_and_writes_sanitized_reports(tmp_path):
         summary_path=summary,
         expected_sha256=sha256_file(video),
         git_commit="abc1234",
+        manual_total_count=3,
         ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
         model_factory=model_factory,
         warm_up=lambda path, *, model: None,
-        extractor=extractor,
-        analyzer=lambda frames: {
-            "total_count": len(frames),
-            "standard_count": len(frames),
-            "nonstandard_count": 0,
-            "rep_details": [],
-            "quality_flags": ["camera_angle_unverified"],
-        },
-        sampler_factory=lambda: FakeSampler(_peak()),
+        stream_factory=stream_factory,
+        analyzer=lambda frames: (list(frames), _benchmark_result(3))[1],
+        sampler_factory=lambda: FakeSampler(_peak(swap_used=0)),
         version_reader=lambda: {"python": "3.12.3", "paddlepaddle": "3.3.0"},
         hardware_reader=lambda: {"cpu_model": "Fake CPU", "vcpu_count": 2},
     )
@@ -198,16 +226,138 @@ def test_runs_all_modes_with_one_model_and_writes_sanitized_reports(tmp_path):
     assert len(model_factory_calls) == 1
     assert sample_modes == [5.0, 10.0, None]
     assert [item["status"] for item in result["modes"]] == ["completed"] * 3
-    assert [item["inferred_frame_count"] for item in result["modes"]] == [2, 3, 5]
+    assert [item["inferred_frame_count"] for item in result["modes"]] == [3, 3, 3]
+    assert result["report_format_version"] == "2.0"
+    assert result["manual_total_count"] == 3
+    assert [mode["count_error"] for mode in result["modes"]] == [0, 0, 0]
+    assert result["acceptance"] == {"passed": True, "failures": []}
     serialized = report.read_text(encoding="utf-8")
     assert str(video) not in serialized
     assert video.name not in serialized
     assert "abc1234" in serialized
-    assert result["manual_total_count"] == "not_provided"
     summary_text = summary.read_text(encoding="utf-8")
     assert "5 FPS" in summary_text
+    assert "人工误差=0" in summary_text
+    assert "v2验收：通过" in summary_text
     assert str(video) not in summary_text
     assert video.name not in summary_text
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_failure"),
+    [
+        ("full_frame_count_not_90", "all_frame_count_mismatch"),
+        ("sampled_count_diff_over_one", "sampled_count_error_over_one"),
+        (
+            "all_frame_over_two_times_duration",
+            "all_frame_slower_than_two_times_duration",
+        ),
+        ("rss_at_or_over_1_5_gib", "all_frame_rss_limit_exceeded"),
+        ("swap_used_nonzero", "swap_used"),
+        ("all_frame_not_completed", "required_mode_not_completed"),
+    ],
+)
+def test_v2_acceptance_rejects_each_failed_gate(case, expected_failure):
+    report = {
+        "manual_total_count": 90,
+        "video": {"duration_seconds": 300.0},
+        "modes": [
+            {"name": "5fps", "status": "completed", "count_error": 0},
+            {"name": "10fps", "status": "completed", "count_error": 0},
+            {
+                "name": "all_frames",
+                "status": "completed",
+                "count_error": 0,
+                "total_seconds": 445.0,
+                "result": {"total_count": 90},
+                "resource_peak": {
+                    "process_rss_bytes": 700 * 1024**2,
+                    "swap_used_bytes": 0,
+                },
+            },
+        ],
+    }
+    if case == "full_frame_count_not_90":
+        report["modes"][2]["result"]["total_count"] = 89
+    elif case == "sampled_count_diff_over_one":
+        report["modes"][0]["count_error"] = -2
+    elif case == "all_frame_over_two_times_duration":
+        report["modes"][2]["total_seconds"] = 601.0
+    elif case == "rss_at_or_over_1_5_gib":
+        report["modes"][2]["resource_peak"]["process_rss_bytes"] = int(
+            1.5 * 1024**3
+        )
+    elif case == "swap_used_nonzero":
+        report["modes"][2]["resource_peak"]["swap_used_bytes"] = 4096
+    else:
+        report["modes"][2] = {"name": "all_frames", "status": "failed"}
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [expected_failure]
+
+
+def test_v2_acceptance_allows_inclusive_time_and_exclusive_rss_boundaries():
+    report = {
+        "manual_total_count": 90,
+        "video": {"duration_seconds": 300.0},
+        "modes": [
+            {"name": "5fps", "status": "completed", "count_error": -1},
+            {"name": "10fps", "status": "completed", "count_error": 1},
+            {
+                "name": "all_frames",
+                "status": "completed",
+                "count_error": 0,
+                "total_seconds": 600.0,
+                "result": {"total_count": 90},
+                "resource_peak": {
+                    "process_rss_bytes": int(1.5 * 1024**3) - 1,
+                    "swap_used_bytes": 0,
+                },
+            },
+        ],
+    }
+
+    assert pose_benchmark._v2_acceptance_failures(report) == []
+
+
+def test_benchmark_persists_sanitized_report_before_v2_acceptance_failure(tmp_path):
+    video = tmp_path / "private-patient-video.mp4"
+    video.write_bytes(b"video")
+    report_path = tmp_path / "report.json"
+    totals = iter([90, 90, 89])
+
+    def stream_factory(path, *, sample_fps, model):
+        return FakeStream([{"timestamp_ms": 0, "keypoints": {}}])
+
+    def analyzer(frames):
+        list(frames)
+        return _benchmark_result(next(totals))
+
+    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report_path,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            manual_total_count=90,
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            stream_factory=stream_factory,
+            analyzer=analyzer,
+            sampler_factory=lambda: FakeSampler(_peak(swap_used=0)),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
+        )
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["acceptance"] == {
+        "passed": False,
+        "failures": ["all_frame_count_mismatch"],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert str(video) not in serialized
+    assert video.name not in serialized
 
 
 @pytest.mark.parametrize(
@@ -217,7 +367,7 @@ def test_runs_all_modes_with_one_model_and_writes_sanitized_reports(tmp_path):
         (800 * 1024**2, 400 * 1024**2, "swap_free_below_512_mib"),
     ],
 )
-def test_skips_all_frames_when_ten_fps_exhausts_safety_reserve(
+def test_resource_skip_fails_v2_acceptance_when_all_frames_are_not_completed(
     tmp_path,
     available,
     swap_free,
@@ -228,37 +378,35 @@ def test_skips_all_frames_when_ten_fps_exhausts_safety_reserve(
     peaks = iter([_peak(), _peak(available=available, swap_free=swap_free)])
     modes = []
 
-    result = run_pose_smoke_benchmark(
-        video,
-        report_path=tmp_path / "report.json",
-        summary_path=tmp_path / "report.txt",
-        expected_sha256=sha256_file(video),
-        git_commit="abc1234",
-        ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
-        model_factory=lambda: object(),
-        warm_up=lambda path, *, model: None,
-        extractor=lambda path, *, sample_fps, model: (
-            modes.append(sample_fps)
-            or VideoKeypointExtraction(
-                [{"timestamp_ms": 0, "keypoints": {}}], 1, 1, 30.0
-            )
-        ),
-        analyzer=lambda frames: {
-            "total_count": 0,
-            "standard_count": 0,
-            "nonstandard_count": 0,
-            "rep_details": [],
-            "quality_flags": [],
-        },
-        sampler_factory=lambda: FakeSampler(next(peaks)),
-        version_reader=lambda: {},
-        hardware_reader=lambda: {},
-    )
+    report_path = tmp_path / "report.json"
+
+    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report_path,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            manual_total_count=1,
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            stream_factory=lambda path, *, sample_fps, model: (
+                modes.append(sample_fps)
+                or FakeStream([{"timestamp_ms": 0, "keypoints": {}}])
+            ),
+            analyzer=lambda frames: (list(frames), _benchmark_result(1))[1],
+            sampler_factory=lambda: FakeSampler(next(peaks)),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
+        )
 
     assert modes == [5.0, 10.0]
-    assert result["status"] == "completed"
+    result = json.loads(report_path.read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
     assert result["modes"][2]["status"] == "skipped_for_resource_safety"
     assert result["modes"][2]["reason"] == reason
+    assert result["acceptance"]["failures"] == ["required_mode_not_completed"]
 
 
 def test_hash_mismatch_writes_failed_report_before_model_load(tmp_path):
@@ -273,6 +421,7 @@ def test_hash_mismatch_writes_failed_report_before_model_load(tmp_path):
             summary_path=tmp_path / "report.txt",
             expected_sha256="0" * 64,
             git_commit="abc1234",
+            manual_total_count=1,
             model_factory=lambda: pytest.fail("哈希失败后不得加载模型"),
         )
 
@@ -295,6 +444,7 @@ def test_benchmark_rejects_report_and_summary_resolving_to_same_path(tmp_path):
             summary_path=summary,
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
+            manual_total_count=1,
             model_factory=lambda: pytest.fail("路径冲突后不得加载模型"),
         )
 
@@ -307,21 +457,22 @@ def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
     report = tmp_path / "report.json"
     calls = []
 
-    def extractor(path, *, sample_fps, model):
+    def stream_factory(path, *, sample_fps, model):
         calls.append(sample_fps)
         raise MemoryError("private /path/video.mp4")
 
-    with pytest.raises(BenchmarkFailure, match="硬验收"):
+    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
         run_pose_smoke_benchmark(
             video,
             report_path=report,
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
+            manual_total_count=1,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
-            extractor=extractor,
+            stream_factory=stream_factory,
             analyzer=lambda frames: {},
             sampler_factory=lambda: FakeSampler(_peak()),
             version_reader=lambda: {},
@@ -371,7 +522,7 @@ def test_only_memory_allocation_failures_use_resource_safety_flow(
     report = tmp_path / "report.json"
     calls = []
 
-    def extractor(path, *, sample_fps, model):
+    def stream_factory(path, *, sample_fps, model):
         calls.append(sample_fps)
         raise failure
 
@@ -382,10 +533,11 @@ def test_only_memory_allocation_failures_use_resource_safety_flow(
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
+            manual_total_count=1,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
-            extractor=extractor,
+            stream_factory=stream_factory,
             analyzer=lambda frames: {},
             sampler_factory=lambda: FakeSampler(_peak()),
             version_reader=lambda: {},
@@ -409,7 +561,7 @@ def test_non_resource_mode_failure_is_sanitized_and_marks_current_mode_failed(
     video.write_bytes(b"video")
     report = tmp_path / "report.json"
 
-    def extractor(path, *, sample_fps, model):
+    def stream_factory(path, *, sample_fps, model):
         raise ValueError("private /path/video.mp4")
 
     with pytest.raises(BenchmarkFailure, match="冒烟测试执行失败"):
@@ -419,10 +571,11 @@ def test_non_resource_mode_failure_is_sanitized_and_marks_current_mode_failed(
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
+            manual_total_count=1,
             ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
             model_factory=lambda: object(),
             warm_up=lambda path, *, model: None,
-            extractor=extractor,
+            stream_factory=stream_factory,
             analyzer=lambda frames: {},
             sampler_factory=lambda: FakeSampler(_peak()),
             version_reader=lambda: {},
@@ -435,52 +588,46 @@ def test_non_resource_mode_failure_is_sanitized_and_marks_current_mode_failed(
     assert payload["modes"][0]["failure_stage"] == "5fps_inference"
     assert payload["modes"][0]["error_type"] == "ValueError"
     assert payload["modes"][0]["error_summary"] == "推理阶段执行失败"
+    assert payload["acceptance"]["failures"] == ["required_mode_not_completed"]
     assert "private /path" not in json.dumps(payload, ensure_ascii=False)
     assert str(video) not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_all_frames_resource_failure_does_not_fail_required_modes(tmp_path):
+def test_all_frames_resource_failure_fails_v2_acceptance(tmp_path):
     video = tmp_path / "private-video.mp4"
     video.write_bytes(b"video")
     report = tmp_path / "report.json"
     calls = []
 
-    def extractor(path, *, sample_fps, model):
+    def stream_factory(path, *, sample_fps, model):
         calls.append(sample_fps)
         if sample_fps is None:
             raise MemoryError("private /path/video.mp4")
-        return VideoKeypointExtraction(
-            [{"timestamp_ms": 0, "keypoints": {}}],
-            1,
-            1,
-            30.0,
+        return FakeStream([{"timestamp_ms": 0, "keypoints": {}}])
+
+    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
+        run_pose_smoke_benchmark(
+            video,
+            report_path=report,
+            summary_path=tmp_path / "report.txt",
+            expected_sha256=sha256_file(video),
+            git_commit="abc1234",
+            manual_total_count=1,
+            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
+            model_factory=lambda: object(),
+            warm_up=lambda path, *, model: None,
+            stream_factory=stream_factory,
+            analyzer=lambda frames: (list(frames), _benchmark_result(1))[1],
+            sampler_factory=lambda: FakeSampler(_peak()),
+            version_reader=lambda: {},
+            hardware_reader=lambda: {},
         )
 
-    result = run_pose_smoke_benchmark(
-        video,
-        report_path=report,
-        summary_path=tmp_path / "report.txt",
-        expected_sha256=sha256_file(video),
-        git_commit="abc1234",
-        ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
-        model_factory=lambda: object(),
-        warm_up=lambda path, *, model: None,
-        extractor=extractor,
-        analyzer=lambda frames: {
-            "total_count": 0,
-            "standard_count": 0,
-            "nonstandard_count": 0,
-            "rep_details": [],
-            "quality_flags": [],
-        },
-        sampler_factory=lambda: FakeSampler(_peak()),
-        version_reader=lambda: {},
-        hardware_reader=lambda: {},
-    )
-
     assert calls == [5.0, 10.0, None]
-    assert result["status"] == "completed"
+    result = json.loads(report.read_text(encoding="utf-8"))
+    assert result["status"] == "failed"
     assert result["modes"][2]["status"] == "failed"
+    assert result["acceptance"]["failures"] == ["required_mode_not_completed"]
     assert "private /path" not in report.read_text(encoding="utf-8")
 
 
@@ -498,6 +645,7 @@ def test_summary_write_failure_leaves_failed_json_report_and_is_wrapped(tmp_path
             summary_path=summary_directory,
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
+            manual_total_count=1,
         )
 
     payload = json.loads(report.read_text(encoding="utf-8"))
@@ -520,6 +668,7 @@ def test_json_report_write_failure_is_wrapped_as_benchmark_failure(tmp_path):
             summary_path=tmp_path / "report.txt",
             expected_sha256=sha256_file(video),
             git_commit="abc1234",
+            manual_total_count=1,
         )
 
     assert isinstance(raised.value.__cause__, OSError)

@@ -19,6 +19,7 @@ class Command(BaseCommand):
         parser.add_argument("--summary", required=True)
         parser.add_argument("--expected-sha256", required=True)
         parser.add_argument("--git-commit", required=True)
+        parser.add_argument("--manual-total-count", required=True, type=int)
         parser.add_argument("--delete-input", action="store_true")
 
     def handle(self, *args, **options):
@@ -27,6 +28,7 @@ class Command(BaseCommand):
         summary = Path(options["summary"])
         expected_sha256 = options["expected_sha256"].lower()
         git_commit = options["git_commit"].lower()
+        manual_total_count = options["manual_total_count"]
         if video.is_symlink() or not video.is_file():
             raise CommandError("视频必须是普通文件且不能是符号链接")
         try:
@@ -34,6 +36,8 @@ class Command(BaseCommand):
                 raise CommandError("expected-sha256 格式无效")
             if not COMMIT_PATTERN.fullmatch(git_commit):
                 raise CommandError("git-commit 格式无效")
+            if manual_total_count <= 0:
+                raise CommandError("manual-total-count 必须为正整数")
             if report.parent.resolve() == video.parent.resolve():
                 raise CommandError("报告不能写入输入目录")
             if summary.parent.resolve() == video.parent.resolve():
@@ -54,6 +58,7 @@ class Command(BaseCommand):
                     summary_path=summary,
                     expected_sha256=expected_sha256,
                     git_commit=git_commit,
+                    manual_total_count=manual_total_count,
                 )
             except (BenchmarkFailure, RuntimeError):
                 raise CommandError("冒烟测试失败，详情见脱敏报告") from None

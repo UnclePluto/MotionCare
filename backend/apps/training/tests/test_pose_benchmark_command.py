@@ -26,6 +26,7 @@ def test_command_passes_fixed_paths_and_deletes_input_after_success(tmp_path, mo
         summary=str(summary),
         expected_sha256="f" * 64,
         git_commit="abc1234",
+        manual_total_count=90,
         delete_input=True,
     )
 
@@ -36,6 +37,7 @@ def test_command_passes_fixed_paths_and_deletes_input_after_success(tmp_path, mo
         summary_path=Path(summary),
         expected_sha256="f" * 64,
         git_commit="abc1234",
+        manual_total_count=90,
     )
 
 
@@ -55,6 +57,7 @@ def test_command_deletes_input_even_when_benchmark_fails(tmp_path, monkeypatch):
             summary=str(tmp_path / "reports" / "report.txt"),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
             delete_input=True,
         )
 
@@ -78,6 +81,7 @@ def test_command_failure_traceback_does_not_expose_private_error(tmp_path, monke
             summary=str(tmp_path / "reports" / "report.txt"),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
         )
 
     rendered_traceback = "".join(traceback.format_exception(exc_info.value))
@@ -101,6 +105,7 @@ def test_command_deletes_input_and_restores_handler_when_interrupted(tmp_path, m
             summary=str(tmp_path / "reports" / "report.txt"),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
             delete_input=True,
         )
 
@@ -124,6 +129,7 @@ def test_command_rejects_invalid_identifiers(tmp_path, overrides, message):
         "summary": str(tmp_path / "reports" / "report.txt"),
         "expected_sha256": "f" * 64,
         "git_commit": "abc1234",
+        "manual_total_count": 90,
     }
     options.update(overrides)
 
@@ -147,6 +153,7 @@ def test_command_deletes_input_when_identifier_validation_fails(tmp_path, overri
         "summary": str(tmp_path / "reports" / "report.txt"),
         "expected_sha256": "f" * 64,
         "git_commit": "abc1234",
+        "manual_total_count": 90,
         "delete_input": True,
     }
     options.update(overrides)
@@ -171,6 +178,7 @@ def test_command_rejects_symlink_input(tmp_path):
             summary=str(tmp_path / "reports" / "report.txt"),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
         )
 
 
@@ -186,6 +194,7 @@ def test_command_rejects_reports_in_input_directory(tmp_path):
             summary=str(tmp_path / "reports" / "report.txt"),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
         )
 
 
@@ -201,6 +210,7 @@ def test_command_rejects_summary_in_input_directory(tmp_path):
             summary=str(tmp_path / "report.txt"),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
         )
 
 
@@ -226,6 +236,7 @@ def test_command_rejects_same_report_and_summary_path_and_deletes_input(
             summary=str(summary),
             expected_sha256="f" * 64,
             git_commit="abc1234",
+            manual_total_count=90,
             delete_input=True,
         )
 
@@ -246,6 +257,7 @@ def test_command_deletes_input_when_output_directory_validation_fails(
         "summary": str(tmp_path / "reports" / "report.txt"),
         "expected_sha256": "f" * 64,
         "git_commit": "abc1234",
+        "manual_total_count": 90,
         "delete_input": True,
     }
     options[invalid_output] = str(tmp_path / f"{invalid_output}.txt")
@@ -254,3 +266,38 @@ def test_command_deletes_input_when_output_directory_validation_fails(
         call_command("run_pose_smoke_benchmark", **options)
 
     assert not video.exists()
+
+
+@pytest.mark.parametrize("manual_total_count", [0, -1, "not-an-integer"])
+def test_command_rejects_non_positive_or_non_integer_manual_count(
+    tmp_path,
+    manual_total_count,
+):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+
+    with pytest.raises(CommandError, match="manual-total-count"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+            manual_total_count=manual_total_count,
+        )
+
+
+def test_command_requires_manual_count(tmp_path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+
+    with pytest.raises(CommandError, match="manual-total-count"):
+        call_command(
+            "run_pose_smoke_benchmark",
+            video=str(video),
+            report=str(tmp_path / "reports" / "report.json"),
+            summary=str(tmp_path / "reports" / "report.txt"),
+            expected_sha256="f" * 64,
+            git_commit="abc1234",
+        )

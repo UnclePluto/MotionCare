@@ -12,20 +12,20 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .analysis import analyze_shoulder_press_keypoints
 from .pose_benchmark_resources import ResourceSampler, read_linux_resource_snapshot
 from .pose_inference import (
     PP_TINYPOSE_MODEL_NAME,
     create_pose_model,
-    extract_video_keypoint_frames_with_stats,
+    open_video_keypoint_stream,
     warm_up_pose_model,
 )
+from .shoulder_press_v2 import analyze_shoulder_press_keypoints_v2
 
 
 MIB = 1024**2
 MIN_MEMORY_AVAILABLE_BYTES = 256 * MIB
 MIN_SWAP_FREE_BYTES = 512 * MIB
-REPORT_FORMAT_VERSION = "1.0"
+REPORT_FORMAT_VERSION = "2.0"
 
 
 class BenchmarkFailure(RuntimeError):
@@ -196,8 +196,10 @@ def _write_summary(summary_path, report):
         lines.append(
             f"{mode['label']}: {mode['status']}; "
             f"推理帧={mode.get('inferred_frame_count', '-')}; "
-            f"总次数={mode.get('result', {}).get('total_count', '-')}"
+            f"总次数={mode.get('result', {}).get('total_count', '-')}; "
+            f"人工误差={mode.get('count_error', '-')}"
         )
+    lines.append(f"v2验收：{'通过' if report['acceptance']['passed'] else '失败'}")
     _atomic_write_text(summary_path, "\n".join(lines) + "\n")
 
 
@@ -212,7 +214,7 @@ def _failure_summary(stage, exc):
     if stage == "video_probe" and isinstance(exc, BenchmarkFailure):
         return "视频探测失败"
     if stage == "hard_acceptance" and isinstance(exc, BenchmarkFailure):
-        return "5 FPS 或 10 FPS 硬验收未完成"
+        return "v2 算法验收失败"
     return "冒烟测试执行失败"
 
 
@@ -234,6 +236,31 @@ def _append_resource_skip(report, mode, reason):
     )
 
 
+def _v2_acceptance_failures(report: dict) -> list[str]:
+    modes_by_name = {mode["name"]: mode for mode in report["modes"]}
+    required_names = ("5fps", "10fps", "all_frames")
+    if any(
+        name not in modes_by_name or modes_by_name[name]["status"] != "completed"
+        for name in required_names
+    ):
+        return ["required_mode_not_completed"]
+
+    sampled_modes = [modes_by_name["5fps"], modes_by_name["10fps"]]
+    all_frames = modes_by_name["all_frames"]
+    failures = []
+    if all_frames["result"]["total_count"] != report["manual_total_count"]:
+        failures.append("all_frame_count_mismatch")
+    if any(abs(mode["count_error"]) > 1 for mode in sampled_modes):
+        failures.append("sampled_count_error_over_one")
+    if all_frames["total_seconds"] > report["video"]["duration_seconds"] * 2:
+        failures.append("all_frame_slower_than_two_times_duration")
+    if all_frames["resource_peak"]["process_rss_bytes"] >= int(1.5 * 1024**3):
+        failures.append("all_frame_rss_limit_exceeded")
+    if all_frames["resource_peak"]["swap_used_bytes"] != 0:
+        failures.append("swap_used")
+    return failures
+
+
 def run_pose_smoke_benchmark(
     video_path: Path,
     *,
@@ -241,12 +268,13 @@ def run_pose_smoke_benchmark(
     summary_path: Path,
     expected_sha256: str,
     git_commit: str,
+    manual_total_count: int,
     ffprobe_path="/usr/bin/ffprobe",
     ffprobe_runner=subprocess.run,
     model_factory=create_pose_model,
     warm_up=warm_up_pose_model,
-    extractor=extract_video_keypoint_frames_with_stats,
-    analyzer=analyze_shoulder_press_keypoints,
+    stream_factory=open_video_keypoint_stream,
+    analyzer=analyze_shoulder_press_keypoints_v2,
     sampler_factory=ResourceSampler,
     version_reader=read_versions,
     hardware_reader=read_hardware,
@@ -272,8 +300,9 @@ def run_pose_smoke_benchmark(
         "hardware": {},
         "video": {},
         "model": {"name": PP_TINYPOSE_MODEL_NAME, "device": "cpu"},
-        "manual_total_count": "not_provided",
+        "manual_total_count": manual_total_count,
         "modes": [],
+        "acceptance": {"passed": False, "failures": []},
     }
     stage = "hash_validation"
 
@@ -353,32 +382,32 @@ def run_pose_smoke_benchmark(
             persist()
 
             stage = f"{mode.name}_inference"
-            mode_started = monotonic()
-            extraction = None
+            stream = None
             sampler = None
             try:
                 with sampler_factory() as sampler:
-                    inference_started = monotonic()
-                    extraction = extractor(
+                    with stream_factory(
                         video_path,
                         sample_fps=mode.sample_fps,
                         model=model,
-                    )
-                    inference_seconds = monotonic() - inference_started
-                    result = analyzer(extraction.frames)
+                    ) as stream:
+                        mode_started = monotonic()
+                        result = analyzer(stream)
+                        total_seconds = monotonic() - mode_started
                 mode_report.update(
                     {
                         "status": "completed",
-                        "decoded_frame_count": extraction.decoded_frame_count,
-                        "inferred_frame_count": extraction.inferred_frame_count,
-                        "source_fps": extraction.source_fps,
-                        "inference_seconds": inference_seconds,
-                        "total_seconds": monotonic() - mode_started,
+                        "decoded_frame_count": stream.decoded_frame_count,
+                        "inferred_frame_count": stream.inferred_frame_count,
+                        "source_fps": stream.source_fps,
+                        "inference_seconds": stream.inference_seconds,
+                        "total_seconds": total_seconds,
                         "average_inference_ms_per_frame": (
-                            inference_seconds
+                            stream.inference_seconds
                             * 1000
-                            / extraction.inferred_frame_count
+                            / stream.inferred_frame_count
                         ),
+                        "count_error": result["total_count"] - manual_total_count,
                         "resource_peak": asdict(sampler.peak),
                         "result": result,
                     }
@@ -409,23 +438,24 @@ def run_pose_smoke_benchmark(
                 else:
                     raise
             finally:
-                if extraction is not None:
-                    del extraction
+                if stream is not None:
+                    del stream
                 gc.collect()
                 persist()
 
-        required_modes_completed = all(
-            item["status"] == "completed" for item in report["modes"][:2]
-        )
-        if not required_modes_completed:
+        report["acceptance"]["failures"] = _v2_acceptance_failures(report)
+        if report["acceptance"]["failures"]:
             stage = "hard_acceptance"
-            raise BenchmarkFailure("5 FPS 或 10 FPS 硬验收未完成")
+            raise BenchmarkFailure("v2 算法验收失败")
 
+        report["acceptance"]["passed"] = True
         report["status"] = "completed"
         report["finished_at"] = datetime.now(timezone.utc).isoformat()
         persist()
         return report
     except BaseException as exc:
+        if stage.endswith("_inference"):
+            report["acceptance"]["failures"] = _v2_acceptance_failures(report)
         report["status"] = "failed"
         report["failure"] = {
             "stage": stage,
