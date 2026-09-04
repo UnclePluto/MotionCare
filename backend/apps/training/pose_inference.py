@@ -123,6 +123,7 @@ class VideoKeypointStream:
         self._inference_seconds = 0.0
         self._next_sample_ms = 0.0
         self._last_timestamp_ms = -1.0
+        self._last_output_timestamp_ms = -1
         self._closed = False
 
     @property
@@ -147,52 +148,60 @@ class VideoKeypointStream:
     def __next__(self):
         if self._closed:
             raise StopIteration
-        while True:
-            ok, frame = self.capture.read()
-            if not ok:
-                self.close()
-                if self._inferred_frame_count == 0:
-                    raise MotionAnalysisInferenceError("训练视频没有可分析帧")
-                raise StopIteration
+        try:
+            while True:
+                ok, frame = self.capture.read()
+                if not ok:
+                    self.close()
+                    if self._inferred_frame_count == 0:
+                        raise MotionAnalysisInferenceError("训练视频没有可分析帧")
+                    raise StopIteration
 
-            frame_index = self._decoded_frame_count
-            self._decoded_frame_count += 1
-            timestamp_ms = float(self.capture.get(CAP_PROP_POS_MSEC) or 0.0)
-            if timestamp_ms <= 0 and frame_index:
-                timestamp_ms = frame_index * 1000.0 / self._source_fps
-            if timestamp_ms <= self._last_timestamp_ms:
-                timestamp_ms = max(
-                    frame_index * 1000.0 / self._source_fps,
-                    self._last_timestamp_ms + 1000.0 / self._source_fps,
-                )
-            self._last_timestamp_ms = timestamp_ms
-            if (
-                self.sample_fps is not None
-                and timestamp_ms + 0.5 < self._next_sample_ms
-            ):
-                continue
+                frame_index = self._decoded_frame_count
+                self._decoded_frame_count += 1
+                timestamp_ms = float(self.capture.get(CAP_PROP_POS_MSEC) or 0.0)
+                if timestamp_ms <= 0 and frame_index:
+                    timestamp_ms = frame_index * 1000.0 / self._source_fps
+                if timestamp_ms <= self._last_timestamp_ms:
+                    timestamp_ms = max(
+                        frame_index * 1000.0 / self._source_fps,
+                        self._last_timestamp_ms + 1000.0 / self._source_fps,
+                    )
+                self._last_timestamp_ms = timestamp_ms
+                if (
+                    self.sample_fps is not None
+                    and timestamp_ms + 0.5 < self._next_sample_ms
+                ):
+                    continue
 
-            try:
-                frame_height, frame_width = frame.shape[:2]
-            except (AttributeError, TypeError, ValueError) as exc:
-                raise MotionAnalysisInferenceError("视频帧尺寸无效") from exc
-            inference_started = time.monotonic()
-            prediction = _first_prediction(self.model, frame)
-            self._inference_seconds += time.monotonic() - inference_started
-            self._inferred_frame_count += 1
-            if self.sample_fps is not None:
-                interval_ms = 1000.0 / self.sample_fps
-                while self._next_sample_ms <= timestamp_ms + 0.5:
-                    self._next_sample_ms += interval_ms
-            return {
-                "timestamp_ms": int(round(timestamp_ms)),
-                "source_fps": self._source_fps,
-                "keypoints": convert_paddlex_result(
-                    prediction,
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                ),
-            }
+                try:
+                    frame_height, frame_width = frame.shape[:2]
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise MotionAnalysisInferenceError("视频帧尺寸无效") from exc
+                inference_started = time.monotonic()
+                prediction = _first_prediction(self.model, frame)
+                self._inference_seconds += time.monotonic() - inference_started
+                self._inferred_frame_count += 1
+                if self.sample_fps is not None:
+                    interval_ms = 1000.0 / self.sample_fps
+                    while self._next_sample_ms <= timestamp_ms + 0.5:
+                        self._next_sample_ms += interval_ms
+                output_timestamp_ms = int(round(timestamp_ms))
+                if output_timestamp_ms <= self._last_output_timestamp_ms:
+                    output_timestamp_ms = self._last_output_timestamp_ms + 1
+                self._last_output_timestamp_ms = output_timestamp_ms
+                return {
+                    "timestamp_ms": output_timestamp_ms,
+                    "source_fps": self._source_fps,
+                    "keypoints": convert_paddlex_result(
+                        prediction,
+                        frame_width=frame_width,
+                        frame_height=frame_height,
+                    ),
+                }
+        except Exception:
+            self.close()
+            raise
 
     def __enter__(self):
         return self
@@ -214,7 +223,9 @@ def open_video_keypoint_stream(
     model=None,
     capture=None,
 ):
-    if sample_fps is not None and sample_fps <= 0:
+    if sample_fps is not None and (
+        not math.isfinite(sample_fps) or sample_fps <= 0
+    ):
         raise ValueError("sample_fps 必须大于 0 或为 None")
 
     cv2 = None

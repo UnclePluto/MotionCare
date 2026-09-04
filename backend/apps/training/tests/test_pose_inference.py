@@ -5,6 +5,7 @@ import pytest
 
 from apps.training.pose_inference import (
     MotionAnalysisDependencyError,
+    MotionAnalysisInferenceError,
     PP_TINYPOSE_MODEL_NAME,
     VideoKeypointExtraction,
     convert_paddlex_result,
@@ -97,6 +98,24 @@ class FakeModel:
     def predict(self, frame):
         self.seen_frames.append(frame.index)
         return [_result()]
+
+
+class HighFpsCapture(FakeCapture):
+    def get(self, property_id):
+        if property_id == 5:
+            return 10000.0
+        return super().get(property_id)
+
+
+class InvalidFrameCapture(FakeCapture):
+    def read(self):
+        ok, _ = super().read()
+        return ok, object()
+
+
+class InvalidResultModel:
+    def predict(self, frame):
+        return [SimpleNamespace(json={"invalid": True})]
 
 
 def test_samples_video_frames_and_runs_fake_model_without_heavy_runtime():
@@ -245,6 +264,79 @@ def test_keypoint_stream_keeps_fixed_fps_sampling_and_stats():
     assert stream.inferred_frame_count == 3
     assert stream.inference_seconds >= 0
     assert [item["timestamp_ms"] for item in frames] == [0, 100, 200]
+
+
+@pytest.mark.parametrize("sample_fps", [float("nan"), float("inf"), float("-inf")])
+def test_keypoint_stream_rejects_non_finite_fixed_fps(sample_fps):
+    with pytest.raises(ValueError, match="sample_fps"):
+        open_video_keypoint_stream(
+            "ignored.mp4",
+            sample_fps=sample_fps,
+            model=FakeModel(),
+            capture=FakeCapture([]),
+        )
+
+
+def test_keypoint_stream_direct_iteration_releases_on_inference_failure():
+    capture = FakeCapture([0])
+    model = Mock()
+    model.predict.side_effect = RuntimeError("inference failed")
+    stream = open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=None,
+        model=model,
+        capture=capture,
+    )
+
+    with pytest.raises(RuntimeError, match="inference failed"):
+        next(stream)
+
+    assert capture.released is True
+
+
+def test_keypoint_stream_direct_iteration_releases_on_invalid_frame():
+    capture = InvalidFrameCapture([0])
+    stream = open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=None,
+        model=FakeModel(),
+        capture=capture,
+    )
+
+    with pytest.raises(MotionAnalysisInferenceError, match="视频帧尺寸无效"):
+        next(stream)
+
+    assert capture.released is True
+
+
+def test_keypoint_stream_direct_iteration_releases_on_conversion_failure():
+    capture = FakeCapture([0])
+    stream = open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=None,
+        model=InvalidResultModel(),
+        capture=capture,
+    )
+
+    with pytest.raises(MotionAnalysisInferenceError, match="结果结构无效"):
+        next(stream)
+
+    assert capture.released is True
+
+
+def test_keypoint_stream_keeps_integer_timestamps_strictly_increasing():
+    capture = HighFpsCapture([0.0, 0.1, 0.2])
+    model = FakeModel()
+
+    with open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=None,
+        model=model,
+        capture=capture,
+    ) as stream:
+        frames = list(stream)
+
+    assert [item["timestamp_ms"] for item in frames] == [0, 1, 2]
 
 
 def test_ten_fps_mode_reports_decoded_and_inferred_counts():
