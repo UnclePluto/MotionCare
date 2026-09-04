@@ -79,7 +79,7 @@
 - `backend/apps/training/tasks.py`：在上下文管理器内流式消费关键点，补充耗时与流统计并持久化 v2。
 - `backend/apps/training/tests/test_motion_analysis.py`：覆盖注册、任务版本、流消费、指标保存和资源释放。
 - `backend/apps/training/pose_benchmark.py`：仅以 `all_frames` 流式推理，记录人工真值、误差和 v2 硬验收。
-- `backend/apps/training/management/commands/run_pose_smoke_benchmark.py`：接收正整数 `--manual-total-count`。
+- `backend/apps/training/management/commands/run_pose_smoke_benchmark.py`：接收且仅允许值为 90 的 `--manual-total-count`。
 - `backend/apps/training/tests/test_pose_benchmark.py`：覆盖单档全帧流式统计、报告自洽和算法/资源验收。
 - `backend/apps/training/tests/test_pose_benchmark_command.py`：覆盖人工真值参数传递与校验。
 - `deploy/motion-analysis-smoke/run-benchmark.sh`：固定传入人工真值 90。
