@@ -112,6 +112,19 @@ def _first_prediction(model, frame):
         raise MotionAnalysisInferenceError("PP-TinyPose 未返回推理结果") from exc
 
 
+def _next_sample_cursor_ms(timestamp_ms, interval_ms):
+    threshold_ms = timestamp_ms + 0.5
+    if not math.isfinite(threshold_ms) or not math.isfinite(interval_ms):
+        return math.inf
+    interval_index = threshold_ms / interval_ms
+    if not math.isfinite(interval_index):
+        return math.inf
+    next_sample_ms = (math.floor(interval_index) + 1) * interval_ms
+    if not math.isfinite(next_sample_ms) or next_sample_ms <= threshold_ms:
+        return math.inf
+    return next_sample_ms
+
+
 class VideoKeypointStream:
     def __init__(self, *, capture, model, sample_fps, source_fps):
         self.capture = capture
@@ -160,11 +173,14 @@ class VideoKeypointStream:
                 frame_index = self._decoded_frame_count
                 self._decoded_frame_count += 1
                 timestamp_ms = float(self.capture.get(CAP_PROP_POS_MSEC) or 0.0)
+                fallback_timestamp_ms = frame_index * 1000.0 / self._source_fps
+                if not math.isfinite(timestamp_ms):
+                    timestamp_ms = fallback_timestamp_ms
                 if timestamp_ms <= 0 and frame_index:
-                    timestamp_ms = frame_index * 1000.0 / self._source_fps
+                    timestamp_ms = fallback_timestamp_ms
                 if timestamp_ms <= self._last_timestamp_ms:
                     timestamp_ms = max(
-                        frame_index * 1000.0 / self._source_fps,
+                        fallback_timestamp_ms,
                         self._last_timestamp_ms + 1000.0 / self._source_fps,
                     )
                 self._last_timestamp_ms = timestamp_ms
@@ -184,8 +200,10 @@ class VideoKeypointStream:
                 self._inferred_frame_count += 1
                 if self.sample_fps is not None:
                     interval_ms = 1000.0 / self.sample_fps
-                    while self._next_sample_ms <= timestamp_ms + 0.5:
-                        self._next_sample_ms += interval_ms
+                    self._next_sample_ms = _next_sample_cursor_ms(
+                        timestamp_ms,
+                        interval_ms,
+                    )
                 output_timestamp_ms = int(round(timestamp_ms))
                 if output_timestamp_ms <= self._last_output_timestamp_ms:
                     output_timestamp_ms = self._last_output_timestamp_ms + 1

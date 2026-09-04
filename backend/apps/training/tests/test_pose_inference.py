@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from threading import Thread
 from unittest.mock import Mock
 
 import pytest
@@ -264,6 +265,63 @@ def test_keypoint_stream_keeps_fixed_fps_sampling_and_stats():
     assert stream.inferred_frame_count == 3
     assert stream.inference_seconds >= 0
     assert [item["timestamp_ms"] for item in frames] == [0, 100, 200]
+
+
+@pytest.mark.parametrize(
+    "invalid_timestamp",
+    [float("nan"), float("inf"), float("-inf")],
+)
+def test_keypoint_stream_falls_back_from_non_finite_capture_timestamps(
+    invalid_timestamp,
+):
+    capture = FakeCapture([invalid_timestamp, invalid_timestamp, invalid_timestamp])
+
+    result = extract_video_keypoint_frames_with_stats(
+        "ignored.mp4",
+        sample_fps=None,
+        model=FakeModel(),
+        capture=capture,
+    )
+
+    assert [frame["timestamp_ms"] for frame in result.frames] == [0, 100, 200]
+    assert capture.next_index == 3
+    assert capture.released is True
+
+
+def test_fixed_fps_huge_finite_timestamp_advances_cursor_in_bounded_time():
+    capture = FakeCapture([1e300])
+    model = FakeModel()
+    stream = open_video_keypoint_stream(
+        "ignored.mp4",
+        sample_fps=5.0,
+        model=model,
+        capture=capture,
+    )
+    outcome = {}
+
+    def read_one_frame():
+        try:
+            outcome["frame"] = next(stream)
+        except BaseException as exc:  # pragma: no cover - 由主线程转抛
+            outcome["error"] = exc
+
+    worker = Thread(target=read_one_frame, daemon=True)
+    worker.start()
+    worker.join(timeout=0.5)
+    completed_in_time = not worker.is_alive()
+    if not completed_in_time:
+        stream._next_sample_ms = float("inf")
+        worker.join(timeout=1)
+    stream.close()
+
+    assert completed_in_time is True
+    assert worker.is_alive() is False
+    if error := outcome.get("error"):
+        raise error
+    assert outcome["frame"]["timestamp_ms"] == int(1e300)
+    assert model.seen_frames == [0]
+    assert capture.next_index == 1
+    assert capture.released is True
 
 
 @pytest.mark.parametrize("sample_fps", [float("nan"), float("inf"), float("-inf")])
