@@ -6,6 +6,7 @@
 > 最终实现 commit：0df937f03cfbdfb315c721bb1a90f4062a7e3df8
 > 远端验收：run_id `20260904T081815Z`，5 FPS / 10 FPS / 全帧均为 90 次并通过算法与资源门槛；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
 > 修订（2026-09-04, codex）：同步最终审查后的 v1 固定采样、验收报告自洽校验、锚点时间线和可靠侧质量语义，并记录最终重部署结果
+> 仅全帧边界修订（2026-09-04, codex）：当前 `shoulder-press-v2` 生产任务和 benchmark/smoke 验收只允许全帧；既有三档结果仅作为历史验收事实保留
 
 # PP-TinyPose 全帧流式肩部推举计数 v2 设计
 
@@ -38,6 +39,7 @@
 9. 新规则版本为 `shoulder-press-v2`；模型版本继续单独记录。
 10. 本期仍只支持肩部推举，不泛化为任意动作识别系统。
 11. 双侧事件匹配只影响动作质量、双侧一致率和整体置信度，不改变 `total_count`。
+12. 当前 `shoulder-press-v2` 生产与验收入口只允许全帧；不再暴露 5/10 FPS 或任意正数采样配置。
 
 ## 3. 目标与非目标
 
@@ -101,14 +103,9 @@
 - 在迭代完成、异常或调用方提前退出时释放 `VideoCapture`；
 - 视频无可分析帧时抛出明确的推理异常。
 
-配置 `MOTION_ANALYSIS_SAMPLE_FPS` 支持：
+当前生产配置不再定义 `MOTION_ANALYSIS_SAMPLE_FPS`。内部继续用 `sample_fps=None` 表示全帧，禁止用 `0` 作为隐式魔法值。
 
-- `all`：全部成功解码帧，作为默认值；
-- 正浮点数：仅用于诊断、回归和紧急降级。
-
-内部用 `sample_fps=None` 表示全帧，禁止用 `0` 作为隐式魔法值。既有正数环境变量继续兼容。
-
-任务执行按已固化的 `rule_version` 精确解析分析器：历史 `shoulder-press-v1` 无论当前全局配置为何都固定使用 5 FPS；`shoulder-press-v2` 才跟随全局 `MOTION_ANALYSIS_SAMPLE_FPS` 的 `all` 或正浮点值。这样历史 v1 任务不会被全帧默认值静默改变采样语义。
+任务执行按已固化的 `rule_version` 精确解析分析器：历史 `shoulder-press-v1` 固定使用 5 FPS，保留旧任务执行语义；`shoulder-press-v2` 固定使用 `sample_fps=None`，即使运行环境残留旧的正数设置也不能降采样。底层正数 `sample_fps` 仅为 v1 历史兼容保留，不属于当前 v2 的公开生产、benchmark 或 smoke 入口。
 
 ### 6.2 单侧特征提取器
 
@@ -290,8 +287,8 @@ total_count = standard_count + nonstandard_count
 ### 11.2 推理与任务集成测试
 
 - 全帧配置逐个消费解码帧，不跳帧。
-- 正数 FPS 配置继续支持诊断降采样。
-- 历史 v1 任务固定使用 5 FPS；v2 任务跟随全局全帧或正浮点诊断配置。
+- 历史 v1 任务固定使用 5 FPS；v2 任务固定使用全帧且不受残留正数环境配置影响。
+- 当前生产配置样例、benchmark 和 smoke 均不暴露正数 FPS 入口。
 - 关键点迭代器为惰性，不在调用前读取完整视频。
 - 正常完成、消费异常和提前关闭时均释放视频句柄。
 - Celery 任务保存 `shoulder-press-v2` 和扩展结果字段。
@@ -304,9 +301,9 @@ total_count = standard_count + nonstandard_count
 
 - 全帧计数必须等于人工真值 90；
 - 相同环境重复运行结果必须一致；
-- 5 FPS、10 FPS 回归结果与全帧相差不超过 1 次；
-- 三档都必须给出合法的 `result.total_count`，且 `count_error` 必须严格等于 `result.total_count - manual_total_count`；字段缺失、类型非法或计数不自洽时一律 fail-closed 为无效验收报告；
-- 全帧总耗时不超过视频时长的 2 倍；
+- 报告必须且只能包含一档已完成的 `all_frames`，出现 5/10 FPS 或其他采样档即为无效验收报告；
+- `all_frames` 必须给出合法的 `result.total_count`，且 `count_error` 必须严格等于 `result.total_count - manual_total_count`；字段缺失、类型非法或计数不自洽时一律 fail-closed；
+- 全帧总耗时不超过 600 秒；
 - 应用进程峰值 RSS 低于 1.5 GiB；
 - 正常运行 Swap 使用量保持为零；
 - 服务器分析结束后删除输入视频和中间文件。
@@ -333,6 +330,7 @@ total_count = standard_count + nonstandard_count
 - 最终分支审查由 `b396c25` 固定历史 v1 为 5 FPS、`ebfb832` 增加三档 `total_count` / `count_error` / `manual_total_count` 自洽且 fail-closed 的验收、`0df937f` 固定锚点时间线并限制幅度/肘角只由可靠参与侧判定。
 - 最终重部署使用 commit `0df937f03cfbdfb315c721bb1a90f4062a7e3df8`、归档 SHA-256 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551`、run_id `20260904T081815Z`；5 FPS / 10 FPS / 全帧仍均为 90 次，耗时分别为 183.176 / 225.758 / 421.844 秒，峰值 RSS 分别为 641,409,024 / 641,277,952 / 623,902,720 B，Swap 均为零，`acceptance.passed=true`。
 - 远端正式 app 为最终 `0df937f`；上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 `app.previous-77b0166`、首次失败 v2 和全部历史报告继续保留。输入和 tmp 完全为空，无 benchmark、Celery 或 Web 进程；生产 PostgreSQL、Redis 与 Celery 仍未接入。
+- 当前生产与验收边界由 `b422a4b` 收紧：移除 `MOTION_ANALYSIS_SAMPLE_FPS` 运行时配置，v2 固定全帧，benchmark/smoke 只运行 `all_frames`，并仅按人工真值 90、600 秒、1.5 GiB RSS、Swap 为零和报告自洽性验收。上述既有三档数据保留为历史事实，不再代表当前入口能力。
 
 ## 13. 后续演进
 

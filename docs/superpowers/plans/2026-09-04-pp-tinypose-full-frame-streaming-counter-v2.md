@@ -4,7 +4,7 @@
 
 **Goal:** 将肩部推举分析从整段关键点列表和姿态门槛计数升级为全帧流式推理、左右单侧运动峰值检测、锚点计数和双侧质量匹配，并在人工标注视频上稳定得到 90 次。
 
-**Architecture:** `pose_inference` 暴露可显式关闭的惰性关键点流；新的 `shoulder_press_v2` 规则器逐帧维护左右侧 200 ms 平滑窗口和有限状态，以确定性锚点侧产生计数明细，并对另一侧紧凑事件做单调质量匹配。Celery 任务保持现有 HTTP/数据库契约，默认全帧单并发，冒烟命令负责三档回归、资源门槛和远端验收。
+**Architecture:** `pose_inference` 暴露可显式关闭的惰性关键点流；新的 `shoulder_press_v2` 规则器逐帧维护左右侧 200 ms 平滑窗口和有限状态，以确定性锚点侧产生计数明细，并对另一侧紧凑事件做单调质量匹配。Celery v2 任务保持现有 HTTP/数据库契约并固定全帧单并发，benchmark/smoke 只运行 `all_frames` 并负责人工真值、资源门槛和报告自洽验收。
 
 **Tech Stack:** Python 3.12、Django 5、Celery 5、PaddlePaddle CPU 3.3.0、PaddleX 3.7.2、PP-TinyPose_128x96、OpenCV contrib 4.10.0.84、pytest、Ruff、Bash、Ubuntu 24.04
 
@@ -12,11 +12,12 @@
 
 > 状态：implemented
 > 日期：2026-09-04
-> 范围：肩部推举 v2 规则、全帧流式推理、任务接入、三档算法验收与独立服务器部署
+> 范围：肩部推举 v2 规则、全帧流式推理、任务接入、仅全帧算法验收与独立服务器部署
 > 实施基线 commit：`6c08451`
 > 最终实现 commit：`0df937f03cfbdfb315c721bb1a90f4062a7e3df8`
 > 最终验收：run_id `20260904T081815Z`，三档均为 90 次且 `acceptance.passed=true`；服务器物理内存约 1.58 GiB，尚未达到生产内存规格
 > 修订（2026-09-04, codex）：记录最终分支审查修复、从 committed HEAD 重部署和第三次三档验收结果
+> 仅全帧边界收口 commit：`b422a4b`；上述三档验收作为历史事实保留，当前生产和验收入口不再提供 5/10 FPS 选择
 
 ## 实施与验收记录
 
@@ -36,12 +37,13 @@
 - 最终重部署：committed HEAD `0df937f03cfbdfb315c721bb1a90f4062a7e3df8`，归档 SHA-256 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551`，run_id `20260904T081815Z`。5 FPS / 10 FPS / 全帧均为 90 次且误差均为 0；耗时 183.176 / 225.758 / 421.844 秒；峰值 RSS 641,409,024 / 641,277,952 / 623,902,720 B；Swap 均为 0；报告 `acceptance.passed=true`、失败码为空。
 - 最终脱敏报告已下载到 `/Users/nick/my_dev/ai/agents/reports/pp-tinypose-v2-20260904T081815Z.json` 和同名前缀 `.txt`；JSON / TXT SHA-256 分别为 `460bbc06b74fa34b342068adcde3e1d4584ed642b5b7981e943cab226ad478bc` / `130cc8f2c678e8ae2f78e6e731ac5d8bfb9987835e3a9849140a2e4c55821017`，远端与本地一致，敏感路径和凭据模式扫描无命中。
 - 最终远端状态：正式 app 为 `0df937f`，上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 保留为 `app.previous-77b0166`，首次失败 v2 与所有历史报告均未覆盖或删除；input/tmp 完全为空，无 benchmark、Celery 或 Web 进程，生产 PostgreSQL、Redis 与 Celery 仍未接入。服务器为 2 vCPU、4 GiB Swap 且使用量为 0，但 `MemTotal=1,691,308,032 B`（约 1.58 GiB），明确不达 4 GiB 生产内存规格。
+- 当前仅全帧边界收口：`b422a4b` 移除 v2 正数采样运行时配置并将 v2 固定为全帧；benchmark/smoke 只运行 `all_frames`，仅检查人工真值 90、600 秒、RSS、Swap 和报告自洽。历史 v1 仍在底层固定使用 5 FPS。
 
 ## Global Constraints
 
 - 当前 2 vCPU 保持不变；生产目标为 4 GiB 物理内存、4 GiB Swap、CPU 推理、动作分析并发 1。
 - 算法输入按最长 60 分钟设计；既有业务上传上限 `TRAINING_VIDEO_MAX_DURATION_SECONDS=1800` 不在本计划内修改，端到端上传 60 分钟需另行设计。
-- 历史 `shoulder-press-v1` 固定使用 5 FPS，不受当前全局配置影响；`shoulder-press-v2` 跟随 `MOTION_ANALYSIS_SAMPLE_FPS`，其中 `all` 映射为内部 `None`，正浮点数只保留为诊断和紧急降级能力。
+- 历史 `shoulder-press-v1` 固定使用 5 FPS；当前 `shoulder-press-v2` 固定使用内部 `sample_fps=None` 全帧模式，不定义 `MOTION_ANALYSIS_SAMPLE_FPS` 运行时配置，也不暴露正数诊断或降级入口。
 - 模型固定为 `PP-TinyPose_128x96`，`device="cpu"`，`use_hpip=False`；不得更换模型或新增推理依赖来规避验收。
 - 新规则版本固定为 `shoulder-press-v2`，v1 文件保留用于历史理解和代码级回退，但注册表默认只启用 v2。
 - v2 初始参数固定为：平滑 200 ms、峰值突出度 0.15 torso、上升/回落迟滞各 0.08 torso、同侧最小间隔 800 ms、缺口 300 ms；双侧质量匹配使用 400 ms 直接峰值窗口，或 800 ms 峰值上限加至少 50% 的正时长区间重叠。
@@ -50,7 +52,7 @@
 - 不改变 HTTP API、医生端页面、视频存储供应商、上传/分段协议、数据库网络或 Redis 网络。
 - 独立服务器本期继续以无数据库、无 Redis 的前台 benchmark 方式验收，不启动常驻 Celery Worker；生产队列接入需要单独取得网络与凭据授权。
 - 测试视频固定为 `/Users/nick/my_dev/ai/agents/IMG_0383_SDR_5min.mp4`，SHA-256 固定为 `f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd`，人工真值固定为 90。
-- 真实视频硬验收：全帧 90 次；5 FPS、10 FPS 与全帧相差不超过 1 次；全帧耗时不超过 600 秒；峰值 RSS 低于 1.5 GiB；Swap 使用为零。
+- 真实视频硬验收：报告必须且只能包含 `all_frames`；计数等于人工真值 90 且字段自洽；总耗时不超过 600 秒；峰值 RSS 低于 1.5 GiB；Swap 使用为零。
 - 所有服务器报告必须脱敏，测试输入和中间文件在成功、失败或中断后删除；不把单视频结果描述为医学或临床有效性证明。
 - 主检出目录存在另一会话的未提交改动；只在 `.worktrees/pp-tinypose-smoke` 工作树修改本计划列出的文件，不暂存或覆盖主目录改动。
 
@@ -67,17 +69,17 @@
 
 - `backend/apps/training/pose_inference.py`：增加 `VideoKeypointStream` 和 `open_video_keypoint_stream(...)`，保留旧列表接口作为兼容代理。
 - `backend/apps/training/tests/test_pose_inference.py`：覆盖惰性读取、全帧/固定 FPS、统计和所有退出路径释放。
-- `backend/config/environment.py`：增加 `env_sample_fps(...)`，只接受 `all` 或正有限浮点数。
-- `backend/config/settings.py`：动作分析采样默认值改为全帧。
-- `backend/tests/test_settings.py`：覆盖采样配置解析和默认值。
-- `.env.example`、`deploy/env.production.example`：显式记录 `MOTION_ANALYSIS_SAMPLE_FPS=all`。
+- `backend/config/environment.py`：移除当前 v2 不再使用的采样配置解析器。
+- `backend/config/settings.py`：移除动作分析采样运行时配置。
+- `backend/tests/test_settings.py`：覆盖采样配置不再公开的契约。
+- `.env.example`、`deploy/env.production.example`：移除 `MOTION_ANALYSIS_SAMPLE_FPS` 配置示例。
 - `backend/apps/training/analysis_registry.py`：注册 `shoulder-press-v2`、规则版本和 Iterable 输入契约。
 - `backend/apps/training/video_services.py`：任务创建时固化模型版本和规则版本。
 - `backend/apps/training/tasks.py`：在上下文管理器内流式消费关键点，补充耗时与流统计并持久化 v2。
 - `backend/apps/training/tests/test_motion_analysis.py`：覆盖注册、任务版本、流消费、指标保存和资源释放。
-- `backend/apps/training/pose_benchmark.py`：三档模式改用流式推理，记录人工真值、误差和 v2 硬验收。
+- `backend/apps/training/pose_benchmark.py`：仅以 `all_frames` 流式推理，记录人工真值、误差和 v2 硬验收。
 - `backend/apps/training/management/commands/run_pose_smoke_benchmark.py`：接收正整数 `--manual-total-count`。
-- `backend/apps/training/tests/test_pose_benchmark.py`：覆盖三档流式统计和算法/资源验收。
+- `backend/apps/training/tests/test_pose_benchmark.py`：覆盖单档全帧流式统计、报告自洽和算法/资源验收。
 - `backend/apps/training/tests/test_pose_benchmark_command.py`：覆盖人工真值参数传递与校验。
 - `deploy/motion-analysis-smoke/run-benchmark.sh`：固定传入人工真值 90。
 - `backend/apps/training/tests/test_pose_benchmark_scripts.py`：验证脚本携带人工真值且继续安全清理输入。
@@ -1376,6 +1378,18 @@ Expected: 三份文档记录提交成功；动作分析工作树为空。主检�
 - [x] **Step 6: 用 run_id `20260904T081815Z` 前台串行完成 5 FPS / 10 FPS / 全帧硬验收，三档均为 90 次、误差 0、Swap 0 且 `acceptance.passed=true`**
 - [x] **Step 7: 下载并哈希核验脱敏报告，确认 input/tmp 完全为空、无 benchmark/常驻服务进程且所有历史版本与报告均保留**
 - [x] **Step 8: 同步 design、plan 与追加式 changelog，并只提交这三份正式文档**
+
+---
+
+### Task 8: 收紧当前生产与验收为仅全帧
+
+- [x] **Step 1: 先用调用链扫描确认底层正数采样仍被历史 v1 使用，禁止删除该兼容能力**
+- [x] **Step 2: 先写失败测试，证明 v2 不受残留正数配置影响且当前设置/样例不再暴露采样配置**
+- [x] **Step 3: 最小实现 v2 固定 `sample_fps=None`，移除 `MOTION_ANALYSIS_SAMPLE_FPS` 解析、设置和样例**
+- [x] **Step 4: 先写失败测试，证明 benchmark 只运行 `all_frames` 并拒绝额外采样档**
+- [x] **Step 5: 最小实现单档全帧 benchmark；验收只检查人工真值 90、600 秒、RSS、Swap 和报告自洽**
+- [x] **Step 6: 相关 289 个测试、Ruff、Bash 语法和 `git diff --check` 通过；代码提交为 `b422a4b`**
+- [x] **Step 7: 同步当前 design、plan、追加式 changelog 和 SDD ledger，不改写既有三档部署事实**
 
 ---
 

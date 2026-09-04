@@ -184,3 +184,9 @@
 - 肩部推举 v2 最终分支审查完成三项收口：历史 `shoulder-press-v1` 固定使用 5 FPS，`shoulder-press-v2` 才跟随全局采样配置；三档 benchmark 强制 `result.total_count`、`count_error` 与 `manual_total_count` 严格自洽，字段损坏时 fail-closed；动作明细与 tempo 严格使用锚点侧时间，幅度和肘角只由可靠覆盖率不低于 80% 的参与侧判定，低可靠侧只贡献 `low_confidence`。对应修复提交为 `b396c25`、`ebfb832`、`0df937f`。
 - 使用 committed HEAD `0df937f03cfbdfb315c721bb1a90f4062a7e3df8` 重新生成并核验归档（SHA-256 `b72c5cf0f7de82659272c051e3bf5d979199dbb39be48857e00b2f4035df1551`），以 run_id `20260904T081815Z` 完成第三次前台串行验收：5 FPS / 10 FPS / 全帧均为 90 次、误差 0，耗时 183.176 / 225.758 / 421.844 秒，峰值 RSS 641,409,024 / 641,277,952 / 623,902,720 B，Swap 均为 0，`acceptance.passed=true`。
 - 独立算法服务器正式 app 已更新为最终 `0df937f`；上一版通过的 `de56352` 保留为 `app.previous-de56352`，v1 `app.previous-77b0166`、首次失败 v2 和全部历史脱敏报告均未覆盖或删除。input/tmp 完全为空，无 benchmark、Celery 或 Web 进程；生产 PostgreSQL、Redis 与 Celery 仍未接入。服务器物理内存为 1,691,308,032 B（约 1.58 GiB），明确不达 4 GiB 生产规格，生产接入仍以扩容和另行授权为前置条件。
+
+## 0.26 - 2026-09-04
+
+- 经用户批准，当前 `shoulder-press-v2` 生产任务固定使用全帧：移除 `MOTION_ANALYSIS_SAMPLE_FPS` 运行时配置及部署样例，残留旧正数设置也不能改变 v2 采样语义。底层固定 FPS 能力仅为历史 `shoulder-press-v1` 的 5 FPS 兼容保留，不进入当前 v2 生产或验收入口。
+- benchmark/smoke 收紧为只运行 `all_frames`；验收只检查人工真值 90、总耗时不超过 600 秒、峰值 RSS 低于 1.5 GiB、Swap 为零，以及 `total_count`、`count_error` 和人工真值严格自洽。报告出现 5/10 FPS 或其他额外采样档时 fail-closed。
+- 代码边界收口提交为 `b422a4b`。0.24–0.25 中的三档运行记录继续作为历史验收事实保留，不再代表当前公开生产或验收流程。
