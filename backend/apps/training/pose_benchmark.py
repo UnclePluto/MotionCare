@@ -40,8 +40,6 @@ class BenchmarkMode:
 
 
 BENCHMARK_MODES = (
-    BenchmarkMode("5fps", 5.0),
-    BenchmarkMode("10fps", 10.0),
     BenchmarkMode("all_frames", None),
 )
 
@@ -274,7 +272,7 @@ def _validated_v2_acceptance_failures(report):
     if not isinstance(modes, list):
         return ["invalid_acceptance_report"]
 
-    required_names = ("5fps", "10fps", "all_frames")
+    required_names = ("all_frames",)
     allowed_statuses = {
         "running",
         "completed",
@@ -361,18 +359,8 @@ def _validated_v2_acceptance_failures(report):
     gate_failures = []
     if actual_count_errors.get("all_frames") not in (None, 0):
         gate_failures.append("all_frame_count_mismatch")
-    if any(
-        abs(actual_count_errors[name]) > 1
-        for name in ("5fps", "10fps")
-        if name in actual_count_errors
-    ):
-        gate_failures.append("sampled_count_error_over_one")
-    if (
-        total_seconds_valid
-        and duration_valid
-        and total_seconds > duration_seconds * 2
-    ):
-        gate_failures.append("all_frame_slower_than_two_times_duration")
+    if total_seconds_valid and total_seconds > 600:
+        gate_failures.append("all_frame_over_600_seconds")
     if process_rss_valid and process_rss_bytes >= int(1.5 * 1024**3):
         gate_failures.append("all_frame_rss_limit_exceeded")
     if swap_used_valid and swap_used_bytes != 0:

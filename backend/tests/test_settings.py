@@ -9,7 +9,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import dotenv_values
 
-from config.environment import env_bool, env_sample_fps, validate_wechat_miniapp_settings
+from config.environment import env_bool, validate_wechat_miniapp_settings
 
 
 def test_env_bool_defaults_to_false_when_variable_is_unset(monkeypatch):
@@ -64,38 +64,13 @@ def test_env_bool_does_not_echo_unknown_environment_value(monkeypatch):
     assert sensitive_value not in str(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    ("raw_value", "expected"),
-    [("all", None), (" ALL ", None), ("5", 5.0), ("10.5", 10.5)],
-)
-def test_env_sample_fps_accepts_all_or_positive_number(
-    monkeypatch,
-    raw_value,
-    expected,
-):
-    monkeypatch.setenv("TEST_SAMPLE_FPS", raw_value)
-
-    assert env_sample_fps("TEST_SAMPLE_FPS") == expected
-
-
-@pytest.mark.parametrize("raw_value", ["", "0", "-1", "nan", "inf", "full"])
-def test_env_sample_fps_rejects_invalid_value(monkeypatch, raw_value):
-    monkeypatch.setenv("TEST_SAMPLE_FPS", raw_value)
-
-    with pytest.raises(ImproperlyConfigured, match="TEST_SAMPLE_FPS"):
-        env_sample_fps("TEST_SAMPLE_FPS")
-
-
-def test_motion_analysis_defaults_to_all_frames():
-    assert settings.MOTION_ANALYSIS_SAMPLE_FPS is None
-
-
-def test_motion_analysis_env_examples_default_to_all_frames():
+def test_motion_analysis_sampling_is_not_runtime_configurable():
+    assert not hasattr(settings, "MOTION_ANALYSIS_SAMPLE_FPS")
     for example_path in (
         settings.ROOT_DIR / ".env.example",
         settings.ROOT_DIR / "deploy" / "env.production.example",
     ):
-        assert dotenv_values(example_path)["MOTION_ANALYSIS_SAMPLE_FPS"] == "all"
+        assert "MOTION_ANALYSIS_SAMPLE_FPS" not in dotenv_values(example_path)
 
 
 def test_local_vite_origins_are_trusted_for_csrf():

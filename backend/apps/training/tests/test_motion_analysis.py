@@ -713,7 +713,7 @@ def test_task_downloads_analyzes_persists_success_and_cleans_temp_file(
 
     def fake_open_stream(path, *, sample_fps):
         assert os.path.exists(path)
-        assert sample_fps == 4
+        assert sample_fps is None
         return fake_stream
 
     def analyze_frames(frames):
@@ -903,20 +903,16 @@ def test_task_runs_historical_v1_with_its_pinned_versions(
     (
         "algorithm_version",
         "rule_version",
-        "configured_sample_fps",
         "expected_sample_fps",
     ),
     [
-        ("", "shoulder-press-v1", None, 5.0),
-        ("", "shoulder-press-v1", 10.0, 5.0),
-        (PP_TINYPOSE_MODEL_NAME, SHOULDER_PRESS_RULE_VERSION, None, None),
-        (PP_TINYPOSE_MODEL_NAME, SHOULDER_PRESS_RULE_VERSION, 10.0, 10.0),
+        ("", "shoulder-press-v1", 5.0),
+        (PP_TINYPOSE_MODEL_NAME, SHOULDER_PRESS_RULE_VERSION, None),
     ],
 )
-def test_task_resolves_sample_fps_from_the_pinned_analyzer_version(
+def test_task_uses_only_the_pinned_analyzer_sampling_mode(
     algorithm_version,
     rule_version,
-    configured_sample_fps,
     expected_sample_fps,
     project_patient,
     active_prescription,
@@ -953,7 +949,7 @@ def test_task_resolves_sample_fps_from_the_pinned_analyzer_version(
         return FakeKeypointStream(frames, source_fps=10.0)
 
     with (
-        override_settings(MOTION_ANALYSIS_SAMPLE_FPS=configured_sample_fps),
+        override_settings(MOTION_ANALYSIS_SAMPLE_FPS=10.0),
         patch(
             "apps.training.tasks.create_private_download_url",
             return_value="https://cdn.example.com/private.mp4?token=sensitive",

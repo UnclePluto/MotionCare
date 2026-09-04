@@ -242,9 +242,7 @@ def run_motion_analysis_job(job_id):
         analysis_started = time.monotonic()
         with open_video_keypoint_stream(
             temporary_path,
-            sample_fps=analyzer.resolve_sample_fps(
-                settings.MOTION_ANALYSIS_SAMPLE_FPS
-            ),
+            sample_fps=analyzer.fixed_sample_fps,
         ) as stream:
             result = analyzer.analyze_keypoints(stream)
         result = {

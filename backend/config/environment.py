@@ -1,21 +1,6 @@
-import math
 import os
 
 from django.core.exceptions import ImproperlyConfigured
-
-
-def env_sample_fps(name: str, *, default: str = "all") -> float | None:
-    raw_value = os.getenv(name, default).strip().lower()
-    if raw_value == "all":
-        return None
-    try:
-        value = float(raw_value)
-    except ValueError as exc:
-        raise ImproperlyConfigured(f"{name} 只允许设置为 all 或正数。") from exc
-    if not math.isfinite(value) or value <= 0:
-        raise ImproperlyConfigured(f"{name} 只允许设置为 all 或正数。")
-    return value
-
 
 def env_bool(name, *, default=False):
     raw_value = os.getenv(name)

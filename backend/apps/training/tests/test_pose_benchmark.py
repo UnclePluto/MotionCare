@@ -79,18 +79,6 @@ def _valid_acceptance_report():
         "video": {"duration_seconds": 300.0},
         "modes": [
             {
-                "name": "5fps",
-                "status": "completed",
-                "count_error": 0,
-                "result": {"total_count": 90},
-            },
-            {
-                "name": "10fps",
-                "status": "completed",
-                "count_error": 0,
-                "result": {"total_count": 90},
-            },
-            {
                 "name": "all_frames",
                 "status": "completed",
                 "count_error": 0,
@@ -244,31 +232,33 @@ def test_v2_benchmark_records_manual_count_and_passes_all_gates(tmp_path):
         summary_path=summary,
         expected_sha256=sha256_file(video),
         git_commit="abc1234",
-        manual_total_count=3,
+        manual_total_count=90,
         ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
         model_factory=model_factory,
         warm_up=lambda path, *, model: None,
         stream_factory=stream_factory,
-        analyzer=lambda frames: (list(frames), _benchmark_result(3))[1],
+        analyzer=lambda frames: (list(frames), _benchmark_result(90))[1],
         sampler_factory=lambda: FakeSampler(_peak(swap_used=0)),
         version_reader=lambda: {"python": "3.12.3", "paddlepaddle": "3.3.0"},
         hardware_reader=lambda: {"cpu_model": "Fake CPU", "vcpu_count": 2},
     )
 
     assert len(model_factory_calls) == 1
-    assert sample_modes == [5.0, 10.0, None]
-    assert [item["status"] for item in result["modes"]] == ["completed"] * 3
-    assert [item["inferred_frame_count"] for item in result["modes"]] == [3, 3, 3]
+    assert sample_modes == [None]
+    assert [item["status"] for item in result["modes"]] == ["completed"]
+    assert [item["inferred_frame_count"] for item in result["modes"]] == [3]
     assert result["report_format_version"] == "2.0"
-    assert result["manual_total_count"] == 3
-    assert [mode["count_error"] for mode in result["modes"]] == [0, 0, 0]
+    assert result["manual_total_count"] == 90
+    assert [mode["count_error"] for mode in result["modes"]] == [0]
     assert result["acceptance"] == {"passed": True, "failures": []}
     serialized = report.read_text(encoding="utf-8")
     assert str(video) not in serialized
     assert video.name not in serialized
     assert "abc1234" in serialized
     summary_text = summary.read_text(encoding="utf-8")
-    assert "5 FPS" in summary_text
+    assert "全帧" in summary_text
+    assert "5 FPS" not in summary_text
+    assert "10 FPS" not in summary_text
     assert "人工误差=0" in summary_text
     assert "v2验收：通过" in summary_text
     assert str(video) not in summary_text
@@ -279,115 +269,60 @@ def test_v2_benchmark_records_manual_count_and_passes_all_gates(tmp_path):
     ("case", "expected_failure"),
     [
         ("full_frame_count_not_90", "all_frame_count_mismatch"),
-        ("sampled_count_diff_over_one", "sampled_count_error_over_one"),
-        (
-            "all_frame_over_two_times_duration",
-            "all_frame_slower_than_two_times_duration",
-        ),
+        ("all_frame_over_600_seconds", "all_frame_over_600_seconds"),
         ("rss_at_or_over_1_5_gib", "all_frame_rss_limit_exceeded"),
         ("swap_used_nonzero", "swap_used"),
         ("all_frame_not_completed", "required_mode_not_completed"),
     ],
 )
 def test_v2_acceptance_rejects_each_failed_gate(case, expected_failure):
-    report = {
-        "manual_total_count": 90,
-        "video": {"duration_seconds": 300.0},
-        "modes": [
-            {
-                "name": "5fps",
-                "status": "completed",
-                "count_error": 0,
-                "result": {"total_count": 90},
-            },
-            {
-                "name": "10fps",
-                "status": "completed",
-                "count_error": 0,
-                "result": {"total_count": 90},
-            },
-            {
-                "name": "all_frames",
-                "status": "completed",
-                "count_error": 0,
-                "total_seconds": 445.0,
-                "result": {"total_count": 90},
-                "resource_peak": {
-                    "process_rss_bytes": 700 * 1024**2,
-                    "swap_used_bytes": 0,
-                },
-            },
-        ],
-    }
+    report = _valid_acceptance_report()
     if case == "full_frame_count_not_90":
-        report["modes"][2]["result"]["total_count"] = 89
-        report["modes"][2]["count_error"] = -1
-    elif case == "sampled_count_diff_over_one":
-        report["modes"][0]["result"]["total_count"] = 88
-        report["modes"][0]["count_error"] = -2
-    elif case == "all_frame_over_two_times_duration":
-        report["modes"][2]["total_seconds"] = 601.0
+        report["modes"][0]["result"]["total_count"] = 89
+        report["modes"][0]["count_error"] = -1
+    elif case == "all_frame_over_600_seconds":
+        report["modes"][0]["total_seconds"] = 600.0001
     elif case == "rss_at_or_over_1_5_gib":
-        report["modes"][2]["resource_peak"]["process_rss_bytes"] = int(
+        report["modes"][0]["resource_peak"]["process_rss_bytes"] = int(
             1.5 * 1024**3
         )
     elif case == "swap_used_nonzero":
-        report["modes"][2]["resource_peak"]["swap_used_bytes"] = 4096
+        report["modes"][0]["resource_peak"]["swap_used_bytes"] = 4096
     else:
-        report["modes"][2] = {"name": "all_frames", "status": "failed"}
+        report["modes"][0] = {"name": "all_frames", "status": "failed"}
 
     assert pose_benchmark._v2_acceptance_failures(report) == [expected_failure]
 
 
 def test_v2_acceptance_allows_inclusive_time_and_exclusive_rss_boundaries():
-    report = {
-        "manual_total_count": 90,
-        "video": {"duration_seconds": 300.0},
-        "modes": [
-            {
-                "name": "5fps",
-                "status": "completed",
-                "count_error": -1,
-                "result": {"total_count": 89},
-            },
-            {
-                "name": "10fps",
-                "status": "completed",
-                "count_error": 1,
-                "result": {"total_count": 91},
-            },
-            {
-                "name": "all_frames",
-                "status": "completed",
-                "count_error": 0,
-                "total_seconds": 600.0,
-                "result": {"total_count": 90},
-                "resource_peak": {
-                    "process_rss_bytes": int(1.5 * 1024**3) - 1,
-                    "swap_used_bytes": 0,
-                },
-            },
-        ],
-    }
+    report = _valid_acceptance_report()
+    report["modes"][0]["total_seconds"] = 600.0
+    report["modes"][0]["resource_peak"]["process_rss_bytes"] = (
+        int(1.5 * 1024**3) - 1
+    )
 
     assert pose_benchmark._v2_acceptance_failures(report) == []
 
 
-def test_v2_acceptance_rejects_forged_sampled_errors_using_actual_totals():
+def test_v2_acceptance_rejects_extra_sampled_mode():
     report = _valid_acceptance_report()
-    report["modes"][0]["result"]["total_count"] = 1
-    report["modes"][1]["result"]["total_count"] = 2
+    report["modes"].append(
+        {
+            "name": "5fps",
+            "status": "completed",
+            "count_error": 0,
+            "result": {"total_count": 90},
+        }
+    )
 
     assert pose_benchmark._v2_acceptance_failures(report) == [
-        "invalid_acceptance_report",
-        "sampled_count_error_over_one",
+        "invalid_acceptance_report"
     ]
 
 
-@pytest.mark.parametrize("mode_index", [0, 1, 2])
-def test_v2_acceptance_requires_result_for_each_mode(mode_index):
+def test_v2_acceptance_requires_all_frame_result():
     report = _valid_acceptance_report()
-    report["modes"][mode_index].pop("result")
+    report["modes"][0].pop("result")
 
     assert pose_benchmark._v2_acceptance_failures(report) == [
         "invalid_acceptance_report"
@@ -395,23 +330,18 @@ def test_v2_acceptance_requires_result_for_each_mode(mode_index):
 
 
 @pytest.mark.parametrize("invalid_total", [True, -1])
-@pytest.mark.parametrize("mode_index", [0, 1, 2])
-def test_v2_acceptance_rejects_bool_or_negative_total_for_each_mode(
-    mode_index,
-    invalid_total,
-):
+def test_v2_acceptance_rejects_bool_or_negative_all_frame_total(invalid_total):
     report = _valid_acceptance_report()
-    report["modes"][mode_index]["result"]["total_count"] = invalid_total
+    report["modes"][0]["result"]["total_count"] = invalid_total
 
     assert pose_benchmark._v2_acceptance_failures(report) == [
         "invalid_acceptance_report"
     ]
 
 
-@pytest.mark.parametrize("mode_index", [0, 1, 2])
-def test_v2_acceptance_rejects_count_error_inconsistent_with_total(mode_index):
+def test_v2_acceptance_rejects_count_error_inconsistent_with_total():
     report = _valid_acceptance_report()
-    report["modes"][mode_index]["count_error"] = 1
+    report["modes"][0]["count_error"] = 1
 
     assert pose_benchmark._v2_acceptance_failures(report) == [
         "invalid_acceptance_report"
@@ -439,19 +369,19 @@ def test_v2_acceptance_rejects_malformed_schema_without_raising(case):
         report["modes"][0].pop("status")
         expected.append("required_mode_not_completed")
     elif case == "missing_result":
-        report["modes"][2].pop("result")
+        report["modes"][0].pop("result")
     elif case == "missing_resource_peak":
-        report["modes"][2].pop("resource_peak")
+        report["modes"][0].pop("resource_peak")
     elif case == "wrong_modes_container":
         report["modes"] = {}
     elif case == "wrong_result_container":
-        report["modes"][2]["result"] = []
+        report["modes"][0]["result"] = []
     elif case == "wrong_resource_peak_container":
-        report["modes"][2]["resource_peak"] = []
+        report["modes"][0]["resource_peak"] = []
     elif case == "bool_count_error":
         report["modes"][0]["count_error"] = True
     elif case == "incomplete_mode_and_bad_duration":
-        report["modes"][2] = {"name": "all_frames", "status": "failed"}
+        report["modes"][0] = {"name": "all_frames", "status": "failed"}
         report["video"]["duration_seconds"] = float("nan")
         expected.append("required_mode_not_completed")
     else:
@@ -485,11 +415,11 @@ def test_v2_acceptance_rejects_non_finite_numbers_without_fail_open(
     elif field == "count_error":
         report["modes"][0][field] = non_finite
     elif field == "total_count":
-        report["modes"][2]["result"][field] = non_finite
+        report["modes"][0]["result"][field] = non_finite
     elif field == "total_seconds":
-        report["modes"][2][field] = non_finite
+        report["modes"][0][field] = non_finite
     else:
-        report["modes"][2]["resource_peak"][field] = non_finite
+        report["modes"][0]["resource_peak"][field] = non_finite
 
     assert pose_benchmark._v2_acceptance_failures(report) == [
         "invalid_acceptance_report"
@@ -498,11 +428,10 @@ def test_v2_acceptance_rejects_non_finite_numbers_without_fail_open(
 
 def test_v2_acceptance_keeps_stable_order_and_collects_safe_failures():
     report = _valid_acceptance_report()
-    report["modes"][2]["count_error"] = True
-    report["modes"][2]["result"]["total_count"] = 89
-    report["modes"][0]["result"]["total_count"] = 88
-    report["modes"][2]["total_seconds"] = 601.0
-    report["modes"][2]["resource_peak"] = {
+    report["modes"][0]["count_error"] = True
+    report["modes"][0]["result"]["total_count"] = 89
+    report["modes"][0]["total_seconds"] = 601.0
+    report["modes"][0]["resource_peak"] = {
         "process_rss_bytes": int(1.5 * 1024**3),
         "swap_used_bytes": 4096,
     }
@@ -510,8 +439,7 @@ def test_v2_acceptance_keeps_stable_order_and_collects_safe_failures():
     assert pose_benchmark._v2_acceptance_failures(report) == [
         "invalid_acceptance_report",
         "all_frame_count_mismatch",
-        "sampled_count_error_over_one",
-        "all_frame_slower_than_two_times_duration",
+        "all_frame_over_600_seconds",
         "all_frame_rss_limit_exceeded",
         "swap_used",
     ]
@@ -521,14 +449,12 @@ def test_benchmark_persists_sanitized_report_before_v2_acceptance_failure(tmp_pa
     video = tmp_path / "private-patient-video.mp4"
     video.write_bytes(b"video")
     report_path = tmp_path / "report.json"
-    totals = iter([90, 90, 89])
-
     def stream_factory(path, *, sample_fps, model):
         return FakeStream([{"timestamp_ms": 0, "keypoints": {}}])
 
     def analyzer(frames):
         list(frames)
-        return _benchmark_result(next(totals))
+        return _benchmark_result(89)
 
     with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
         run_pose_smoke_benchmark(
@@ -604,7 +530,7 @@ def test_invalid_acceptance_data_still_persists_final_json_and_summary(tmp_path)
     video.write_bytes(b"video")
     report_path = tmp_path / "report.json"
     summary_path = tmp_path / "report.txt"
-    peaks = iter([_peak(), _peak(), _peak(process_rss=None)])
+    peak = _peak(process_rss=None)
 
     with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
         run_pose_smoke_benchmark(
@@ -621,7 +547,7 @@ def test_invalid_acceptance_data_still_persists_final_json_and_summary(tmp_path)
                 [{"timestamp_ms": 0, "keypoints": {}}]
             ),
             analyzer=lambda frames: (list(frames), _benchmark_result(1))[1],
-            sampler_factory=lambda: FakeSampler(next(peaks)),
+            sampler_factory=lambda: FakeSampler(peak),
             version_reader=lambda: {},
             hardware_reader=lambda: {},
         )
@@ -637,55 +563,6 @@ def test_invalid_acceptance_data_still_persists_final_json_and_summary(tmp_path)
     assert "状态: failed" in summary
     assert "v2验收：失败" in summary
     assert str(video) not in summary
-
-
-@pytest.mark.parametrize(
-    ("available", "swap_free", "reason"),
-    [
-        (200 * 1024**2, 3 * 1024**3, "memory_available_below_256_mib"),
-        (800 * 1024**2, 400 * 1024**2, "swap_free_below_512_mib"),
-    ],
-)
-def test_resource_skip_fails_v2_acceptance_when_all_frames_are_not_completed(
-    tmp_path,
-    available,
-    swap_free,
-    reason,
-):
-    video = tmp_path / "video.mp4"
-    video.write_bytes(b"video")
-    peaks = iter([_peak(), _peak(available=available, swap_free=swap_free)])
-    modes = []
-
-    report_path = tmp_path / "report.json"
-
-    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
-        run_pose_smoke_benchmark(
-            video,
-            report_path=report_path,
-            summary_path=tmp_path / "report.txt",
-            expected_sha256=sha256_file(video),
-            git_commit="abc1234",
-            manual_total_count=1,
-            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
-            model_factory=lambda: object(),
-            warm_up=lambda path, *, model: None,
-            stream_factory=lambda path, *, sample_fps, model: (
-                modes.append(sample_fps)
-                or FakeStream([{"timestamp_ms": 0, "keypoints": {}}])
-            ),
-            analyzer=lambda frames: (list(frames), _benchmark_result(1))[1],
-            sampler_factory=lambda: FakeSampler(next(peaks)),
-            version_reader=lambda: {},
-            hardware_reader=lambda: {},
-        )
-
-    assert modes == [5.0, 10.0]
-    result = json.loads(report_path.read_text(encoding="utf-8"))
-    assert result["status"] == "failed"
-    assert result["modes"][2]["status"] == "skipped_for_resource_safety"
-    assert result["modes"][2]["reason"] == reason
-    assert result["acceptance"]["failures"] == ["required_mode_not_completed"]
 
 
 def test_hash_mismatch_writes_failed_report_before_model_load(tmp_path):
@@ -730,63 +607,20 @@ def test_benchmark_rejects_report_and_summary_resolving_to_same_path(tmp_path):
     assert not report.exists()
 
 
-def test_resource_failure_is_sanitized_and_stops_higher_modes(tmp_path):
-    video = tmp_path / "private-video.mp4"
-    video.write_bytes(b"video")
-    report = tmp_path / "report.json"
-    calls = []
-
-    def stream_factory(path, *, sample_fps, model):
-        calls.append(sample_fps)
-        raise MemoryError("private /path/video.mp4")
-
-    with pytest.raises(BenchmarkFailure, match="v2 算法验收失败"):
-        run_pose_smoke_benchmark(
-            video,
-            report_path=report,
-            summary_path=tmp_path / "report.txt",
-            expected_sha256=sha256_file(video),
-            git_commit="abc1234",
-            manual_total_count=1,
-            ffprobe_runner=lambda *args, **kwargs: _probe_payload(),
-            model_factory=lambda: object(),
-            warm_up=lambda path, *, model: None,
-            stream_factory=stream_factory,
-            analyzer=lambda frames: {},
-            sampler_factory=lambda: FakeSampler(_peak()),
-            version_reader=lambda: {},
-            hardware_reader=lambda: {},
-        )
-
-    result = json.loads(report.read_text(encoding="utf-8"))
-    assert calls == [5.0]
-    assert result["status"] == "failed"
-    assert result["modes"][0]["status"] == "failed"
-    assert result["modes"][0]["error_type"] == "MemoryError"
-    assert result["modes"][1]["status"] == "skipped_for_resource_safety"
-    assert result["modes"][2]["status"] == "skipped_for_resource_safety"
-    serialized = report.read_text(encoding="utf-8")
-    assert "private /path" not in serialized
-    assert str(video) not in serialized
-
-
 @pytest.mark.parametrize(
-    ("failure", "expected_summary", "expected_mode_statuses"),
+    ("failure", "expected_summary"),
     [
         (
             MemoryError("private /path/video.mp4"),
             "推理阶段发生资源错误",
-            ["failed", "skipped_for_resource_safety", "skipped_for_resource_safety"],
         ),
         (
             OSError(errno.ENOMEM, "private /path/video.mp4"),
             "推理阶段发生资源错误",
-            ["failed", "skipped_for_resource_safety", "skipped_for_resource_safety"],
         ),
         (
             OSError(errno.EIO, "private /path/video.mp4"),
             "推理阶段执行失败",
-            ["failed"],
         ),
     ],
 )
@@ -794,7 +628,6 @@ def test_only_memory_allocation_failures_use_resource_safety_flow(
     tmp_path,
     failure,
     expected_summary,
-    expected_mode_statuses,
 ):
     video = tmp_path / "private-video.mp4"
     video.write_bytes(b"video")
@@ -824,8 +657,8 @@ def test_only_memory_allocation_failures_use_resource_safety_flow(
         )
 
     payload = json.loads(report.read_text(encoding="utf-8"))
-    assert calls == [5.0]
-    assert [mode["status"] for mode in payload["modes"]] == expected_mode_statuses
+    assert calls == [None]
+    assert [mode["status"] for mode in payload["modes"]] == ["failed"]
     assert payload["modes"][0]["error_type"] == type(failure).__name__
     assert payload["modes"][0]["error_summary"] == expected_summary
     serialized = json.dumps(payload, ensure_ascii=False)
@@ -864,7 +697,7 @@ def test_non_resource_mode_failure_is_sanitized_and_marks_current_mode_failed(
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["status"] == "failed"
     assert payload["modes"][0]["status"] == "failed"
-    assert payload["modes"][0]["failure_stage"] == "5fps_inference"
+    assert payload["modes"][0]["failure_stage"] == "all_frames_inference"
     assert payload["modes"][0]["error_type"] == "ValueError"
     assert payload["modes"][0]["error_summary"] == "推理阶段执行失败"
     assert payload["acceptance"]["failures"] == ["required_mode_not_completed"]
@@ -902,10 +735,10 @@ def test_all_frames_resource_failure_fails_v2_acceptance(tmp_path):
             hardware_reader=lambda: {},
         )
 
-    assert calls == [5.0, 10.0, None]
+    assert calls == [None]
     result = json.loads(report.read_text(encoding="utf-8"))
     assert result["status"] == "failed"
-    assert result["modes"][2]["status"] == "failed"
+    assert result["modes"][0]["status"] == "failed"
     assert result["acceptance"]["failures"] == ["required_mode_not_completed"]
     assert "private /path" not in report.read_text(encoding="utf-8")
 
