@@ -294,8 +294,18 @@ def test_v2_acceptance_rejects_each_failed_gate(case, expected_failure):
         "manual_total_count": 90,
         "video": {"duration_seconds": 300.0},
         "modes": [
-            {"name": "5fps", "status": "completed", "count_error": 0},
-            {"name": "10fps", "status": "completed", "count_error": 0},
+            {
+                "name": "5fps",
+                "status": "completed",
+                "count_error": 0,
+                "result": {"total_count": 90},
+            },
+            {
+                "name": "10fps",
+                "status": "completed",
+                "count_error": 0,
+                "result": {"total_count": 90},
+            },
             {
                 "name": "all_frames",
                 "status": "completed",
@@ -311,7 +321,9 @@ def test_v2_acceptance_rejects_each_failed_gate(case, expected_failure):
     }
     if case == "full_frame_count_not_90":
         report["modes"][2]["result"]["total_count"] = 89
+        report["modes"][2]["count_error"] = -1
     elif case == "sampled_count_diff_over_one":
+        report["modes"][0]["result"]["total_count"] = 88
         report["modes"][0]["count_error"] = -2
     elif case == "all_frame_over_two_times_duration":
         report["modes"][2]["total_seconds"] = 601.0
@@ -332,8 +344,18 @@ def test_v2_acceptance_allows_inclusive_time_and_exclusive_rss_boundaries():
         "manual_total_count": 90,
         "video": {"duration_seconds": 300.0},
         "modes": [
-            {"name": "5fps", "status": "completed", "count_error": -1},
-            {"name": "10fps", "status": "completed", "count_error": 1},
+            {
+                "name": "5fps",
+                "status": "completed",
+                "count_error": -1,
+                "result": {"total_count": 89},
+            },
+            {
+                "name": "10fps",
+                "status": "completed",
+                "count_error": 1,
+                "result": {"total_count": 91},
+            },
             {
                 "name": "all_frames",
                 "status": "completed",
@@ -349,6 +371,51 @@ def test_v2_acceptance_allows_inclusive_time_and_exclusive_rss_boundaries():
     }
 
     assert pose_benchmark._v2_acceptance_failures(report) == []
+
+
+def test_v2_acceptance_rejects_forged_sampled_errors_using_actual_totals():
+    report = _valid_acceptance_report()
+    report["modes"][0]["result"]["total_count"] = 1
+    report["modes"][1]["result"]["total_count"] = 2
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report",
+        "sampled_count_error_over_one",
+    ]
+
+
+@pytest.mark.parametrize("mode_index", [0, 1, 2])
+def test_v2_acceptance_requires_result_for_each_mode(mode_index):
+    report = _valid_acceptance_report()
+    report["modes"][mode_index].pop("result")
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
+
+
+@pytest.mark.parametrize("invalid_total", [True, -1])
+@pytest.mark.parametrize("mode_index", [0, 1, 2])
+def test_v2_acceptance_rejects_bool_or_negative_total_for_each_mode(
+    mode_index,
+    invalid_total,
+):
+    report = _valid_acceptance_report()
+    report["modes"][mode_index]["result"]["total_count"] = invalid_total
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
+
+
+@pytest.mark.parametrize("mode_index", [0, 1, 2])
+def test_v2_acceptance_rejects_count_error_inconsistent_with_total(mode_index):
+    report = _valid_acceptance_report()
+    report["modes"][mode_index]["count_error"] = 1
+
+    assert pose_benchmark._v2_acceptance_failures(report) == [
+        "invalid_acceptance_report"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -433,7 +500,7 @@ def test_v2_acceptance_keeps_stable_order_and_collects_safe_failures():
     report = _valid_acceptance_report()
     report["modes"][2]["count_error"] = True
     report["modes"][2]["result"]["total_count"] = 89
-    report["modes"][0]["count_error"] = -2
+    report["modes"][0]["result"]["total_count"] = 88
     report["modes"][2]["total_seconds"] = 601.0
     report["modes"][2]["resource_peak"] = {
         "process_rss_bytes": int(1.5 * 1024**3),

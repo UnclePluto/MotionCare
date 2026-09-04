@@ -310,31 +310,31 @@ def _validated_v2_acceptance_failures(report):
         failures.append("required_mode_not_completed")
         return failures
 
-    sampled_modes = [modes_by_name["5fps"], modes_by_name["10fps"]]
     all_frames = modes_by_name["all_frames"]
 
-    sampled_errors = []
-    for mode in sampled_modes:
-        count_error = mode.get("count_error")
-        if type(count_error) is int:
-            sampled_errors.append(count_error)
-        else:
+    actual_count_errors = {}
+    for name in required_names:
+        mode = modes_by_name[name]
+        result = mode.get("result")
+        result_total_count = None
+        result_total_count_valid = False
+        if isinstance(result, dict):
+            result_total_count = result.get("total_count")
+            result_total_count_valid = (
+                type(result_total_count) is int and result_total_count >= 0
+            )
+        if not result_total_count_valid:
             invalid = True
 
-    all_count_error = all_frames.get("count_error")
-    if type(all_count_error) is not int:
-        invalid = True
-
-    result = all_frames.get("result")
-    result_total_count = None
-    result_total_count_valid = False
-    if isinstance(result, dict):
-        result_total_count = result.get("total_count")
-        result_total_count_valid = (
-            type(result_total_count) is int and result_total_count >= 0
-        )
-    if not result_total_count_valid:
-        invalid = True
+        count_error = mode.get("count_error")
+        count_error_valid = type(count_error) is int
+        if not count_error_valid:
+            invalid = True
+        if result_total_count_valid and manual_count_valid:
+            actual_count_error = result_total_count - manual_total_count
+            actual_count_errors[name] = actual_count_error
+            if not count_error_valid or count_error != actual_count_error:
+                invalid = True
 
     total_seconds = all_frames.get("total_seconds")
     total_seconds_valid = (
@@ -359,13 +359,13 @@ def _validated_v2_acceptance_failures(report):
         invalid = True
 
     gate_failures = []
-    if (
-        result_total_count_valid
-        and manual_count_valid
-        and result_total_count != manual_total_count
-    ):
+    if actual_count_errors.get("all_frames") not in (None, 0):
         gate_failures.append("all_frame_count_mismatch")
-    if any(abs(count_error) > 1 for count_error in sampled_errors):
+    if any(
+        abs(actual_count_errors[name]) > 1
+        for name in ("5fps", "10fps")
+        if name in actual_count_errors
+    ):
         gate_failures.append("sampled_count_error_over_one")
     if (
         total_seconds_valid
