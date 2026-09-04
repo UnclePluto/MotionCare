@@ -227,6 +227,50 @@ def test_extended_bilateral_match_boundaries(
     )
 
 
+@pytest.mark.parametrize(
+    ("right_start_ms", "right_end_ms"),
+    [
+        pytest.param(1_600, 1_600, id="zero-duration"),
+        pytest.param(1_700, 1_500, id="negative-duration"),
+    ],
+)
+def test_extended_match_rejects_nonpositive_event_duration(
+    right_start_ms, right_end_ms
+):
+    left_events = [
+        _side_event("left", start_ms=0, peak_ms=1_000, end_ms=2_000)
+    ]
+    right_events = [
+        _side_event(
+            "right",
+            start_ms=right_start_ms,
+            peak_ms=1_600,
+            end_ms=right_end_ms,
+        )
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert len(details) == 1
+    assert bilateral_count == 0
+    assert details[0]["source_sides"] == ["left"]
+
+
+def test_direct_400ms_match_still_accepts_zero_duration_event():
+    left_events = [
+        _side_event("left", start_ms=0, peak_ms=1_000, end_ms=2_000)
+    ]
+    right_events = [
+        _side_event("right", start_ms=1_400, peak_ms=1_400, end_ms=1_400)
+    ]
+
+    details, bilateral_count = _merge_events(left_events, right_events)
+
+    assert len(details) == 1
+    assert bilateral_count == 1
+    assert details[0]["source_sides"] == ["left", "right"]
+
+
 def test_analysis_total_uses_larger_side_count_and_keeps_count_invariants():
     frames = [
         _frame(0, 0.0, 0.0),

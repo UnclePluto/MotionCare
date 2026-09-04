@@ -337,6 +337,8 @@ def _events_match(first: SideEvent, second: SideEvent) -> bool:
         first.end_ms - first.start_ms,
         second.end_ms - second.start_ms,
     )
+    if shorter_duration_ms <= 0:
+        return False
     return (
         peak_difference_ms <= BILATERAL_OVERLAP_MATCH_WINDOW_MS
         and overlap_ms * 2 >= shorter_duration_ms
