@@ -299,9 +299,9 @@ total_count = standard_count + nonstandard_count
 
 使用 SHA-256 为 `f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd` 的 5 分钟视频：
 
-- 全帧计数必须等于人工真值 90；
+- 验收输入 `manual_total_count` 必须固定为 90，且全帧计数必须等于 90；
 - 相同环境重复运行结果必须一致；
-- 报告必须且只能包含一档已完成的 `all_frames`，出现 5/10 FPS 或其他采样档即为无效验收报告；
+- 报告必须且只能包含一档已完成的 `all_frames`，其 `sample_fps` 必须显式为 `null`，`decoded_frame_count` 与 `inferred_frame_count` 必须为相等的非负整数；字段缺失、不相等或出现 5/10 FPS 等采样证据时均为无效验收报告；
 - `all_frames` 必须给出合法的 `result.total_count`，且 `count_error` 必须严格等于 `result.total_count - manual_total_count`；字段缺失、类型非法或计数不自洽时一律 fail-closed；
 - 全帧总耗时不超过 600 秒；
 - 应用进程峰值 RSS 低于 1.5 GiB；

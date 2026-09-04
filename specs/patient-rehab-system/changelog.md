@@ -190,3 +190,8 @@
 - 经用户批准，当前 `shoulder-press-v2` 生产任务固定使用全帧：移除 `MOTION_ANALYSIS_SAMPLE_FPS` 运行时配置及部署样例，残留旧正数设置也不能改变 v2 采样语义。底层固定 FPS 能力仅为历史 `shoulder-press-v1` 的 5 FPS 兼容保留，不进入当前 v2 生产或验收入口。
 - benchmark/smoke 收紧为只运行 `all_frames`；验收只检查人工真值 90、总耗时不超过 600 秒、峰值 RSS 低于 1.5 GiB、Swap 为零，以及 `total_count`、`count_error` 和人工真值严格自洽。报告出现 5/10 FPS 或其他额外采样档时 fail-closed。
 - 代码边界收口提交为 `b422a4b`。0.24–0.25 中的三档运行记录继续作为历史验收事实保留，不再代表当前公开生产或验收流程。
+
+## 0.27 - 2026-09-04
+
+- 仅全帧验收进一步 fail-closed：唯一 `all_frames` 档必须显式记录 `sample_fps=null`，且解码帧数、推理帧数均为非负整数并严格相等，防止抽帧结果伪装为全帧报告。
+- benchmark 函数与管理命令的 `manual_total_count` 均固定为 90：benchmark 函数在视频探测前拒绝其他值并落盘脱敏失败报告，管理命令在调用 benchmark 前拒绝其他值。对应修复提交为 `6d0c2e9`。
