@@ -215,6 +215,12 @@ export function TrainingVideoSwitcher({
             src={currentUrl}
             onLoadedMetadata={(event) => void restorePlayback(event.currentTarget, activeSource)}
             onError={(event) => {
+              transitionRef.current += 1;
+              playbackTransactionRef.current = {
+                generation: transitionRef.current,
+                targetSource: activeSource,
+                snapshot: snapshotPlayback(event.currentTarget),
+              };
               unload(event.currentTarget);
               setMediaError(true);
             }}

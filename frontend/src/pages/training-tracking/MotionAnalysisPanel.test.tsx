@@ -85,7 +85,7 @@ describe("MotionAnalysisPanel", () => {
     renderPanel(record({ analysis_status: analysisStatus }));
 
     expect(screen.queryByRole("button", { name: /开始|重新分析|重试分析/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "总次数" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "总次数" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "保存训练结果" })).toBeDisabled();
     expect(screen.getByText(analysisStatus === "pending" ? /进入自动分析队列/ : /正在分析/)).toBeInTheDocument();
   });
@@ -93,7 +93,7 @@ describe("MotionAnalysisPanel", () => {
   it.each(["failed", "succeeded", "unsupported"] as const)("%s 时允许医生填写当前结果", (analysisStatus) => {
     renderPanel(record({ analysis_status: analysisStatus }));
 
-    expect(screen.getByRole("spinbutton", { name: "总次数" })).toBeEnabled();
+    expect(screen.getByRole("textbox", { name: "总次数" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "保存训练结果" })).toBeEnabled();
   });
 
@@ -107,22 +107,24 @@ describe("MotionAnalysisPanel", () => {
   it("在前端明确校验总次数守恒", async () => {
     renderPanel(record());
 
-    fireEvent.change(screen.getByRole("spinbutton", { name: "总次数" }), { target: { value: "90" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "70" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "不标准次数" }), { target: { value: "10" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "总次数" }), { target: { value: "90" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "70" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "不标准次数" }), { target: { value: "10" } });
     fireEvent.click(screen.getByRole("button", { name: "保存训练结果" }));
 
     expect(await screen.findByText("总次数必须等于标准次数与不标准次数之和")).toBeInTheDocument();
     expect(mockPatch).not.toHaveBeenCalled();
   });
 
-  it.each(["1.5", "-1", "2147483648"])("拒绝非法整数 %s 且不静默改值", async (invalidValue) => {
+  it.each(["1e3", " 1", "1 ", "-0", "+1", "01", "1.5", "-1", "中文", "2147483648"])("拒绝非法原始文本 %s 且 blur 后不静默改值", async (invalidValue) => {
     renderPanel(record());
 
-    const total = screen.getByRole("spinbutton", { name: "总次数" });
-    fireEvent.change(total, { target: { value: invalidValue } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "0" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "不标准次数" }), { target: { value: "0" } });
+    const total = screen.getByRole("textbox", { name: "总次数" });
+    fireEvent.paste(total, { clipboardData: { getData: () => invalidValue } });
+    fireEvent.input(total, { target: { value: invalidValue } });
+    fireEvent.blur(total);
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "不标准次数" }), { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "保存训练结果" }));
 
     expect(await screen.findByText("请输入 0 至 2147483647 之间的整数")).toBeInTheDocument();
@@ -132,8 +134,8 @@ describe("MotionAnalysisPanel", () => {
 
   it("空计数显示必填错误且保留其它输入", async () => {
     renderPanel(record());
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "0" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "不标准次数" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "不标准次数" }), { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "保存训练结果" }));
 
     expect(await screen.findByText("请输入总次数")).toBeInTheDocument();
@@ -142,9 +144,9 @@ describe("MotionAnalysisPanel", () => {
 
   it("非有限输入显示明确错误且不提交", async () => {
     renderPanel(record());
-    fireEvent.change(screen.getByRole("spinbutton", { name: "总次数" }), { target: { value: "Infinity" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "0" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "不标准次数" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "总次数" }), { target: { value: "Infinity" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "不标准次数" }), { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "保存训练结果" }));
 
     expect(await screen.findByText(/请输入总次数|请输入 0 至 2147483647 之间的整数/)).toBeInTheDocument();
@@ -154,9 +156,9 @@ describe("MotionAnalysisPanel", () => {
   it("接受 int4 上界且不改变数值", async () => {
     mockPatch.mockResolvedValue({ data: {} });
     renderPanel(record());
-    fireEvent.change(screen.getByRole("spinbutton", { name: "总次数" }), { target: { value: "2147483647" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "2147483647" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "不标准次数" }), { target: { value: "0" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "总次数" }), { target: { value: "2147483647" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "2147483647" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "不标准次数" }), { target: { value: "0" } });
     fireEvent.click(screen.getByRole("button", { name: "保存训练结果" }));
 
     await waitFor(() => expect(mockPatch).toHaveBeenCalledWith(
@@ -170,9 +172,9 @@ describe("MotionAnalysisPanel", () => {
     const onSaved = vi.fn();
     const { invalidateSpy } = renderPanel(record(), onSaved);
 
-    fireEvent.change(screen.getByRole("spinbutton", { name: "总次数" }), { target: { value: "90" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "72" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "不标准次数" }), { target: { value: "18" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "总次数" }), { target: { value: "90" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "72" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "不标准次数" }), { target: { value: "18" } });
     fireEvent.change(screen.getByRole("textbox", { name: "质量备注" }), {
       target: { value: "动作基本稳定" },
     });
@@ -208,6 +210,8 @@ describe("MotionAnalysisPanel", () => {
 
   it.each([
     [400, "输入内容未通过校验，请检查后重试", false],
+    [401, "登录状态已失效，请重新登录后再修改", true],
+    [403, "当前账号无权修改这条训练记录", true],
     [409, "分析状态已变化，系统正在分析视频，请等待完成", true],
     [404, "训练记录已不可用，请刷新页面后重新选择", true],
   ] as const)("PATCH %s 使用安全分支文案并按需禁止编辑", async (status, message, disabled) => {
@@ -244,13 +248,13 @@ describe("MotionAnalysisPanel", () => {
       motion_result_source: "doctor",
     }));
 
-    fireEvent.change(screen.getByRole("spinbutton", { name: "总次数" }), { target: { value: "91" } });
-    fireEvent.change(screen.getByRole("spinbutton", { name: "标准次数" }), { target: { value: "73" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "总次数" }), { target: { value: "91" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "标准次数" }), { target: { value: "73" } });
     fireEvent.click(screen.getByRole("button", { name: "保存训练结果" }));
 
     expect(await screen.findByText("网络连接异常，输入已保留，请重试保存")).toBeInTheDocument();
     expect(screen.getByText("医生已修正")).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "总次数" })).toHaveValue("91");
+    expect(screen.getByRole("textbox", { name: "总次数" })).toHaveValue("91");
     expect(screen.getByRole("button", { name: "保存训练结果" })).toBeEnabled();
   });
 
@@ -274,7 +278,7 @@ describe("MotionAnalysisPanel", () => {
       motion_nonstandard_count: 5,
       motion_result_source: "",
     }));
-    await waitFor(() => expect(screen.getByRole("spinbutton", { name: "总次数" })).toHaveValue("20"));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "总次数" })).toHaveValue("20"));
     resolveOld?.();
 
     await Promise.resolve();

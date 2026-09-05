@@ -980,7 +980,7 @@ describe("TrainingTrackingDetailPage", () => {
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
     expect(await screen.findByText(/进入自动分析队列/)).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "总次数" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "总次数" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /开始动作分析|重新分析|重试分析/ })).not.toBeInTheDocument();
     expect(mockPost).not.toHaveBeenCalled();
   });
@@ -1082,8 +1082,8 @@ describe("TrainingTrackingDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
 
     await waitFor(() => expect(trackingCalls).toBeGreaterThanOrEqual(2));
-    await waitFor(() => expect(screen.getByRole("spinbutton", { name: "总次数" })).toHaveValue("90"));
-    expect(screen.getByRole("spinbutton", { name: "标准次数" })).toHaveValue("72");
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "总次数" })).toHaveValue("90"));
+    expect(screen.getByRole("textbox", { name: "标准次数" })).toHaveValue("72");
     expect(screen.getByRole("textbox", { name: "质量备注" })).toHaveValue("复核后稳定");
     expect(screen.getByText("医生已修正")).toBeInTheDocument();
   });
@@ -1112,6 +1112,51 @@ describe("TrainingTrackingDetailPage", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(downloadCalls).toBe(1);
+  });
+
+  it("成功刷新确认记录已移出后清空选择且记录返回也不自动重开", async () => {
+    const withoutSelectedRecord = cloneTrackingDetail();
+    withoutSelectedRecord.recent_records = withoutSelectedRecord.recent_records.filter((record) => record.id !== 7000);
+    let trackingCalls = 0;
+    let rangeRequestSeen = false;
+    mockGet.mockImplementation((url: string, config?: { params?: { range?: string } }) => {
+      if (url === "/training/tracking/patients/201/") {
+        trackingCalls += 1;
+        if (config?.params?.range === "7d") {
+          rangeRequestSeen = true;
+          return Promise.resolve({ data: trackingDetail });
+        }
+        return Promise.resolve({ data: trackingCalls === 1 ? trackingDetail : withoutSelectedRecord });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/") {
+        return Promise.resolve({
+          data: {
+            id: 9202,
+            status: "succeeded",
+            analysis_failure_message: null,
+            skeleton_available: false,
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-05-14T09:00:00+08:00",
+          },
+        });
+      }
+      if (url === "/training/videos/8101/download-url/") return Promise.resolve({ data: { url: "original" } });
+      if (url.endsWith("/wearable-window/")) return Promise.resolve({ data: { available: false } });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/training/videos/8101/analysis-jobs/latest/"));
+    await waitFor(() => expect(trackingCalls).toBe(2));
+    await waitFor(() => expect(screen.queryByLabelText("原视频播放器")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("近 7 天"));
+    await waitFor(() => expect(rangeRequestSeen).toBe(true));
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(screen.queryByLabelText("原视频播放器")).not.toBeInTheDocument();
   });
 
   it("切换训练记录后忽略前一条记录晚返回的骨架地址", async () => {

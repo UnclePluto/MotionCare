@@ -31,6 +31,22 @@ function ControlledSwitcher({
   );
 }
 
+function ErrorRetrySwitcher() {
+  const [originalUrl, setOriginalUrl] = React.useState("original-v1");
+  const [activeSource, setActiveSource] = React.useState<TrainingVideoSource>("original");
+  return (
+    <TrainingVideoSwitcher
+      originalUrl={originalUrl}
+      skeletonUrl="skeleton"
+      skeletonAvailable
+      resetKey="video-1"
+      activeSource={activeSource}
+      onChange={setActiveSource}
+      onOriginalRetry={() => setOriginalUrl("original-v2")}
+    />
+  );
+}
+
 function setMediaState(node: HTMLVideoElement, state: { currentTime: number; paused: boolean }) {
   Object.defineProperty(node, "currentTime", { configurable: true, writable: true, value: state.currentTime });
   Object.defineProperty(node, "paused", { configurable: true, get: () => state.paused });
@@ -185,5 +201,25 @@ describe("TrainingVideoSwitcher", () => {
     expect(video.pause).toHaveBeenCalled();
     expect(video.load).toHaveBeenCalled();
     expect(video).not.toHaveAttribute("src");
+  });
+
+  it("媒体错误重取同源 URL 后恢复错误前的时间和播放状态", async () => {
+    vi.mocked(window.HTMLMediaElement.prototype.load).mockImplementation(function resetMedia(this: HTMLMediaElement) {
+      Object.defineProperty(this, "currentTime", { configurable: true, writable: true, value: 0 });
+      Object.defineProperty(this, "paused", { configurable: true, get: () => true });
+    });
+    render(<ErrorRetrySwitcher />);
+    const failedVideo = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(failedVideo, { currentTime: 27, paused: false });
+
+    fireEvent.error(failedVideo);
+    fireEvent.click(await screen.findByRole("button", { name: "重新获取原视频" }));
+    const recoveredVideo = await screen.findByLabelText("原视频播放器") as HTMLVideoElement;
+    Object.defineProperty(recoveredVideo, "duration", { configurable: true, value: 20 });
+    fireEvent.loadedMetadata(recoveredVideo);
+
+    expect(recoveredVideo.currentTime).toBeGreaterThanOrEqual(19.9);
+    expect(recoveredVideo.currentTime).toBeLessThan(20);
+    expect(recoveredVideo.play).toHaveBeenCalled();
   });
 });

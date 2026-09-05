@@ -288,7 +288,7 @@ export function TrainingTrackingDetailPage() {
     [numericPatientId, queryParams],
   );
 
-  const { data, isLoading, isFetching, isError, error } = useQuery({
+  const { data, isLoading, isFetching, isError, isSuccess, isPlaceholderData, error } = useQuery({
     queryKey: detailQueryKey,
     queryFn: async () => {
       const response = await apiClient.get<TrackingDetail>(`/training/tracking/patients/${numericPatientId}/`, {
@@ -307,6 +307,14 @@ export function TrainingTrackingDetailPage() {
   const drawerOpen = videoDrawerRecord !== null;
   const selectedVideoId = videoDrawerRecord?.video_id ?? null;
   const selectedVideoSupportsAnalysis = videoDrawerRecord?.analysis_available === true;
+
+  useEffect(() => {
+    if (!isSuccess || isFetching || isPlaceholderData || videoDrawerRecordId == null) return;
+    if (!data?.recent_records.some((record) => record.id === videoDrawerRecordId)) {
+      setVideoDrawerRecordId(null);
+      setActiveVideoSource("original");
+    }
+  }, [data?.recent_records, isFetching, isPlaceholderData, isSuccess, videoDrawerRecordId]);
 
   const latestAnalysisQuery = useQuery({
     queryKey: ["latest-analysis", selectedVideoId],

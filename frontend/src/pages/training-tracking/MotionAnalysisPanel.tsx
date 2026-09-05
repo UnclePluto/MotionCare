@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Form, Input, InputNumber, Space, Tag, Typography } from "antd";
+import { Alert, Button, Form, Input, Space, Tag, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
 
 import { apiClient } from "../../api/client";
@@ -12,7 +12,7 @@ type MotionResultValues = {
   quality_note: string;
 };
 
-type SaveError = "validation" | "conflict" | "missing" | "network" | null;
+type SaveError = "validation" | "unauthorized" | "forbidden" | "conflict" | "missing" | "network" | null;
 
 const MAX_COUNT = 2_147_483_647;
 
@@ -133,13 +133,19 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
       const status = responseStatus(error);
       if (status === 400) {
         setSaveError("validation");
-      } else if (status === 409 || status === 404) {
-        setSaveError(status === 409 ? "conflict" : "missing");
+      } else if (status === 401 || status === 403 || status === 409 || status === 404) {
+        setSaveError(status === 401
+          ? "unauthorized"
+          : status === 403
+            ? "forbidden"
+            : status === 409 ? "conflict" : "missing");
         setSubmissionBlocked(true);
-        void Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["training-tracking"] }),
-          queryClient.invalidateQueries({ queryKey: ["latest-analysis", videoId] }),
-        ]);
+        if (status === 409 || status === 404) {
+          void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["training-tracking"] }),
+            queryClient.invalidateQueries({ queryKey: ["latest-analysis", videoId] }),
+          ]);
+        }
       } else {
         setSaveError("network");
       }
@@ -164,6 +170,10 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
   const message = statusMessage(effectiveStatus);
   const saveErrorMessage = saveError === "validation"
     ? "输入内容未通过校验，请检查后重试"
+    : saveError === "unauthorized"
+      ? "登录状态已失效，请重新登录后再修改"
+      : saveError === "forbidden"
+        ? "当前账号无权修改这条训练记录"
     : saveError === "conflict"
       ? "分析状态已变化，系统正在分析视频，请等待完成"
       : saveError === "missing"
@@ -199,13 +209,13 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
           onFinish={submit}
         >
           <Form.Item name="total_count" label="总次数" rules={countRules("请输入总次数")}>
-            <InputNumber<string> aria-label="总次数" stringMode style={{ width: "100%" }} />
+            <Input aria-label="总次数" inputMode="numeric" pattern="[0-9]*" autoComplete="off" />
           </Form.Item>
           <Form.Item name="standard_count" label="标准次数" rules={countRules("请输入标准次数")}>
-            <InputNumber<string> aria-label="标准次数" stringMode style={{ width: "100%" }} />
+            <Input aria-label="标准次数" inputMode="numeric" pattern="[0-9]*" autoComplete="off" />
           </Form.Item>
           <Form.Item name="nonstandard_count" label="不标准次数" rules={countRules("请输入不标准次数")}>
-            <InputNumber<string> aria-label="不标准次数" stringMode style={{ width: "100%" }} />
+            <Input aria-label="不标准次数" inputMode="numeric" pattern="[0-9]*" autoComplete="off" />
           </Form.Item>
           <Form.Item name="quality_note" label="质量备注" className="motion-analysis-note">
             <Input.TextArea aria-label="质量备注" maxLength={2000} rows={3} placeholder="可填写动作质量说明" />
