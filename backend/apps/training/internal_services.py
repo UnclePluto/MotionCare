@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import secrets
 from dataclasses import dataclass, field
@@ -16,6 +17,13 @@ from .video_models import MotionAnalysisJob
 
 
 _STAGE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
+_CAPABILITY_FIELDS = (
+    "action_source_key",
+    "algorithm_version",
+    "rule_version",
+    "parameter_version",
+)
+_logger = logging.getLogger(__name__)
 
 
 class LeaseUnavailable(Exception):
@@ -68,6 +76,44 @@ def _capability_filter(capabilities):
     return compatible if keys else None
 
 
+def _capability_payload(capability):
+    return dict(zip(_CAPABILITY_FIELDS, capability_key(capability), strict=True))
+
+
+def _log_incompatible_pending_job(*, worker_id, capabilities, compatible):
+    if compatible is not None:
+        compatible_pending_exists = MotionAnalysisJob.objects.filter(
+            compatible,
+            status=MotionAnalysisJob.Status.PENDING,
+        ).exists()
+        if compatible_pending_exists:
+            return
+
+    oldest_pending = (
+        MotionAnalysisJob.objects.filter(status=MotionAnalysisJob.Status.PENDING)
+        .order_by("created_at", "id")
+        .values("id", *_CAPABILITY_FIELDS)
+        .first()
+    )
+    if oldest_pending is None:
+        return
+
+    _logger.warning(
+        "motion_analysis_claim_unavailable",
+        extra={
+            "reason_code": "no_compatible_capability",
+            "oldest_pending_job_id": oldest_pending["id"],
+            "required_capability": {
+                field_name: oldest_pending[field_name] for field_name in _CAPABILITY_FIELDS
+            },
+            "worker_id": worker_id,
+            "declared_capabilities": [
+                _capability_payload(capability) for capability in capabilities[:32]
+            ],
+        },
+    )
+
+
 @transaction.atomic
 def claim_next_job(
     *,
@@ -78,6 +124,11 @@ def claim_next_job(
     lease_seconds, _heartbeat_seconds = _control_plane_timings()
     compatible = _capability_filter(capabilities)
     if compatible is None:
+        _log_incompatible_pending_job(
+            worker_id=worker_id,
+            capabilities=capabilities,
+            compatible=compatible,
+        )
         return None
 
     job = (
@@ -88,6 +139,11 @@ def claim_next_job(
         .first()
     )
     if job is None:
+        _log_incompatible_pending_job(
+            worker_id=worker_id,
+            capabilities=capabilities,
+            compatible=compatible,
+        )
         return None
 
     lease_token = secrets.token_urlsafe(32)

@@ -13,6 +13,9 @@ _DISABLED_DIGEST = "0" * 64
 
 class IsPpMcareWorker(BasePermission):
     def has_permission(self, request, view):
+        if not request.is_secure():
+            return False
+
         authorization = request.headers.get("Authorization", "")
         match = _BEARER_PATTERN.fullmatch(authorization)
         supplied_token = match.group(1) if match else ""

@@ -9,7 +9,7 @@ from motion_analysis_contract import MotionCounts
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _restore_latest_schema(django_db_setup, django_db_blocker):
     del django_db_setup
     with django_db_blocker.unblock():
@@ -119,6 +119,7 @@ def test_motion_analysis_job_persists_control_plane_and_skeleton_metadata(
 
 @pytest.mark.django_db(transaction=True)
 def test_control_plane_migration_fails_existing_active_analysis_jobs(
+    _restore_latest_schema,
     project_patient,
     active_prescription,
     prescription_action,

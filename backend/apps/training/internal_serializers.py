@@ -42,9 +42,18 @@ class WorkerCapabilitySerializer(serializers.Serializer):
 
 
 class ClaimRequestSerializer(serializers.Serializer):
-    worker_id = serializers.RegexField(_IDENTIFIER_PATTERN, max_length=120)
+    worker_id = StrictStringField(max_length=120)
     protocol_version = ProtocolVersionField()
-    capabilities = WorkerCapabilitySerializer(many=True, allow_empty=True)
+    capabilities = WorkerCapabilitySerializer(
+        many=True,
+        allow_empty=True,
+        max_length=32,
+    )
+
+    def validate_worker_id(self, value):
+        if not _IDENTIFIER_PATTERN.fullmatch(value):
+            raise serializers.ValidationError("worker_id 格式无效")
+        return value
 
     def validate_capabilities(self, value):
         return [WorkerCapability(**item) for item in value]

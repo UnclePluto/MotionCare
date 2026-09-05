@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import subprocess
 import sys
@@ -117,7 +118,7 @@ def analysis_job_factory(
 def test_claim_requires_exact_bearer_token(api_client, settings):
     settings.PP_MCARE_SERVICE_TOKEN_SHA256 = hashlib.sha256(b"machine-secret").hexdigest()
 
-    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json")
+    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", secure=True)
 
     assert response.status_code == 403
 
@@ -146,6 +147,7 @@ def test_claim_rejects_wrong_or_malformed_bearer_credentials(
         CLAIM_URL,
         CLAIM_BODY,
         format="json",
+        secure=True,
         HTTP_AUTHORIZATION=authorization,
     )
 
@@ -157,9 +159,38 @@ def test_doctor_session_does_not_bypass_machine_auth(api_client, doctor, setting
     settings.PP_MCARE_SERVICE_TOKEN_SHA256 = hashlib.sha256(b"machine-secret").hexdigest()
     api_client.force_authenticate(user=doctor)
 
-    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json")
+    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", secure=True)
 
     assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_claim_rejects_plain_http_even_with_correct_bearer(
+    api_client,
+    machine_auth,
+    analysis_job_factory,
+):
+    job = analysis_job_factory()
+
+    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", **machine_auth)
+
+    assert response.status_code == 403
+    assert "machine-secret" not in response.content.decode()
+    job.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.PENDING
+
+
+@pytest.mark.django_db
+def test_claim_accepts_trusted_forwarded_https(api_client, machine_auth):
+    response = api_client.post(
+        CLAIM_URL,
+        CLAIM_BODY,
+        format="json",
+        HTTP_X_FORWARDED_PROTO="https",
+        **machine_auth,
+    )
+
+    assert response.status_code == 204
 
 
 @pytest.mark.django_db
@@ -176,6 +207,7 @@ def test_claim_locks_oldest_compatible_job(
         CLAIM_URL,
         CLAIM_BODY,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
@@ -197,6 +229,7 @@ def test_claim_returns_shared_contract_and_hashes_one_time_lease(
         CLAIM_URL,
         CLAIM_BODY,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
@@ -239,11 +272,79 @@ def test_claim_returns_204_when_queue_is_empty(api_client, machine_auth):
         CLAIM_URL,
         CLAIM_BODY,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
     assert response.status_code == 204
     assert not response.content
+
+
+@pytest.mark.django_db
+def test_empty_queue_does_not_log_capability_mismatch(api_client, machine_auth, caplog):
+    with caplog.at_level(logging.WARNING, logger="apps.training.internal_services"):
+        response = api_client.post(
+            CLAIM_URL,
+            CLAIM_BODY,
+            format="json",
+            secure=True,
+            **machine_auth,
+        )
+
+    assert response.status_code == 204
+    assert not any(
+        getattr(record, "reason_code", None) == "no_compatible_capability"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.django_db
+def test_incompatible_pending_job_logs_structured_redacted_diagnostic(
+    api_client,
+    machine_auth,
+    analysis_job_factory,
+    caplog,
+):
+    job = analysis_job_factory(result_payload={"patient_note": "private-patient-note"})
+    declared = {**CAPABILITY, "rule_version": "shoulder-press-v1"}
+    body = {
+        **CLAIM_BODY,
+        "worker_id": "worker-diagnostic-1",
+        "capabilities": [declared],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="apps.training.internal_services"):
+        response = api_client.post(
+            CLAIM_URL,
+            body,
+            format="json",
+            secure=True,
+            **machine_auth,
+        )
+
+    assert response.status_code == 204
+    diagnostic = next(
+        record
+        for record in caplog.records
+        if getattr(record, "reason_code", None) == "no_compatible_capability"
+    )
+    assert diagnostic.oldest_pending_job_id == job.id
+    assert diagnostic.required_capability == CAPABILITY
+    assert diagnostic.worker_id == "worker-diagnostic-1"
+    assert diagnostic.declared_capabilities == [declared]
+    rendered = repr(diagnostic.__dict__)
+    for forbidden in (
+        "machine-secret",
+        "private-patient-note",
+        job.project_patient.patient.name,
+        job.training_video.object_key,
+        job.skeleton_object_key,
+        "Authorization",
+        "lease_token",
+        "signed_url",
+        "upload_token",
+    ):
+        assert forbidden not in rendered
 
 
 @pytest.mark.django_db
@@ -267,7 +368,7 @@ def test_claim_does_not_take_job_when_any_capability_dimension_differs(
     job = analysis_job_factory()
     body = {**CLAIM_BODY, "capabilities": [{**CAPABILITY, field: value}]}
 
-    response = api_client.post(CLAIM_URL, body, format="json", **machine_auth)
+    response = api_client.post(CLAIM_URL, body, format="json", secure=True, **machine_auth)
 
     assert response.status_code == 204
     job.refresh_from_db()
@@ -287,11 +388,34 @@ def test_claim_rejects_missing_or_incompatible_protocol_version(
     job = analysis_job_factory()
     body = {**CLAIM_BODY, "protocol_version": protocol_version}
 
-    response = api_client.post(CLAIM_URL, body, format="json", **machine_auth)
+    response = api_client.post(CLAIM_URL, body, format="json", secure=True, **machine_auth)
 
     assert response.status_code == 400
     job.refresh_from_db()
     assert job.status == MotionAnalysisJob.Status.PENDING
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "worker_id",
+    [123, " worker-1", "worker-1 ", "worker 1", "worker/1"],
+)
+def test_claim_rejects_non_string_or_non_canonical_worker_id(
+    api_client,
+    machine_auth,
+    worker_id,
+):
+    body = {**CLAIM_BODY, "worker_id": worker_id}
+
+    response = api_client.post(
+        CLAIM_URL,
+        body,
+        format="json",
+        secure=True,
+        **machine_auth,
+    )
+
+    assert response.status_code == 400
 
 
 @pytest.mark.django_db
@@ -310,7 +434,7 @@ def test_claim_storage_grant_failure_rolls_back_running_state(
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValidationError("secret failure")),
     )
 
-    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", **machine_auth)
+    response = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", secure=True, **machine_auth)
 
     assert response.status_code == 503
     assert "secret failure" not in response.content.decode()
@@ -387,6 +511,7 @@ def test_heartbeat_rejects_free_text_paths_urls_and_overlong_stages(
         f"/api/internal/motion-analysis/jobs/{job.id}/heartbeat/",
         body,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
@@ -428,6 +553,7 @@ def test_heartbeat_rejects_invalid_lease_without_extension(
         f"/api/internal/motion-analysis/jobs/{job.id}/heartbeat/",
         body,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
@@ -459,6 +585,7 @@ def test_heartbeat_requires_shared_protocol_version(
         f"/api/internal/motion-analysis/jobs/{job.id}/heartbeat/",
         body,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
@@ -488,6 +615,7 @@ def test_valid_heartbeat_api_returns_renewed_lease_without_echoing_token(
         f"/api/internal/motion-analysis/jobs/{job.id}/heartbeat/",
         body,
         format="json",
+        secure=True,
         **machine_auth,
     )
 
@@ -498,6 +626,37 @@ def test_valid_heartbeat_api_returns_renewed_lease_without_echoing_token(
     job.refresh_from_db()
     assert job.lease_expires_at - job.last_heartbeat_at == timedelta(seconds=300)
     assert job.current_stage == "upload"
+
+
+@pytest.mark.django_db
+def test_heartbeat_rejects_plain_http_even_with_correct_bearer(
+    api_client,
+    machine_auth,
+    analysis_job_factory,
+):
+    before = timezone.now()
+    lease_token = "a" * 43
+    expires_at = before + timedelta(minutes=1)
+    job = analysis_job_factory(
+        status=MotionAnalysisJob.Status.RUNNING,
+        lease_token_hash=hashlib.sha256(lease_token.encode()).hexdigest(),
+        lease_expires_at=expires_at,
+        last_heartbeat_at=before,
+        started_at=before,
+    )
+
+    response = api_client.post(
+        f"/api/internal/motion-analysis/jobs/{job.id}/heartbeat/",
+        {**HEARTBEAT_BODY, "lease_token": lease_token},
+        format="json",
+        **machine_auth,
+    )
+
+    assert response.status_code == 403
+    assert lease_token not in response.content.decode()
+    job.refresh_from_db()
+    assert job.lease_expires_at == expires_at
+    assert job.last_heartbeat_at == before
 
 
 @pytest.mark.django_db
