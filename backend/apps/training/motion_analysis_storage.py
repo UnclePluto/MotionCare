@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from django.utils import timezone
 from motion_analysis_contract import DownloadGrant, UploadGrant
+import qiniu
 from qiniu import Auth
 
 from .qiniu import (
@@ -116,6 +117,21 @@ def verify_skeleton_upload(job: MotionAnalysisJob, metadata: Mapping[str, object
     if expected_content_type != "video/mp4":
         raise ValidationError("骨架对象类型不匹配")
 
+    timeout_seconds = settings.PP_MCARE_OBJECT_STAT_TIMEOUT_SECONDS
+    retry_count = settings.PP_MCARE_OBJECT_STAT_RETRIES
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int)
+        or timeout_seconds <= 0
+        or isinstance(retry_count, bool)
+        or not isinstance(retry_count, int)
+        or retry_count <= 0
+    ):
+        raise ImproperlyConfigured("pp-mcare 七牛对象查询配置无效")
+    qiniu.config.set_default(
+        connection_timeout=timeout_seconds,
+        connection_retries=retry_count,
+    )
     remote_metadata = stat_object_metadata(
         bucket=job.skeleton_bucket,
         key=job.skeleton_object_key,

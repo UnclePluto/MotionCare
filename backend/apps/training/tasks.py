@@ -9,6 +9,7 @@ from django.utils import timezone
 from .motion_analysis_monitoring import (
     expire_stale_motion_analysis_jobs,
     motion_analysis_health_snapshot,
+    reconcile_motion_analysis_cleanup_tombstones,
 )
 
 
@@ -41,6 +42,7 @@ def _safe_failure_reason(stage, exc):
 @shared_task(ignore_result=True)
 def recover_stale_motion_analysis_jobs():
     _positive_monitoring_setting("PP_MCARE_MONITOR_INTERVAL_SECONDS")
+    reconcile_motion_analysis_cleanup_tombstones()
     return expire_stale_motion_analysis_jobs()
 
 

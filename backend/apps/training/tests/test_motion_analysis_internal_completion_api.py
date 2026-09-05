@@ -1,6 +1,9 @@
 import hashlib
+import json
+import logging
 import threading
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +20,7 @@ from apps.training.models import (
     TrainingRecord,
     TrainingVideo,
 )
+from apps.training.qiniu import QiniuObjectNotFound, QiniuObjectUnavailable
 
 
 LEASE_TOKEN = "a" * 43
@@ -206,8 +210,8 @@ def test_complete_verifies_object_and_updates_job_and_record_atomically(
 @pytest.mark.parametrize(
     "remote_error",
     [
-        "七牛对象不存在 /tmp/private token=secret",
-        "训练视频对象 Hash 不匹配 /tmp/private token=secret",
+        QiniuObjectNotFound("七牛对象不存在 /tmp/private token=secret"),
+        ValidationError("训练视频对象 Hash 不匹配 /tmp/private token=secret"),
     ],
 )
 def test_complete_remote_object_failure_rolls_back_job_and_training_record(
@@ -226,7 +230,7 @@ def test_complete_remote_object_failure_rolls_back_job_and_training_record(
 
     with patch(
         "apps.training.internal_services.verify_skeleton_upload",
-        side_effect=ValidationError(remote_error),
+        side_effect=remote_error,
     ):
         response = api_client.post(
             complete_url(job),
@@ -247,6 +251,108 @@ def test_complete_remote_object_failure_rolls_back_job_and_training_record(
     assert job.lease_expires_at == original_lease_expiry
     assert job.training_record.motion_total_count == 7
     assert job.training_record.motion_result_source == MotionResultSource.DOCTOR
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        "network timeout token=provider-secret",
+        "provider returned 503 /internal/path",
+    ],
+)
+def test_complete_maps_qiniu_unavailable_to_redacted_503_and_rolls_back(
+    api_client,
+    machine_auth,
+    running_job_factory,
+    provider_error,
+):
+    job = running_job_factory()
+
+    with patch(
+        "apps.training.internal_services.verify_skeleton_upload",
+        side_effect=QiniuObjectUnavailable(provider_error),
+    ):
+        response = api_client.post(
+            complete_url(job),
+            complete_body(job),
+            format="json",
+            secure=True,
+            **machine_auth,
+        )
+
+    assert response.status_code == 503
+    assert provider_error not in response.content.decode()
+    assert response.data == {"detail": "存储验证暂不可用"}
+    job.refresh_from_db()
+    job.training_record.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.RUNNING
+    assert job.result_payload == {}
+    assert job.training_record.motion_total_count is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("provider_case", "expected_status"),
+    [
+        ("network", 503),
+        ("http_503", 503),
+        ("missing_612", 400),
+        ("metadata_mismatch", 400),
+    ],
+)
+def test_complete_maps_actual_qiniu_stat_outcomes_at_api_boundary(
+    api_client,
+    machine_auth,
+    running_job_factory,
+    settings,
+    provider_case,
+    expected_status,
+):
+    settings.QINIU_ACCESS_KEY = "ak-test"
+    settings.QINIU_SECRET_KEY = "sk-test"
+    job = running_job_factory()
+    response_info = SimpleNamespace(status_code=200, error=None)
+    remote_metadata = {
+        "hash": "skeleton-hash",
+        "fsize": 2048,
+        "mimeType": "video/mp4",
+    }
+
+    with patch("apps.training.qiniu.BucketManager.stat") as stat:
+        if provider_case == "network":
+            stat.side_effect = RuntimeError("network token=provider-secret /private/path")
+        elif provider_case == "http_503":
+            stat.return_value = (
+                None,
+                SimpleNamespace(status_code=503, error="provider-secret"),
+            )
+        elif provider_case == "missing_612":
+            stat.return_value = (
+                None,
+                SimpleNamespace(status_code=612, error="provider-secret"),
+            )
+        else:
+            stat.return_value = (
+                {**remote_metadata, "hash": "unexpected-hash"},
+                response_info,
+            )
+        response = api_client.post(
+            complete_url(job),
+            complete_body(job),
+            format="json",
+            secure=True,
+            **machine_auth,
+        )
+
+    assert response.status_code == expected_status
+    assert "provider-secret" not in response.content.decode()
+    assert "/private/path" not in response.content.decode()
+    job.refresh_from_db()
+    job.training_record.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.RUNNING
+    assert job.result_payload == {}
+    assert job.training_record.motion_total_count is None
 
 
 @pytest.mark.django_db
@@ -273,6 +379,59 @@ def test_complete_rejects_wrong_execution_version_without_remote_check_or_writes
     job.refresh_from_db()
     assert job.status == MotionAnalysisJob.Status.RUNNING
     assert job.result_payload == {}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("counts_int4_overflow", 2_147_483_648),
+        ("size_bytes", 0),
+        ("size_bytes", 9_223_372_036_854_775_808),
+        ("width", 16_385),
+        ("width", 2_147_483_648),
+        ("height", 16_385),
+        ("height", 2_147_483_648),
+        ("duration_seconds", 0),
+        ("duration_seconds", -1),
+        ("duration_seconds", 3_636.1),
+        ("duration_seconds", 1e308),
+        ("fps", 0),
+        ("fps", -1),
+        ("fps", 240.1),
+        ("fps", 1e308),
+    ],
+)
+def test_complete_rejects_numeric_capacity_violations_before_remote_check(
+    api_client,
+    machine_auth,
+    running_job_factory,
+    field_name,
+    invalid_value,
+):
+    job = running_job_factory()
+    body = complete_body(job)
+    if field_name == "counts_int4_overflow":
+        body.update(
+            total_count=invalid_value,
+            standard_count=invalid_value,
+            nonstandard_count=0,
+        )
+    else:
+        body["skeleton"] = {**body["skeleton"], field_name: invalid_value}
+
+    with patch("apps.training.internal_services.verify_skeleton_upload") as verify:
+        response = api_client.post(
+            complete_url(job), body, format="json", secure=True, **machine_auth
+        )
+
+    assert response.status_code == 400
+    verify.assert_not_called()
+    job.refresh_from_db()
+    job.training_record.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.RUNNING
+    assert job.result_payload == {}
+    assert job.training_record.motion_total_count is None
 
 
 @pytest.mark.django_db
@@ -304,6 +463,44 @@ def test_complete_rejects_wrong_or_expired_lease(
     verify.assert_not_called()
     job.refresh_from_db()
     assert job.status == MotionAnalysisJob.Status.RUNNING
+
+
+@pytest.mark.django_db
+def test_complete_rechecks_lease_after_remote_verification_and_rolls_back_when_expired(
+    api_client,
+    machine_auth,
+    running_job_factory,
+):
+    from apps.training import internal_services
+
+    lease_expires_at = timezone.now() + timedelta(seconds=30)
+    job = running_job_factory(lease_expires_at=lease_expires_at)
+    after_expiry = lease_expires_at + timedelta(microseconds=1)
+
+    with (
+        patch.object(
+            internal_services,
+            "verify_skeleton_upload",
+            return_value={"hash": "skeleton-hash", "fsize": 2048, "mimeType": "video/mp4"},
+        ),
+        patch.object(internal_services, "timezone", create=True) as service_timezone,
+    ):
+        service_timezone.now.return_value = after_expiry
+        response = api_client.post(
+            complete_url(job),
+            complete_body(job),
+            format="json",
+            secure=True,
+            **machine_auth,
+        )
+
+    assert response.status_code == 409
+    job.refresh_from_db()
+    job.training_record.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.RUNNING
+    assert job.finished_at is None
+    assert job.result_payload == {}
+    assert job.training_record.motion_total_count is None
 
 
 @pytest.mark.django_db
@@ -409,7 +606,7 @@ def test_fail_preserves_doctor_result_and_queues_idempotent_skeleton_cleanup(
     assert job.status == MotionAnalysisJob.Status.FAILED
     assert job.completion_idempotency_key == "fail-001"
     assert job.failure_code == "subject_unstable"
-    assert job.failure_reason == "无法稳定锁定单一训练主体"
+    assert job.failure_reason == "动作分析失败（代码=subject_unstable，阶段=upload）"
     assert job.result_payload == {
         "failure_diagnostics": {"stage_timings": {"download": 2.5, "inference": 71}}
     }
@@ -429,6 +626,54 @@ def test_fail_preserves_doctor_result_and_queues_idempotent_skeleton_cleanup(
     )
     assert replay.status_code == 200
     assert QiniuCleanupTombstone.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_fail_reaches_terminal_when_cleanup_registration_temporarily_fails(
+    api_client,
+    machine_auth,
+    running_job_factory,
+    caplog,
+):
+    from apps.training import internal_services, motion_analysis_monitoring as monitoring
+
+    job = running_job_factory()
+    provider_detail = f"Bearer provider-secret C:\\private key={job.skeleton_object_key}"
+    failure = RuntimeError(provider_detail)
+
+    with (
+        patch.object(
+            internal_services,
+            "queue_skeleton_cleanup",
+            side_effect=failure,
+            create=True,
+        ),
+        patch.object(monitoring, "queue_skeleton_cleanup", side_effect=failure),
+        caplog.at_level(logging.CRITICAL, logger=monitoring.__name__),
+    ):
+        response = api_client.post(
+            fail_url(job), fail_body(), format="json", secure=True, **machine_auth
+        )
+
+    assert response.status_code == 200
+    job.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert QiniuCleanupTombstone.objects.count() == 0
+    diagnostic = next(
+        record
+        for record in caplog.records
+        if getattr(record, "reason_code", None)
+        == "skeleton_cleanup_registration_failed"
+    )
+    assert diagnostic.job_id == job.id
+    rendered = "\n".join(
+        f"{record.getMessage()} {record.__dict__!r}" for record in caplog.records
+    )
+    for forbidden in (provider_detail, "provider-secret", job.skeleton_object_key):
+        assert forbidden not in rendered
+
+    assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 1
+    assert QiniuCleanupTombstone.objects.get().canonical_key == job.skeleton_object_key
 
 
 @pytest.mark.django_db
@@ -460,22 +705,51 @@ def test_fail_rejects_conflicting_terminal_state(
 @pytest.mark.parametrize(
     "summary",
     [
-        "下载 https://private.example/video.mp4?token=secret 失败",
-        "读取 /var/lib/motioncare/private.mp4 失败",
-        "upload_token=qiniu-secret",
-        "access_key=ak-sensitive",
-        "secret_key=sk-sensitive",
-        "credential_id=credential-sensitive",
-        "x" * 2001,
+        "Authorization: Bearer machine-secret",
+        "accessKey=camel-sensitive",
+        r"C:\private\patient.mp4",
+        r"\\server\share\patient.mp4",
     ],
 )
-def test_fail_rejects_sensitive_summary_without_persisting_or_echoing_it(
+def test_fail_accepts_but_never_persists_logs_or_echoes_client_summary(
     api_client,
     machine_auth,
     running_job_factory,
     summary,
+    caplog,
 ):
     job = running_job_factory()
+
+    with caplog.at_level(logging.DEBUG):
+        response = api_client.post(
+            fail_url(job),
+            fail_body(summary=summary),
+            format="json",
+            secure=True,
+            **machine_auth,
+        )
+
+    assert response.status_code == 200
+    assert summary not in response.content.decode()
+    job.refresh_from_db()
+    persisted = f"{job.failure_reason}\n{json.dumps(job.result_payload, ensure_ascii=False)}"
+    rendered_logs = "\n".join(
+        f"{record.getMessage()} {record.__dict__!r}" for record in caplog.records
+    )
+    assert summary not in persisted
+    assert summary not in rendered_logs
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert job.failure_reason == "动作分析失败（代码=subject_unstable，阶段=upload）"
+
+
+@pytest.mark.django_db
+def test_fail_rejects_overlong_summary_without_persisting_it(
+    api_client,
+    machine_auth,
+    running_job_factory,
+):
+    job = running_job_factory()
+    summary = "x" * 2001
 
     response = api_client.post(
         fail_url(job),

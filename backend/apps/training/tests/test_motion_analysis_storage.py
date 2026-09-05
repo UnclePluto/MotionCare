@@ -1,4 +1,8 @@
 from datetime import timedelta
+import os
+import subprocess
+import sys
+from unittest.mock import Mock
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -171,6 +175,56 @@ def test_verify_skeleton_upload_rejects_remote_metadata_mismatch(
                 "content_type": "video/mp4",
             },
         )
+
+
+@pytest.mark.django_db
+@override_settings(
+    PP_MCARE_OBJECT_STAT_TIMEOUT_SECONDS=4,
+    PP_MCARE_OBJECT_STAT_RETRIES=2,
+)
+def test_verify_skeleton_upload_applies_bounded_qiniu_stat_settings(
+    analysis_job,
+    monkeypatch,
+):
+    module = _storage_module()
+    configure = Mock()
+    monkeypatch.setattr(module.qiniu.config, "set_default", configure)
+    monkeypatch.setattr(
+        module,
+        "stat_object_metadata",
+        Mock(return_value={"hash": "skeleton-hash", "fsize": 256, "mimeType": "video/mp4"}),
+    )
+
+    module.verify_skeleton_upload(
+        analysis_job,
+        {
+            "bucket": "analysis-skeletons",
+            "object_key": analysis_job.skeleton_object_key,
+            "object_hash": "skeleton-hash",
+            "size_bytes": 256,
+            "content_type": "video/mp4",
+        },
+    )
+
+    configure.assert_called_once_with(connection_timeout=4, connection_retries=2)
+
+
+@pytest.mark.parametrize(
+    "setting_name",
+    ["PP_MCARE_OBJECT_STAT_TIMEOUT_SECONDS", "PP_MCARE_OBJECT_STAT_RETRIES"],
+)
+def test_invalid_qiniu_stat_environment_setting_fails_at_startup(settings, setting_name):
+    result = subprocess.run(
+        [sys.executable, "-c", "import config.settings"],
+        cwd=settings.BASE_DIR,
+        env={**os.environ, setting_name: "0"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert setting_name in result.stderr
 
 
 @pytest.mark.django_db

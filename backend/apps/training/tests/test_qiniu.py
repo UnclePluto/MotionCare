@@ -56,22 +56,26 @@ def test_stat_object_metadata_rejects_missing_object(monkeypatch):
     stat = Mock(return_value=(None, _stat_response(status_code=612, error="no such file")))
     monkeypatch.setattr(BucketManager, "stat", stat)
 
-    with pytest.raises(ValidationError, match="对象不存在"):
+    with pytest.raises(ValidationError, match="对象不存在") as exc_info:
         training_qiniu.stat_object_metadata(
             bucket="motioncare-training",
             key="training-videos/1/missing.mp4",
         )
 
+    assert type(exc_info.value).__name__ == "QiniuObjectNotFound"
+
 
 @override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
-def test_stat_object_metadata_converts_sdk_failure_to_validation_error(monkeypatch):
+def test_stat_object_metadata_marks_sdk_failure_as_provider_unavailable(monkeypatch):
     monkeypatch.setattr(BucketManager, "stat", Mock(side_effect=RuntimeError("network down")))
 
-    with pytest.raises(ValidationError, match="无法读取"):
+    with pytest.raises(ValidationError, match="无法读取") as exc_info:
         training_qiniu.stat_object_metadata(
             bucket="motioncare-training",
             key="training-videos/1/video.mp4",
         )
+
+    assert type(exc_info.value).__name__ == "QiniuObjectUnavailable"
 
 
 @override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
@@ -86,18 +90,24 @@ def test_stat_object_metadata_or_none_returns_none_only_for_612(monkeypatch):
 
 
 @override_settings(QINIU_ACCESS_KEY="ak-test", QINIU_SECRET_KEY="sk-test")
-def test_stat_object_metadata_or_none_rejects_non_612_error(monkeypatch):
+@pytest.mark.parametrize("status_code", [401, 500, 503])
+def test_stat_object_metadata_or_none_marks_non_612_error_unavailable(
+    monkeypatch,
+    status_code,
+):
     monkeypatch.setattr(
         BucketManager,
         "stat",
-        Mock(return_value=(None, _stat_response(status_code=401, error="bad credentials"))),
+        Mock(return_value=(None, _stat_response(status_code=status_code, error="provider error"))),
     )
 
-    with pytest.raises(ValidationError, match="无法读取"):
+    with pytest.raises(ValidationError, match="无法读取") as exc_info:
         training_qiniu.stat_object_metadata_or_none(
             bucket="motioncare-training",
             key="training-videos/1/video.mp4",
         )
+
+    assert type(exc_info.value).__name__ == "QiniuObjectUnavailable"
 
 
 def _local_video(tmp_path):

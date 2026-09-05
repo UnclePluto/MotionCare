@@ -19,6 +19,14 @@ class QiniuUploadDeadlineExceeded(ValidationError):
     pass
 
 
+class QiniuObjectUnavailable(ValidationError):
+    pass
+
+
+class QiniuObjectNotFound(ValidationError):
+    pass
+
+
 def _urlsafe_base64(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8")
 
@@ -33,23 +41,23 @@ def _sign(data: str) -> str:
 
 
 def stat_object_metadata_or_none(*, bucket: str, key: str) -> dict | None:
-    auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
     try:
+        auth = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY)
         metadata, response = BucketManager(auth).stat(bucket, key)
     except Exception as exc:
-        raise ValidationError("七牛训练视频对象无法读取") from exc
+        raise QiniuObjectUnavailable("七牛训练视频对象无法读取") from exc
     status_code = getattr(response, "status_code", None)
     if status_code == 200 and isinstance(metadata, dict):
         return metadata
     if status_code == 612:
         return None
-    raise ValidationError("七牛训练视频对象无法读取")
+    raise QiniuObjectUnavailable("七牛训练视频对象无法读取")
 
 
 def stat_object_metadata(*, bucket: str, key: str) -> dict:
     metadata = stat_object_metadata_or_none(bucket=bucket, key=key)
     if metadata is None:
-        raise ValidationError("七牛训练视频对象不存在")
+        raise QiniuObjectNotFound("七牛训练视频对象不存在")
     return metadata
 
 

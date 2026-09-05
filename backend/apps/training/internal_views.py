@@ -17,6 +17,7 @@ from .internal_services import (
     CompletionRejected,
     LeaseUnavailable,
     StorageGrantUnavailable,
+    StorageVerificationUnavailable,
     claim_next_job,
     complete_job,
     fail_job,
@@ -128,6 +129,11 @@ class MotionAnalysisCompleteView(InternalWorkerAPIView):
             return Response({"detail": "任务状态冲突"}, status=status.HTTP_409_CONFLICT)
         except CompletionRejected:
             return Response({"detail": "完成数据无效"}, status=status.HTTP_400_BAD_REQUEST)
+        except StorageVerificationUnavailable:
+            return Response(
+                {"detail": "存储验证暂不可用"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         return Response(_terminal_job_response(job), status=status.HTTP_200_OK)
 
 

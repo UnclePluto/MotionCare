@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 PROTOCOL_VERSION = "1"
+POSTGRES_INT32_MAX = 2_147_483_647
+POSTGRES_INT64_MAX = 9_223_372_036_854_775_807
+MAX_SKELETON_DIMENSION = 16_384
+MAX_SKELETON_DURATION_SECONDS = 3_636.0
+MAX_SKELETON_FPS = 240.0
 
 
 class ContractValidationError(ValueError):
@@ -37,8 +42,21 @@ def _require_str(value: object, field_name: str) -> str:
     return value
 
 
-def _require_int(value: object, field_name: str, *, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+def _require_int(
+    value: object,
+    field_name: str,
+    *,
+    minimum: int = 0,
+    maximum: int | None = None,
+) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or (maximum is not None and value > maximum)
+    ):
+        if maximum is not None:
+            raise ContractValidationError(f"{field_name} 超出允许范围")
         if minimum == 0:
             raise ContractValidationError(f"{field_name} 必须是非负整数")
         raise ContractValidationError(f"{field_name} 必须是正整数")
@@ -168,9 +186,9 @@ def _validate_count_values(
         ("standard_count", standard_count),
         ("nonstandard_count", nonstandard_count),
     ):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ContractValidationError(f"{name} 必须是非负整数")
-        values.append(value)
+        values.append(
+            _require_int(value, name, minimum=0, maximum=POSTGRES_INT32_MAX)
+        )
     total, standard, nonstandard = values
     if total != standard + nonstandard:
         raise ContractValidationError("total_count 必须等于 standard_count + nonstandard_count")
@@ -202,7 +220,12 @@ class DownloadGrant:
         object.__setattr__(
             self,
             "size_bytes",
-            _require_int(self.size_bytes, "download.size_bytes", minimum=0),
+            _require_int(
+                self.size_bytes,
+                "download.size_bytes",
+                minimum=0,
+                maximum=POSTGRES_INT64_MAX,
+            ),
         )
         object.__setattr__(
             self,
@@ -217,7 +240,12 @@ class DownloadGrant:
             bucket=_require_str(payload.get("bucket"), "download.bucket"),
             object_key=_require_str(payload.get("object_key"), "download.object_key"),
             expires_at=_require_str(payload.get("expires_at"), "download.expires_at"),
-            size_bytes=_require_int(payload.get("size_bytes"), "download.size_bytes", minimum=0),
+            size_bytes=_require_int(
+                payload.get("size_bytes"),
+                "download.size_bytes",
+                minimum=0,
+                maximum=POSTGRES_INT64_MAX,
+            ),
             content_type=_require_str(payload.get("content_type"), "download.content_type"),
         )
 
@@ -289,16 +317,53 @@ class SkeletonArtifact:
         object.__setattr__(
             self,
             "size_bytes",
-            _require_int(self.size_bytes, "skeleton.size_bytes", minimum=0),
+            _require_int(
+                self.size_bytes,
+                "skeleton.size_bytes",
+                minimum=1,
+                maximum=POSTGRES_INT64_MAX,
+            ),
         )
         object.__setattr__(
             self,
             "duration_seconds",
-            _require_float(self.duration_seconds, "skeleton.duration_seconds"),
+            _require_float(
+                self.duration_seconds,
+                "skeleton.duration_seconds",
+                minimum_exclusive=0,
+                maximum=MAX_SKELETON_DURATION_SECONDS,
+            ),
         )
-        object.__setattr__(self, "width", _require_int(self.width, "skeleton.width", minimum=1))
-        object.__setattr__(self, "height", _require_int(self.height, "skeleton.height", minimum=1))
-        object.__setattr__(self, "fps", _require_float(self.fps, "skeleton.fps"))
+        object.__setattr__(
+            self,
+            "width",
+            _require_int(
+                self.width,
+                "skeleton.width",
+                minimum=1,
+                maximum=MAX_SKELETON_DIMENSION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "height",
+            _require_int(
+                self.height,
+                "skeleton.height",
+                minimum=1,
+                maximum=MAX_SKELETON_DIMENSION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "fps",
+            _require_float(
+                self.fps,
+                "skeleton.fps",
+                minimum_exclusive=0,
+                maximum=MAX_SKELETON_FPS,
+            ),
+        )
         object.__setattr__(
             self,
             "content_type",
@@ -311,13 +376,36 @@ class SkeletonArtifact:
             bucket=_require_str(payload.get("bucket"), "skeleton.bucket"),
             object_key=_require_str(payload.get("object_key"), "skeleton.object_key"),
             object_hash=_require_str(payload.get("object_hash"), "skeleton.object_hash"),
-            size_bytes=_require_int(payload.get("size_bytes"), "skeleton.size_bytes", minimum=0),
-            duration_seconds=_require_float(
-                payload.get("duration_seconds"), "skeleton.duration_seconds"
+            size_bytes=_require_int(
+                payload.get("size_bytes"),
+                "skeleton.size_bytes",
+                minimum=1,
+                maximum=POSTGRES_INT64_MAX,
             ),
-            width=_require_int(payload.get("width"), "skeleton.width", minimum=1),
-            height=_require_int(payload.get("height"), "skeleton.height", minimum=1),
-            fps=_require_float(payload.get("fps"), "skeleton.fps"),
+            duration_seconds=_require_float(
+                payload.get("duration_seconds"),
+                "skeleton.duration_seconds",
+                minimum_exclusive=0,
+                maximum=MAX_SKELETON_DURATION_SECONDS,
+            ),
+            width=_require_int(
+                payload.get("width"),
+                "skeleton.width",
+                minimum=1,
+                maximum=MAX_SKELETON_DIMENSION,
+            ),
+            height=_require_int(
+                payload.get("height"),
+                "skeleton.height",
+                minimum=1,
+                maximum=MAX_SKELETON_DIMENSION,
+            ),
+            fps=_require_float(
+                payload.get("fps"),
+                "skeleton.fps",
+                minimum_exclusive=0,
+                maximum=MAX_SKELETON_FPS,
+            ),
             content_type=_require_str(payload.get("content_type"), "skeleton.content_type"),
         )
 
@@ -336,12 +424,22 @@ class SkeletonArtifact:
         return data
 
 
-def _require_float(value: object, field_name: str) -> float:
+def _require_float(
+    value: object,
+    field_name: str,
+    *,
+    minimum_exclusive: float | None = None,
+    maximum: float | None = None,
+) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ContractValidationError(f"{field_name} 必须是数字")
     result = float(value)
     if not math.isfinite(result):
         raise ContractValidationError(f"{field_name} 必须是有限数字")
+    if minimum_exclusive is not None and result <= minimum_exclusive:
+        raise ContractValidationError(f"{field_name} 必须大于 {minimum_exclusive}")
+    if maximum is not None and result > maximum:
+        raise ContractValidationError(f"{field_name} 超出允许范围")
     return result
 
 

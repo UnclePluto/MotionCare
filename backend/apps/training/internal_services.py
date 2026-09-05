@@ -13,6 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from motion_analysis_contract import (
     PROTOCOL_VERSION,
     CompletionPayload,
@@ -22,12 +23,13 @@ from motion_analysis_contract import (
 )
 
 from .models import MotionResultSource
+from .motion_analysis_monitoring import register_motion_analysis_cleanup
 from .motion_analysis_storage import (
     AnalysisStorageGrant,
     issue_storage_grant,
-    queue_skeleton_cleanup,
     verify_skeleton_upload,
 )
+from .qiniu import QiniuObjectUnavailable
 from .video_models import MotionAnalysisJob
 
 
@@ -35,11 +37,6 @@ _STAGE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,31}\Z")
 _FAILURE_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,79}\Z")
 _IDEMPOTENCY_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,119}\Z")
 _LEASE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
-_SENSITIVE_FAILURE_PATTERN = re.compile(
-    r"(?i)(?:https?://|(?<![A-Za-z0-9])/(?:[^\s'\";,()]+)|"
-    r"traceback|token|access[_-]?key|secret[_-]?key|credential|"
-    r"(?:^|[^A-Za-z0-9_])(?:AK|SK)(?:$|[^A-Za-z0-9_]))"
-)
 _CAPABILITY_FIELDS = (
     "action_source_key",
     "algorithm_version",
@@ -62,6 +59,10 @@ class AnalysisConflict(Exception):
 
 
 class CompletionRejected(Exception):
+    pass
+
+
+class StorageVerificationUnavailable(Exception):
     pass
 
 
@@ -112,16 +113,8 @@ def parse_failure_payload(payload: Mapping[str, object]) -> FailurePayload:
         raise ValueError("失败数据格式无效")
     if not isinstance(failure_code, str) or not _FAILURE_CODE_PATTERN.fullmatch(failure_code):
         raise ValueError("失败数据格式无效")
-    if (
-        not isinstance(summary, str)
-        or not summary
-        or len(summary) > 2000
-        or _SENSITIVE_FAILURE_PATTERN.search(summary)
-    ):
+    if not isinstance(summary, str) or not summary or len(summary) > 2000:
         raise ValueError("失败数据格式无效")
-    for secret in (settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY):
-        if secret and secret in summary:
-            raise ValueError("失败数据格式无效")
     if not isinstance(stage_timings, Mapping) or len(stage_timings) > 32:
         raise ValueError("失败数据格式无效")
     normalized_timings: dict[str, int | float] = {}
@@ -395,9 +388,9 @@ def _clear_lease(job: MotionAnalysisJob, terminal_stage: str) -> None:
     job.current_stage = terminal_stage
 
 
-def _queue_skeleton_cleanup_if_allocated(job: MotionAnalysisJob) -> None:
-    if job.skeleton_bucket and job.skeleton_object_key:
-        queue_skeleton_cleanup(job)
+def _safe_worker_failure_reason(job: MotionAnalysisJob, failure_code: str) -> str:
+    stage = job.current_stage if _STAGE_PATTERN.fullmatch(job.current_stage or "") else "unknown"
+    return f"动作分析失败（代码={failure_code}，阶段={stage}）"
 
 
 @transaction.atomic
@@ -429,8 +422,11 @@ def complete_job(
     skeleton = completion.skeleton
     try:
         verify_skeleton_upload(job, skeleton.to_dict())
+    except QiniuObjectUnavailable as exc:
+        raise StorageVerificationUnavailable("骨架对象验证服务暂不可用") from exc
     except ValidationError as exc:
         raise CompletionRejected("骨架对象验证失败") from exc
+    _require_live_lease(job, lease_token, timezone.now())
 
     record = job.training_record
     record.set_motion_result(
@@ -495,7 +491,6 @@ def complete_job(
     return job
 
 
-@transaction.atomic
 def fail_job(
     *,
     job_id: int,
@@ -504,45 +499,46 @@ def fail_job(
     failure,
     now,
 ) -> MotionAnalysisJob:
-    job = _locked_job(job_id)
-    if job.status == MotionAnalysisJob.Status.FAILED:
-        if job.completion_idempotency_key == idempotency_key:
-            return job
-        raise AnalysisConflict("任务已由不同请求失败收口")
-    if job.status == MotionAnalysisJob.Status.SUCCEEDED:
-        raise AnalysisConflict("成功任务不能失败收口")
+    with transaction.atomic():
+        job = _locked_job(job_id)
+        if job.status == MotionAnalysisJob.Status.FAILED:
+            if job.completion_idempotency_key != idempotency_key:
+                raise AnalysisConflict("任务已由不同请求失败收口")
+        else:
+            if job.status == MotionAnalysisJob.Status.SUCCEEDED:
+                raise AnalysisConflict("成功任务不能失败收口")
 
-    failure_payload = (
-        failure if isinstance(failure, FailurePayload) else parse_failure_payload(failure)
-    )
-    if (
-        failure_payload.lease_token != lease_token
-        or failure_payload.idempotency_key != idempotency_key
-    ):
-        raise CompletionRejected("失败数据无效")
-    _require_live_lease(job, lease_token, now)
-    job.status = MotionAnalysisJob.Status.FAILED
-    job.completion_idempotency_key = idempotency_key
-    job.failure_code = failure_payload.failure_code
-    job.failure_reason = failure_payload.summary
-    job.result_payload = {
-        "failure_diagnostics": {"stage_timings": failure_payload.stage_timings}
-    }
-    job.finished_at = now
-    _clear_lease(job, "failed")
-    job.save(
-        update_fields=[
-            "status",
-            "completion_idempotency_key",
-            "failure_code",
-            "failure_reason",
-            "result_payload",
-            "finished_at",
-            "lease_token_hash",
-            "lease_expires_at",
-            "current_stage",
-            "updated_at",
-        ]
-    )
-    _queue_skeleton_cleanup_if_allocated(job)
+            failure_payload = (
+                failure if isinstance(failure, FailurePayload) else parse_failure_payload(failure)
+            )
+            if (
+                failure_payload.lease_token != lease_token
+                or failure_payload.idempotency_key != idempotency_key
+            ):
+                raise CompletionRejected("失败数据无效")
+            _require_live_lease(job, lease_token, now)
+            job.status = MotionAnalysisJob.Status.FAILED
+            job.completion_idempotency_key = idempotency_key
+            job.failure_code = failure_payload.failure_code
+            job.failure_reason = _safe_worker_failure_reason(job, failure_payload.failure_code)
+            job.result_payload = {
+                "failure_diagnostics": {"stage_timings": failure_payload.stage_timings}
+            }
+            job.finished_at = now
+            _clear_lease(job, "failed")
+            job.save(
+                update_fields=[
+                    "status",
+                    "completion_idempotency_key",
+                    "failure_code",
+                    "failure_reason",
+                    "result_payload",
+                    "finished_at",
+                    "lease_token_hash",
+                    "lease_expires_at",
+                    "current_stage",
+                    "updated_at",
+                ]
+            )
+    register_motion_analysis_cleanup(job)
     return job

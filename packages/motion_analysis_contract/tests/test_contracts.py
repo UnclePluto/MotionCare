@@ -53,6 +53,21 @@ def test_validate_counts_rejects_bool_and_broken_total():
         )
 
 
+def test_validate_counts_accepts_zero_and_rejects_int4_overflow_even_when_conserved():
+    assert validate_counts(
+        {"total_count": 0, "standard_count": 0, "nonstandard_count": 0}
+    ) == MotionCounts(0, 0, 0)
+
+    with pytest.raises(ContractValidationError):
+        validate_counts(
+            {
+                "total_count": 2_147_483_648,
+                "standard_count": 2_147_483_648,
+                "nonstandard_count": 0,
+            }
+        )
+
+
 def test_direct_dto_construction_rejects_invalid_counts_and_non_json_values():
     with pytest.raises(ContractValidationError):
         MotionCounts(3, 1, 1)
@@ -103,6 +118,41 @@ def test_direct_skeleton_construction_rejects_nan_and_missing_content_type():
     del payload["content_type"]
     with pytest.raises(ContractValidationError):
         SkeletonArtifact.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("size_bytes", 0),
+        ("size_bytes", 9_223_372_036_854_775_808),
+        ("width", 2_147_483_648),
+        ("height", 2_147_483_648),
+        ("duration_seconds", 0),
+        ("duration_seconds", 3_636.1),
+        ("duration_seconds", 1e308),
+        ("fps", 0),
+        ("fps", 240.1),
+        ("fps", 1e308),
+    ],
+)
+def test_skeleton_rejects_database_overflow_and_unreasonable_video_values(
+    field_name,
+    invalid_value,
+):
+    fields = {
+        "bucket": "motion-analysis",
+        "object_key": "motion-analysis/1/2026/09/job/skeleton.mp4",
+        "object_hash": "sha256:deadbeef",
+        "size_bytes": 2048,
+        "duration_seconds": 12.5,
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "content_type": "video/mp4",
+    }
+
+    with pytest.raises(ContractValidationError):
+        SkeletonArtifact(**{**fields, field_name: invalid_value})
 
 
 def test_claimed_job_round_trip_keeps_exact_storage_scope():

@@ -131,6 +131,82 @@ def test_expire_stale_jobs_uses_strict_lease_boundary_and_queues_cleanup_once(
 
 
 @pytest.mark.django_db
+def test_expiry_reaches_terminal_when_cleanup_registration_fails_and_retries_safely(
+    analysis_job_factory,
+    monkeypatch,
+    caplog,
+):
+    from apps.training import motion_analysis_monitoring as monitoring
+
+    now = timezone.now()
+    job = analysis_job_factory(
+        status=MotionAnalysisJob.Status.RUNNING,
+        lease_token_hash="old-lease-hash",
+        lease_expires_at=now - timedelta(seconds=1),
+        current_stage="upload",
+    )
+    provider_detail = (
+        f"token=provider-secret path=/private/patient.mp4 key={job.skeleton_object_key}"
+    )
+
+    monkeypatch.setattr(
+        monitoring,
+        "queue_skeleton_cleanup",
+        lambda _job: (_ for _ in ()).throw(RuntimeError(provider_detail)),
+    )
+    with caplog.at_level(logging.CRITICAL, logger=monitoring.__name__):
+        assert monitoring.expire_stale_motion_analysis_jobs(now=now) == 1
+
+    job.refresh_from_db()
+    assert job.status == MotionAnalysisJob.Status.FAILED
+    assert job.failure_code == "lease_expired"
+    assert job.lease_expires_at is None
+    assert QiniuCleanupTombstone.objects.count() == 0
+    diagnostic = next(
+        record
+        for record in caplog.records
+        if getattr(record, "reason_code", None)
+        == "skeleton_cleanup_registration_failed"
+    )
+    assert diagnostic.job_id == job.id
+    rendered = "\n".join(
+        f"{record.getMessage()} {record.__dict__!r}" for record in caplog.records
+    )
+    for forbidden in (
+        provider_detail,
+        "provider-secret",
+        "/private/patient.mp4",
+        job.skeleton_object_key,
+        job.project_patient.patient.name,
+    ):
+        assert forbidden not in rendered
+
+    monkeypatch.undo()
+    assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 1
+    assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 0
+    assert QiniuCleanupTombstone.objects.get().canonical_key == job.skeleton_object_key
+
+
+@pytest.mark.django_db
+def test_cleanup_reconciliation_pages_past_failed_jobs_with_existing_tombstones(
+    analysis_job_factory,
+    monkeypatch,
+):
+    from apps.training import motion_analysis_monitoring as monitoring
+    from apps.training.motion_analysis_storage import queue_skeleton_cleanup
+
+    already_registered = analysis_job_factory(status=MotionAnalysisJob.Status.FAILED)
+    missing = analysis_job_factory(status=MotionAnalysisJob.Status.FAILED)
+    queue_skeleton_cleanup(already_registered)
+    monkeypatch.setattr(monitoring, "_CLEANUP_RECONCILIATION_BATCH_SIZE", 1)
+
+    assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 1
+    assert QiniuCleanupTombstone.objects.filter(
+        canonical_key=missing.skeleton_object_key
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_recovery_task_delegates_to_expiry_without_requeue(monkeypatch):
     from apps.training import tasks
 
@@ -140,9 +216,14 @@ def test_recovery_task_delegates_to_expiry_without_requeue(monkeypatch):
         "expire_stale_motion_analysis_jobs",
         lambda now=None: calls.append(now) or 3,
     )
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_motion_analysis_cleanup_tombstones",
+        lambda: calls.append("cleanup") or 1,
+    )
 
     assert tasks.recover_stale_motion_analysis_jobs() == 3
-    assert calls == [None]
+    assert calls == ["cleanup", None]
 
 
 @pytest.mark.django_db

@@ -1,3 +1,4 @@
+import logging
 from dataclasses import asdict, dataclass
 
 from django.db import transaction
@@ -6,7 +7,11 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from .motion_analysis_storage import queue_skeleton_cleanup
-from .video_models import MotionAnalysisJob
+from .video_models import MotionAnalysisJob, QiniuCleanupTombstone
+
+
+logger = logging.getLogger(__name__)
+_CLEANUP_RECONCILIATION_BATCH_SIZE = 500
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,68 @@ def motion_analysis_health_snapshot(now=None) -> MotionAnalysisHealthSnapshot:
         oldest_running_lease_age_seconds=_elapsed_seconds(now, oldest_running_activity_at),
         expired_running_lease_count=running.filter(lease_expires_at__lt=now).count(),
     )
+
+
+def register_motion_analysis_cleanup(job: MotionAnalysisJob) -> bool:
+    if not job.skeleton_bucket or not job.skeleton_object_key:
+        return True
+    try:
+        queue_skeleton_cleanup(job)
+    except Exception:
+        logger.critical(
+            "motion_analysis_cleanup_registration_failed",
+            extra={
+                "reason_code": "skeleton_cleanup_registration_failed",
+                "job_id": job.id,
+            },
+        )
+        return False
+    return True
+
+
+def _skeleton_prefix(object_key: str) -> str:
+    directory, separator, _filename = object_key.rpartition("/")
+    return f"{directory}/" if separator and directory else ""
+
+
+def reconcile_motion_analysis_cleanup_tombstones() -> int:
+    registered_count = 0
+    last_job_id = 0
+    while registered_count < _CLEANUP_RECONCILIATION_BATCH_SIZE:
+        jobs = list(
+            MotionAnalysisJob.objects.select_related("training_video")
+            .filter(
+                id__gt=last_job_id,
+                status=MotionAnalysisJob.Status.FAILED,
+                skeleton_bucket__gt="",
+                skeleton_object_key__gt="",
+            )
+            .order_by("id")[:_CLEANUP_RECONCILIATION_BATCH_SIZE]
+        )
+        if not jobs:
+            break
+        last_job_id = jobs[-1].id
+        prefixes = {
+            prefix
+            for job in jobs
+            if (prefix := _skeleton_prefix(job.skeleton_object_key or ""))
+        }
+        existing_prefixes = set(
+            QiniuCleanupTombstone.objects.filter(attempt_key_prefix__in=prefixes).values_list(
+                "attempt_key_prefix", flat=True
+            )
+        )
+        for job in jobs:
+            prefix = _skeleton_prefix(job.skeleton_object_key or "")
+            if prefix in existing_prefixes:
+                continue
+            if register_motion_analysis_cleanup(job):
+                registered_count += 1
+                if prefix:
+                    existing_prefixes.add(prefix)
+            if registered_count >= _CLEANUP_RECONCILIATION_BATCH_SIZE:
+                break
+    return registered_count
 
 
 def expire_stale_motion_analysis_jobs(now=None) -> int:
@@ -95,7 +162,6 @@ def expire_stale_motion_analysis_jobs(now=None) -> int:
                     "updated_at",
                 ]
             )
-            if job.skeleton_bucket and job.skeleton_object_key:
-                queue_skeleton_cleanup(job)
             expired_count += 1
+        register_motion_analysis_cleanup(job)
     return expired_count
