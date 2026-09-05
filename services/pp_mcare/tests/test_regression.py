@@ -192,6 +192,11 @@ def test_regression_runs_formal_pipeline_once_and_writes_full_frame_evidence(
     video.write_bytes(b"real fixture bytes")
     report_path = tmp_path / "report.json"
     monkeypatch.setenv("PP_MCARE_IMPLEMENTATION_COMMIT", "deadbee")
+    monkeypatch.setattr(
+        regression,
+        "_source_checkout_identity",
+        lambda _root: regression.SourceCheckoutIdentity(commit="a" * 40, dirty=False),
+    )
     calls, digest = _configure_success(monkeypatch, video)
 
     report = run_regression(video_path=video, manual_total_count=90, report_path=report_path)
@@ -460,6 +465,11 @@ def test_implementation_identity_names_core_and_full_distribution_digests(monkey
     distribution_calls = []
     monkeypatch.setattr(
         regression,
+        "_source_checkout_identity",
+        lambda _root: regression.SourceCheckoutIdentity(commit="a" * 40, dirty=False),
+    )
+    monkeypatch.setattr(
+        regression,
         "_distribution_content_sha256",
         lambda package_root: distribution_calls.append(package_root) or "d" * 64,
         raising=False,
@@ -564,7 +574,12 @@ def test_source_checkout_rejects_non_pp_mcare_or_malformed_adjacent_project(tmp_
     assert regression._source_project_root(package_root) is None
 
 
-def test_git_command_failure_reports_no_commit_or_dirty_state(monkeypatch):
+def test_git_command_failure_reports_no_commit_or_dirty_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        regression,
+        "_RELEASE_MANIFEST_PATH",
+        tmp_path / "missing-release-manifest.json",
+    )
     monkeypatch.setattr(
         regression.subprocess,
         "run",
@@ -578,8 +593,12 @@ def test_git_command_failure_reports_no_commit_or_dirty_state(monkeypatch):
     assert identity["release_artifact"]["manifest_status"] == "not_present"
 
 
-def test_source_checkout_identity_reports_actual_head_and_dirty_semantics():
+def test_source_checkout_identity_reports_actual_environment_semantics():
     package_root = Path(regression.__file__).resolve().parent
+    project_root = regression._source_project_root(package_root)
+    if project_root is None:
+        assert regression._source_checkout_identity(package_root) is None
+        return
     repository_root = Path(
         subprocess.run(
             ["git", "-C", str(package_root), "rev-parse", "--show-toplevel"],
@@ -594,7 +613,6 @@ def test_source_checkout_identity_reports_actual_head_and_dirty_semantics():
         capture_output=True,
         text=True,
     ).stdout.strip()
-    project_root = package_root.parent.parent
     expected_dirty = bool(
         subprocess.run(
             [
@@ -1316,7 +1334,7 @@ def test_regression_pipeline_reads_private_snapshot_after_source_inode_is_rewrit
     assert video.read_bytes() == unvalidated
 
 
-def test_regression_fails_when_source_inode_changes_while_snapshot_is_copied(
+def test_regression_fails_when_source_metadata_changes_while_snapshot_is_copied(
     monkeypatch,
     tmp_path,
 ):
@@ -1340,6 +1358,7 @@ def test_regression_fails_when_source_inode_changes_while_snapshot_is_copied(
         if content and not changed and descriptor_identity == source_identity:
             changed = True
             video.write_bytes(unvalidated)
+            video.chmod(0o400)
             os.utime(
                 video,
                 ns=(source_times.st_atime_ns, source_times.st_mtime_ns),
