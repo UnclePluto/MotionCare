@@ -54,7 +54,8 @@ _IMPLEMENTATION_FILES = (
     "actions/shoulder_press_v2.py",
 )
 _RELEASE_MANIFEST_PATH = Path("/opt/motioncare-analysis/current/release-manifest.json")
-_AT_EMPTY_PATH = 0x1000
+_AT_FDCWD = -100
+_AT_SYMLINK_FOLLOW = 0x400
 
 
 class RegressionFailure(RuntimeError):
@@ -711,14 +712,45 @@ def _link_anonymous_file_linux(
     parent_descriptor: int,
     final_name: str,
 ) -> None:
-    encoded_name = os.fsencode(final_name)
-    if not encoded_name or b"/" in encoded_name or b"\0" in encoded_name:
+    if type(descriptor) is not int or descriptor < 0:
+        raise RegressionFailure("报告文件描述符无效")
+    if type(parent_descriptor) is not int or parent_descriptor < 0:
+        raise RegressionFailure("报告目录描述符无效")
+    if not isinstance(final_name, str):
         raise RegressionFailure("报告文件名无效")
+    encoded_name = os.fsencode(final_name)
+    if (
+        not encoded_name
+        or encoded_name in {b".", b".."}
+        or b"/" in encoded_name
+        or b"\0" in encoded_name
+    ):
+        raise RegressionFailure("报告文件名无效")
+    proc_fd_path = f"/proc/self/fd/{descriptor}"
+    try:
+        proc_identity = os.stat(proc_fd_path, follow_symlinks=True)
+        descriptor_identity = os.fstat(descriptor)
+    except OSError as exc:
+        raise RegressionFailure("当前 Linux 不支持安全报告发布") from exc
+    if (proc_identity.st_dev, proc_identity.st_ino) != (
+        descriptor_identity.st_dev,
+        descriptor_identity.st_ino,
+    ):
+        raise RegressionFailure("当前 Linux 不支持安全报告发布")
     libc = ctypes.CDLL(None, use_errno=True)
     linkat = libc.linkat
     linkat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
     linkat.restype = ctypes.c_int
-    if linkat(descriptor, b"", parent_descriptor, encoded_name, _AT_EMPTY_PATH) != 0:
+    if (
+        linkat(
+            _AT_FDCWD,
+            os.fsencode(proc_fd_path),
+            parent_descriptor,
+            encoded_name,
+            _AT_SYMLINK_FOLLOW,
+        )
+        != 0
+    ):
         error_number = ctypes.get_errno()
         raise OSError(error_number, os.strerror(error_number))
 

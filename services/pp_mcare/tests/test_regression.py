@@ -939,6 +939,26 @@ def test_atomic_report_publish_never_links_a_rebound_temporary_name(
 def test_linux_linkat_publishes_only_the_open_fd_to_the_validated_basename(monkeypatch):
     calls = []
 
+    descriptor_identity = SimpleNamespace(st_dev=11, st_ino=12)
+    original_stat = os.stat
+
+    def stat_proc_descriptor(path, *args, **kwargs):
+        if path == "/proc/self/fd/41":
+            calls.append(("stat", path, kwargs.get("follow_symlinks")))
+            return descriptor_identity
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        regression.os,
+        "stat",
+        stat_proc_descriptor,
+    )
+    monkeypatch.setattr(
+        regression.os,
+        "fstat",
+        lambda descriptor: calls.append(("fstat", descriptor)) or descriptor_identity,
+    )
+
     class LinkAt:
         argtypes = None
         restype = None
@@ -960,8 +980,16 @@ def test_linux_linkat_publishes_only_the_open_fd_to_the_validated_basename(monke
     regression._link_anonymous_file_linux(41, 42, "report.json")
 
     assert calls == [
+        ("stat", "/proc/self/fd/41", True),
+        ("fstat", 41),
         ("CDLL", None, True),
-        (41, b"", 42, b"report.json", regression._AT_EMPTY_PATH),
+        (
+            regression._AT_FDCWD,
+            b"/proc/self/fd/41",
+            42,
+            b"report.json",
+            regression._AT_SYMLINK_FOLLOW,
+        ),
     ]
     assert linkat.argtypes == [
         regression.ctypes.c_int,
@@ -973,14 +1001,95 @@ def test_linux_linkat_publishes_only_the_open_fd_to_the_validated_basename(monke
     assert linkat.restype is regression.ctypes.c_int
 
 
-def test_linux_linkat_rejects_arbitrary_paths_and_preserves_errno(monkeypatch):
+def test_linux_linkat_fails_closed_when_proc_self_fd_is_unavailable(monkeypatch):
+    original_stat = os.stat
+
+    def reject_proc_descriptor(path, *args, **kwargs):
+        if path == "/proc/self/fd/41":
+            raise FileNotFoundError(errno.ENOENT, "proc unavailable")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        regression.os,
+        "stat",
+        reject_proc_descriptor,
+    )
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: pytest.fail("libc must not run without /proc/self/fd"),
+    )
+
+    with pytest.raises(RegressionFailure, match="当前 Linux 不支持安全报告发布"):
+        regression._link_anonymous_file_linux(41, 42, "report.json")
+
+
+def test_linux_linkat_fails_closed_when_proc_path_is_not_the_open_fd(monkeypatch):
+    original_stat = os.stat
+
+    def stat_wrong_inode(path, *args, **kwargs):
+        if path == "/proc/self/fd/41":
+            return SimpleNamespace(st_dev=11, st_ino=99)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(regression.os, "stat", stat_wrong_inode)
+    monkeypatch.setattr(
+        regression.os,
+        "fstat",
+        lambda _descriptor: SimpleNamespace(st_dev=11, st_ino=12),
+    )
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: pytest.fail("libc must not run for a mismatched proc fd"),
+    )
+
+    with pytest.raises(RegressionFailure, match="当前 Linux 不支持安全报告发布"):
+        regression._link_anonymous_file_linux(41, 42, "report.json")
+
+
+def test_linux_linkat_avoids_capability_dependent_empty_path(monkeypatch):
+    descriptor_identity = SimpleNamespace(st_dev=11, st_ino=12)
+    original_stat = os.stat
+    monkeypatch.setattr(
+        regression.os,
+        "stat",
+        lambda path, *args, **kwargs: (
+            descriptor_identity
+            if path == "/proc/self/fd/41"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(regression.os, "fstat", lambda _descriptor: descriptor_identity)
+
+    class LinkAt:
+        argtypes = None
+        restype = None
+
+        def __call__(self, old_dir_fd, old_path, *_arguments):
+            if old_dir_fd == 41 and old_path == b"":
+                return -1
+            return 0
+
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(linkat=LinkAt()),
+    )
+    monkeypatch.setattr(regression.ctypes, "get_errno", lambda: errno.ENOENT)
+
+    regression._link_anonymous_file_linux(41, 42, "report.json")
+
+
+@pytest.mark.parametrize("invalid_name", ["../report.json", ".", "..", "nested/report.json"])
+def test_linux_linkat_rejects_arbitrary_paths_and_preserves_errno(monkeypatch, invalid_name):
     monkeypatch.setattr(
         regression.ctypes,
         "CDLL",
         lambda *_args, **_kwargs: pytest.fail("invalid basename must not call libc"),
     )
     with pytest.raises(RegressionFailure, match="报告文件名无效"):
-        regression._link_anonymous_file_linux(41, 42, "../report.json")
+        regression._link_anonymous_file_linux(41, 42, invalid_name)
 
     class LinkAt:
         argtypes = None
@@ -994,10 +1103,34 @@ def test_linux_linkat_rejects_arbitrary_paths_and_preserves_errno(monkeypatch):
         "CDLL",
         lambda *_args, **_kwargs: SimpleNamespace(linkat=LinkAt()),
     )
+    descriptor_identity = SimpleNamespace(st_dev=11, st_ino=12)
+    original_stat = os.stat
+    monkeypatch.setattr(
+        regression.os,
+        "stat",
+        lambda path, *args, **kwargs: (
+            descriptor_identity
+            if path == "/proc/self/fd/41"
+            else original_stat(path, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(regression.os, "fstat", lambda _descriptor: descriptor_identity)
     monkeypatch.setattr(regression.ctypes, "get_errno", lambda: errno.EEXIST)
     with pytest.raises(OSError) as captured:
         regression._link_anonymous_file_linux(41, 42, "report.json")
     assert captured.value.errno == errno.EEXIST
+
+
+@pytest.mark.parametrize("invalid_descriptor", [-1, True, "41/../../private"])
+def test_linux_linkat_rejects_non_numeric_fd_path_injection(monkeypatch, invalid_descriptor):
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: pytest.fail("invalid descriptor must not call libc"),
+    )
+
+    with pytest.raises(RegressionFailure, match="报告文件描述符无效"):
+        regression._link_anonymous_file_linux(invalid_descriptor, 42, "report.json")
 
 
 def test_linux_report_publisher_keeps_anonymous_fd_open_through_linkat(monkeypatch):
