@@ -264,13 +264,20 @@ MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS = int(
 MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS = int(
     os.getenv("MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS", "7200")
 )
-MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS = int(
-    os.getenv("MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS", "300")
+PP_MCARE_MONITOR_INTERVAL_SECONDS = _positive_int_env(
+    "PP_MCARE_MONITOR_INTERVAL_SECONDS",
+    os.getenv("MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS", "300"),
 )
+MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS = PP_MCARE_MONITOR_INTERVAL_SECONDS
+PP_MCARE_PENDING_WARNING_SECONDS = _positive_int_env("PP_MCARE_PENDING_WARNING_SECONDS", 1200)
 CELERY_BEAT_SCHEDULE = {
     "recover-stale-motion-analysis-jobs": {
         "task": "apps.training.tasks.recover_stale_motion_analysis_jobs",
-        "schedule": MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS,
+        "schedule": PP_MCARE_MONITOR_INTERVAL_SECONDS,
+    },
+    "record-motion-analysis-health-snapshot": {
+        "task": "apps.training.tasks.record_motion_analysis_health_snapshot",
+        "schedule": PP_MCARE_MONITOR_INTERVAL_SECONDS,
     },
     "recover-stale-video-assembly-jobs": {
         "task": "apps.training.video_tasks.recover_stale_video_assembly_jobs",

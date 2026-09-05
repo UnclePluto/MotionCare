@@ -6,11 +6,20 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .internal_permissions import IsPpMcareWorker
-from .internal_serializers import ClaimRequestSerializer, HeartbeatRequestSerializer
+from .internal_serializers import (
+    ClaimRequestSerializer,
+    CompletionRequestSerializer,
+    FailureRequestSerializer,
+    HeartbeatRequestSerializer,
+)
 from .internal_services import (
+    AnalysisConflict,
+    CompletionRejected,
     LeaseUnavailable,
     StorageGrantUnavailable,
     claim_next_job,
+    complete_job,
+    fail_job,
     heartbeat_job,
 )
 
@@ -82,3 +91,61 @@ class MotionAnalysisHeartbeatView(InternalWorkerAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+def _terminal_job_response(job):
+    payload = {
+        "protocol_version": PROTOCOL_VERSION,
+        "job_id": job.id,
+        "status": job.status,
+        "finished_at": job.finished_at.isoformat(),
+    }
+    if job.status == job.Status.SUCCEEDED:
+        payload.update(
+            {
+                "total_count": job.total_count,
+                "standard_count": job.standard_count,
+                "nonstandard_count": job.nonstandard_count,
+            }
+        )
+    return payload
+
+
+class MotionAnalysisCompleteView(InternalWorkerAPIView):
+    def post(self, request, job_id):
+        serializer = CompletionRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        completion = serializer.validated_data["payload"]
+        try:
+            job = complete_job(
+                job_id=job_id,
+                lease_token=completion.lease_token,
+                idempotency_key=completion.idempotency_key,
+                payload=completion,
+                now=timezone.now(),
+            )
+        except (AnalysisConflict, LeaseUnavailable):
+            return Response({"detail": "任务状态冲突"}, status=status.HTTP_409_CONFLICT)
+        except CompletionRejected:
+            return Response({"detail": "完成数据无效"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_terminal_job_response(job), status=status.HTTP_200_OK)
+
+
+class MotionAnalysisFailView(InternalWorkerAPIView):
+    def post(self, request, job_id):
+        serializer = FailureRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        failure = serializer.validated_data["failure"]
+        try:
+            job = fail_job(
+                job_id=job_id,
+                lease_token=failure.lease_token,
+                idempotency_key=failure.idempotency_key,
+                failure=failure,
+                now=timezone.now(),
+            )
+        except (AnalysisConflict, LeaseUnavailable):
+            return Response({"detail": "任务状态冲突"}, status=status.HTTP_409_CONFLICT)
+        except CompletionRejected:
+            return Response({"detail": "失败数据无效"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_terminal_job_response(job), status=status.HTTP_200_OK)

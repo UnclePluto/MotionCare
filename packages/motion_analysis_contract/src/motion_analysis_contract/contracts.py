@@ -464,6 +464,10 @@ class CompletionPayload:
     protocol_version: str
     lease_token: str = field(repr=False)
     idempotency_key: str
+    algorithm_version: str
+    rule_version: str
+    parameter_version: str
+    subject_tracker_version: str
     counts: MotionCounts
     quality_summary: dict[str, JsonValue]
     result_payload: dict[str, JsonValue]
@@ -473,7 +477,10 @@ class CompletionPayload:
         return (
             "CompletionPayload("
             f"protocol_version={self.protocol_version!r}, lease_credential=<redacted>, "
-            f"idempotency_key={self.idempotency_key!r}, counts={self.counts!r}, "
+            f"idempotency_key={self.idempotency_key!r}, "
+            f"algorithm_version={self.algorithm_version!r}, rule_version={self.rule_version!r}, "
+            f"parameter_version={self.parameter_version!r}, "
+            f"subject_tracker_version={self.subject_tracker_version!r}, counts={self.counts!r}, "
             f"quality_summary={self.quality_summary!r}, result_payload={self.result_payload!r}, "
             f"skeleton={self.skeleton!r})"
         )
@@ -490,6 +497,13 @@ class CompletionPayload:
             "idempotency_key",
             _require_str(self.idempotency_key, "idempotency_key"),
         )
+        for field_name in (
+            "algorithm_version",
+            "rule_version",
+            "parameter_version",
+            "subject_tracker_version",
+        ):
+            object.__setattr__(self, field_name, _require_str(getattr(self, field_name), field_name))
         if not isinstance(self.counts, MotionCounts):
             raise ContractValidationError("counts 必须是 MotionCounts")
         if not isinstance(self.skeleton, SkeletonArtifact):
@@ -514,6 +528,12 @@ class CompletionPayload:
             protocol_version=_require_str(payload.get("protocol_version"), "protocol_version"),
             lease_token=_require_str(payload.get("lease_token"), "lease_token"),
             idempotency_key=_require_str(payload.get("idempotency_key"), "idempotency_key"),
+            algorithm_version=_require_str(payload.get("algorithm_version"), "algorithm_version"),
+            rule_version=_require_str(payload.get("rule_version"), "rule_version"),
+            parameter_version=_require_str(payload.get("parameter_version"), "parameter_version"),
+            subject_tracker_version=_require_str(
+                payload.get("subject_tracker_version"), "subject_tracker_version"
+            ),
             counts=counts,
             quality_summary=_require_json_object(payload.get("quality_summary"), "quality_summary"),
             result_payload=_require_json_object(payload.get("result_payload"), "result_payload"),
@@ -525,6 +545,10 @@ class CompletionPayload:
             "protocol_version": self.protocol_version,
             "lease_token": self.lease_token,
             "idempotency_key": self.idempotency_key,
+            "algorithm_version": self.algorithm_version,
+            "rule_version": self.rule_version,
+            "parameter_version": self.parameter_version,
+            "subject_tracker_version": self.subject_tracker_version,
             **self.counts.to_dict(),
             "quality_summary": _require_json_object(self.quality_summary, "quality_summary"),
             "result_payload": _require_json_object(self.result_payload, "result_payload"),

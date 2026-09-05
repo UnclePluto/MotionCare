@@ -73,6 +73,10 @@ def test_direct_dto_construction_rejects_invalid_counts_and_non_json_values():
             protocol_version=PROTOCOL_VERSION,
             lease_token="lease-token",
             idempotency_key="idem-001",
+            algorithm_version="PP-TinyPose_128x96",
+            rule_version="shoulder-press-v2",
+            parameter_version="shoulder-press-v2-defaults",
+            subject_tracker_version="primary-subject-v1",
             counts=MotionCounts(0, 0, 0),
             quality_summary={"invalid": object()},
             result_payload={},
@@ -160,6 +164,10 @@ def test_completion_payload_round_trip_flattens_counts_and_keeps_json_base_types
             "protocol_version": PROTOCOL_VERSION,
             "lease_token": "lease-token",
             "idempotency_key": "idem-001",
+            "algorithm_version": "PP-TinyPose_128x96",
+            "rule_version": "shoulder-press-v2",
+            "parameter_version": "shoulder-press-v2-defaults",
+            "subject_tracker_version": "primary-subject-v1",
             "total_count": 90,
             "standard_count": 80,
             "nonstandard_count": 10,
@@ -188,7 +196,52 @@ def test_completion_payload_round_trip_flattens_counts_and_keeps_json_base_types
 
     assert payload.counts == MotionCounts(90, 80, 10)
     assert payload.to_dict()["total_count"] == 90
+    assert payload.to_dict()["algorithm_version"] == "PP-TinyPose_128x96"
+    assert payload.to_dict()["rule_version"] == "shoulder-press-v2"
+    assert payload.to_dict()["parameter_version"] == "shoulder-press-v2-defaults"
+    assert payload.to_dict()["subject_tracker_version"] == "primary-subject-v1"
     assert payload.to_dict()["skeleton"]["object_key"] == "motion-analysis/1/2026/09/job/skeleton.mp4"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "algorithm_version",
+        "rule_version",
+        "parameter_version",
+        "subject_tracker_version",
+    ],
+)
+def test_completion_payload_requires_every_execution_version(field_name):
+    payload = {
+        "protocol_version": PROTOCOL_VERSION,
+        "lease_token": "lease-token",
+        "idempotency_key": "idem-001",
+        "algorithm_version": "PP-TinyPose_128x96",
+        "rule_version": "shoulder-press-v2",
+        "parameter_version": "shoulder-press-v2-defaults",
+        "subject_tracker_version": "primary-subject-v1",
+        "total_count": 1,
+        "standard_count": 1,
+        "nonstandard_count": 0,
+        "quality_summary": {},
+        "result_payload": {},
+        "skeleton": {
+            "bucket": "motion-analysis",
+            "object_key": "motion-analysis/1/2026/09/job/skeleton.mp4",
+            "object_hash": "sha256:deadbeef",
+            "size_bytes": 2048,
+            "duration_seconds": 12.5,
+            "width": 1920,
+            "height": 1080,
+            "fps": 30,
+            "content_type": "video/mp4",
+        },
+    }
+    del payload[field_name]
+
+    with pytest.raises(ContractValidationError, match=field_name):
+        CompletionPayload.from_dict(payload)
 
 
 def test_capability_key_uses_all_dimensions_in_order():

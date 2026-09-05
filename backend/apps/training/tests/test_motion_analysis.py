@@ -3,7 +3,6 @@ from datetime import timedelta
 
 import pytest
 from django.conf import settings
-from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -425,21 +424,36 @@ def test_motion_analysis_registry_only_exposes_shoulder_press(
         assert analyzer is None
 
 
-def _mark_job_running(job, *, started_at):
+def _mark_job_running(job, *, started_at, lease_expires_at):
     job.status = MotionAnalysisJob.Status.RUNNING
     job.started_at = started_at
+    job.lease_token_hash = "lease-hash"
+    job.lease_expires_at = lease_expires_at
     job.finished_at = None
-    job.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
+    job.save(
+        update_fields=[
+            "status",
+            "started_at",
+            "lease_token_hash",
+            "lease_expires_at",
+            "finished_at",
+            "updated_at",
+        ]
+    )
 
 
 @pytest.mark.django_db
-@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=300)
-def test_recovery_marks_stale_running_job_failed_with_audit_reason(
+def test_recovery_marks_expired_lease_failed_without_using_started_at(
     project_patient,
     active_prescription,
 ):
     job, _, _ = _analysis_job(project_patient, active_prescription)
-    _mark_job_running(job, started_at=timezone.now() - timedelta(seconds=301))
+    now = timezone.now()
+    _mark_job_running(
+        job,
+        started_at=now,
+        lease_expires_at=now - timedelta(seconds=1),
+    )
 
     recovered_count = training_tasks.recover_stale_motion_analysis_jobs.run()
 
@@ -447,20 +461,28 @@ def test_recovery_marks_stale_running_job_failed_with_audit_reason(
     assert recovered_count == 1
     assert job.status == MotionAnalysisJob.Status.FAILED
     assert job.finished_at is not None
-    assert "阶段=running_stale_recovery" in job.failure_reason
-    assert "原因=running_timeout" in job.failure_reason
+    assert job.failure_code == "lease_expired"
+    assert job.failure_reason == "动作分析任务租约已过期"
+    assert job.lease_token_hash == ""
+    assert job.lease_expires_at is None
 
 
 @pytest.mark.django_db
-@override_settings(MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS=300)
-def test_recovery_leaves_recent_running_job_unchanged(
+def test_recovery_leaves_lease_expiring_exactly_now_unchanged_even_if_started_long_ago(
     project_patient,
     active_prescription,
 ):
-    job, _, _ = _analysis_job(project_patient, active_prescription)
-    _mark_job_running(job, started_at=timezone.now() - timedelta(seconds=299))
+    from apps.training.motion_analysis_monitoring import expire_stale_motion_analysis_jobs
 
-    recovered_count = training_tasks.recover_stale_motion_analysis_jobs.run()
+    job, _, _ = _analysis_job(project_patient, active_prescription)
+    now = timezone.now()
+    _mark_job_running(
+        job,
+        started_at=now - timedelta(days=1),
+        lease_expires_at=now,
+    )
+
+    recovered_count = expire_stale_motion_analysis_jobs(now=now)
 
     job.refresh_from_db()
     assert recovered_count == 0

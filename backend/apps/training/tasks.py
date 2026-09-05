@@ -1,11 +1,15 @@
 import re
-from datetime import timedelta
+import logging
 
 from celery import shared_task
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
-from .models import MotionAnalysisJob
+from .motion_analysis_monitoring import (
+    expire_stale_motion_analysis_jobs,
+    motion_analysis_health_snapshot,
+)
 
 
 FAILURE_REASON_MAX_LENGTH = 2000
@@ -16,6 +20,7 @@ CREDENTIAL_PATTERN = re.compile(
     r"\s*[:=]\s*[^\s,;&]+"
 )
 LOCAL_PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9])/(?:[^\s'\";,()]+)")
+logger = logging.getLogger(__name__)
 
 
 def _safe_failure_reason(stage, exc):
@@ -35,22 +40,37 @@ def _safe_failure_reason(stage, exc):
 
 @shared_task(ignore_result=True)
 def recover_stale_motion_analysis_jobs():
-    timeout_seconds = settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS
-    now = timezone.now()
-    cutoff = now - timedelta(seconds=timeout_seconds)
-    failure_reason = (
-        "阶段=running_stale_recovery；原因=running_timeout；"
-        f"任务运行超过 {timeout_seconds} 秒未完成"
-    )
-    return MotionAnalysisJob.objects.filter(
-        status=MotionAnalysisJob.Status.RUNNING,
-        started_at__lt=cutoff,
-    ).update(
-        status=MotionAnalysisJob.Status.FAILED,
-        failure_reason=failure_reason,
-        finished_at=now,
-        updated_at=now,
-    )
+    _positive_monitoring_setting("PP_MCARE_MONITOR_INTERVAL_SECONDS")
+    return expire_stale_motion_analysis_jobs()
+
+
+def _positive_monitoring_setting(name):
+    value = getattr(settings, name, None)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ImproperlyConfigured(f"{name} 配置无效")
+    return value
+
+
+@shared_task(ignore_result=True)
+def record_motion_analysis_health_snapshot():
+    _positive_monitoring_setting("PP_MCARE_MONITOR_INTERVAL_SECONDS")
+    warning_threshold = _positive_monitoring_setting("PP_MCARE_PENDING_WARNING_SECONDS")
+    snapshot = motion_analysis_health_snapshot(now=timezone.now())
+    metrics = snapshot.to_dict()
+    logger.info("motion_analysis_health_snapshot", extra=metrics)
+    if snapshot.oldest_pending_age_seconds > warning_threshold:
+        logger.warning(
+            "motion_analysis_pending_age_warning",
+            extra={
+                "reason_code": "oldest_pending_age_exceeded",
+                "pending_count": snapshot.pending_count,
+                "oldest_pending_age_seconds": snapshot.oldest_pending_age_seconds,
+                "warning_threshold_seconds": warning_threshold,
+                "running_count": snapshot.running_count,
+                "expired_running_lease_count": snapshot.expired_running_lease_count,
+            },
+        )
+    return metrics
 
 
 from .video_tasks import (  # noqa: E402,F401

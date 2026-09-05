@@ -1,7 +1,15 @@
 import re
+from collections.abc import Mapping
 
-from motion_analysis_contract import PROTOCOL_VERSION, WorkerCapability
+from motion_analysis_contract import (
+    PROTOCOL_VERSION,
+    CompletionPayload,
+    ContractValidationError,
+    WorkerCapability,
+)
 from rest_framework import serializers
+
+from .internal_services import FailurePayload, parse_failure_payload
 
 
 _IDENTIFIER_PATTERN = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
@@ -73,3 +81,69 @@ class HeartbeatRequestSerializer(serializers.Serializer):
         max_length=32,
         trim_whitespace=False,
     )
+
+
+class CompletionRequestSerializer(serializers.Serializer):
+    _allowed_fields = frozenset(
+        {
+            "protocol_version",
+            "lease_token",
+            "idempotency_key",
+            "algorithm_version",
+            "rule_version",
+            "parameter_version",
+            "subject_tracker_version",
+            "total_count",
+            "standard_count",
+            "nonstandard_count",
+            "quality_summary",
+            "result_payload",
+            "skeleton",
+        }
+    )
+
+    def to_internal_value(self, data):
+        if not isinstance(data, Mapping) or set(data) != self._allowed_fields:
+            raise serializers.ValidationError({"non_field_errors": ["完成数据格式无效"]})
+        try:
+            payload = CompletionPayload.from_dict(data)
+        except ContractValidationError as exc:
+            raise serializers.ValidationError(
+                {"non_field_errors": ["完成数据格式无效"]}
+            ) from exc
+
+        if not _LEASE_TOKEN_PATTERN.fullmatch(payload.lease_token):
+            raise serializers.ValidationError({"non_field_errors": ["完成数据格式无效"]})
+        if not _IDENTIFIER_PATTERN.fullmatch(payload.idempotency_key) or len(
+            payload.idempotency_key
+        ) > 120:
+            raise serializers.ValidationError({"non_field_errors": ["完成数据格式无效"]})
+        skeleton = payload.skeleton
+        if (
+            len(payload.algorithm_version) > 80
+            or len(payload.rule_version) > 80
+            or len(payload.parameter_version) > 80
+            or len(payload.subject_tracker_version) > 80
+            or len(skeleton.bucket) > 120
+            or len(skeleton.object_key) > 500
+            or len(skeleton.object_hash) > 64
+            or skeleton.duration_seconds < 0
+            or skeleton.fps <= 0
+            or skeleton.content_type != "video/mp4"
+        ):
+            raise serializers.ValidationError({"non_field_errors": ["完成数据格式无效"]})
+        return {"payload": payload}
+
+
+class FailureRequestSerializer(serializers.Serializer):
+    def to_internal_value(self, data):
+        try:
+            failure = parse_failure_payload(data)
+        except ValueError as exc:
+            raise serializers.ValidationError(
+                {"non_field_errors": ["失败数据格式无效"]}
+            ) from exc
+        return {"failure": failure}
+
+    def create(self, validated_data) -> FailurePayload:
+        return validated_data["failure"]
