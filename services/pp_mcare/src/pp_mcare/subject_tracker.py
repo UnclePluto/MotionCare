@@ -32,6 +32,7 @@ class TrackedPoseFrame:
     frame: InferenceFrame
     primary: PersonPose | None
     ambiguous: bool = False
+    observation_fingerprint: str | None = None
 
     __hash__ = None
 
@@ -44,6 +45,12 @@ class TrackedPoseFrame:
             raise TypeError("ambiguous 必须是 bool")
         if self.ambiguous and self.primary is not None:
             raise ValueError("歧义帧不得输出主体")
+        if self.primary is None and self.observation_fingerprint is not None:
+            raise ValueError("无主体帧不得包含 observation_fingerprint")
+        if self.primary is not None and (
+            not isinstance(self.observation_fingerprint, str) or not self.observation_fingerprint
+        ):
+            raise ValueError("稳定帧必须包含 observation_fingerprint")
 
     def to_action_frame(self) -> PoseFrame | None:
         if self.primary is None:
@@ -79,8 +86,9 @@ def _keypoint_distance(
     *,
     prior: PersonPose | None,
     prediction_intervals: float,
-) -> tuple[float | None, int]:
-    distances: list[float] = []
+) -> tuple[float | None, float | None, int]:
+    last_distances: list[float] = []
+    predicted_distances: list[float] = []
     common_names = previous.named_keypoints.keys() & candidate.named_keypoints.keys()
     for name in common_names:
         previous_point = previous.named_keypoints[name]
@@ -96,18 +104,28 @@ def _keypoint_distance(
                 if prior_point[2] >= RELIABLE_KEYPOINT_SCORE:
                     expected_x += (previous_point[0] - prior_point[0]) * prediction_intervals
                     expected_y += (previous_point[1] - prior_point[1]) * prediction_intervals
-            distances.append(
+            last_distances.append(
+                math.hypot(
+                    previous_point[0] - candidate_point[0],
+                    previous_point[1] - candidate_point[1],
+                )
+            )
+            predicted_distances.append(
                 math.hypot(expected_x - candidate_point[0], expected_y - candidate_point[1])
             )
-    return (median(distances), len(distances)) if distances else (None, 0)
+    if not last_distances:
+        return None, None, 0
+    return median(last_distances), median(predicted_distances), len(last_distances)
 
 
 @dataclass(frozen=True)
 class _CandidateMatch:
     person: PersonPose
-    distance: float
+    last_distance: float
+    predicted_distance: float
     iou: float
     reliable_keypoint_count: int
+    detection_index: int
 
 
 class PrimarySubjectTracker:
@@ -143,9 +161,10 @@ class PrimarySubjectTracker:
         matches = self._matches(frame.people, frame_timestamp_ms=frame.timestamp_ms)
         if not matches:
             return self._skip(frame, ambiguous=False)
-        if self._is_ambiguous(matches):
+        selected = self._select_unambiguous(matches)
+        if selected is None:
             return self._skip(frame, ambiguous=True)
-        return self._emit(frame, matches[0].person)
+        return self._emit(frame, selected.person)
 
     def finish(self) -> Mapping[str, object]:
         if self._primary is None or self._last_primary_timestamp_ms is None:
@@ -199,36 +218,41 @@ class PrimarySubjectTracker:
         assert self._primary is not None
         prediction_intervals = self._prediction_intervals(frame_timestamp_ms)
         matches: list[_CandidateMatch] = []
-        for person in people:
-            distance, reliable_count = _keypoint_distance(
+        for detection_index, person in enumerate(people):
+            last_distance, predicted_distance, reliable_count = _keypoint_distance(
                 self._primary,
                 person,
                 prior=self._prior_primary,
                 prediction_intervals=prediction_intervals,
             )
             iou = _bbox_iou(self._primary.bbox, person.bbox)
-            if distance is None or reliable_count < MINIMUM_COMMON_RELIABLE_KEYPOINTS:
+            if (
+                last_distance is None
+                or predicted_distance is None
+                or reliable_count < MINIMUM_COMMON_RELIABLE_KEYPOINTS
+            ):
                 if iou < MINIMUM_FALLBACK_IOU:
                     continue
-                distance = 1.0 - iou
-            elif distance > MAX_NORMALIZED_JUMP + 1e-12:
+                last_distance = predicted_distance = 1.0 - iou
+            elif last_distance > MAX_NORMALIZED_JUMP + 1e-12:
                 continue
             else:
                 if (
                     self._prior_primary is not None
-                    and distance > HISTORY_CLEAR_MATCH_DISTANCE
+                    and predicted_distance > HISTORY_CLEAR_MATCH_DISTANCE
                     and iou < MINIMUM_FALLBACK_IOU
                 ):
                     continue
             matches.append(
                 _CandidateMatch(
                     person=person,
-                    distance=distance,
+                    last_distance=last_distance,
+                    predicted_distance=predicted_distance,
                     iou=iou,
                     reliable_keypoint_count=reliable_count,
+                    detection_index=detection_index,
                 )
             )
-        matches.sort(key=lambda match: (match.distance, -match.iou, match.person.fingerprint))
         return matches
 
     def _prediction_intervals(self, frame_timestamp_ms: int) -> float:
@@ -245,13 +269,27 @@ class PrimarySubjectTracker:
         return min(MAX_PREDICTION_INTERVALS, elapsed_ms / historical_interval_ms)
 
     @staticmethod
-    def _is_ambiguous(matches: list[_CandidateMatch]) -> bool:
-        if len(matches) < 2:
-            return False
-        best, second = matches[:2]
-        return second.distance - best.distance <= AMBIGUOUS_DISTANCE_DELTA
+    def _select_unambiguous(matches: list[_CandidateMatch]) -> _CandidateMatch | None:
+        last_ranked = sorted(
+            matches,
+            key=lambda match: (match.last_distance, -match.iou, match.detection_index),
+        )
+        predicted_ranked = sorted(
+            matches,
+            key=lambda match: (match.predicted_distance, -match.iou, match.detection_index),
+        )
+        if last_ranked[0].detection_index != predicted_ranked[0].detection_index:
+            return None
+        if len(matches) > 1 and (
+            last_ranked[1].last_distance - last_ranked[0].last_distance <= AMBIGUOUS_DISTANCE_DELTA
+            or predicted_ranked[1].predicted_distance - predicted_ranked[0].predicted_distance
+            <= AMBIGUOUS_DISTANCE_DELTA
+        ):
+            return None
+        return last_ranked[0]
 
     def _emit(self, frame: InferenceFrame, person: PersonPose) -> TrackedPoseFrame:
+        observation_fingerprint = person.fingerprint
         if self._track_fingerprint is None:
             self._track_fingerprint = person.fingerprint
         elif person.fingerprint != self._track_fingerprint:
@@ -261,7 +299,11 @@ class PrimarySubjectTracker:
         self._primary = person
         self._last_primary_timestamp_ms = frame.timestamp_ms
         self._emitted_frames += 1
-        return TrackedPoseFrame(frame=frame, primary=person)
+        return TrackedPoseFrame(
+            frame=frame,
+            primary=person,
+            observation_fingerprint=observation_fingerprint,
+        )
 
     def _skip(self, frame: InferenceFrame, *, ambiguous: bool) -> TrackedPoseFrame:
         if ambiguous:

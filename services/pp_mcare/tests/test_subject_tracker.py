@@ -58,6 +58,8 @@ def test_tracker_keeps_original_subject_when_larger_bystander_enters():
     assert second.primary.raw_keypoints == moved_trainee.raw_keypoints
     assert second.primary.raw_keypoints != bystander.raw_keypoints
     assert second.primary.fingerprint == first.primary.fingerprint
+    assert second.observation_fingerprint == moved_trainee.fingerprint
+    assert second.observation_fingerprint != bystander.fingerprint
 
 
 def test_tracker_matches_by_pose_when_detection_order_swaps_during_crossing():
@@ -130,11 +132,55 @@ def test_tracker_uses_motion_history_to_keep_real_subject_through_crossing_and_o
 
     assert first.primary.named_keypoints["left_wrist"][1] == pytest.approx(0.45)
     assert second.primary.named_keypoints["left_wrist"][1] == pytest.approx(0.45)
-    assert crossed.primary.named_keypoints["left_wrist"][1] == pytest.approx(0.45)
-    assert crossed.primary.raw_keypoints[9][1] == pytest.approx(450.0)
+    assert crossed.primary is None
+    assert crossed.ambiguous is True
+    assert crossed.observation_fingerprint is None
     assert occluded.primary is None
     assert recovered.primary.named_keypoints["left_wrist"][1] == pytest.approx(0.45)
     assert recovered.primary.raw_keypoints[9][1] == pytest.approx(450.0)
+
+
+def test_tracker_skips_when_last_position_and_prediction_disagree_after_subject_slows():
+    tracker = PrimarySubjectTracker()
+    tracker.observe(frame(0, [person(center_x=0.35), person(center_x=0.65, left_wrist_y=0.55)]))
+    tracker.observe(frame(33, [person(center_x=0.45), person(center_x=0.55, left_wrist_y=0.55)]))
+    actual_subject = person(center_x=0.45)
+    bystander = person(center_x=0.55, left_wrist_y=0.55)
+
+    uncertain = tracker.observe(frame(66, [actual_subject, bystander]))
+
+    assert uncertain.primary is None
+    assert uncertain.observation_fingerprint is None
+    assert uncertain.ambiguous is True
+    assert uncertain.to_action_frame() is None
+
+
+def test_tracker_skips_crossing_when_last_and_prediction_evidence_conflict():
+    tracker = PrimarySubjectTracker()
+    tracker.observe(frame(0, [person(center_x=0.40), person(center_x=0.60, left_wrist_y=0.55)]))
+    tracker.observe(frame(33, [person(center_x=0.48), person(center_x=0.52, left_wrist_y=0.55)]))
+    actual_subject = person(center_x=0.58)
+    bystander = person(center_x=0.42, left_wrist_y=0.55)
+
+    uncertain = tracker.observe(frame(66, [actual_subject, bystander]))
+
+    assert uncertain.primary is None
+    assert uncertain.observation_fingerprint is None
+    assert uncertain.ambiguous is True
+    assert actual_subject.raw_keypoints != bystander.raw_keypoints
+
+
+def test_tracker_applies_max_jump_to_actual_displacement_not_only_prediction_residual():
+    tracker = PrimarySubjectTracker()
+    tracker.observe(frame(0, [person(center_x=0.25)]))
+    tracker.observe(frame(100, [person(center_x=0.40)]))
+    far_candidate = person(center_x=0.85)
+
+    skipped = tracker.observe(frame(400, [far_candidate]))
+
+    assert skipped.primary is None
+    assert skipped.observation_fingerprint is None
+    assert skipped.ambiguous is False
 
 
 def test_tracker_rejects_low_confidence_bystander_with_only_tiny_bbox_overlap():
