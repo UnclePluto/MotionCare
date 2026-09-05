@@ -290,18 +290,15 @@ def test_direct_settings_constructor_rejects_path_outside_trusted_root(tmp_path)
         direct_settings(tmp_path, model_cache=tmp_path.parent / "outside-models")
 
 
-def test_package_metadata_targets_python_312_and_one_headless_opencv_provider():
+def test_package_metadata_targets_python_312_and_paddlex_supported_cv_bundle():
     pyproject_path = Path(__file__).parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text())["project"]
     inference = project["optional-dependencies"]["inference"]
 
     assert project["requires-python"] == ">=3.12,<3.13"
     assert "paddlepaddle==3.3.0" in inference
-    assert "paddlex==3.7.2" in inference
-    assert not any(requirement.startswith("paddlex[cv]") for requirement in inference)
-    assert [
-        requirement for requirement in inference if requirement.lower().startswith("opencv-")
-    ] == ["opencv-contrib-python-headless==4.10.0.84"]
+    assert "paddlex[cv]==3.7.2" in inference
+    assert not any(requirement.lower().startswith("opencv-") for requirement in inference)
 
 
 def test_trusted_root_and_race_hook_are_not_public_settings_inputs(tmp_path):
