@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import stat
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -23,6 +25,31 @@ from pp_mcare.regression import (
     read_resource_snapshot,
     run_regression,
 )
+
+
+_PRODUCTION_REPORT_PUBLISHER = regression._publish_report
+
+
+@pytest.fixture(autouse=True)
+def _darwin_test_only_report_publisher(monkeypatch):
+    if regression.sys.platform != "darwin":
+        return
+
+    def publish(parent_descriptor: int, final_name: str, content: bytes) -> None:
+        descriptor = os.open(
+            final_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        try:
+            regression._write_all(descriptor, content)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(parent_descriptor)
+
+    monkeypatch.setattr(regression, "_publish_report", publish)
 
 
 def test_regression_cli_rejects_manual_count_other_than_90(capsys, tmp_path):
@@ -465,7 +492,7 @@ def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_ma
     )
     monkeypatch.setattr(regression, "_RELEASE_MANIFEST_PATH", manifest, raising=False)
     monkeypatch.setattr(regression, "_distribution_content_sha256", lambda _root: "d" * 64, raising=False)
-    monkeypatch.setattr(regression, "_source_checkout_commit", lambda _root: None)
+    monkeypatch.setattr(regression, "_source_checkout_identity", lambda _root: None)
 
     identity = regression.read_implementation_identity()
 
@@ -479,6 +506,117 @@ def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_ma
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RegressionFailure, match="发布清单身份不匹配"):
         regression.read_implementation_identity()
+
+
+def test_source_checkout_rejects_repo_ancestor_site_packages(monkeypatch, tmp_path):
+    repository_root = tmp_path / "repository"
+    package_root = repository_root / "backend" / ".venv" / "site-packages" / "pp_mcare"
+    package_root.mkdir(parents=True)
+    commit = "a" * 40
+
+    def fake_run(arguments, **_kwargs):
+        if arguments[-1] == "--show-toplevel":
+            return SimpleNamespace(stdout=f"{repository_root}\n")
+        if arguments[-1] == "HEAD":
+            return SimpleNamespace(stdout=f"{commit}\n")
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(regression.subprocess, "run", fake_run)
+
+    assert regression._source_checkout_commit(package_root) is None
+
+
+def test_source_checkout_rejects_exact_but_untracked_package_copy(monkeypatch, tmp_path):
+    repository_root = tmp_path / "repository"
+    project_root = repository_root / "services" / "pp_mcare"
+    package_root = project_root / "src" / "pp_mcare"
+    package_root.mkdir(parents=True)
+    (project_root / "pyproject.toml").write_text(
+        '[project]\nname="pp-mcare"\nversion="0.1.0"\n',
+        encoding="utf-8",
+    )
+    commit = "b" * 40
+
+    def fake_run(arguments, **_kwargs):
+        if arguments[-1] == "--show-toplevel":
+            return SimpleNamespace(stdout=f"{repository_root}\n")
+        if "ls-files" in arguments:
+            raise subprocess.CalledProcessError(1, arguments)
+        if arguments[-1] == "HEAD":
+            return SimpleNamespace(stdout=f"{commit}\n")
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(regression.subprocess, "run", fake_run)
+
+    assert regression._source_checkout_commit(package_root) is None
+
+
+def test_source_checkout_rejects_non_pp_mcare_or_malformed_adjacent_project(tmp_path):
+    project_root = tmp_path / "service"
+    package_root = project_root / "src" / "pp_mcare"
+    package_root.mkdir(parents=True)
+    pyproject = project_root / "pyproject.toml"
+
+    pyproject.write_text('[project]\nname="other-package"\n', encoding="utf-8")
+    assert regression._source_project_root(package_root) is None
+
+    pyproject.write_text('project="not-a-table"\n', encoding="utf-8")
+    assert regression._source_project_root(package_root) is None
+
+
+def test_git_command_failure_reports_no_commit_or_dirty_state(monkeypatch):
+    monkeypatch.setattr(
+        regression.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("git unavailable")),
+    )
+
+    identity = regression.read_implementation_identity()
+
+    assert identity["git_commit"] is None
+    assert identity["git_dirty"] is None
+    assert identity["release_artifact"]["manifest_status"] == "not_present"
+
+
+def test_source_checkout_identity_reports_actual_head_and_dirty_semantics():
+    package_root = Path(regression.__file__).resolve().parent
+    repository_root = Path(
+        subprocess.run(
+            ["git", "-C", str(package_root), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    expected_commit = subprocess.run(
+        ["git", "-C", str(repository_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    project_root = package_root.parent.parent
+    expected_dirty = bool(
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                str(project_root.relative_to(repository_root)),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+
+    identity = regression.read_implementation_identity()
+
+    assert identity["git_commit"] == expected_commit
+    assert identity["git_dirty"] is expected_dirty
 
 
 def test_video_identity_ignores_access_time_but_detects_content_metadata_change():
@@ -761,6 +899,193 @@ def test_atomic_report_commit_never_replaces_target_created_after_entry_validati
 
     assert report.read_bytes() == original
     assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_atomic_report_publish_never_links_a_rebound_temporary_name(
+    monkeypatch,
+    tmp_path,
+):
+    report = tmp_path / "report.json"
+    input_video = tmp_path / "private-video.mp4"
+    original_video = b"attacker must not publish this inode"
+    input_video.write_bytes(original_video)
+    expected_report = {"status": "completed", "count": 90}
+    original_link = regression.os.link
+
+    def rebind_temporary_name(source, destination, *, src_dir_fd, dst_dir_fd, **kwargs):
+        os.unlink(source, dir_fd=src_dir_fd)
+        original_link(input_video, source, dst_dir_fd=src_dir_fd)
+        return original_link(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(regression.os, "link", rebind_temporary_name)
+
+    try:
+        regression._atomic_write_report(report, expected_report)
+    except RegressionFailure:
+        pass
+
+    assert input_video.read_bytes() == original_video
+    if report.exists():
+        assert json.loads(report.read_text(encoding="utf-8")) == expected_report
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
+def test_linux_linkat_publishes_only_the_open_fd_to_the_validated_basename(monkeypatch):
+    calls = []
+
+    class LinkAt:
+        argtypes = None
+        restype = None
+
+        def __call__(self, *arguments):
+            calls.append(arguments)
+            return 0
+
+    linkat = LinkAt()
+    library = SimpleNamespace(linkat=linkat)
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda name, *, use_errno: (
+            calls.append(("CDLL", name, use_errno)) or library
+        ),
+    )
+
+    regression._link_anonymous_file_linux(41, 42, "report.json")
+
+    assert calls == [
+        ("CDLL", None, True),
+        (41, b"", 42, b"report.json", regression._AT_EMPTY_PATH),
+    ]
+    assert linkat.argtypes == [
+        regression.ctypes.c_int,
+        regression.ctypes.c_char_p,
+        regression.ctypes.c_int,
+        regression.ctypes.c_char_p,
+        regression.ctypes.c_int,
+    ]
+    assert linkat.restype is regression.ctypes.c_int
+
+
+def test_linux_linkat_rejects_arbitrary_paths_and_preserves_errno(monkeypatch):
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: pytest.fail("invalid basename must not call libc"),
+    )
+    with pytest.raises(RegressionFailure, match="报告文件名无效"):
+        regression._link_anonymous_file_linux(41, 42, "../report.json")
+
+    class LinkAt:
+        argtypes = None
+        restype = None
+
+        def __call__(self, *_arguments):
+            return -1
+
+    monkeypatch.setattr(
+        regression.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(linkat=LinkAt()),
+    )
+    monkeypatch.setattr(regression.ctypes, "get_errno", lambda: errno.EEXIST)
+    with pytest.raises(OSError) as captured:
+        regression._link_anonymous_file_linux(41, 42, "report.json")
+    assert captured.value.errno == errno.EEXIST
+
+
+def test_linux_report_publisher_keeps_anonymous_fd_open_through_linkat(monkeypatch):
+    calls = []
+    temporary_flag = 0x410000
+    monkeypatch.setattr(regression.os, "O_TMPFILE", temporary_flag, raising=False)
+    monkeypatch.setattr(
+        regression.os,
+        "open",
+        lambda path, flags, mode, *, dir_fd: (
+            calls.append(("open", path, flags, mode, dir_fd)) or 51
+        ),
+    )
+    monkeypatch.setattr(regression, "_write_all", lambda fd, data: calls.append(("write", fd, data)))
+    monkeypatch.setattr(regression.os, "fsync", lambda fd: calls.append(("fsync", fd)))
+    monkeypatch.setattr(
+        regression.os,
+        "fstat",
+        lambda fd: SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_nlink=0),
+    )
+    monkeypatch.setattr(
+        regression,
+        "_link_anonymous_file_linux",
+        lambda fd, parent_fd, name: calls.append(("linkat", fd, parent_fd, name)),
+    )
+    monkeypatch.setattr(regression.os, "close", lambda fd: calls.append(("close", fd)))
+
+    regression._publish_report_linux(50, "report.json", b"canonical-json")
+
+    assert calls == [
+        (
+            "open",
+            ".",
+            os.O_WRONLY | temporary_flag | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            50,
+        ),
+        ("write", 51, b"canonical-json"),
+        ("fsync", 51),
+        ("linkat", 51, 50, "report.json"),
+        ("fsync", 50),
+        ("close", 51),
+    ]
+
+
+def test_production_report_publisher_fails_closed_outside_linux(monkeypatch):
+    monkeypatch.setattr(regression.sys, "platform", "darwin")
+    with pytest.raises(RegressionFailure, match="当前平台不支持安全报告发布"):
+        _PRODUCTION_REPORT_PUBLISHER(41, "report.json", b"canonical-json")
+
+
+def test_production_report_publisher_dispatches_only_to_linux_fd_publisher(monkeypatch):
+    calls = []
+    monkeypatch.setattr(regression.sys, "platform", "linux")
+    monkeypatch.setattr(
+        regression,
+        "_publish_report_linux",
+        lambda parent_fd, name, content: calls.append((parent_fd, name, content)),
+    )
+
+    _PRODUCTION_REPORT_PUBLISHER(41, "report.json", b"canonical-json")
+
+    assert calls == [(41, "report.json", b"canonical-json")]
+
+
+def test_linux_report_publisher_closes_fd_when_atomic_link_fails(monkeypatch):
+    temporary_flag = 0x410000
+    closed = []
+    monkeypatch.setattr(regression.os, "O_TMPFILE", temporary_flag, raising=False)
+    monkeypatch.setattr(regression.os, "open", lambda *_args, **_kwargs: 51)
+    monkeypatch.setattr(regression, "_write_all", lambda *_args: None)
+    monkeypatch.setattr(regression.os, "fsync", lambda *_args: None)
+    monkeypatch.setattr(
+        regression.os,
+        "fstat",
+        lambda _fd: SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_nlink=0),
+    )
+    monkeypatch.setattr(
+        regression,
+        "_link_anonymous_file_linux",
+        lambda *_args: (_ for _ in ()).throw(OSError(errno.EEXIST, "exists")),
+    )
+    monkeypatch.setattr(regression.os, "close", lambda fd: closed.append(fd))
+
+    with pytest.raises(RegressionFailure, match="报告写入失败"):
+        regression._publish_report_linux(50, "report.json", b"canonical-json")
+
+    assert closed == [51]
 
 
 def test_regression_hash_probe_and_pipeline_share_open_fd_when_path_is_replaced(

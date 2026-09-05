@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import importlib
 import importlib.metadata
@@ -7,7 +8,6 @@ import json
 import math
 import os
 import platform
-import secrets
 import shutil
 import stat
 import subprocess
@@ -54,6 +54,7 @@ _IMPLEMENTATION_FILES = (
     "actions/shoulder_press_v2.py",
 )
 _RELEASE_MANIFEST_PATH = Path("/opt/motioncare-analysis/current/release-manifest.json")
+_AT_EMPTY_PATH = 0x1000
 
 
 class RegressionFailure(RuntimeError):
@@ -167,7 +168,15 @@ def _source_project_root(package_root: Path) -> Path | None:
             return None
     except OSError:
         return None
-    if not (project_root / "pyproject.toml").is_file():
+    pyproject = project_root / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    try:
+        payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, TypeError, tomllib.TOMLDecodeError):
+        return None
+    project = payload.get("project")
+    if not isinstance(project, dict) or project.get("name") != "pp-mcare":
         return None
     return project_root
 
@@ -200,20 +209,69 @@ def _package_version(package_root: Path) -> str:
     return version
 
 
-def _source_checkout_commit(package_root: Path) -> str | None:
+@dataclass(frozen=True)
+class SourceCheckoutIdentity:
+    commit: str
+    dirty: bool
+
+
+def _source_checkout_identity(package_root: Path) -> SourceCheckoutIdentity | None:
+    project_root = _source_project_root(package_root)
+    if project_root is None:
+        return None
     try:
         root_result = subprocess.run(
-            ["git", "-C", str(package_root), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
             check=True,
             capture_output=True,
             text=True,
             timeout=10,
         )
         repository_root = Path(root_result.stdout.strip()).resolve(strict=True)
-        if not package_root.resolve(strict=True).is_relative_to(repository_root):
+        if not project_root.resolve(strict=True).is_relative_to(repository_root):
+            return None
+        tracked_paths = tuple(
+            str((package_root / relative_path).relative_to(repository_root))
+            for relative_path in _IMPLEMENTATION_FILES
+        ) + tuple(
+            str((project_root / filename).relative_to(repository_root))
+            for filename in ("pyproject.toml", "LICENSE.paddledetection", "NOTICE")
+        )
+        tracked_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                *tracked_paths,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if set(tracked_result.stdout.splitlines()) != set(tracked_paths):
             return None
         commit_result = subprocess.run(
             ["git", "-C", str(repository_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        status_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                str(project_root.relative_to(repository_root)),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -224,7 +282,12 @@ def _source_checkout_commit(package_root: Path) -> str | None:
     commit = commit_result.stdout.strip()
     if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
         return None
-    return commit
+    return SourceCheckoutIdentity(commit=commit, dirty=bool(status_result.stdout))
+
+
+def _source_checkout_commit(package_root: Path) -> str | None:
+    identity = _source_checkout_identity(package_root)
+    return None if identity is None else identity.commit
 
 
 def _valid_sha256(value: object) -> bool:
@@ -276,7 +339,8 @@ def _release_artifact_identity(
 def read_implementation_identity() -> dict[str, object]:
     package_root = Path(__file__).resolve().parent
     package_version = _package_version(package_root)
-    source_checkout_commit = _source_checkout_commit(package_root)
+    source_checkout = _source_checkout_identity(package_root)
+    source_checkout_commit = None if source_checkout is None else source_checkout.commit
     distribution_content_sha256 = _distribution_content_sha256(package_root)
     return {
         "package_name": "pp-mcare",
@@ -284,6 +348,7 @@ def read_implementation_identity() -> dict[str, object]:
         "regression_runtime_sha256": _implementation_sha256(package_root),
         "distribution_content_sha256": distribution_content_sha256,
         "git_commit": source_checkout_commit,
+        "git_dirty": None if source_checkout is None else source_checkout.dirty,
         "release_artifact": _release_artifact_identity(
             package_version=package_version,
             distribution_content_sha256=distribution_content_sha256,
@@ -641,45 +706,68 @@ def _reject_colliding_report(
         raise RegressionFailure("输入与报告路径无法安全核对") from exc
 
 
-def _atomic_write_report(path: Path, report: dict[str, object]) -> None:
-    path, parent_fd = _validated_report_path(path)
-    temporary_name = f".{path.name}.{secrets.token_hex(12)}"
+def _link_anonymous_file_linux(
+    descriptor: int,
+    parent_descriptor: int,
+    final_name: str,
+) -> None:
+    encoded_name = os.fsencode(final_name)
+    if not encoded_name or b"/" in encoded_name or b"\0" in encoded_name:
+        raise RegressionFailure("报告文件名无效")
+    libc = ctypes.CDLL(None, use_errno=True)
+    linkat = libc.linkat
+    linkat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    linkat.restype = ctypes.c_int
+    if linkat(descriptor, b"", parent_descriptor, encoded_name, _AT_EMPTY_PATH) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+
+
+def _publish_report_linux(parent_descriptor: int, final_name: str, content: bytes) -> None:
+    temporary_flag = getattr(os, "O_TMPFILE", 0)
+    if not temporary_flag:
+        raise RegressionFailure("当前 Linux 不支持安全报告发布")
     descriptor: int | None = None
     try:
         descriptor = os.open(
-            temporary_name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            ".",
+            os.O_WRONLY | temporary_flag | getattr(os, "O_CLOEXEC", 0),
             0o600,
-            dir_fd=parent_fd,
+            dir_fd=parent_descriptor,
         )
-        content = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            descriptor = None
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        os.link(
-            temporary_name,
-            path.name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        os.unlink(temporary_name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    except RegressionFailure:
-        raise
+        _write_all(descriptor, content)
+        os.fsync(descriptor)
+        identity = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(identity.st_mode)
+            or stat.S_IMODE(identity.st_mode) != 0o600
+            or identity.st_nlink != 0
+        ):
+            raise RegressionFailure("匿名报告文件无效")
+        _link_anonymous_file_linux(descriptor, parent_descriptor, final_name)
+        os.fsync(parent_descriptor)
     except OSError as exc:
         raise RegressionFailure("报告写入失败") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        try:
-            os.unlink(temporary_name, dir_fd=parent_fd)
-        except FileNotFoundError:
-            pass
-        finally:
-            os.close(parent_fd)
+
+
+def _publish_report(parent_descriptor: int, final_name: str, content: bytes) -> None:
+    if sys.platform != "linux":
+        raise RegressionFailure("当前平台不支持安全报告发布")
+    _publish_report_linux(parent_descriptor, final_name, content)
+
+
+def _atomic_write_report(path: Path, report: dict[str, object]) -> None:
+    path, parent_fd = _validated_report_path(path)
+    try:
+        content = (json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+            "utf-8"
+        )
+        _publish_report(parent_fd, path.name, content)
+    finally:
+        os.close(parent_fd)
 
 
 def _video_metadata(source: SourceVideoMetadata, *, sha256: str, size_bytes: int) -> dict:
