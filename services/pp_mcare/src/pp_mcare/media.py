@@ -26,10 +26,9 @@ PROBE_TIMELINE_LINE_LIMIT_BYTES = 256
 PROBE_TIMEOUT_SECONDS = 3600
 PROBE_POLL_SECONDS = 0.05
 PROBE_KILL_WAIT_SECONDS = 5
-FRAME_RATE_RELATIVE_TOLERANCE = 0.001
-FRAME_RATE_ABSOLUTE_TOLERANCE = 0.001
 TIMESTAMP_RELATIVE_TOLERANCE = 0.01
 TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS = 0.001
+MAX_MISSING_NOMINAL_TICK_RATIO = 0.01
 
 
 _ProbeResult = TypeVar("_ProbeResult")
@@ -244,6 +243,7 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
     first_pts: float | None = None
     previous_pts: float | None = None
     frame_count = 0
+    nominal_tick_count = 0
     last_duration: float | None = None
     while True:
         raw_line = output.readline(PROBE_TIMELINE_LINE_LIMIT_BYTES + 1)
@@ -280,13 +280,23 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
             first_pts = pts
         if previous_pts is not None:
             interval = pts - previous_pts
-            if interval <= 0 or abs(interval - nominal_interval) > tolerance:
+            interval_ticks = round(interval / nominal_interval)
+            if (
+                interval_ticks < 1
+                or abs(interval - interval_ticks * nominal_interval) > tolerance
+            ):
                 raise MediaEncodingError("输入视频帧时间戳不均匀")
+            nominal_tick_count += interval_ticks
+        else:
+            nominal_tick_count = 1
         previous_pts = pts
         last_duration = duration
         frame_count += 1
     if frame_count < 2 or first_pts is None or previous_pts is None:
         raise MediaEncodingError("输入视频时间轴无法可靠验证")
+    missing_tick_count = nominal_tick_count - frame_count
+    if missing_tick_count / nominal_tick_count > MAX_MISSING_NOMINAL_TICK_RATIO:
+        raise MediaEncodingError("输入视频缺帧比例过高")
     duration_seconds = previous_pts - first_pts + (last_duration or nominal_interval)
     return _TimelineMetadata(
         frame_count=frame_count,
@@ -428,20 +438,13 @@ def probe_source_video(path, *, pass_fds: tuple[int, ...] = ()) -> SourceVideoMe
         video = video_streams[0]
         average_fps = _parse_rate(video["avg_frame_rate"])
         nominal_fps = _parse_rate(video["r_frame_rate"])
-        if not math.isclose(
-            nominal_fps,
-            average_fps,
-            rel_tol=FRAME_RATE_RELATIVE_TOLERANCE,
-            abs_tol=FRAME_RATE_ABSOLUTE_TOLERANCE,
-        ):
-            raise MediaEncodingError("输入视频为可变帧率，首版不支持")
         timeline = _run_ffprobe(
             timeline_command,
             stdout_limit=PROBE_TIMELINE_LIMIT_BYTES,
             stderr_limit=PROBE_STDERR_LIMIT_BYTES,
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
             redact_paths=(source_path,),
-            parser=lambda output: _parse_cfr_timeline(output, expected_fps=average_fps),
+            parser=lambda output: _parse_cfr_timeline(output, expected_fps=nominal_fps),
             pass_fds=pass_fds,
         )
         summary_frame_count = int(video["nb_read_frames"])

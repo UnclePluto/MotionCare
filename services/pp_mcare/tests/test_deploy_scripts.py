@@ -61,6 +61,69 @@ def _write_archive(path: Path, *, member_name: str, member_type: bytes) -> None:
             archive.addfile(member)
 
 
+def _run_regression_with_fake_boundaries(tmp_path: Path):
+    analysis_root = tmp_path / "analysis"
+    run_id = "20260906T120000Z"
+    video = analysis_root / "input" / f"pp-mcare-{run_id}.mp4"
+    current = analysis_root / "current"
+    reports = analysis_root / "reports"
+    bin_dir = tmp_path / "bin"
+    cwd_log = tmp_path / "runuser.cwd"
+    for directory in (video.parent, current, reports, bin_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"fixed-regression-video")
+
+    copied_script = tmp_path / "run-regression.sh"
+    copied_script.write_text(
+        REGRESSION_SCRIPT.read_text(encoding="utf-8").replace(
+            'readonly ANALYSIS_ROOT="/opt/motioncare-analysis"',
+            f'readonly ANALYSIS_ROOT="{analysis_root}"',
+        ),
+        encoding="utf-8",
+    )
+    fake_commands = {
+        "python3.12": "#!/usr/bin/env bash\nexit 0\n",
+        "stat": (
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' 'motioncare-analysis:motioncare-analysis:600:1'\n"
+        ),
+        "sha256sum": (
+            "#!/usr/bin/env bash\n"
+            "printf '%s  %s\\n' "
+            "'f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd' "
+            '"$1"\n'
+        ),
+        "runuser": "#!/usr/bin/env bash\npwd > \"${PP_MCARE_TEST_CWD_LOG}\"\n",
+    }
+    for name, content in fake_commands.items():
+        command = bin_dir / name
+        command.write_text(content, encoding="utf-8")
+        command.chmod(0o700)
+
+    environment = os.environ.copy()
+    environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+    environment["PP_MCARE_TEST_CWD_LOG"] = str(cwd_log)
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; shift; _run_regression "$@"',
+            "test-shell",
+            str(copied_script),
+            str(video),
+            "f59b6e773200588453f55c11a1aea796440efd34",
+            run_id,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=environment,
+        cwd=tmp_path,
+    )
+    return completed, video, current, cwd_log
+
+
 def test_install_release_rejects_non_commit_release_name(tmp_path):
     completed = source_and_call(INSTALL_SCRIPT, "_install_release", tmp_path, "latest")
 
@@ -202,3 +265,18 @@ def test_regression_script_uses_real_cli_and_create_once_report():
     assert "--report" in content
     assert "pp-mcare-v2-${implementation_commit}-${run_id}.json" in content
     assert "unlink" in content
+
+
+def test_regression_script_cleans_validated_input_after_function_scope_ends(tmp_path):
+    completed, video, _current, _cwd_log = _run_regression_with_fake_boundaries(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert video.exists() is False
+    assert "unbound variable" not in completed.stderr
+
+
+def test_regression_script_runs_worker_from_current_release_directory(tmp_path):
+    completed, _video, current, cwd_log = _run_regression_with_fake_boundaries(tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert cwd_log.read_text(encoding="utf-8").strip() == str(current)

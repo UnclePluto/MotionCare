@@ -525,7 +525,7 @@ def test_encoder_partial_unlink_failure_after_link_is_successful_and_observable(
 
 
 @pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
-def test_probe_source_video_rejects_real_vfr_rate_and_timestamp_drift(tmp_path):
+def test_probe_source_video_rejects_excessive_missing_nominal_ticks(tmp_path):
     from pp_mcare.media import MediaEncodingError, probe_source_video
 
     source = tmp_path / "vfr.mp4"
@@ -575,12 +575,47 @@ def test_probe_source_video_rejects_real_vfr_rate_and_timestamp_drift(tmp_path):
         "nb_read_frames": "16",
     }
 
-    with pytest.raises(MediaEncodingError, match="可变帧率"):
+    with pytest.raises(MediaEncodingError, match="缺帧比例"):
         probe_source_video(source)
 
 
 @pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
-def test_probe_source_video_rejects_nonuniform_pts_even_when_rates_match(tmp_path):
+def test_probe_source_video_accepts_sparse_missing_nominal_ticks_below_one_percent(tmp_path):
+    from pp_mcare.media import probe_source_video
+
+    source = tmp_path / "sparse-drop.mp4"
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=30:duration=4",
+            "-vf",
+            "select='not(eq(n,60))'",
+            "-fps_mode",
+            "vfr",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
+        ],
+        check=True,
+    )
+
+    metadata = probe_source_video(source)
+
+    assert metadata.frame_count == 119
+    assert metadata.fps == pytest.approx(119 / 4)
+    assert metadata.duration_seconds == pytest.approx(4.0, abs=0.01)
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_probe_source_video_rejects_excessive_missing_ticks_even_when_rates_match(tmp_path):
     from pp_mcare.media import MediaEncodingError, probe_source_video
 
     source = tmp_path / "vfr-rates-match.mkv"
@@ -605,7 +640,7 @@ def test_probe_source_video_rejects_nonuniform_pts_even_when_rates_match(tmp_pat
         check=True,
     )
 
-    with pytest.raises(MediaEncodingError, match="时间戳"):
+    with pytest.raises(MediaEncodingError, match="缺帧比例"):
         probe_source_video(source)
 
 
