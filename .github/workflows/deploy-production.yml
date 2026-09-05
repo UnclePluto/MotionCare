@@ -43,6 +43,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: 安装并验证动作分析协议与 worker 非推理能力
+        run: |
+          pip install -e './packages/motion_analysis_contract'
+          pip install -e './services/pp_mcare[dev]'
+          pytest -q packages/motion_analysis_contract/tests services/pp_mcare/tests
       - name: 安装后端依赖
         run: pip install -e './backend[dev]'
       - name: 验证后端

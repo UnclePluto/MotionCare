@@ -1,4 +1,4 @@
-import { normalizeStaticAssetBaseUrl } from '../src/assets/staticAssetUrl'
+import { normalizeStaticAssetBaseUrl } from '../shared/staticAssetBaseUrl.js'
 
 type EnvironmentSource = {
   NODE_ENV?: string

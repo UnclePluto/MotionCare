@@ -11,6 +11,9 @@ RUN apt-get update \
     && useradd --uid 10001 --gid motioncare --create-home motioncare
 
 WORKDIR /app
+COPY packages/motion_analysis_contract /app/packages/motion_analysis_contract
+RUN python -m pip install --no-cache-dir /app/packages/motion_analysis_contract
+
 COPY backend /app/backend
 COPY docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx /app/docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx
 

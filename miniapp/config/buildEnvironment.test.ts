@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process'
+import { resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -7,6 +10,21 @@ import {
 } from './buildEnvironment'
 
 describe('小程序构建环境', () => {
+  it('构建配置的传递依赖都能被 Taro 配置加载器转译', () => {
+    const script = [
+      "const path=require('node:path')",
+      "require('@tarojs/helper').createSwcRegister({only:[filePath=>filePath.includes(path.join(process.cwd(),'config'))]})",
+      "require('./config/buildEnvironment.ts')",
+    ].join(';')
+    const completed = spawnSync(process.execPath, ['-e', script], {
+      cwd: resolve(__dirname, '..'),
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+
+    expect(completed.status, completed.stderr).toBe(0)
+  })
+
   it('开发构建只读取 development 配置', () => {
     expect(resolveConfigEnvironment({
       NODE_ENV: 'production',

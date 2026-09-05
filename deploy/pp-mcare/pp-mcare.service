@@ -1,0 +1,39 @@
+[Unit]
+Description=MotionCare independent PP-TinyPose analysis worker
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=motioncare-analysis
+Group=motioncare-analysis
+UMask=0077
+WorkingDirectory=/opt/motioncare-analysis/current
+EnvironmentFile=/etc/pp-mcare.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TMPDIR=/opt/motioncare-analysis/tmp
+ExecStart=/opt/motioncare-analysis/current/.venv/bin/python -m pp_mcare
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/motioncare-analysis/model-cache /opt/motioncare-analysis/tmp /opt/motioncare-analysis/logs
+
+[Install]
+WantedBy=multi-user.target
