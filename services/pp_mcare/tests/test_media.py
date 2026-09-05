@@ -793,3 +793,24 @@ def test_timeline_parser_rejects_untrusted_or_overlong_lines_stably(payload):
 
     with pytest.raises(media.MediaEncodingError, match="时间戳"):
         media._parse_cfr_timeline(io.BytesIO(payload), expected_fps=25.0)
+
+
+def test_timeline_parser_accepts_sparse_integer_tick_duration_below_one_percent():
+    from pp_mcare import media
+
+    present_ticks = [tick for tick in range(120) if tick != 60]
+    lines = []
+    for index, tick in enumerate(present_ticks):
+        next_tick = present_ticks[index + 1] if index + 1 < len(present_ticks) else tick + 1
+        lines.append(
+            "best_effort_timestamp_time="
+            f"{tick / 30:.6f}|pkt_duration_time={(next_tick - tick) / 30:.6f}|\n"
+        )
+
+    timeline = media._parse_cfr_timeline(
+        io.BytesIO("".join(lines).encode("ascii")),
+        expected_fps=30.0,
+    )
+
+    assert timeline.frame_count == 119
+    assert timeline.duration_seconds == pytest.approx(4.0, abs=0.001)

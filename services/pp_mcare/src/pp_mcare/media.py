@@ -269,13 +269,13 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
         if not math.isfinite(pts):
             raise MediaEncodingError("输入视频帧时间戳无法可靠验证")
         duration = _optional_positive_float(fields.get("pkt_duration_time"))
-        if duration is not None and not math.isclose(
-            duration,
-            nominal_interval,
-            rel_tol=TIMESTAMP_RELATIVE_TOLERANCE,
-            abs_tol=TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS,
-        ):
-            raise MediaEncodingError("输入视频帧持续时间不均匀")
+        if duration is not None:
+            duration_ticks = round(duration / nominal_interval)
+            if (
+                duration_ticks < 1
+                or abs(duration - duration_ticks * nominal_interval) > tolerance
+            ):
+                raise MediaEncodingError("输入视频帧持续时间不均匀")
         if first_pts is None:
             first_pts = pts
         if previous_pts is not None:
