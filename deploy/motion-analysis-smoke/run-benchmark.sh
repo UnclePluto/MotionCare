@@ -24,7 +24,8 @@ _run_benchmark_after_root_gate() {
 
   implementation_commit="$1"
   run_id="$2"
-  report_path="${analysis_root}/reports/pp-tinypose-v2-${run_id}.json"
+  report_nonce="$$-${RANDOM}${RANDOM}"
+  report_path="${analysis_root}/reports/pp-tinypose-v2-${run_id}-${report_nonce}.json"
 
   if [[ ! "${implementation_commit}" =~ ^[a-f0-9]{7,40}$ ]]; then
     echo "COMMIT 格式无效" >&2
@@ -36,6 +37,10 @@ _run_benchmark_after_root_gate() {
   fi
   if [[ ! -f "${video_path}" || -L "${video_path}" ]]; then
     echo "输入视频不存在或不是普通文件" >&2
+    exit 1
+  fi
+  if [[ -e "${report_path}" || -L "${report_path}" ]]; then
+    echo "报告目标已存在" >&2
     exit 1
   fi
 

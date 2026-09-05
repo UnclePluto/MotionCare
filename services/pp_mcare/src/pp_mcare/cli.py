@@ -23,7 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     regression = subcommands.add_parser("regression")
     regression.add_argument("--video", required=True)
     regression.add_argument("--manual-total-count", required=True, type=int)
-    regression.add_argument("--report", required=True)
+    regression.add_argument("--report", required=True, help="报告目标必须不存在（create-once）")
     return parser
 
 

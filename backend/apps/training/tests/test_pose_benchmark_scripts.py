@@ -1,5 +1,6 @@
 import ast
 import os
+import re
 import stat
 import subprocess
 import tomllib
@@ -317,7 +318,13 @@ def test_run_script_invokes_independent_pp_mcare_regression_cli(tmp_path):
         "90",
     ]
     expected_prefix = str(analysis_root / "reports" / "pp-tinypose-v2-")
-    assert f"{expected_prefix}20260903T120000Z.json" in arguments
+    report_index = arguments.index("--report")
+    report_argument = arguments[report_index + 1]
+    assert re.fullmatch(
+        rf"{re.escape(expected_prefix)}20260903T120000Z-[0-9]+-[0-9]+\.json",
+        report_argument,
+    )
+    assert report_argument != f"{expected_prefix}20260903T120000Z.json"
     assert "--summary" not in arguments
     assert "manage.py" not in arguments
     assert "run_pose_smoke_benchmark" not in arguments

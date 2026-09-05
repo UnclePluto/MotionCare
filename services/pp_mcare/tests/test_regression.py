@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -175,12 +176,18 @@ def test_regression_runs_formal_pipeline_once_and_writes_full_frame_evidence(
     assert source.frame_count == EXPECTED_DECODED_FRAME_COUNT
     assert job.action_source_key == "motion-resistance-shoulder-press"
     assert job.rule_version == "shoulder-press-v2"
+    assert report["report_format_version"] == "4.0"
     assert report["status"] == "completed"
     assert report["git_commit"] != "deadbee"
     assert report["implementation"]["git_commit"] == report["git_commit"]
     assert report["implementation"]["package_name"] == "pp-mcare"
     assert report["implementation"]["package_version"] == "0.1.0"
-    assert len(report["implementation"]["implementation_sha256"]) == 64
+    assert len(report["implementation"]["regression_runtime_sha256"]) == 64
+    assert len(report["implementation"]["distribution_content_sha256"]) == 64
+    assert report["implementation"]["release_artifact"] == {
+        "manifest_status": "source_checkout",
+        "wheel_sha256": None,
+    }
     assert report["implementation"]["capability"] == {
         "protocol_version": "1",
         "action_source_key": "motion-resistance-shoulder-press",
@@ -247,6 +254,32 @@ def test_regression_cli_returns_one_with_only_sanitized_failure(capsys, tmp_path
     assert "回归失败" in captured.err
     assert str(video) not in captured.err
     assert "patient-name-private" not in captured.err
+
+
+def test_regression_cli_returns_one_without_replacing_existing_report(capsys, tmp_path):
+    video = tmp_path / "patient-name-private.mp4"
+    video.write_bytes(b"private video")
+    report_path = tmp_path / "patient-report.json"
+    report_path.write_bytes(b"existing report")
+
+    exit_code = main(
+        [
+            "regression",
+            "--video",
+            str(video),
+            "--manual-total-count",
+            "90",
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 1
+    assert report_path.read_bytes() == b"existing report"
+    captured = capsys.readouterr()
+    assert captured.err == "pp-mcare 回归失败，详情见脱敏报告\n"
+    assert str(video) not in captured.err
+    assert str(report_path) not in captured.err
 
 
 def test_regression_cli_has_no_sampled_mode_option(capsys):
@@ -317,6 +350,7 @@ def test_regression_cli_help_remains_available(capsys):
     captured = capsys.readouterr()
     assert "--video" in captured.out
     assert "--manual-total-count" in captured.out
+    assert "目标必须不存在" in captured.out
     assert captured.err == ""
 
 
@@ -343,6 +377,108 @@ def test_implementation_sha256_is_deterministic_and_detects_source_tampering(tmp
     assert initial == repeated
     assert len(initial) == 64
     assert tampered != initial
+
+
+def test_source_distribution_digest_covers_all_package_metadata_and_license_files(tmp_path):
+    project_root = tmp_path / "service"
+    package_root = project_root / "src" / "pp_mcare"
+    package_root.mkdir(parents=True)
+    (package_root / "pipeline.py").write_text("pipeline-v1", encoding="utf-8")
+    (package_root / "api_client.py").write_text("client-v1", encoding="utf-8")
+    (project_root / "pyproject.toml").write_text(
+        '[project]\nname="pp-mcare"\nversion="0.1.0"\ndependencies=["httpx"]\n',
+        encoding="utf-8",
+    )
+    (project_root / "LICENSE.paddledetection").write_text("license-v1", encoding="utf-8")
+    (project_root / "NOTICE").write_text("notice-v1", encoding="utf-8")
+    digest_reader = getattr(regression, "_distribution_content_sha256", None)
+
+    assert digest_reader is not None
+    initial = digest_reader(package_root)
+    assert digest_reader(package_root) == initial
+
+    for path, changed_content in (
+        (package_root / "api_client.py", "client-v2"),
+        (project_root / "pyproject.toml", '[project]\nname="pp-mcare"\nversion="0.1.0"\ndependencies=["qiniu"]\n'),
+        (project_root / "LICENSE.paddledetection", "license-v2"),
+        (project_root / "NOTICE", "notice-v2"),
+    ):
+        original_content = path.read_text(encoding="utf-8")
+        path.write_text(changed_content, encoding="utf-8")
+        assert digest_reader(package_root) != initial
+        path.write_text(original_content, encoding="utf-8")
+
+
+def test_installed_distribution_digest_ignores_unrelated_ancestor_pyproject(
+    monkeypatch,
+    tmp_path,
+):
+    package_root = tmp_path / "site-packages" / "pp_mcare"
+    package_root.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text("unrelated", encoding="utf-8")
+    monkeypatch.setattr(
+        regression,
+        "_installed_distribution_entries",
+        lambda: [("pp_mcare/worker.py", b"installed-wheel-content")],
+    )
+
+    digest = regression._distribution_content_sha256(package_root)
+
+    assert digest == regression._digest_named_content(
+        [("pp_mcare/worker.py", b"installed-wheel-content")]
+    )
+
+
+def test_implementation_identity_names_core_and_full_distribution_digests(monkeypatch):
+    distribution_calls = []
+    monkeypatch.setattr(
+        regression,
+        "_distribution_content_sha256",
+        lambda package_root: distribution_calls.append(package_root) or "d" * 64,
+        raising=False,
+    )
+
+    identity = regression.read_implementation_identity()
+
+    assert distribution_calls == [Path(regression.__file__).resolve().parent]
+    assert identity["distribution_content_sha256"] == "d" * 64
+    assert len(identity["regression_runtime_sha256"]) == 64
+    assert "implementation_sha256" not in identity
+
+
+def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_matches(
+    monkeypatch,
+    tmp_path,
+):
+    manifest = tmp_path / "release-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "manifest_version": "1",
+                "package_name": "pp-mcare",
+                "package_version": "0.1.0",
+                "wheel_sha256": "a" * 64,
+                "installed_distribution_sha256": "d" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(regression, "_RELEASE_MANIFEST_PATH", manifest, raising=False)
+    monkeypatch.setattr(regression, "_distribution_content_sha256", lambda _root: "d" * 64, raising=False)
+    monkeypatch.setattr(regression, "_source_checkout_commit", lambda _root: None)
+
+    identity = regression.read_implementation_identity()
+
+    assert identity["release_artifact"] == {
+        "manifest_status": "verified",
+        "wheel_sha256": "a" * 64,
+    }
+
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["installed_distribution_sha256"] = "e" * 64
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RegressionFailure, match="发布清单身份不匹配"):
+        regression.read_implementation_identity()
 
 
 def test_video_identity_ignores_access_time_but_detects_content_metadata_change():
@@ -554,6 +690,79 @@ def test_regression_rejects_existing_report_hardlink_to_video_without_writing(tm
     assert report.read_bytes() == original
 
 
+def test_regression_report_is_create_once_and_preserves_existing_regular_file(
+    monkeypatch,
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"private video")
+    report = tmp_path / "report.json"
+    report.write_bytes(b"existing report must survive")
+    monkeypatch.setattr(
+        regression,
+        "sha256_file",
+        lambda _path: pytest.fail("existing report must be rejected before hashing"),
+    )
+
+    with pytest.raises(RegressionFailure):
+        run_regression(video_path=video, manual_total_count=90, report_path=report)
+
+    assert report.read_bytes() == b"existing report must survive"
+
+
+def test_regression_closes_report_parent_fd_when_create_once_precheck_fails(
+    monkeypatch,
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"private video")
+    report = tmp_path / "report.json"
+    report.write_bytes(b"existing report")
+    original_open = regression.os.open
+    parent_descriptor = None
+
+    def recording_open(path, flags, *args, **kwargs):
+        nonlocal parent_descriptor
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if Path(path) == tmp_path:
+            parent_descriptor = descriptor
+        return descriptor
+
+    monkeypatch.setattr(regression.os, "open", recording_open)
+
+    with pytest.raises(RegressionFailure):
+        run_regression(video_path=video, manual_total_count=90, report_path=report)
+
+    assert parent_descriptor is not None
+    with pytest.raises(OSError):
+        os.fstat(parent_descriptor)
+
+
+def test_atomic_report_commit_never_replaces_target_created_after_entry_validation(
+    monkeypatch,
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    original = b"validated original bytes"
+    video.write_bytes(original)
+    report = tmp_path / "report.json"
+    _configure_success(monkeypatch, video)
+    configured_pipeline = regression.run_local_pipeline
+
+    def racing_pipeline(*args, **kwargs):
+        result = configured_pipeline(*args, **kwargs)
+        os.replace(video, report)
+        return result
+
+    monkeypatch.setattr(regression, "run_local_pipeline", racing_pipeline)
+
+    with pytest.raises(RegressionFailure):
+        run_regression(video_path=video, manual_total_count=90, report_path=report)
+
+    assert report.read_bytes() == original
+    assert not list(tmp_path.glob(".report.json.*"))
+
+
 def test_regression_hash_probe_and_pipeline_share_open_fd_when_path_is_replaced(
     monkeypatch,
     tmp_path,
@@ -597,10 +806,124 @@ def test_regression_hash_probe_and_pipeline_share_open_fd_when_path_is_replaced(
     result = run_regression(video_path=video, manual_total_count=90, report_path=report)
 
     assert result["status"] == "completed"
-    assert len(observed_paths) == 3
+    assert len(observed_paths) == 4
     assert len(set(observed_paths)) == 1
     assert observed_paths[0] != video
     assert video.read_bytes() == b"unvalidated replacement bytes"
+
+
+def test_regression_pipeline_reads_private_snapshot_after_source_inode_is_rewritten(
+    monkeypatch,
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    original = b"validated-content-A"
+    unvalidated = b"untrusted-content-B"
+    assert len(original) == len(unvalidated)
+    video.write_bytes(original)
+    report = tmp_path / "report.json"
+    calls, _digest = _configure_success(monkeypatch, video)
+    configured_pipeline = regression.run_local_pipeline
+    pipeline_inputs: list[bytes] = []
+
+    def reading_pipeline(*args, **kwargs):
+        pipeline_inputs.append(Path(args[1]).read_bytes())
+        return configured_pipeline(*args, **kwargs)
+
+    monkeypatch.setattr(regression, "run_local_pipeline", reading_pipeline)
+    expected_digest = hashlib.sha256(original).hexdigest()
+    monkeypatch.setattr(regression, "EXPECTED_VIDEO_SHA256", expected_digest)
+    original_hash = regression.sha256_file
+    source_times = video.stat()
+    hash_calls = 0
+
+    def rewrite_source_then_hash(path):
+        nonlocal hash_calls
+        hash_calls += 1
+        if hash_calls == 1:
+            video.write_bytes(unvalidated)
+            os.utime(
+                video,
+                ns=(source_times.st_atime_ns, source_times.st_mtime_ns),
+            )
+        return original_hash(path)
+
+    monkeypatch.setattr(regression, "sha256_file", rewrite_source_then_hash)
+
+    result = run_regression(video_path=video, manual_total_count=90, report_path=report)
+
+    assert result["status"] == "completed"
+    assert len(calls) == 1
+    assert pipeline_inputs == [original]
+    assert video.read_bytes() == unvalidated
+
+
+def test_regression_fails_when_source_inode_changes_while_snapshot_is_copied(
+    monkeypatch,
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    original = b"validated-content-A"
+    unvalidated = b"untrusted-content-B"
+    assert len(original) == len(unvalidated)
+    video.write_bytes(original)
+    source_times = video.stat()
+    source_identity = (source_times.st_dev, source_times.st_ino)
+    report = tmp_path / "report.json"
+    calls, _digest = _configure_success(monkeypatch, video)
+    original_read = regression.os.read
+    changed = False
+
+    def racing_read(descriptor, size):
+        nonlocal changed
+        content = original_read(descriptor, size)
+        descriptor_stat = os.fstat(descriptor)
+        descriptor_identity = (descriptor_stat.st_dev, descriptor_stat.st_ino)
+        if content and not changed and descriptor_identity == source_identity:
+            changed = True
+            video.write_bytes(unvalidated)
+            os.utime(
+                video,
+                ns=(source_times.st_atime_ns, source_times.st_mtime_ns),
+            )
+        return content
+
+    monkeypatch.setattr(regression.os, "read", racing_read)
+
+    with pytest.raises(RegressionFailure):
+        run_regression(video_path=video, manual_total_count=90, report_path=report)
+
+    assert changed is True
+    assert calls == []
+
+
+def test_regression_rejects_fifo_without_waiting_for_a_writer(tmp_path):
+    video = tmp_path / "private-video.fifo"
+    os.mkfifo(video)
+    report = tmp_path / "report.json"
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            run_regression(video_path=video, manual_total_count=90, report_path=report)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run, daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(timeout=0.25)
+    finished_without_writer = not worker.is_alive()
+    if worker.is_alive():
+        writer = os.open(video, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(writer)
+        worker.join(timeout=1)
+
+    assert finished_without_writer
+    assert time.monotonic() - started < 0.5
+    assert len(errors) == 1
+    assert isinstance(errors[0], RegressionFailure)
+    assert not report.exists()
 
 
 @pytest.mark.parametrize(
@@ -760,6 +1083,44 @@ def test_resource_sampler_fails_closed_and_stops_after_background_reader_error()
 
     assert sampler._thread is not None
     assert not sampler._thread.is_alive()
+
+
+def test_resource_sampler_exit_has_a_deadline_when_background_reader_blocks(monkeypatch):
+    background_started = threading.Event()
+    release_reader = threading.Event()
+    calls = 0
+
+    def reader():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ResourceSnapshot(100, 500, 900, 0, 1_000)
+        background_started.set()
+        release_reader.wait()
+        return ResourceSnapshot(200, 600, 800, 0, 1_000)
+
+    monkeypatch.setattr(ResourceSampler, "JOIN_TIMEOUT_SECONDS", 0.05, raising=False)
+    sampler = ResourceSampler(reader=reader, interval_seconds=0.001)
+    errors: list[BaseException] = []
+
+    def sample() -> None:
+        try:
+            with pytest.raises(RegressionFailure, match="资源采样失败"):
+                with sampler:
+                    assert background_started.wait(timeout=1)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=sample, daemon=True)
+    worker.start()
+    assert background_started.wait(timeout=1)
+    worker.join(timeout=0.25)
+    finished_within_deadline = not worker.is_alive()
+    release_reader.set()
+    worker.join(timeout=2)
+
+    assert finished_within_deadline
+    assert errors == []
 
 
 def test_acceptance_rss_gate_uses_process_tree_peak_field():

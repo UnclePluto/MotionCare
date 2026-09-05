@@ -8,6 +8,7 @@ import math
 import os
 import platform
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -32,7 +33,7 @@ from .subject_tracker import SUBJECT_TRACKER_VERSION
 EXPECTED_VIDEO_SHA256 = "f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd"
 EXPECTED_DECODED_FRAME_COUNT = 8_929
 EXPECTED_MANUAL_TOTAL_COUNT = 90
-REPORT_FORMAT_VERSION = "3.0"
+REPORT_FORMAT_VERSION = "4.0"
 MAX_TOTAL_SECONDS = 600.0
 MAX_PROCESS_RSS_BYTES = int(1.5 * 1024**3)
 _CLOCK = time.monotonic
@@ -52,6 +53,7 @@ _IMPLEMENTATION_FILES = (
     "actions/base.py",
     "actions/shoulder_press_v2.py",
 )
+_RELEASE_MANIFEST_PATH = Path("/opt/motioncare-analysis/current/release-manifest.json")
 
 
 class RegressionFailure(RuntimeError):
@@ -80,9 +82,109 @@ def _implementation_sha256(
     return digest.hexdigest()
 
 
+def _digest_named_content(entries: list[tuple[str, bytes]]) -> str:
+    digest = hashlib.sha256()
+    if not entries:
+        raise RegressionFailure("分发内容身份为空")
+    for logical_name, content in sorted(entries):
+        encoded_name = logical_name.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(4, "big"))
+        digest.update(encoded_name)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def _source_distribution_entries(package_root: Path, project_root: Path) -> list[tuple[str, bytes]]:
+    entries: list[tuple[str, bytes]] = []
+    try:
+        for path in package_root.rglob("*"):
+            relative = path.relative_to(package_root)
+            if (
+                not path.is_file()
+                or path.is_symlink()
+                or "__pycache__" in relative.parts
+                or path.suffix in {".pyc", ".pyo"}
+            ):
+                continue
+            entries.append((f"pp_mcare/{relative.as_posix()}", path.read_bytes()))
+        for filename in ("pyproject.toml", "LICENSE.paddledetection", "NOTICE"):
+            path = project_root / filename
+            if not path.is_file() or path.is_symlink():
+                raise RegressionFailure("分发内容身份无法读取")
+            entries.append((f"project/{filename}", path.read_bytes()))
+    except OSError as exc:
+        raise RegressionFailure("分发内容身份无法读取") from exc
+    return entries
+
+
+def _installed_distribution_entries() -> list[tuple[str, bytes]]:
+    try:
+        distribution = importlib.metadata.distribution("pp-mcare")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RegressionFailure("分发内容身份无法读取") from exc
+    entries: list[tuple[str, bytes]] = []
+    excluded_metadata = {"RECORD", "INSTALLER", "REQUESTED", "direct_url.json"}
+    for item in distribution.files or ():
+        parts = Path(str(item)).parts
+        logical_name: str | None = None
+        if "pp_mcare" in parts:
+            package_index = parts.index("pp_mcare")
+            package_parts = parts[package_index:]
+            if "__pycache__" not in package_parts and Path(*package_parts).suffix not in {
+                ".pyc",
+                ".pyo",
+            }:
+                logical_name = Path(*package_parts).as_posix()
+        else:
+            dist_info_index = next(
+                (index for index, part in enumerate(parts) if part.endswith(".dist-info")),
+                None,
+            )
+            if dist_info_index is not None:
+                metadata_parts = parts[dist_info_index + 1 :]
+                if metadata_parts and metadata_parts[0] not in excluded_metadata:
+                    logical_name = Path("dist-info", *metadata_parts).as_posix()
+        if logical_name is None:
+            continue
+        path = Path(distribution.locate_file(item))
+        try:
+            if not path.is_file() or path.is_symlink():
+                raise RegressionFailure("分发内容身份无法读取")
+            entries.append((logical_name, path.read_bytes()))
+        except OSError as exc:
+            raise RegressionFailure("分发内容身份无法读取") from exc
+    return entries
+
+
+def _source_project_root(package_root: Path) -> Path | None:
+    if package_root.name != "pp_mcare" or package_root.parent.name != "src":
+        return None
+    project_root = package_root.parent.parent
+    expected_package_root = project_root / "src" / "pp_mcare"
+    try:
+        if expected_package_root.resolve(strict=True) != package_root.resolve(strict=True):
+            return None
+    except OSError:
+        return None
+    if not (project_root / "pyproject.toml").is_file():
+        return None
+    return project_root
+
+
+def _distribution_content_sha256(package_root: Path) -> str:
+    project_root = _source_project_root(package_root)
+    if project_root is not None:
+        entries = _source_distribution_entries(package_root, project_root)
+    else:
+        entries = _installed_distribution_entries()
+    return _digest_named_content(entries)
+
+
 def _package_version(package_root: Path) -> str:
-    pyproject = package_root.parent.parent / "pyproject.toml"
-    if pyproject.is_file():
+    project_root = _source_project_root(package_root)
+    if project_root is not None:
+        pyproject = project_root / "pyproject.toml"
         try:
             payload = tomllib.loads(pyproject.read_text(encoding="utf-8"))
             version = payload["project"]["version"]
@@ -125,13 +227,68 @@ def _source_checkout_commit(package_root: Path) -> str | None:
     return commit
 
 
+def _valid_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _release_artifact_identity(
+    *,
+    package_version: str,
+    distribution_content_sha256: str,
+    source_checkout_commit: str | None,
+) -> dict[str, object]:
+    if source_checkout_commit is not None:
+        return {"manifest_status": "source_checkout", "wheel_sha256": None}
+    try:
+        manifest_identity = _RELEASE_MANIFEST_PATH.lstat()
+    except FileNotFoundError:
+        return {"manifest_status": "not_present", "wheel_sha256": None}
+    except OSError as exc:
+        raise RegressionFailure("发布清单无法读取") from exc
+    if not stat.S_ISREG(manifest_identity.st_mode) or _RELEASE_MANIFEST_PATH.is_symlink():
+        raise RegressionFailure("发布清单无效")
+    try:
+        payload = json.loads(_RELEASE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RegressionFailure("发布清单无法读取") from exc
+    expected = {
+        "manifest_version": "1",
+        "package_name": "pp-mcare",
+        "package_version": package_version,
+        "installed_distribution_sha256": distribution_content_sha256,
+    }
+    if (
+        not isinstance(payload, dict)
+        or any(payload.get(key) != value for key, value in expected.items())
+        or not _valid_sha256(payload.get("wheel_sha256"))
+    ):
+        raise RegressionFailure("发布清单身份不匹配")
+    return {
+        "manifest_status": "verified",
+        "wheel_sha256": payload["wheel_sha256"],
+    }
+
+
 def read_implementation_identity() -> dict[str, object]:
     package_root = Path(__file__).resolve().parent
+    package_version = _package_version(package_root)
+    source_checkout_commit = _source_checkout_commit(package_root)
+    distribution_content_sha256 = _distribution_content_sha256(package_root)
     return {
         "package_name": "pp-mcare",
-        "package_version": _package_version(package_root),
-        "implementation_sha256": _implementation_sha256(package_root),
-        "git_commit": _source_checkout_commit(package_root),
+        "package_version": package_version,
+        "regression_runtime_sha256": _implementation_sha256(package_root),
+        "distribution_content_sha256": distribution_content_sha256,
+        "git_commit": source_checkout_commit,
+        "release_artifact": _release_artifact_identity(
+            package_version=package_version,
+            distribution_content_sha256=distribution_content_sha256,
+            source_checkout_commit=source_checkout_commit,
+        ),
         "capability": {
             "protocol_version": PROTOCOL_VERSION,
             "action_source_key": _ACTION_PLUGIN.source_key,
@@ -185,6 +342,8 @@ def read_resource_snapshot() -> ResourceSnapshot:
 
 
 class ResourceSampler:
+    JOIN_TIMEOUT_SECONDS = 1.0
+
     def __init__(self, *, reader=read_resource_snapshot, interval_seconds: float = 0.5):
         self._reader = reader
         self._interval_seconds = interval_seconds
@@ -219,8 +378,11 @@ class ResourceSampler:
 
     def _sample_until_stopped(self) -> None:
         try:
-            while not self._stop.wait(self._interval_seconds):
+            while True:
+                stopped = self._stop.wait(self._interval_seconds)
                 self.sample_once()
+                if stopped:
+                    return
         except BaseException as exc:
             self._sampling_error = exc
             self._stop.set()
@@ -237,15 +399,11 @@ class ResourceSampler:
     def __exit__(self, _exc_type, _exc, _traceback) -> None:
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=max(1.0, self._interval_seconds * 2))
-        final_error = None
-        try:
-            self.sample_once()
-        except BaseException as exc:
-            final_error = exc
-        sampling_error = self._sampling_error or final_error
-        if sampling_error is not None:
-            raise RegressionFailure("资源采样失败") from sampling_error
+            self._thread.join(timeout=self.JOIN_TIMEOUT_SECONDS)
+            if self._thread.is_alive():
+                raise RegressionFailure("资源采样失败")
+        if self._sampling_error is not None:
+            raise RegressionFailure("资源采样失败") from self._sampling_error
 
 
 def sha256_file(path: Path) -> str:
@@ -269,6 +427,20 @@ def _same_file_identity(before: os.stat_result, after: os.stat_result) -> bool:
     return all(getattr(before, field) == getattr(after, field) for field in fields)
 
 
+def _same_source_copy_identity(before: os.stat_result, after: os.stat_result) -> bool:
+    fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_uid",
+        "st_gid",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+    )
+    return all(getattr(before, field) == getattr(after, field) for field in fields)
+
+
 def _open_fd_path(descriptor: int) -> Path:
     if sys.platform == "linux":
         return Path(f"/proc/self/fd/{descriptor}")
@@ -283,6 +455,83 @@ def _rewind_video(descriptor: int) -> None:
             raise RegressionFailure("固定输入无法复位")
     except OSError as exc:
         raise RegressionFailure("固定输入无法复位") from exc
+
+
+def _write_all(descriptor: int, content: bytes) -> None:
+    view = memoryview(content)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise RegressionFailure("验证副本写入失败")
+        view = view[written:]
+
+
+def _create_video_snapshot(
+    source_descriptor: int,
+    source_identity: os.stat_result,
+) -> tuple[int, os.stat_result]:
+    temporary_directory = Path(tempfile.mkdtemp(prefix="pp-mcare-input-snapshot-"))
+    snapshot_path = temporary_directory / "input.snapshot"
+    writer: int | None = None
+    reader: int | None = None
+    try:
+        os.chmod(temporary_directory, 0o700)
+        if shutil.disk_usage(temporary_directory).free < source_identity.st_size:
+            raise RegressionFailure("验证副本磁盘空间不足")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        writer = os.open(snapshot_path, flags, 0o600)
+        _rewind_video(source_descriptor)
+        copied_bytes = 0
+        while True:
+            chunk = os.read(source_descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            _write_all(writer, chunk)
+            copied_bytes += len(chunk)
+        os.fsync(writer)
+        source_after_copy = os.fstat(source_descriptor)
+        if (
+            copied_bytes != source_identity.st_size
+            or not _same_source_copy_identity(source_identity, source_after_copy)
+        ):
+            raise RegressionFailure("视频在验证副本创建期间发生变化")
+        os.fchmod(writer, 0o400)
+        os.close(writer)
+        writer = None
+
+        read_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        read_flags |= getattr(os, "O_NOFOLLOW", 0)
+        reader = os.open(snapshot_path, read_flags)
+        snapshot_identity = os.fstat(reader)
+        if (
+            not stat.S_ISREG(snapshot_identity.st_mode)
+            or snapshot_identity.st_size != source_identity.st_size
+            or stat.S_IMODE(snapshot_identity.st_mode) != 0o400
+        ):
+            raise RegressionFailure("验证副本无效")
+        os.unlink(snapshot_path)
+        os.rmdir(temporary_directory)
+        result = reader
+        reader = None
+        return result, snapshot_identity
+    except RegressionFailure:
+        raise
+    except OSError as exc:
+        raise RegressionFailure("验证副本创建失败") from exc
+    finally:
+        if writer is not None:
+            os.close(writer)
+        if reader is not None:
+            os.close(reader)
+        try:
+            os.unlink(snapshot_path)
+        except FileNotFoundError:
+            pass
+        try:
+            os.rmdir(temporary_directory)
+        except FileNotFoundError:
+            pass
 
 
 def read_versions() -> dict[str, str]:
@@ -338,6 +587,7 @@ def read_hardware() -> dict[str, object]:
 def _validated_report_path(path: Path) -> tuple[Path, int]:
     if not path.is_absolute() or path.name in {"", ".", ".."}:
         raise RegressionFailure("报告路径无效")
+    parent_fd: int | None = None
     try:
         parent = path.parent
         if parent.resolve(strict=True) != parent or not parent.is_dir():
@@ -346,16 +596,19 @@ def _validated_report_path(path: Path) -> tuple[Path, int]:
         flags |= getattr(os, "O_NOFOLLOW", 0)
         parent_fd = os.open(parent, flags)
         try:
-            existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             pass
         else:
-            if not stat.S_ISREG(existing.st_mode):
-                raise RegressionFailure("报告路径无效")
+            raise RegressionFailure("报告目标已存在")
         return path, parent_fd
     except RegressionFailure:
+        if parent_fd is not None:
+            os.close(parent_fd)
         raise
     except OSError as exc:
+        if parent_fd is not None:
+            os.close(parent_fd)
         raise RegressionFailure("报告路径无效") from exc
 
 
@@ -405,19 +658,14 @@ def _atomic_write_report(path: Path, report: dict[str, object]) -> None:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
-        try:
-            existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
-        else:
-            if not stat.S_ISREG(existing.st_mode):
-                raise RegressionFailure("报告路径无效")
-        os.replace(
+        os.link(
             temporary_name,
             path.name,
             src_dir_fd=parent_fd,
             dst_dir_fd=parent_fd,
+            follow_symlinks=False,
         )
+        os.unlink(temporary_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
     except RegressionFailure:
         raise
@@ -570,6 +818,7 @@ def run_regression(
     video_descriptor: int | None = None
     try:
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
         video_descriptor = os.open(video, flags)
         video_identity = os.fstat(video_descriptor)
     except OSError as exc:
@@ -581,6 +830,7 @@ def run_regression(
         os.close(report_parent_fd)
         os.close(video_descriptor)
         raise RegressionFailure("视频路径无效")
+    snapshot_descriptor: int | None = None
     try:
         try:
             _reject_colliding_report(
@@ -589,12 +839,18 @@ def run_regression(
                 report=report_file,
                 report_parent_fd=report_parent_fd,
             )
-            stable_video = _open_fd_path(video_descriptor)
+            snapshot_descriptor, snapshot_identity = _create_video_snapshot(
+                video_descriptor,
+                video_identity,
+            )
+            stable_video = _open_fd_path(snapshot_descriptor)
         except BaseException:
-            os.close(video_descriptor)
+            if snapshot_descriptor is not None:
+                os.close(snapshot_descriptor)
             raise
     finally:
         os.close(report_parent_fd)
+        os.close(video_descriptor)
 
     now = datetime.now(timezone.utc).isoformat()
     report: dict[str, object] = {
@@ -619,20 +875,20 @@ def run_regression(
         report["git_commit"] = implementation["git_commit"]
         stage = "hash_validation"
         actual_sha256 = sha256_file(stable_video)
-        _rewind_video(video_descriptor)
+        _rewind_video(snapshot_descriptor)
         if actual_sha256 != EXPECTED_VIDEO_SHA256:
             report["acceptance"] = {"passed": False, "failures": ["video_sha256_mismatch"]}
             raise RegressionFailure("视频 SHA-256 与固定样本不一致")
-        if not _same_file_identity(video_identity, os.fstat(video_descriptor)):
-            raise RegressionFailure("视频在校验期间发生变化")
+        if not _same_file_identity(snapshot_identity, os.fstat(snapshot_descriptor)):
+            raise RegressionFailure("验证副本在校验期间发生变化")
 
         stage = "video_probe"
-        source = probe_source_video(stable_video, pass_fds=(video_descriptor,))
-        _rewind_video(video_descriptor)
+        source = probe_source_video(stable_video, pass_fds=(snapshot_descriptor,))
+        _rewind_video(snapshot_descriptor)
         report["video"] = _video_metadata(
             source,
             sha256=actual_sha256,
-            size_bytes=video_identity.st_size,
+            size_bytes=snapshot_identity.st_size,
         )
         if source.frame_count != EXPECTED_DECODED_FRAME_COUNT:
             stage = "frame_validation"
@@ -652,7 +908,7 @@ def run_regression(
             output_path = Path(temporary) / "skeleton.mp4"
             with ResourceSampler() as sampler:
                 result = run_local_pipeline(
-                    _local_job(size_bytes=video_identity.st_size, object_hash=actual_sha256),
+                    _local_job(size_bytes=snapshot_identity.st_size, object_hash=actual_sha256),
                     stable_video,
                     output_path,
                     lambda _stage: None,
@@ -661,8 +917,14 @@ def run_regression(
             total_seconds = _CLOCK() - started
         if sampler.peak is None:
             raise RegressionFailure("资源采样没有结果")
-        if not _same_file_identity(video_identity, os.fstat(video_descriptor)):
-            raise RegressionFailure("视频在分析期间发生变化")
+        _rewind_video(snapshot_descriptor)
+        final_sha256 = sha256_file(stable_video)
+        _rewind_video(snapshot_descriptor)
+        if final_sha256 != actual_sha256 or not _same_file_identity(
+            snapshot_identity,
+            os.fstat(snapshot_descriptor),
+        ):
+            raise RegressionFailure("验证副本在分析期间发生变化")
         if not isinstance(result.counts, MotionCounts):
             raise RegressionFailure("正式流水线返回了无效计数")
         result_payload = result.result_payload_json()
@@ -716,4 +978,4 @@ def run_regression(
             raise
         raise RegressionFailure(_failure_summary(stage)) from exc
     finally:
-        os.close(video_descriptor)
+        os.close(snapshot_descriptor)
