@@ -264,6 +264,7 @@ class MotionAnalysisJob(UserStampedModel):
     lease_token_hash = models.CharField("租约令牌哈希", max_length=128, blank=True, default="")
     lease_expires_at = models.DateTimeField("租约过期时间", null=True, blank=True)
     last_heartbeat_at = models.DateTimeField("最近心跳时间", null=True, blank=True)
+    current_stage = models.CharField("当前阶段", max_length=32, blank=True, default="")
     action_source_key = models.CharField("动作来源键", max_length=120, blank=True, default="")
     parameter_version = models.CharField("参数版本", max_length=80, blank=True, default="")
     subject_tracker_version = models.CharField(

@@ -8,6 +8,18 @@ from django.db.migrations.executor import MigrationExecutor
 from django.utils import timezone
 
 
+@pytest.fixture(autouse=True)
+def _restore_latest_schema(django_db_setup, django_db_blocker):
+    del django_db_setup
+    with django_db_blocker.unblock():
+        latest_leaf_nodes = MigrationExecutor(connection).loader.graph.leaf_nodes()
+    try:
+        yield
+    finally:
+        with django_db_blocker.unblock():
+            MigrationExecutor(connection).migrate(latest_leaf_nodes)
+
+
 @pytest.mark.django_db(transaction=True)
 def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     project_patient,

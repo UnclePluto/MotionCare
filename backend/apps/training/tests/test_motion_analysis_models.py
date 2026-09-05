@@ -9,6 +9,18 @@ from motion_analysis_contract import MotionCounts
 from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 
 
+@pytest.fixture(autouse=True)
+def _restore_latest_schema(django_db_setup, django_db_blocker):
+    del django_db_setup
+    with django_db_blocker.unblock():
+        latest_leaf_nodes = MigrationExecutor(connection).loader.graph.leaf_nodes()
+    try:
+        yield
+    finally:
+        with django_db_blocker.unblock():
+            MigrationExecutor(connection).migrate(latest_leaf_nodes)
+
+
 @pytest.fixture
 def training_record(project_patient, active_prescription, prescription_action):
     return TrainingRecord.objects.create(

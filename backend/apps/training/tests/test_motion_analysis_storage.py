@@ -42,7 +42,10 @@ def analysis_job(project_patient, active_prescription, prescription_action):
         project_patient=project_patient,
         prescription_action=prescription_action,
         skeleton_bucket="analysis-skeletons",
-        skeleton_object_key="motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4",
+        skeleton_object_key=(
+            f"motion-analysis/{project_patient.id}/2026/09/"
+            "11111111-1111-4111-8111-111111111111/skeleton.mp4"
+        ),
     )
 
 
@@ -70,16 +73,14 @@ def test_issue_grant_limits_upload_to_preallocated_key(analysis_job, monkeypatch
     assert issued == [
         (
             "analysis-skeletons",
-            "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4",
+            analysis_job.skeleton_object_key,
             10800,
             {"insertOnly": 1},
         )
     ]
     assert grant.download.object_key == "training-videos/1/original.mp4"
     assert grant.download.expires_at == (now + timedelta(hours=1)).isoformat()
-    assert grant.upload.object_key == (
-        "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"
-    )
+    assert grant.upload.object_key == analysis_job.skeleton_object_key
     assert grant.upload.expires_at == (now + timedelta(hours=3)).isoformat()
     assert "sensitive-upload-token" not in repr(grant)
     assert "token=" not in repr(grant)
@@ -92,21 +93,33 @@ def test_issue_grant_limits_upload_to_preallocated_key(analysis_job, monkeypatch
     QINIU_DOWNLOAD_DOMAIN="https://private.example.com",
 )
 @pytest.mark.parametrize(
-    ("bucket", "object_key"),
+    ("bucket", "object_key_case"),
     [
-        ("", "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"),
-        ("analysis-skeletons", ""),
-        ("analysis-skeletons", "motion-analysis/2/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"),
-        ("analysis-skeletons", "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/result.mp4"),
+        ("", "valid"),
+        ("analysis-skeletons", "empty"),
+        ("analysis-skeletons", "wrong_project"),
+        ("analysis-skeletons", "wrong_filename"),
     ],
 )
 def test_issue_grant_rejects_empty_or_out_of_scope_skeleton_destination(
     analysis_job,
     monkeypatch,
     bucket,
-    object_key,
+    object_key_case,
 ):
     module = _storage_module()
+    object_keys = {
+        "valid": analysis_job.skeleton_object_key,
+        "empty": "",
+        "wrong_project": analysis_job.skeleton_object_key.replace(
+            f"motion-analysis/{analysis_job.project_patient_id}/",
+            f"motion-analysis/{analysis_job.project_patient_id + 1}/",
+            1,
+        ),
+        "wrong_filename": analysis_job.skeleton_object_key.removesuffix("skeleton.mp4")
+        + "result.mp4",
+    }
+    object_key = object_keys[object_key_case]
     analysis_job.skeleton_bucket = bucket
     analysis_job.skeleton_object_key = object_key or None
     analysis_job.save(update_fields=["skeleton_bucket", "skeleton_object_key", "updated_at"])
@@ -152,7 +165,7 @@ def test_verify_skeleton_upload_rejects_remote_metadata_mismatch(
             analysis_job,
             {
                 "bucket": "analysis-skeletons",
-                "object_key": "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4",
+                "object_key": analysis_job.skeleton_object_key,
                 "object_hash": "skeleton-hash",
                 "size_bytes": 256,
                 "content_type": "video/mp4",
@@ -170,9 +183,8 @@ def test_queue_skeleton_cleanup_keeps_only_the_job_skeleton_directory(analysis_j
     assert first.pk == second.pk
     assert first.session_id == analysis_job.training_video.client_session_id
     assert first.bucket == "analysis-skeletons"
-    assert first.attempt_key_prefix == "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/"
+    expected_prefix = analysis_job.skeleton_object_key.rpartition("/")[0] + "/"
+    assert first.attempt_key_prefix == expected_prefix
     assert first.max_attempt_number == 0
-    assert first.canonical_key == (
-        "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"
-    )
+    assert first.canonical_key == analysis_job.skeleton_object_key
     assert first.retain_canonical is False

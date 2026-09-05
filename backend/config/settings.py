@@ -16,6 +16,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 ROOT_DIR = BASE_DIR.parent
 load_dotenv(ROOT_DIR / ".env")
 
+
+def _positive_int_env(name, default):
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured(f"{name} 配置无效") from exc
+    if value <= 0:
+        raise ImproperlyConfigured(f"{name} 配置无效")
+    return value
+
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "local-dev-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,*" if DEBUG else "localhost,127.0.0.1"
@@ -30,6 +41,16 @@ SESSION_COOKIE_SECURE = os.getenv("DJANGO_SESSION_COOKIE_SECURE", str(not DEBUG)
 CSRF_COOKIE_SECURE = os.getenv("DJANGO_CSRF_COOKIE_SECURE", str(not DEBUG)).lower() == "true"
 TRAINING_HEALTH_ENFORCE_ROW_SCOPE = env_bool("TRAINING_HEALTH_ENFORCE_ROW_SCOPE")
 PP_MCARE_AUTO_ENQUEUE_ENABLED = env_bool("PP_MCARE_AUTO_ENQUEUE_ENABLED")
+PP_MCARE_SERVICE_TOKEN_SHA256 = os.getenv("PP_MCARE_SERVICE_TOKEN_SHA256", "")
+PP_MCARE_JOB_LEASE_SECONDS = _positive_int_env("PP_MCARE_JOB_LEASE_SECONDS", 300)
+PP_MCARE_HEARTBEAT_INTERVAL_SECONDS = _positive_int_env("PP_MCARE_HEARTBEAT_INTERVAL_SECONDS", 60)
+if PP_MCARE_HEARTBEAT_INTERVAL_SECONDS >= PP_MCARE_JOB_LEASE_SECONDS:
+    raise ImproperlyConfigured("pp-mcare 心跳间隔必须小于任务租期")
+if PP_MCARE_SERVICE_TOKEN_SHA256 and (
+    len(PP_MCARE_SERVICE_TOKEN_SHA256) != 64
+    or any(character not in "0123456789abcdef" for character in PP_MCARE_SERVICE_TOKEN_SHA256)
+):
+    raise ImproperlyConfigured("PP_MCARE_SERVICE_TOKEN_SHA256 配置无效")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
