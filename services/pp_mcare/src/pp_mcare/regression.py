@@ -299,24 +299,41 @@ def _valid_sha256(value: object) -> bool:
     )
 
 
+def _release_manifest_path_for_package(package_root: Path) -> Path | None:
+    try:
+        active_release = _RELEASE_MANIFEST_PATH.parent.resolve(strict=True)
+        installed_package = package_root.resolve(strict=True)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RegressionFailure("发布清单无法读取") from exc
+    if not installed_package.is_relative_to(active_release):
+        return None
+    return _RELEASE_MANIFEST_PATH
+
+
 def _release_artifact_identity(
     *,
+    package_root: Path,
     package_version: str,
     distribution_content_sha256: str,
     source_checkout_commit: str | None,
 ) -> dict[str, object]:
     if source_checkout_commit is not None:
         return {"manifest_status": "source_checkout", "wheel_sha256": None}
+    manifest_path = _release_manifest_path_for_package(package_root)
+    if manifest_path is None:
+        return {"manifest_status": "not_present", "wheel_sha256": None}
     try:
-        manifest_identity = _RELEASE_MANIFEST_PATH.lstat()
+        manifest_identity = manifest_path.lstat()
     except FileNotFoundError:
         return {"manifest_status": "not_present", "wheel_sha256": None}
     except OSError as exc:
         raise RegressionFailure("发布清单无法读取") from exc
-    if not stat.S_ISREG(manifest_identity.st_mode) or _RELEASE_MANIFEST_PATH.is_symlink():
+    if not stat.S_ISREG(manifest_identity.st_mode) or manifest_path.is_symlink():
         raise RegressionFailure("发布清单无效")
     try:
-        payload = json.loads(_RELEASE_MANIFEST_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise RegressionFailure("发布清单无法读取") from exc
     expected = {
@@ -351,6 +368,7 @@ def read_implementation_identity() -> dict[str, object]:
         "git_commit": source_checkout_commit,
         "git_dirty": None if source_checkout is None else source_checkout.dirty,
         "release_artifact": _release_artifact_identity(
+            package_root=package_root,
             package_version=package_version,
             distribution_content_sha256=distribution_content_sha256,
             source_checkout_commit=source_checkout_commit,

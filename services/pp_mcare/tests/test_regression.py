@@ -501,6 +501,11 @@ def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_ma
         encoding="utf-8",
     )
     monkeypatch.setattr(regression, "_RELEASE_MANIFEST_PATH", manifest, raising=False)
+    monkeypatch.setattr(
+        regression,
+        "_release_manifest_path_for_package",
+        lambda _root: manifest,
+    )
     monkeypatch.setattr(regression, "_distribution_content_sha256", lambda _root: "d" * 64, raising=False)
     monkeypatch.setattr(regression, "_source_checkout_identity", lambda _root: None)
 
@@ -516,6 +521,32 @@ def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_ma
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RegressionFailure, match="发布清单身份不匹配"):
         regression.read_implementation_identity()
+
+
+def test_candidate_wheel_does_not_inherit_manifest_from_previous_current_release(
+    monkeypatch,
+    tmp_path,
+):
+    previous_release = tmp_path / "releases" / "previous"
+    candidate_package = (
+        tmp_path / "releases" / "candidate" / ".venv" / "site-packages" / "pp_mcare"
+    )
+    previous_release.mkdir(parents=True)
+    candidate_package.mkdir(parents=True)
+    current = tmp_path / "current"
+    current.symlink_to(previous_release, target_is_directory=True)
+    manifest = current / "release-manifest.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(regression, "_RELEASE_MANIFEST_PATH", manifest)
+
+    identity = regression._release_artifact_identity(
+        package_root=candidate_package,
+        package_version="0.1.0",
+        distribution_content_sha256="d" * 64,
+        source_checkout_commit=None,
+    )
+
+    assert identity == {"manifest_status": "not_present", "wheel_sha256": None}
 
 
 def test_source_checkout_rejects_repo_ancestor_site_packages(monkeypatch, tmp_path):
