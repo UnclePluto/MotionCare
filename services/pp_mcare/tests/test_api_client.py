@@ -169,6 +169,23 @@ def test_claim_returns_none_for_204_without_parsing_a_body():
     assert client.claim() is None
 
 
+def test_claim_returns_immediate_directive_for_bounded_scan_202():
+    from pp_mcare.api_client import CLAIM_IMMEDIATELY
+
+    client = MotionCareClient(
+        settings(),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                202,
+                json={"protocol_version": PROTOCOL_VERSION, "status": "scan_incomplete"},
+                request=request,
+            )
+        ),
+    )
+
+    assert client.claim() is CLAIM_IMMEDIATELY
+
+
 @pytest.mark.parametrize(
     "response",
     [

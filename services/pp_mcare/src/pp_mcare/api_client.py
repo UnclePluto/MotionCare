@@ -81,6 +81,13 @@ class MotionCareProtocolError(MotionCareClientError):
     pass
 
 
+class _ClaimImmediately:
+    __slots__ = ()
+
+
+CLAIM_IMMEDIATELY = _ClaimImmediately()
+
+
 class _TransientRequestError(RuntimeError):
     def __init__(self, *, reason_code: str, status: int | None = None) -> None:
         self.reason_code = reason_code
@@ -270,7 +277,7 @@ class MotionCareClient:
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             raise MotionCareProtocolError(f"{response_name}响应不是有效 JSON") from None
 
-    def claim(self) -> ClaimedJob | None:
+    def claim(self) -> ClaimedJob | _ClaimImmediately | None:
         response = self._post(
             _CLAIM_PATH,
             {
@@ -284,6 +291,11 @@ class MotionCareClient:
         )
         if response.status_code == 204:
             return None
+        if response.status_code == 202:
+            payload = self._decode_json(response, "claim")
+            if payload == {"protocol_version": PROTOCOL_VERSION, "status": "scan_incomplete"}:
+                return CLAIM_IMMEDIATELY
+            raise MotionCareProtocolError("claim 响应契约无效")
         if response.status_code != 200:
             raise MotionCareProtocolError("claim 响应状态无效")
         payload = _require_exact_mapping(

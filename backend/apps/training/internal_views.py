@@ -13,6 +13,7 @@ from .internal_serializers import (
     HeartbeatRequestSerializer,
 )
 from .internal_services import (
+    CLAIM_SCAN_INCOMPLETE,
     AnalysisConflict,
     CompletionRejected,
     LeaseUnavailable,
@@ -47,6 +48,11 @@ class MotionAnalysisClaimView(InternalWorkerAPIView):
             )
         if claimed is None:
             return Response(status=status.HTTP_204_NO_CONTENT)
+        if claimed is CLAIM_SCAN_INCOMPLETE:
+            return Response(
+                {"protocol_version": PROTOCOL_VERSION, "status": "scan_incomplete"},
+                status=status.HTTP_202_ACCEPTED,
+            )
 
         job = claimed.job
         payload = ClaimedJob(

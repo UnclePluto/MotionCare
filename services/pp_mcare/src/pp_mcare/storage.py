@@ -4,16 +4,19 @@ import logging
 import os
 import re
 import stat
+import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Iterator
 from urllib.parse import urlsplit
 
 import httpx
 import qiniu
 from motion_analysis_contract import DownloadGrant, UploadGrant
 
-from .safe_logging import SafeLogFilter
 from .workspace import TaskWorkspace
 
 
@@ -21,6 +24,8 @@ _DOWNLOAD_TRANSPORT: httpx.BaseTransport | None = None
 _SLEEP = time.sleep
 _ATTEMPTS = 3
 _CONTENT_TYPE = "video/mp4"
+_QINIU_LOGGING_LOCK = threading.RLock()
+_QINIU_PACKAGE_ROOT = Path(qiniu.__file__).resolve().parent
 _SKELETON_KEY = re.compile(
     r"motion-analysis/[1-9][0-9]*/[0-9]{4}/(?:0[1-9]|1[0-2])/"
     r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/skeleton\.mp4\Z"
@@ -69,7 +74,7 @@ class UploadedObject:
 
 
 def configure_storage_logging(secrets=()) -> None:
-    """Quarantine SDK namespaces and qiniu 7.18's direct root logging calls."""
+    """Quarantine third-party logger namespaces without changing host handlers."""
 
     roots = ("httpx", "httpcore", "qiniu")
     existing = tuple(logging.root.manager.loggerDict)
@@ -81,16 +86,35 @@ def configure_storage_logging(secrets=()) -> None:
         logger = logging.getLogger(name)
         logger.handlers[:] = [logging.NullHandler()]
         logger.propagate = False
+
+
+class _DropQiniuRootRecords(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            source = Path(record.pathname).resolve()
+            return not source.is_relative_to(_QINIU_PACKAGE_ROOT)
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+
+@contextmanager
+def _qiniu_root_logging_boundary() -> Iterator[None]:
+    """Drop qiniu's direct root records without mutating shared LogRecord objects."""
+
     root = logging.getLogger()
-    if not root.handlers:
-        handler = logging.NullHandler()
-        setattr(handler, "_pp_mcare_safe_root_handler", True)
-        root.addHandler(handler)
-    for handler in root.handlers:
-        for filter_ in tuple(handler.filters):
-            if isinstance(filter_, SafeLogFilter):
-                handler.removeFilter(filter_)
-        handler.addFilter(SafeLogFilter(secrets=secrets))
+    record_filter = _DropQiniuRootRecords()
+    temporary_handler: logging.Handler | None = None
+    with _QINIU_LOGGING_LOCK:
+        if not root.handlers:
+            temporary_handler = logging.NullHandler()
+            root.addHandler(temporary_handler)
+        root.addFilter(record_filter)
+        try:
+            yield
+        finally:
+            root.removeFilter(record_filter)
+            if temporary_handler is not None:
+                root.removeHandler(temporary_handler)
 
 
 def _safe_https_url(value: str) -> None:
@@ -108,10 +132,14 @@ def _safe_https_url(value: str) -> None:
 
 
 def _fd_path(descriptor: int) -> str:
-    for root in ("/proc/self/fd", "/dev/fd"):
-        candidate = f"{root}/{descriptor}"
-        if os.path.exists(candidate):
-            return candidate
+    if sys.platform.startswith("linux"):
+        candidate = f"/proc/self/fd/{descriptor}"
+    elif sys.platform == "darwin":
+        candidate = f"/dev/fd/{descriptor}"
+    else:
+        raise StoragePermanentError("当前平台不支持安全文件描述符路径")
+    if os.path.exists(candidate):
+        return candidate
     raise StoragePermanentError("当前平台不支持安全文件描述符路径")
 
 
@@ -295,13 +323,14 @@ def upload_skeleton(grant: UploadGrant, path: TaskWorkspace) -> UploadedObject:
 
         for attempt in range(1, _ATTEMPTS + 1):
             try:
-                result, info = qiniu.put_file(
-                    grant.token,
-                    grant.object_key,
-                    descriptor_path,
-                    mime_type=_CONTENT_TYPE,
-                    check_crc=True,
-                )
+                with _qiniu_root_logging_boundary():
+                    result, info = qiniu.put_file(
+                        grant.token,
+                        grant.object_key,
+                        descriptor_path,
+                        mime_type=_CONTENT_TYPE,
+                        check_crc=True,
+                    )
             except OSError:
                 ambiguous_attempt = True
                 if attempt == _ATTEMPTS:

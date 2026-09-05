@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from motion_analysis_contract import ClaimedJob, SkeletonArtifact
 
 from .api_client import (
+    CLAIM_IMMEDIATELY,
     MotionCareClient,
     MotionCareConflictError,
     MotionCareUnavailableError,
@@ -443,6 +444,8 @@ def run_worker(
 
         if job is None:
             sleeper(settings.poll_interval_seconds)
+            continue
+        if job is CLAIM_IMMEDIATELY:
             continue
 
         try:

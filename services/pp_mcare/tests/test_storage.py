@@ -1,5 +1,4 @@
 import logging
-import io
 import os
 import stat
 
@@ -362,24 +361,63 @@ def test_upload_rejects_malformed_provider_response_without_retry(task_workspace
     assert calls == 1
 
 
-def test_storage_root_logging_boundary_redacts_real_qiniu_root_messages(monkeypatch):
-    stream = io.StringIO()
+def test_qiniu_root_logging_boundary_drops_sdk_secret_without_mutating_host_records():
     root = logging.getLogger()
-    handler = logging.StreamHandler(stream)
-    root.addHandler(handler)
+    original_level = root.level
+    original_filters = tuple(root.filters)
+    received = [[], []]
+
+    class Capture(logging.Handler):
+        def __init__(self, sink):
+            super().__init__()
+            self.sink = sink
+
+        def emit(self, record):
+            self.sink.append(record)
+
+    handlers = [Capture(sink) for sink in received]
+    for handler in handlers:
+        root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
     try:
         storage.configure_storage_logging(("upload-secret-token",))
-        # qiniu 7.18 的 HTTP 错误路径直接调用 logging.error/debug（root logger）。
-        logging.error(
-            "https://cdn.example/x?token=upload-secret-token /private/patient.mp4 body=PHI"
-        )
-        rendered = stream.getvalue()
-        assert "upload-secret-token" not in rendered
-        assert "patient.mp4" not in rendered
-        assert "PHI" not in rendered
-        assert "<redacted>" in rendered
+        error = RuntimeError("ordinary host exception")
+        try:
+            raise error
+        except RuntimeError:
+            exc_info = __import__("sys").exc_info()
+        with storage._qiniu_root_logging_boundary():
+            logging.info("host event %s", "kept", extra={"tenant_id": 17}, exc_info=exc_info)
+            response = requests.Response()
+            response.status_code = 200
+            response.url = "https://upload.example?token=upload-secret-token"
+            response.headers["X-Reqid"] = "request-id"
+            response._content = (
+                b"https://cdn.example?token=upload-secret-token "
+                b"motion-analysis/private /patient/path body=PHI"
+            )
+            qiniu.http.__dict__["__return_wrapper"](response)
+
+        assert tuple(root.filters) == original_filters
+        assert [len(sink) for sink in received] == [1, 1]
+        for record in (received[0][0], received[1][0]):
+            assert record.msg == "host event %s"
+            assert record.args == ("kept",)
+            assert record.exc_info == exc_info
+            assert record.tenant_id == 17
+        assert received[0][0] is received[1][0]
     finally:
-        root.removeHandler(handler)
+        root.setLevel(original_level)
+        for handler in handlers:
+            root.removeHandler(handler)
+
+
+def test_linux_fd_path_never_falls_back_to_dev_fd(monkeypatch):
+    monkeypatch.setattr(storage.sys, "platform", "linux")
+    monkeypatch.setattr(storage.os.path, "exists", lambda path: path.startswith("/dev/fd/"))
+
+    with pytest.raises(StoragePermanentError, match="不支持"):
+        storage._fd_path(9)
 
 
 def test_upload_uses_anchored_fd_when_leaf_is_replaced(tmp_path, monkeypatch):

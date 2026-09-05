@@ -246,7 +246,7 @@ def test_claim_terminally_skips_invalid_oldest_source_metadata(
 
 
 @pytest.mark.django_db
-def test_claim_all_invalid_sources_finishes_them_and_returns_empty(
+def test_claim_all_invalid_sources_requests_one_immediate_empty_confirmation(
     api_client,
     machine_auth,
     analysis_job_factory,
@@ -263,8 +263,63 @@ def test_claim_all_invalid_sources_finishes_them_and_returns_empty(
         secure=True,
         **machine_auth,
     )
+    confirmed_empty = api_client.post(
+        CLAIM_URL,
+        CLAIM_BODY,
+        format="json",
+        secure=True,
+        **machine_auth,
+    )
 
-    assert response.status_code == 204
+    assert response.status_code == 202
+    assert confirmed_empty.status_code == 204
+    assert not MotionAnalysisJob.objects.filter(
+        id__in=[job.id for job in jobs], status=MotionAnalysisJob.Status.PENDING
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_claim_scan_limit_returns_continue_then_reaches_healthy_job(
+    api_client, machine_auth, analysis_job_factory
+):
+    jobs = [analysis_job_factory() for _ in range(25)]
+    for job in jobs:
+        job.training_video.object_hash = ""
+        job.training_video.save(update_fields=["object_hash", "updated_at"])
+    healthy = analysis_job_factory()
+
+    first = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", secure=True, **machine_auth)
+    second = api_client.post(CLAIM_URL, CLAIM_BODY, format="json", secure=True, **machine_auth)
+
+    assert first.status_code == 202
+    assert first.data == {"protocol_version": PROTOCOL_VERSION, "status": "scan_incomplete"}
+    assert second.status_code == 200
+    assert second.data["job_id"] == healthy.id
+    assert (
+        MotionAnalysisJob.objects.filter(
+            id__in=[job.id for job in jobs], status=MotionAnalysisJob.Status.FAILED
+        ).count()
+        == 25
+    )
+
+
+@pytest.mark.django_db
+def test_claim_26_invalid_jobs_requires_continue_before_true_empty(
+    api_client, machine_auth, analysis_job_factory
+):
+    jobs = [analysis_job_factory() for _ in range(26)]
+    for job in jobs:
+        job.training_video.size_bytes = 0
+        job.training_video.save(update_fields=["size_bytes", "updated_at"])
+
+    statuses = [
+        api_client.post(
+            CLAIM_URL, CLAIM_BODY, format="json", secure=True, **machine_auth
+        ).status_code
+        for _ in range(3)
+    ]
+
+    assert statuses == [202, 202, 204]
     assert not MotionAnalysisJob.objects.filter(
         id__in=[job.id for job in jobs], status=MotionAnalysisJob.Status.PENDING
     ).exists()

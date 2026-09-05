@@ -69,6 +69,13 @@ class StorageVerificationUnavailable(Exception):
     pass
 
 
+class _ClaimScanIncomplete:
+    __slots__ = ()
+
+
+CLAIM_SCAN_INCOMPLETE = _ClaimScanIncomplete()
+
+
 @dataclass(frozen=True, repr=False)
 class FailurePayload:
     protocol_version: str
@@ -232,7 +239,7 @@ def claim_next_job(
     worker_id: str,
     capabilities: list[WorkerCapability],
     now,
-) -> ClaimedMotionJob | None:
+) -> ClaimedMotionJob | _ClaimScanIncomplete | None:
     lease_seconds, _heartbeat_seconds = _control_plane_timings()
     compatible = _capability_filter(capabilities)
     if compatible is None:
@@ -244,6 +251,7 @@ def claim_next_job(
         return None
 
     job = None
+    invalid_processed = 0
     for _ in range(_MAX_INVALID_SOURCES_PER_CLAIM):
         job = (
             MotionAnalysisJob.objects.select_for_update(skip_locked=True)
@@ -258,7 +266,7 @@ def claim_next_job(
                 capabilities=capabilities,
                 compatible=compatible,
             )
-            return None
+            return CLAIM_SCAN_INCOMPLETE if invalid_processed else None
         video = job.training_video
         source_valid = (
             isinstance(video.bucket, str)
@@ -291,9 +299,10 @@ def claim_next_job(
                 "updated_at",
             ]
         )
+        invalid_processed += 1
         job = None
     if job is None:
-        return None
+        return CLAIM_SCAN_INCOMPLETE
 
     lease_token = secrets.token_urlsafe(32)
     job.status = MotionAnalysisJob.Status.RUNNING

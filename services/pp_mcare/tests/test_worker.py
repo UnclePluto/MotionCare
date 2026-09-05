@@ -103,6 +103,23 @@ def test_empty_queue_sleeps_exactly_900_seconds_after_immediate_claim():
     assert sleeps == [900]
 
 
+def test_bounded_scan_directive_immediately_reclaims_without_sleep():
+    from pp_mcare.api_client import CLAIM_IMMEDIATELY
+
+    events = []
+    client = FakeClient([CLAIM_IMMEDIATELY, make_job(1), None], events)
+
+    run_worker(
+        client=client,
+        processor=lambda job: events.append(f"process:{job.job_id}"),
+        sleeper=lambda seconds: events.append(f"sleep:{seconds}"),
+        settings=service_settings(),
+        max_claims=3,
+    )
+
+    assert events == ["claim", "claim", "process:1", "claim", "sleep:900"]
+
+
 def test_two_backlogged_jobs_are_processed_contiguously_before_empty_sleep():
     events = []
     client = FakeClient([make_job(1), make_job(2), None], events)

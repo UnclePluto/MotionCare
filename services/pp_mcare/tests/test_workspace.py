@@ -187,3 +187,141 @@ def test_stale_cleanup_rechecks_age_after_open(tmp_path, monkeypatch):
 
     assert candidate.exists()
     assert result.removed == 0
+
+
+@pytest.mark.parametrize("cursor_kind", ["directory", "symlink"])
+def test_damaged_cursor_is_advisory_and_never_blocks_cleanup(tmp_path, cursor_kind):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    old = root / f"job-91-{'f' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+    cursor = root / ".pp-mcare-cleanup-cursor"
+    outside = tmp_path / "outside"
+    outside.write_text("do-not-touch")
+    if cursor_kind == "directory":
+        cursor.mkdir()
+    else:
+        cursor.symlink_to(outside)
+
+    result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+
+    assert not old.exists()
+    assert result.removed == 1
+    assert result.failed >= 1
+    assert outside.read_text() == "do-not-touch"
+    assert not list(root.glob(".cleanup-cursor-*.tmp"))
+    assert stat.S_ISREG(cursor.lstat().st_mode)
+
+
+def test_cursor_write_failure_is_advisory_and_cleans_owned_temp(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    old = root / f"job-92-{'a' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+    original_write = workspace_module.os.write
+
+    def fail_cursor_write(fd, data):
+        if data.startswith(b"job-"):
+            raise OSError("cursor storage unavailable")
+        return original_write(fd, data)
+
+    monkeypatch.setattr(workspace_module.os, "write", fail_cursor_write)
+    result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+
+    assert not old.exists()
+    assert result.removed == 1
+    assert result.failed == 1
+    assert not list(root.glob(".cleanup-cursor-*.tmp"))
+
+
+def test_cursor_replace_failure_is_advisory_and_cleans_owned_temp(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    old = root / f"job-94-{'b' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+    original_replace = workspace_module.os.replace
+
+    def fail_cursor_replace(source, destination, **kwargs):
+        if destination == ".pp-mcare-cleanup-cursor":
+            raise OSError("cursor replace unavailable")
+        return original_replace(source, destination, **kwargs)
+
+    monkeypatch.setattr(workspace_module.os, "replace", fail_cursor_replace)
+    result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+
+    assert not old.exists()
+    assert result.removed == 1
+    assert result.failed == 1
+    assert not list(root.glob(".cleanup-cursor-*.tmp"))
+
+
+def test_nonregular_cursor_inode_is_advisory(tmp_path):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    old = root / f"job-95-{'c' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+    cursor = root / ".pp-mcare-cleanup-cursor"
+    os.mkfifo(cursor, mode=0o600)
+    writer = os.open(cursor, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+    finally:
+        os.close(writer)
+
+    assert not old.exists()
+    assert result.removed == 1
+    assert result.failed >= 1
+    assert not list(root.glob(".cleanup-cursor-*.tmp"))
+
+
+def test_creation_rollback_tracks_renamed_owned_directory_without_inode_scan(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_fchmod = workspace_module.os.fchmod
+    calls = 0
+
+    def rename_then_fail(fd, mode):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            created = next(root.glob("job-*"))
+            created.rename(root / "attacker-chosen-name")
+            created.symlink_to(outside, target_is_directory=True)
+            raise OSError("permission setup failed")
+        return original_fchmod(fd, mode)
+
+    monkeypatch.setattr(workspace_module.os, "fchmod", rename_then_fail)
+    with pytest.raises(OSError):
+        TaskWorkspace.create(root, 93)
+
+    assert list(root.iterdir()) == []
+    assert list(outside.iterdir()) == []
+
+
+def test_creation_rollback_tracks_directory_renamed_before_open(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_open = workspace_module.os.open
+    attacked = False
+
+    def rename_before_open(path, flags, *args, **kwargs):
+        nonlocal attacked
+        if not attacked and isinstance(path, str) and path.startswith("job-"):
+            attacked = True
+            created = root / path
+            created.rename(root / "attacker-chosen-name")
+            created.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_module.os, "open", rename_before_open)
+    with pytest.raises(OSError):
+        TaskWorkspace.create(root, 96)
+
+    assert list(root.iterdir()) == []
+    assert list(outside.iterdir()) == []
