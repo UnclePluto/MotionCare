@@ -260,6 +260,29 @@ class MotionAnalysisJob(UserStampedModel):
     nonstandard_count = models.PositiveIntegerField("不标准次数", null=True, blank=True)
     result_payload = models.JSONField("分析结果", default=dict)
     failure_reason = models.TextField("失败原因", blank=True)
+    worker_id = models.CharField("工作节点 ID", max_length=120, blank=True, default="")
+    lease_token_hash = models.CharField("租约令牌哈希", max_length=128, blank=True, default="")
+    lease_expires_at = models.DateTimeField("租约过期时间", null=True, blank=True)
+    last_heartbeat_at = models.DateTimeField("最近心跳时间", null=True, blank=True)
+    action_source_key = models.CharField("动作来源键", max_length=120, blank=True, default="")
+    parameter_version = models.CharField("参数版本", max_length=80, blank=True, default="")
+    subject_tracker_version = models.CharField(
+        "受试者跟踪版本", max_length=80, blank=True, default=""
+    )
+    completion_idempotency_key = models.CharField(
+        "完成幂等键", max_length=120, blank=True, default=""
+    )
+    failure_code = models.CharField("失败代码", max_length=80, blank=True, default="")
+    skeleton_bucket = models.CharField("骨架空间", max_length=120, blank=True, default="")
+    skeleton_object_key = models.CharField(
+        "骨架对象 Key", max_length=500, unique=True, null=True, blank=True
+    )
+    skeleton_object_hash = models.CharField("骨架对象哈希", max_length=64, blank=True, default="")
+    skeleton_size_bytes = models.PositiveBigIntegerField("骨架大小", null=True, blank=True)
+    skeleton_duration_seconds = models.FloatField("骨架时长", null=True, blank=True)
+    skeleton_width = models.PositiveIntegerField("骨架宽度", null=True, blank=True)
+    skeleton_height = models.PositiveIntegerField("骨架高度", null=True, blank=True)
+    skeleton_fps = models.FloatField("骨架帧率", null=True, blank=True)
     requested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
