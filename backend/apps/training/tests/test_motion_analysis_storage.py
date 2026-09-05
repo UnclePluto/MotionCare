@@ -27,7 +27,8 @@ def _storage_module():
 
 
 @pytest.fixture
-def analysis_job(project_patient, active_prescription, prescription_action):
+def analysis_job(settings, project_patient, active_prescription, prescription_action):
+    settings.QINIU_BUCKET = "analysis-skeletons"
     record = TrainingRecord.objects.create(
         project_patient=project_patient,
         prescription=active_prescription,

@@ -300,3 +300,58 @@ def test_motion_result_edit_requires_row_level_access(
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
+def test_training_record_list_and_retrieve_apply_row_level_scope(
+    doctor,
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    record = _record(project_patient, active_prescription, prescription_action)
+    unrelated_doctor = User.objects.create_user(
+        phone="13800009996",
+        password="pass123456",
+        name="无权限医生",
+        role=User.Role.DOCTOR,
+    )
+
+    owner_list = _client(doctor).get("/api/training/")
+    owner_retrieve = _client(doctor).get(f"/api/training/{record.id}/")
+    unrelated_list = _client(unrelated_doctor).get("/api/training/")
+    unrelated_retrieve = _client(unrelated_doctor).get(f"/api/training/{record.id}/")
+
+    assert owner_list.status_code == 200
+    assert [item["id"] for item in owner_list.data] == [record.id]
+    assert owner_retrieve.status_code == 200
+    assert owner_retrieve.data["id"] == record.id
+    assert unrelated_list.status_code == 200
+    assert unrelated_list.data == []
+    assert unrelated_retrieve.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=False)
+def test_training_record_reads_keep_global_compatibility_when_row_scope_is_disabled(
+    project_patient,
+    active_prescription,
+    prescription_action,
+):
+    record = _record(project_patient, active_prescription, prescription_action)
+    unrelated_doctor = User.objects.create_user(
+        phone="13800009995",
+        password="pass123456",
+        name="兼容模式医生",
+        role=User.Role.DOCTOR,
+    )
+    client = _client(unrelated_doctor)
+
+    list_response = client.get("/api/training/")
+    retrieve_response = client.get(f"/api/training/{record.id}/")
+
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.data] == [record.id]
+    assert retrieve_response.status_code == 200
+    assert retrieve_response.data["id"] == record.id

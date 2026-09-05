@@ -1,3 +1,4 @@
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -7,7 +8,12 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import transaction
 from django.utils import timezone
-from motion_analysis_contract import DownloadGrant, UploadGrant
+from motion_analysis_contract import (
+    ContractValidationError,
+    DownloadGrant,
+    SkeletonArtifact,
+    UploadGrant,
+)
 import qiniu
 from qiniu import Auth
 
@@ -17,6 +23,10 @@ from .qiniu import (
     validate_object_metadata,
 )
 from .video_models import MotionAnalysisJob, QiniuCleanupTombstone, TrainingVideo
+
+
+SKELETON_CONTENT_TYPE = "video/mp4"
+_QINIU_ETAG_PATTERN = re.compile(r"\A[A-Za-z0-9_-]{28}\Z")
 
 
 @dataclass(frozen=True, repr=False)
@@ -42,10 +52,8 @@ def build_skeleton_object_key(video: TrainingVideo) -> str:
 
 
 def issue_storage_grant(job: MotionAnalysisJob, now) -> AnalysisStorageGrant:
-    _validate_skeleton_destination(job)
-    download_expires_at = now + timedelta(
-        seconds=settings.PP_MCARE_DOWNLOAD_TOKEN_TTL_SECONDS
-    )
+    validate_skeleton_destination(job)
+    download_expires_at = now + timedelta(seconds=settings.PP_MCARE_DOWNLOAD_TOKEN_TTL_SECONDS)
     upload_expires_at = now + timedelta(seconds=settings.PP_MCARE_UPLOAD_TOKEN_TTL_SECONDS)
     video = job.training_video
     upload_token = Auth(settings.QINIU_ACCESS_KEY, settings.QINIU_SECRET_KEY).upload_token(
@@ -76,17 +84,16 @@ def issue_storage_grant(job: MotionAnalysisJob, now) -> AnalysisStorageGrant:
     )
 
 
-def _validate_skeleton_destination(job: MotionAnalysisJob) -> None:
+def validate_skeleton_destination(job: MotionAnalysisJob) -> None:
     bucket = job.skeleton_bucket
     key = job.skeleton_object_key
-    if not isinstance(bucket, str) or not bucket.strip():
+    if not isinstance(bucket, str) or not bucket.strip() or bucket != settings.QINIU_BUCKET:
         raise ValidationError("骨架对象空间无效")
     if not isinstance(key, str) or not key:
         raise ValidationError("骨架对象 Key 无效")
 
     expected_prefix = (
-        f"motion-analysis/{job.project_patient_id}/"
-        f"{job.training_video.training_date:%Y/%m}/"
+        f"motion-analysis/{job.project_patient_id}/{job.training_video.training_date:%Y/%m}/"
     )
     if not key.startswith(expected_prefix) or not key.endswith("/skeleton.mp4"):
         raise ValidationError("骨架对象 Key 不在任务预分配目录内")
@@ -96,6 +103,31 @@ def _validate_skeleton_destination(job: MotionAnalysisJob) -> None:
             raise ValueError
     except (AttributeError, ValueError) as exc:
         raise ValidationError("骨架对象 Key 不在任务预分配目录内") from exc
+
+
+def validate_published_skeleton_metadata(job: MotionAnalysisJob | None) -> None:
+    if job is None or job.status != MotionAnalysisJob.Status.SUCCEEDED:
+        raise ValidationError("骨架视频不可用")
+    validate_skeleton_destination(job)
+    if not isinstance(job.skeleton_object_hash, str) or not _QINIU_ETAG_PATTERN.fullmatch(
+        job.skeleton_object_hash
+    ):
+        raise ValidationError("骨架对象 Hash 无效")
+    try:
+        SkeletonArtifact(
+            bucket=job.skeleton_bucket,
+            object_key=job.skeleton_object_key,
+            object_hash=job.skeleton_object_hash,
+            size_bytes=job.skeleton_size_bytes,
+            duration_seconds=job.skeleton_duration_seconds,
+            width=job.skeleton_width,
+            height=job.skeleton_height,
+            fps=job.skeleton_fps,
+            # 完成登记已校验远端对象类型；签发阶段只复核持久化元数据与固定文件 scope。
+            content_type=SKELETON_CONTENT_TYPE,
+        )
+    except (ContractValidationError, TypeError) as exc:
+        raise ValidationError("骨架对象元数据无效") from exc
 
 
 def verify_skeleton_upload(job: MotionAnalysisJob, metadata: Mapping[str, object]) -> dict:

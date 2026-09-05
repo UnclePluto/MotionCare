@@ -11,11 +11,11 @@ from rest_framework.views import APIView
 from apps.common.permissions import IsAdminOrDoctor
 from apps.wearables.services.training_windows import training_video_wearable_window
 
+from .motion_analysis_storage import validate_published_skeleton_metadata
 from .models import MotionAnalysisJob
 from .qiniu import create_private_object_download_url
 from .video_serializers import (
     MotionAnalysisJobSerializer,
-    skeleton_metadata_is_complete,
 )
 from .video_services import (
     create_private_download_url,
@@ -53,7 +53,8 @@ class TrainingVideoLatestAnalysisJobView(APIView):
     def get(self, request, video_id):
         video = get_training_video_for_user(request.user, video_id)
         job = (
-            MotionAnalysisJob.objects.filter(training_video=video)
+            MotionAnalysisJob.objects.select_related("training_video")
+            .filter(training_video=video)
             .order_by("-created_at", "-id")
             .first()
         )
@@ -66,11 +67,14 @@ class TrainingVideoLatestAnalysisSkeletonUrlView(APIView):
     def get(self, request, video_id):
         video = get_training_video_for_user(request.user, video_id)
         job = (
-            MotionAnalysisJob.objects.filter(training_video=video)
+            MotionAnalysisJob.objects.select_related("training_video")
+            .filter(training_video=video)
             .order_by("-created_at", "-id")
             .first()
         )
-        if not skeleton_metadata_is_complete(job):
+        try:
+            validate_published_skeleton_metadata(job)
+        except DjangoValidationError:
             raise Http404
         expires_at = timezone.now() + datetime.timedelta(
             seconds=settings.QINIU_DOWNLOAD_TOKEN_TTL_SECONDS

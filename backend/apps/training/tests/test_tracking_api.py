@@ -30,6 +30,7 @@ OFFICIAL_MOTION_SOURCE_KEYS = (
     "motion-resistance-row",
     "motion-resistance-shoulder-press",
 )
+QINIU_ETAG = "F" + "a" * 27
 
 
 def _sql_datetime_param_matches(value, expected):
@@ -240,12 +241,12 @@ def test_tracking_recent_record_includes_video_analysis_summary(
         standard_count=6,
         nonstandard_count=2,
     )
-    job.skeleton_bucket = "motioncare"
+    job.skeleton_bucket = "motioncare-training"
     job.skeleton_object_key = (
         f"motion-analysis/{project_patient.id}/2026/09/"
         "11111111-1111-4111-8111-111111111111/skeleton.mp4"
     )
-    job.skeleton_object_hash = "skeleton-hash"
+    job.skeleton_object_hash = QINIU_ETAG
     job.skeleton_size_bytes = 2048
     job.skeleton_duration_seconds = 30.0
     job.skeleton_width = 720
@@ -326,6 +327,50 @@ def test_tracking_exposes_only_fixed_failure_message_and_no_internal_job_details
         "患者隐私",
     ):
         assert secret not in serialized
+
+
+@pytest.mark.django_db
+@override_settings(QINIU_BUCKET="motioncare-training")
+def test_tracking_marks_out_of_scope_skeleton_metadata_unavailable(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    video = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.ATTACHED,
+        training_record=record,
+    )
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+        skeleton_bucket="motioncare-training",
+        skeleton_object_key=(
+            f"motion-analysis/{project_patient.id + 1}/2026/09/"
+            "11111111-1111-4111-8111-111111111111/skeleton.mp4"
+        ),
+        skeleton_object_hash=QINIU_ETAG,
+        skeleton_size_bytes=2048,
+        skeleton_duration_seconds=30.0,
+        skeleton_width=720,
+        skeleton_height=1280,
+        skeleton_fps=30.0,
+    )
+
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
+
+    recent = response.data["recent_records"][0]
+    assert recent["analysis_status"] == MotionAnalysisJob.Status.SUCCEEDED
+    assert recent["skeleton_available"] is False
 
 
 @pytest.mark.django_db

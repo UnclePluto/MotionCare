@@ -45,6 +45,13 @@ class TrainingRecordViewSet(
     serializer_class = TrainingRecordSerializer
     permission_classes = [IsAdminOrDoctor]
 
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .filter(project_patient__in=accessible_project_patients(self.request.user))
+        )
+
     def create(self, request, *args, **kwargs):
         serializer = TrainingRecordCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -64,9 +71,7 @@ class TrainingRecordViewSet(
     @transaction.atomic
     def motion_result(self, request, pk=None):
         record = get_object_or_404(
-            TrainingRecord.objects.select_for_update().filter(
-                project_patient__in=accessible_project_patients(request.user)
-            ),
+            self.get_queryset().select_for_update(),
             pk=pk,
         )
         has_active_analysis = record.motion_analysis_jobs.filter(

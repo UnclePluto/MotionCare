@@ -437,7 +437,9 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
         .prefetch_related(
             Prefetch(
                 "motion_analysis_jobs",
-                queryset=MotionAnalysisJob.objects.order_by("-created_at", "-id"),
+                queryset=MotionAnalysisJob.objects.select_related("training_video").order_by(
+                    "-created_at", "-id"
+                ),
                 to_attr="ordered_analysis_jobs",
             )
         )

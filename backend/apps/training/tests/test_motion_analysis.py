@@ -28,6 +28,7 @@ OFFICIAL_MOTION_SOURCE_KEYS = (
     SHOULDER_PRESS_SOURCE_KEY,
 )
 UNSUPPORTED_ANALYSIS_SOURCE_KEYS = OFFICIAL_MOTION_SOURCE_KEYS[:-1]
+QINIU_ETAG = "F" + "a" * 27
 
 
 def test_business_analysis_profile_freezes_supported_versions():
@@ -86,7 +87,7 @@ def _set_complete_skeleton_metadata(job):
         f"motion-analysis/{job.project_patient_id}/2026/09/"
         "11111111-1111-4111-8111-111111111111/skeleton.mp4"
     )
-    job.skeleton_object_hash = "skeleton-hash"
+    job.skeleton_object_hash = QINIU_ETAG
     job.skeleton_size_bytes = 2048
     job.skeleton_duration_seconds = 120.0
     job.skeleton_width = 720
@@ -162,6 +163,76 @@ def test_skeleton_url_is_unavailable_for_non_success_or_incomplete_metadata(
     response = client.get(f"/api/training/videos/{video.id}/analysis-jobs/latest/skeleton-url/")
 
     assert response.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(
+    QINIU_BUCKET="motioncare-training",
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_DOWNLOAD_DOMAIN="https://cdn.example.com",
+)
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "wrong_bucket",
+        "wrong_project",
+        "wrong_month",
+        "non_v4_uuid",
+        "wrong_filename",
+        "malformed_hash",
+        "empty_file",
+    ],
+)
+def test_skeleton_url_rejects_nonempty_but_untrusted_database_metadata(
+    corruption,
+    doctor,
+    project_patient,
+    active_prescription,
+    monkeypatch,
+):
+    job, video, _ = _analysis_job(project_patient, active_prescription)
+    job.status = MotionAnalysisJob.Status.SUCCEEDED
+    _set_complete_skeleton_metadata(job)
+    if corruption == "wrong_bucket":
+        job.skeleton_bucket = "other-private-bucket"
+    elif corruption == "wrong_project":
+        job.skeleton_object_key = job.skeleton_object_key.replace(
+            f"motion-analysis/{project_patient.id}/",
+            f"motion-analysis/{project_patient.id + 1}/",
+            1,
+        )
+    elif corruption == "wrong_month":
+        job.skeleton_object_key = job.skeleton_object_key.replace("/2026/09/", "/2026/08/")
+    elif corruption == "non_v4_uuid":
+        job.skeleton_object_key = job.skeleton_object_key.replace(
+            "11111111-1111-4111-8111-111111111111",
+            "11111111-1111-1111-8111-111111111111",
+        )
+    elif corruption == "wrong_filename":
+        job.skeleton_object_key = job.skeleton_object_key.removesuffix("skeleton.mp4") + "other.mp4"
+    elif corruption == "malformed_hash":
+        job.skeleton_object_hash = "not-a-qiniu-etag"
+    elif corruption == "empty_file":
+        job.skeleton_size_bytes = 0
+    job.save()
+    signed = []
+
+    def signer(**kwargs):
+        signed.append(kwargs)
+        return "https://should-not-be-issued.example"
+
+    monkeypatch.setattr(
+        "apps.training.video_views.create_private_object_download_url",
+        signer,
+    )
+    client = APIClient()
+    client.force_authenticate(doctor)
+
+    response = client.get(f"/api/training/videos/{video.id}/analysis-jobs/latest/skeleton-url/")
+
+    assert response.status_code == 404
+    assert signed == []
 
 
 @pytest.mark.django_db
