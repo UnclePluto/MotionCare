@@ -1,6 +1,7 @@
 import logging
 import os
 import stat
+import threading
 
 import httpx
 import pytest
@@ -365,6 +366,7 @@ def test_qiniu_root_logging_boundary_drops_sdk_secret_without_mutating_host_reco
     root = logging.getLogger()
     original_level = root.level
     original_filters = tuple(root.filters)
+    original_factory = logging.getLogRecordFactory()
     received = [[], []]
 
     class Capture(logging.Handler):
@@ -379,6 +381,18 @@ def test_qiniu_root_logging_boundary_drops_sdk_secret_without_mutating_host_reco
     for handler in handlers:
         root.addHandler(handler)
     root.setLevel(logging.DEBUG)
+
+    def forge_record_source(*args, **kwargs):
+        record = original_factory(*args, **kwargs)
+        if record.msg == "host event %s":
+            record.pathname = str(storage._QINIU_PACKAGE_ROOT / "forged-host.py")
+            record.module = "qiniu"
+        elif isinstance(record.msg, str) and record.msg.startswith("response body decode error"):
+            record.pathname = "/outside/forged-qiniu.py"
+            record.module = "host"
+        return record
+
+    logging.setLogRecordFactory(forge_record_source)
     try:
         storage.configure_storage_logging(("upload-secret-token",))
         error = RuntimeError("ordinary host exception")
@@ -407,9 +421,60 @@ def test_qiniu_root_logging_boundary_drops_sdk_secret_without_mutating_host_reco
             assert record.tenant_id == 17
         assert received[0][0] is received[1][0]
     finally:
+        logging.setLogRecordFactory(original_factory)
         root.setLevel(original_level)
         for handler in handlers:
             root.removeHandler(handler)
+
+
+def test_qiniu_root_boundary_preserves_malformed_and_concurrent_host_records():
+    root = logging.getLogger()
+    original_level = root.level
+    original_filters = tuple(root.filters)
+    original_handlers = tuple(root.handlers)
+    received = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            received.append(record)
+
+    handler = Capture()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    malformed = logging.LogRecord("host", logging.INFO, "host.py", 1, "malformed", (), None)
+    malformed.pathname = None
+    malformed.module = None
+    try:
+        with storage._qiniu_root_logging_boundary():
+            thread = threading.Thread(target=logging.info, args=("thread event %s", "kept"))
+            thread.start()
+            thread.join(5)
+            assert not thread.is_alive()
+            root.handle(malformed)
+
+        assert len(received) == 2
+        assert received[0].msg == "thread event %s"
+        assert received[0].args == ("kept",)
+        assert received[1] is malformed
+        assert malformed.msg == "malformed"
+        assert tuple(root.filters) == original_filters
+    finally:
+        root.setLevel(original_level)
+        root.removeHandler(handler)
+    assert tuple(root.handlers) == original_handlers
+
+
+def test_qiniu_root_boundary_restores_root_state_after_exception():
+    root = logging.getLogger()
+    original_filters = tuple(root.filters)
+    original_handlers = tuple(root.handlers)
+
+    with pytest.raises(RuntimeError, match="sdk call failed"):
+        with storage._qiniu_root_logging_boundary():
+            raise RuntimeError("sdk call failed")
+
+    assert tuple(root.filters) == original_filters
+    assert tuple(root.handlers) == original_handlers
 
 
 def test_linux_fd_path_never_falls_back_to_dev_fd(monkeypatch):

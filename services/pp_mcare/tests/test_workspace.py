@@ -236,6 +236,93 @@ def test_cursor_write_failure_is_advisory_and_cleans_owned_temp(tmp_path, monkey
     assert not list(root.glob(".cleanup-cursor-*.tmp"))
 
 
+def test_cursor_read_close_failure_is_advisory(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    old = root / f"job-97-{'d' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+    (root / ".pp-mcare-cleanup-cursor").write_text("unrelated", encoding="ascii")
+    original_open = workspace_module.os.open
+    original_close = workspace_module.os.close
+    cursor_fd = None
+    close_failures = 0
+
+    def tracked_open(path, flags, *args, **kwargs):
+        nonlocal cursor_fd
+        fd = original_open(path, flags, *args, **kwargs)
+        if path == ".pp-mcare-cleanup-cursor":
+            cursor_fd = fd
+        return fd
+
+    def close_once_then_fail(fd):
+        nonlocal close_failures
+        if fd == cursor_fd and close_failures == 0:
+            close_failures += 1
+            original_close(fd)
+            raise OSError("cursor read close unavailable")
+        return original_close(fd)
+
+    monkeypatch.setattr(workspace_module.os, "open", tracked_open)
+    monkeypatch.setattr(workspace_module.os, "close", close_once_then_fail)
+
+    result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+
+    assert not old.exists()
+    assert result.removed == 1
+    assert result.failed >= 1
+    assert close_failures == 1
+
+
+@pytest.mark.parametrize("write_fails", [False, True])
+def test_cursor_write_close_failure_is_advisory_without_double_close(
+    tmp_path, monkeypatch, write_fails
+):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    old = root / f"job-98-{'e' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+    original_open = workspace_module.os.open
+    original_write = workspace_module.os.write
+    original_close = workspace_module.os.close
+    cursor_fds = set()
+    close_calls = 0
+
+    def tracked_open(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if isinstance(path, str) and path.startswith(".cleanup-cursor-"):
+            cursor_fds.add(fd)
+        return fd
+
+    def maybe_fail_write(fd, data):
+        if write_fails and fd in cursor_fds:
+            raise OSError("cursor write unavailable")
+        return original_write(fd, data)
+
+    def close_once_then_fail(fd):
+        nonlocal close_calls
+        if fd in cursor_fds:
+            close_calls += 1
+            if close_calls > 1:
+                raise AssertionError("cursor fd was closed twice")
+            original_close(fd)
+            raise OSError("cursor write close unavailable")
+        return original_close(fd)
+
+    monkeypatch.setattr(workspace_module.os, "open", tracked_open)
+    monkeypatch.setattr(workspace_module.os, "write", maybe_fail_write)
+    monkeypatch.setattr(workspace_module.os, "close", close_once_then_fail)
+
+    result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+
+    assert not old.exists()
+    assert result.removed == 1
+    assert result.failed == 1
+    assert close_calls == 1
+    assert not list(root.glob(".cleanup-cursor-*.tmp"))
+
+
 def test_cursor_replace_failure_is_advisory_and_cleans_owned_temp(tmp_path, monkeypatch):
     root = tmp_path / "jobs"
     root.mkdir(mode=0o700)

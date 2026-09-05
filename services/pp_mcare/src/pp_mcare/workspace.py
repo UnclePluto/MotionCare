@@ -353,15 +353,21 @@ def _read_cursor(root_fd: int) -> tuple[str, bool]:
         return "", False
     except OSError:
         return "", True
+    value = ""
+    invalid = False
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 256:
-            return "", True
-        return os.read(descriptor, 257).decode("ascii"), False
+            invalid = True
+        else:
+            value = os.read(descriptor, 257).decode("ascii")
     except (OSError, UnicodeDecodeError):
-        return "", True
-    finally:
+        invalid = True
+    try:
         os.close(descriptor)
+    except OSError:
+        invalid = True
+    return value, invalid
 
 
 def _write_cursor(root_fd: int, value: str) -> None:
@@ -383,13 +389,16 @@ def _write_cursor(root_fd: int, value: str) -> None:
                 raise OSError("游标写入失败")
             offset += written
         os.fsync(descriptor)
-        os.close(descriptor)
+        closing_descriptor = descriptor
         descriptor = -1
+        os.close(closing_descriptor)
         os.replace(temporary, _CURSOR_NAME, src_dir_fd=root_fd, dst_dir_fd=root_fd)
     except BaseException:
         if descriptor >= 0:
+            closing_descriptor = descriptor
+            descriptor = -1
             try:
-                os.close(descriptor)
+                os.close(closing_descriptor)
             except OSError:
                 pass
         try:

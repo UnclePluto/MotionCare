@@ -89,12 +89,19 @@ def configure_storage_logging(secrets=()) -> None:
 
 
 class _DropQiniuRootRecords(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            source = Path(record.pathname).resolve()
-            return not source.is_relative_to(_QINIU_PACKAGE_ROOT)
-        except (OSError, RuntimeError, ValueError):
-            return False
+    def filter(self, _record: logging.LogRecord) -> bool:
+        frame = sys._getframe(1)
+        while frame is not None:
+            module_name = frame.f_globals.get("__name__")
+            module = sys.modules.get(module_name) if isinstance(module_name, str) else None
+            if (
+                module is not None
+                and (module_name == "qiniu" or module_name.startswith("qiniu."))
+                and module.__dict__ is frame.f_globals
+            ):
+                return False
+            frame = frame.f_back
+        return True
 
 
 @contextmanager
