@@ -417,6 +417,61 @@ def test_probe_source_video_uses_video_duration_and_rejects_multiple_video_strea
         probe_source_video(multi)
 
 
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_probe_source_video_reports_display_dimensions_after_quarter_turn_rotation(tmp_path):
+    from pp_mcare.media import probe_source_video
+
+    capabilities = subprocess.run(
+        [FFMPEG, "-hide_banner", "-h", "full"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if "display_rotation" not in capabilities.stdout:
+        pytest.skip("ffmpeg 不支持写入显示旋转矩阵")
+
+    source = tmp_path / "raw.mp4"
+    rotated = tmp_path / "rotated.mp4"
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=10:duration=1",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-display_rotation",
+            "90",
+            "-i",
+            str(source),
+            "-c",
+            "copy",
+            str(rotated),
+        ],
+        check=True,
+    )
+
+    metadata = probe_source_video(rotated)
+
+    assert metadata.width == 48
+    assert metadata.height == 64
+
+
 def test_encoder_initialization_cleans_partial_if_stderr_file_creation_is_interrupted(
     tmp_path, monkeypatch
 ):

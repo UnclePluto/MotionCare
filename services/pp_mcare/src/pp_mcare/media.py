@@ -211,6 +211,35 @@ def _parse_rate(value: object) -> float:
     return _positive_float(rate, "输出帧率")
 
 
+def _display_dimensions(video: dict[str, object]) -> tuple[int, int]:
+    width = int(video["width"])
+    height = int(video["height"])
+    rotations = [
+        item.get("rotation")
+        for item in video.get("side_data_list", [])
+        if isinstance(item, dict) and item.get("rotation") is not None
+    ]
+    tags = video.get("tags")
+    if not rotations and isinstance(tags, dict) and tags.get("rotate") is not None:
+        rotations.append(tags["rotate"])
+    if len(rotations) > 1:
+        raise MediaEncodingError("输入视频包含多个显示旋转信息")
+    if not rotations:
+        return width, height
+    try:
+        rotation = float(rotations[0])
+    except (TypeError, ValueError) as exc:
+        raise MediaEncodingError("输入视频显示旋转信息无效") from exc
+    if not math.isfinite(rotation):
+        raise MediaEncodingError("输入视频显示旋转信息无效")
+    quarter_turns = round(rotation / 90)
+    if abs(rotation - quarter_turns * 90) > 0.01:
+        raise MediaEncodingError("输入视频显示旋转角度不受支持")
+    if quarter_turns % 2:
+        return height, width
+    return width, height
+
+
 def _optional_positive_float(value: object) -> float | None:
     try:
         return _positive_float(float(value), "时长")
@@ -403,7 +432,7 @@ def probe_source_video(path, *, pass_fds: tuple[int, ...] = ()) -> SourceVideoMe
         "error",
         "-count_frames",
         "-show_entries",
-        "stream=codec_name,codec_type,width,height,r_frame_rate,avg_frame_rate,nb_read_frames,duration",
+        "stream=codec_name,codec_type,width,height,r_frame_rate,avg_frame_rate,nb_read_frames,duration:stream_tags=rotate:stream_side_data=rotation",
         "-of",
         "json",
         str(source_path),
@@ -461,9 +490,10 @@ def probe_source_video(path, *, pass_fds: tuple[int, ...] = ()) -> SourceVideoMe
             duration_seconds = stream_duration
         else:
             duration_seconds = timeline.duration_seconds
+        display_width, display_height = _display_dimensions(video)
         return SourceVideoMetadata(
-            width=int(video["width"]),
-            height=int(video["height"]),
+            width=display_width,
+            height=display_height,
             fps=average_fps,
             frame_count=summary_frame_count,
             duration_seconds=duration_seconds,
