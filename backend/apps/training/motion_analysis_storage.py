@@ -41,6 +41,7 @@ def build_skeleton_object_key(video: TrainingVideo) -> str:
 
 
 def issue_storage_grant(job: MotionAnalysisJob, now) -> AnalysisStorageGrant:
+    _validate_skeleton_destination(job)
     download_expires_at = now + timedelta(
         seconds=settings.PP_MCARE_DOWNLOAD_TOKEN_TTL_SECONDS
     )
@@ -71,6 +72,28 @@ def issue_storage_grant(job: MotionAnalysisJob, now) -> AnalysisStorageGrant:
             expires_at=upload_expires_at.isoformat(),
         ),
     )
+
+
+def _validate_skeleton_destination(job: MotionAnalysisJob) -> None:
+    bucket = job.skeleton_bucket
+    key = job.skeleton_object_key
+    if not isinstance(bucket, str) or not bucket.strip():
+        raise ValidationError("骨架对象空间无效")
+    if not isinstance(key, str) or not key:
+        raise ValidationError("骨架对象 Key 无效")
+
+    expected_prefix = (
+        f"motion-analysis/{job.project_patient_id}/"
+        f"{job.training_video.training_date:%Y/%m}/"
+    )
+    if not key.startswith(expected_prefix) or not key.endswith("/skeleton.mp4"):
+        raise ValidationError("骨架对象 Key 不在任务预分配目录内")
+    directory = key.removeprefix(expected_prefix).removesuffix("/skeleton.mp4")
+    try:
+        if "/" in directory or not directory or uuid.UUID(directory).version != 4:
+            raise ValueError
+    except (AttributeError, ValueError) as exc:
+        raise ValidationError("骨架对象 Key 不在任务预分配目录内") from exc
 
 
 def verify_skeleton_upload(job: MotionAnalysisJob, metadata: Mapping[str, object]) -> dict:

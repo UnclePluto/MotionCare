@@ -42,7 +42,7 @@ def analysis_job(project_patient, active_prescription, prescription_action):
         project_patient=project_patient,
         prescription_action=prescription_action,
         skeleton_bucket="analysis-skeletons",
-        skeleton_object_key="motion-analysis/1/2026/09/job-uuid/skeleton.mp4",
+        skeleton_object_key="motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4",
     )
 
 
@@ -70,17 +70,54 @@ def test_issue_grant_limits_upload_to_preallocated_key(analysis_job, monkeypatch
     assert issued == [
         (
             "analysis-skeletons",
-            "motion-analysis/1/2026/09/job-uuid/skeleton.mp4",
+            "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4",
             10800,
             {"insertOnly": 1},
         )
     ]
     assert grant.download.object_key == "training-videos/1/original.mp4"
     assert grant.download.expires_at == (now + timedelta(hours=1)).isoformat()
-    assert grant.upload.object_key == "motion-analysis/1/2026/09/job-uuid/skeleton.mp4"
+    assert grant.upload.object_key == (
+        "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"
+    )
     assert grant.upload.expires_at == (now + timedelta(hours=3)).isoformat()
     assert "sensitive-upload-token" not in repr(grant)
     assert "token=" not in repr(grant)
+
+
+@pytest.mark.django_db
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_DOWNLOAD_DOMAIN="https://private.example.com",
+)
+@pytest.mark.parametrize(
+    ("bucket", "object_key"),
+    [
+        ("", "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"),
+        ("analysis-skeletons", ""),
+        ("analysis-skeletons", "motion-analysis/2/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"),
+        ("analysis-skeletons", "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/result.mp4"),
+    ],
+)
+def test_issue_grant_rejects_empty_or_out_of_scope_skeleton_destination(
+    analysis_job,
+    monkeypatch,
+    bucket,
+    object_key,
+):
+    module = _storage_module()
+    analysis_job.skeleton_bucket = bucket
+    analysis_job.skeleton_object_key = object_key or None
+    analysis_job.save(update_fields=["skeleton_bucket", "skeleton_object_key", "updated_at"])
+    monkeypatch.setattr(
+        module.Auth,
+        "upload_token",
+        lambda *_args, **_kwargs: pytest.fail("不应为无效骨架目标签发 token"),
+    )
+
+    with pytest.raises(ValidationError, match="骨架对象"):
+        module.issue_storage_grant(analysis_job, timezone.now())
 
 
 @pytest.mark.django_db
@@ -115,7 +152,7 @@ def test_verify_skeleton_upload_rejects_remote_metadata_mismatch(
             analysis_job,
             {
                 "bucket": "analysis-skeletons",
-                "object_key": "motion-analysis/1/2026/09/job-uuid/skeleton.mp4",
+                "object_key": "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4",
                 "object_hash": "skeleton-hash",
                 "size_bytes": 256,
                 "content_type": "video/mp4",
@@ -133,7 +170,9 @@ def test_queue_skeleton_cleanup_keeps_only_the_job_skeleton_directory(analysis_j
     assert first.pk == second.pk
     assert first.session_id == analysis_job.training_video.client_session_id
     assert first.bucket == "analysis-skeletons"
-    assert first.attempt_key_prefix == "motion-analysis/1/2026/09/job-uuid/"
+    assert first.attempt_key_prefix == "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/"
     assert first.max_attempt_number == 0
-    assert first.canonical_key == "motion-analysis/1/2026/09/job-uuid/skeleton.mp4"
+    assert first.canonical_key == (
+        "motion-analysis/1/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"
+    )
     assert first.retain_canonical is False

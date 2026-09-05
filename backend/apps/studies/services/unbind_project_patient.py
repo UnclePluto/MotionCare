@@ -3,7 +3,7 @@ from django.utils import timezone
 from apps.crf.models import CrfExport
 from apps.prescriptions.models import Prescription
 from apps.studies.models import ProjectPatient
-from apps.training.models import TrainingVideo
+from apps.training.models import MotionAnalysisJob, TrainingVideo
 
 
 @transaction.atomic
@@ -37,13 +37,38 @@ def unbind_project_patient(*, project_patient: ProjectPatient) -> None:
             updated_at=now,
         )
 
+    skeleton_tombstone_ids = []
+    if video_ids:
+        from apps.training.motion_analysis_storage import queue_skeleton_cleanup
+
+        skeleton_tombstone_ids = [
+            queue_skeleton_cleanup(job).id
+            for job in MotionAnalysisJob.objects.select_for_update()
+            .select_related("training_video")
+            .filter(
+                training_video_id__in=video_ids,
+                skeleton_bucket__gt="",
+                skeleton_object_key__isnull=False,
+            )
+            .exclude(skeleton_object_key="")
+        ]
+
     pp.delete()
     if video_ids:
-        from apps.training.video_tasks import cleanup_unbound_training_video
+        from apps.training.video_tasks import (
+            cleanup_qiniu_tombstone,
+            cleanup_unbound_training_video,
+        )
 
         for video_id in video_ids:
             transaction.on_commit(
                 lambda durable_video_id=video_id: cleanup_unbound_training_video.delay(
                     durable_video_id
+                )
+            )
+        for tombstone_id in skeleton_tombstone_ids:
+            transaction.on_commit(
+                lambda durable_tombstone_id=tombstone_id: cleanup_qiniu_tombstone.delay(
+                    durable_tombstone_id
                 )
             )

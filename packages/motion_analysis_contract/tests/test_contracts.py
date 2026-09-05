@@ -109,6 +109,17 @@ def test_claimed_job_round_trip_keeps_exact_storage_scope():
     assert job.protocol_version == PROTOCOL_VERSION
 
 
+def test_storage_grant_and_claim_repr_redact_urls_and_credentials():
+    job = ClaimedJob.from_dict(CLAIM_RESPONSE)
+
+    for value in (job.download, job.upload, job):
+        rendered = repr(value)
+        assert "https://example.invalid/original.mp4" not in rendered
+        assert "upload-token" not in rendered
+        assert "lease-token" not in rendered
+        assert "<redacted>" in rendered
+
+
 def test_claimed_job_rejects_unknown_protocol_version():
     payload = dict(CLAIM_RESPONSE)
     payload["protocol_version"] = "2"

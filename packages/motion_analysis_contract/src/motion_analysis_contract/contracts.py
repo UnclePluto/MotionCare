@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping
 
 PROTOCOL_VERSION = "1"
@@ -179,12 +179,20 @@ def _validate_count_values(
 
 @dataclass(frozen=True)
 class DownloadGrant:
-    url: str
+    url: str = field(repr=False)
     bucket: str
     object_key: str
     expires_at: str
     size_bytes: int
     content_type: str
+
+    def __repr__(self) -> str:
+        return (
+            "DownloadGrant("
+            f"bucket={self.bucket!r}, object_key={self.object_key!r}, "
+            f"expires_at={self.expires_at!r}, size_bytes={self.size_bytes!r}, "
+            f"content_type={self.content_type!r}, download_url=<redacted>)"
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "url", _require_str(self.url, "download.url"))
@@ -228,8 +236,15 @@ class DownloadGrant:
 class UploadGrant:
     bucket: str
     object_key: str
-    token: str
+    token: str = field(repr=False)
     expires_at: str
+
+    def __repr__(self) -> str:
+        return (
+            "UploadGrant("
+            f"bucket={self.bucket!r}, object_key={self.object_key!r}, "
+            f"expires_at={self.expires_at!r}, upload_credential=<redacted>)"
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "bucket", _require_str(self.bucket, "upload.bucket"))
@@ -339,11 +354,25 @@ class ClaimedJob:
     rule_version: str
     parameter_version: str
     subject_tracker_version: str
-    lease_token: str
+    lease_token: str = field(repr=False)
     lease_expires_at: str
     heartbeat_interval_seconds: int
     download: DownloadGrant
     upload: UploadGrant
+
+    def __repr__(self) -> str:
+        return (
+            "ClaimedJob("
+            f"protocol_version={self.protocol_version!r}, job_id={self.job_id!r}, "
+            f"action_source_key={self.action_source_key!r}, "
+            f"algorithm_version={self.algorithm_version!r}, rule_version={self.rule_version!r}, "
+            f"parameter_version={self.parameter_version!r}, "
+            f"subject_tracker_version={self.subject_tracker_version!r}, "
+            "lease_credential=<redacted>, "
+            f"lease_expires_at={self.lease_expires_at!r}, "
+            f"heartbeat_interval_seconds={self.heartbeat_interval_seconds!r}, "
+            f"download={self.download!r}, upload={self.upload!r})"
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -433,12 +462,21 @@ class ClaimedJob:
 @dataclass(frozen=True)
 class CompletionPayload:
     protocol_version: str
-    lease_token: str
+    lease_token: str = field(repr=False)
     idempotency_key: str
     counts: MotionCounts
     quality_summary: dict[str, JsonValue]
     result_payload: dict[str, JsonValue]
     skeleton: SkeletonArtifact
+
+    def __repr__(self) -> str:
+        return (
+            "CompletionPayload("
+            f"protocol_version={self.protocol_version!r}, lease_credential=<redacted>, "
+            f"idempotency_key={self.idempotency_key!r}, counts={self.counts!r}, "
+            f"quality_summary={self.quality_summary!r}, result_payload={self.result_payload!r}, "
+            f"skeleton={self.skeleton!r})"
+        )
 
     def __post_init__(self) -> None:
         object.__setattr__(
