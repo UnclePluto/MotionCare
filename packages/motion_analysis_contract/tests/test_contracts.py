@@ -5,6 +5,7 @@ from motion_analysis_contract import (
     ClaimedJob,
     CompletionPayload,
     ContractValidationError,
+    SkeletonArtifact,
     WorkerCapability,
     MotionCounts,
     capability_key,
@@ -50,6 +51,54 @@ def test_validate_counts_rejects_bool_and_broken_total():
         validate_counts(
             {"total_count": 3, "standard_count": 1, "nonstandard_count": 1}
         )
+
+
+def test_direct_dto_construction_rejects_invalid_counts_and_non_json_values():
+    with pytest.raises(ContractValidationError):
+        MotionCounts(3, 1, 1)
+
+    skeleton = SkeletonArtifact(
+        bucket="motion-analysis",
+        object_key="motion-analysis/1/2026/09/job/skeleton.mp4",
+        object_hash="sha256:deadbeef",
+        size_bytes=2048,
+        duration_seconds=12.5,
+        width=1920,
+        height=1080,
+        fps=30,
+        content_type="video/mp4",
+    )
+    with pytest.raises(ContractValidationError):
+        CompletionPayload(
+            protocol_version=PROTOCOL_VERSION,
+            lease_token="lease-token",
+            idempotency_key="idem-001",
+            counts=MotionCounts(0, 0, 0),
+            quality_summary={"invalid": object()},
+            result_payload={},
+            skeleton=skeleton,
+        )
+
+
+def test_direct_skeleton_construction_rejects_nan_and_missing_content_type():
+    fields = {
+        "bucket": "motion-analysis",
+        "object_key": "motion-analysis/1/2026/09/job/skeleton.mp4",
+        "object_hash": "sha256:deadbeef",
+        "size_bytes": 2048,
+        "duration_seconds": 12.5,
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "content_type": "video/mp4",
+    }
+    with pytest.raises(ContractValidationError):
+        SkeletonArtifact(**{**fields, "fps": float("nan")})
+
+    payload = dict(fields)
+    del payload["content_type"]
+    with pytest.raises(ContractValidationError):
+        SkeletonArtifact.from_dict(payload)
 
 
 def test_claimed_job_round_trip_keeps_exact_storage_scope():
