@@ -1,12 +1,20 @@
+import json
 import math
 import tracemalloc
 
 import pytest
 
-from motion_analysis_contract import ContractValidationError, MotionCounts
+from motion_analysis_contract import (
+    PROTOCOL_VERSION,
+    CompletionPayload,
+    ContractValidationError,
+    MotionCounts,
+    SkeletonArtifact,
+)
 from pp_mcare.actions import shoulder_press_v2
 from pp_mcare.actions.base import (
     ActionAnalysisError,
+    ActionDataValidationError,
     ActionPlugin,
     AnalysisResult,
     PoseFrame,
@@ -72,6 +80,71 @@ def test_analysis_result_rejects_payload_counts_that_disagree_with_shared_counts
             counts=MotionCounts(total_count=1, standard_count=1, nonstandard_count=0),
             payload={"total_count": 2, "standard_count": 1, "nonstandard_count": 1},
         )
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_analysis_result_rejects_nonfinite_json_numbers(value):
+    with pytest.raises(ActionDataValidationError, match="payload 必须是有限数字"):
+        AnalysisResult(
+            counts=MotionCounts(total_count=0, standard_count=0, nonstandard_count=0),
+            payload={
+                "total_count": 0,
+                "standard_count": 0,
+                "nonstandard_count": 0,
+                "metrics": {"confidence": value},
+            },
+        )
+
+
+@pytest.mark.parametrize("named_keypoints", [None, []])
+def test_pose_frame_rejects_non_mapping_keypoints_with_stable_validation_error(
+    named_keypoints,
+):
+    with pytest.raises(ActionDataValidationError, match="named_keypoints 必须是映射"):
+        PoseFrame(timestamp_ms=0, named_keypoints=named_keypoints)
+
+
+def test_real_plugin_result_exports_independent_json_for_completion_payload():
+    result = ShoulderPressV2Plugin().analyze(
+        _pose_frame(_frame(timestamp_ms, lift, lift))
+        for timestamp_ms, lift in [(0, 0.0), (400, 0.8), (800, 0.0)]
+    )
+
+    first_export = result.to_json_dict()
+    completion = CompletionPayload(
+        protocol_version=PROTOCOL_VERSION,
+        lease_token="lease-token",
+        idempotency_key="complete-job-1",
+        algorithm_version=ShoulderPressV2Plugin.algorithm_version,
+        rule_version=ShoulderPressV2Plugin.rule_version,
+        parameter_version=ShoulderPressV2Plugin.parameter_version,
+        subject_tracker_version="subject-tracker-v1",
+        counts=result.counts,
+        quality_summary={},
+        result_payload=first_export,
+        skeleton=SkeletonArtifact(
+            bucket="motioncare-private",
+            object_key="training/skeleton/job-1.mp4",
+            object_hash="qiniu-hash",
+            size_bytes=1,
+            duration_seconds=1.0,
+            width=1280,
+            height=720,
+            fps=30.0,
+            content_type="video/mp4",
+        ),
+    )
+
+    assert isinstance(first_export["quality_flags"], list)
+    assert isinstance(first_export["rep_details"], list)
+    assert json.loads(json.dumps(completion.to_dict(), allow_nan=False))["total_count"] == 1
+
+    first_export["quality_flags"].append("external-mutation")
+    first_export["rep_details"][0]["flags"].append("external-mutation")
+    second_export = result.to_json_dict()
+
+    assert second_export["quality_flags"] == ["camera_angle_unverified"]
+    assert "external-mutation" not in second_export["rep_details"][0]["flags"]
 
 
 def test_plugin_implements_contract_and_returns_validated_shared_counts():
