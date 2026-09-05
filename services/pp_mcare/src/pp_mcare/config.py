@@ -49,6 +49,8 @@ _APPROVED_CAPABILITY = WorkerCapability(
     rule_version="shoulder-press-v2",
     parameter_version="shoulder-press-v2-defaults",
 )
+_TRUSTED_PATH_BASE = Path("/opt/motioncare-analysis")
+_DIRECTORY_OPERATION_HOOK: Callable[[Path], None] | None = None
 
 
 def _required(environ: Mapping[str, str], name: str) -> str:
@@ -243,16 +245,6 @@ class Settings:
     pool_timeout_seconds: int = 5
     protocol_version: str = PROTOCOL_VERSION
     capabilities: tuple[WorkerCapability, ...] = (_APPROVED_CAPABILITY,)
-    _trusted_path_base: Path = field(
-        default=Path("/opt/motioncare-analysis"),
-        repr=False,
-        compare=False,
-    )
-    _path_operation_hook: Callable[[Path], None] | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.api_base_url, str):
@@ -265,11 +257,7 @@ class Settings:
             minimum=1,
             maximum=86_400,
         )
-        if (
-            not isinstance(self.work_root, Path)
-            or not isinstance(self.model_cache, Path)
-            or not isinstance(self._trusted_path_base, Path)
-        ):
+        if not isinstance(self.work_root, Path) or not isinstance(self.model_cache, Path):
             raise ConfigurationError("worker 目录必须使用 Path")
         if self.work_root == self.model_cache or self.work_root in self.model_cache.parents:
             raise ConfigurationError("worker 目录不得重叠")
@@ -277,13 +265,13 @@ class Settings:
             raise ConfigurationError("worker 目录不得重叠")
         _secure_directory(
             self.work_root,
-            trusted_base=self._trusted_path_base,
-            operation_hook=self._path_operation_hook,
+            trusted_base=_TRUSTED_PATH_BASE,
+            operation_hook=_DIRECTORY_OPERATION_HOOK,
         )
         _secure_directory(
             self.model_cache,
-            trusted_base=self._trusted_path_base,
-            operation_hook=self._path_operation_hook,
+            trusted_base=_TRUSTED_PATH_BASE,
+            operation_hook=_DIRECTORY_OPERATION_HOOK,
         )
 
     def validate_network_security(self) -> None:
@@ -329,9 +317,6 @@ class Settings:
     def from_env(
         cls,
         environ: Mapping[str, str] | None = None,
-        *,
-        _trusted_path_base: Path = Path("/opt/motioncare-analysis"),
-        _path_operation_hook: Callable[[Path], None] | None = None,
     ) -> Settings:
         source = os.environ if environ is None else environ
         forbidden = sorted(key for key in _FORBIDDEN_ENVIRONMENT_KEYS if key in source)
@@ -411,6 +396,4 @@ class Settings:
                 maximum=120,
             ),
             capabilities=_parse_capabilities(source),
-            _trusted_path_base=_trusted_path_base,
-            _path_operation_hook=_path_operation_hook,
         )

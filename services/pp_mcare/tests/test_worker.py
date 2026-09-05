@@ -3,11 +3,13 @@ import io
 import tempfile
 import threading
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from motion_analysis_contract import PROTOCOL_VERSION, ClaimedJob
 
 from pp_mcare.api_client import MotionCareUnavailableError
+import pp_mcare.config as config_module
 from pp_mcare.config import Settings
 from pp_mcare.safe_logging import configure_safe_logging
 from pp_mcare.worker import run_worker
@@ -52,14 +54,14 @@ TEST_PATH_BASE = Path(TEST_DIRECTORY.name)
 
 
 def service_settings():
-    return Settings(
-        api_base_url="https://motioncare.example",
-        service_token="machine-service-secret",
-        worker_id="worker-1",
-        work_root=TEST_PATH_BASE / "jobs",
-        model_cache=TEST_PATH_BASE / "model-cache",
-        _trusted_path_base=TEST_PATH_BASE,
-    )
+    with patch.object(config_module, "_TRUSTED_PATH_BASE", TEST_PATH_BASE):
+        return Settings(
+            api_base_url="https://motioncare.example",
+            service_token="machine-service-secret",
+            worker_id="worker-1",
+            work_root=TEST_PATH_BASE / "jobs",
+            model_cache=TEST_PATH_BASE / "model-cache",
+        )
 
 
 class FakeClient:

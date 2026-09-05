@@ -1,11 +1,15 @@
 import json
+import inspect
 import stat
 import tomllib
+from dataclasses import fields
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from motion_analysis_contract import PROTOCOL_VERSION, WorkerCapability
 
+import pp_mcare.config as config_module
 from pp_mcare.config import ConfigurationError, Settings
 
 
@@ -27,8 +31,12 @@ def valid_env(tmp_path):
     }
 
 
-def from_env(tmp_path, environ, **kwargs):
-    return Settings.from_env(environ, _trusted_path_base=tmp_path, **kwargs)
+def from_env(tmp_path, environ, *, operation_hook=None):
+    with (
+        patch.object(config_module, "_TRUSTED_PATH_BASE", tmp_path),
+        patch.object(config_module, "_DIRECTORY_OPERATION_HOOK", operation_hook),
+    ):
+        return Settings.from_env(environ)
 
 
 def direct_settings(tmp_path, **overrides):
@@ -38,10 +46,10 @@ def direct_settings(tmp_path, **overrides):
         "worker_id": "worker-prod-1",
         "work_root": tmp_path / "jobs",
         "model_cache": tmp_path / "models",
-        "_trusted_path_base": tmp_path,
     }
     values.update(overrides)
-    return Settings(**values)
+    with patch.object(config_module, "_TRUSTED_PATH_BASE", tmp_path):
+        return Settings(**values)
 
 
 def test_settings_builds_exact_approved_capability_and_private_work_root(tmp_path):
@@ -193,13 +201,13 @@ def test_settings_rejects_parent_and_leaf_symlinks(tmp_path, field_name):
     env[field_name] = str(parent_link / "child")
 
     with pytest.raises(ConfigurationError):
-        Settings.from_env(env, _trusted_path_base=trusted)
+        from_env(trusted, env)
 
     leaf_link = trusted / "leaf-link"
     leaf_link.symlink_to(outside, target_is_directory=True)
     env[field_name] = str(leaf_link)
     with pytest.raises(ConfigurationError):
-        Settings.from_env(env, _trusted_path_base=trusted)
+        from_env(trusted, env)
 
 
 @pytest.mark.parametrize("field_name", ["PP_MCARE_WORK_ROOT", "PP_MCARE_MODEL_CACHE"])
@@ -212,7 +220,7 @@ def test_settings_rejects_file_placeholder_at_directory_path(tmp_path, field_nam
     env[field_name] = str(placeholder)
 
     with pytest.raises(ConfigurationError):
-        Settings.from_env(env, _trusted_path_base=trusted)
+        from_env(trusted, env)
 
 
 def test_settings_rejects_path_outside_explicit_trusted_base(tmp_path):
@@ -221,7 +229,7 @@ def test_settings_rejects_path_outside_explicit_trusted_base(tmp_path):
     env["PP_MCARE_MODEL_CACHE"] = str(tmp_path / "outside" / "models")
 
     with pytest.raises(ConfigurationError):
-        Settings.from_env(env, _trusted_path_base=trusted)
+        from_env(trusted, env)
 
 
 def test_settings_detects_mkdir_replacement_race_without_following_link(tmp_path):
@@ -236,10 +244,10 @@ def test_settings_detects_mkdir_replacement_race_without_following_link(tmp_path
             path.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ConfigurationError):
-        Settings.from_env(
+        from_env(
+            trusted,
             valid_env(trusted),
-            _trusted_path_base=trusted,
-            _path_operation_hook=replace_created_directory,
+            operation_hook=replace_created_directory,
         )
 
     assert raced_leaf.is_symlink()
@@ -294,3 +302,26 @@ def test_package_metadata_targets_python_312_and_one_headless_opencv_provider():
     assert [
         requirement for requirement in inference if requirement.lower().startswith("opencv-")
     ] == ["opencv-contrib-python-headless==4.10.0.84"]
+
+
+def test_trusted_root_and_race_hook_are_not_public_settings_inputs(tmp_path):
+    forbidden = {"_trusted_path_base", "_path_operation_hook"}
+
+    assert forbidden.isdisjoint(inspect.signature(Settings).parameters)
+    assert forbidden.isdisjoint(inspect.signature(Settings.from_env).parameters)
+    assert forbidden.isdisjoint(field.name for field in fields(Settings))
+    assert config_module._TRUSTED_PATH_BASE == Path("/opt/motioncare-analysis")
+
+    configured = from_env(tmp_path, valid_env(tmp_path))
+    assert all(name not in repr(configured) for name in forbidden)
+
+    for name in forbidden:
+        with pytest.raises(TypeError):
+            Settings(
+                api_base_url="https://motioncare.example",
+                service_token="machine-secret-123",
+                worker_id="worker-prod-1",
+                **{name: tmp_path},
+            )
+        with pytest.raises(TypeError):
+            Settings.from_env(valid_env(tmp_path), **{name: tmp_path})

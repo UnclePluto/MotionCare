@@ -3,6 +3,7 @@ import io
 import logging
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from pp_mcare.api_client import (
     MotionCareValidationError,
 )
 from pp_mcare.config import Settings
+import pp_mcare.config as config_module
 from pp_mcare.safe_logging import configure_safe_logging, install_safe_logging
 
 
@@ -63,14 +65,14 @@ TEST_PATH_BASE = Path(TEST_DIRECTORY.name)
 
 
 def settings():
-    return Settings(
-        api_base_url="https://motioncare.example",
-        service_token="service-token-secret",
-        worker_id="worker-1",
-        work_root=TEST_PATH_BASE / "jobs",
-        model_cache=TEST_PATH_BASE / "model-cache",
-        _trusted_path_base=TEST_PATH_BASE,
-    )
+    with patch.object(config_module, "_TRUSTED_PATH_BASE", TEST_PATH_BASE):
+        return Settings(
+            api_base_url="https://motioncare.example",
+            service_token="service-token-secret",
+            worker_id="worker-1",
+            work_root=TEST_PATH_BASE / "jobs",
+            model_cache=TEST_PATH_BASE / "model-cache",
+        )
 
 
 def completion_payload():
