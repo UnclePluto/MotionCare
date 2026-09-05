@@ -295,3 +295,18 @@ def private_download_url(base_url: str, *, expires_at: int) -> str:
     unsigned = f"{base_url}{separator}{urlencode({'e': expires_at})}"
     token = f"{settings.QINIU_ACCESS_KEY}:{_sign(unsigned)}"
     return f"{unsigned}&token={quote(token, safe=':')}"
+
+
+def create_private_object_download_url(*, object_key: str, expires_at) -> str:
+    if not object_key:
+        raise ValidationError("七牛下载对象 Key 缺失")
+    if not all(
+        [
+            settings.QINIU_ACCESS_KEY,
+            settings.QINIU_SECRET_KEY,
+            settings.QINIU_DOWNLOAD_DOMAIN,
+        ]
+    ):
+        raise ValidationError("七牛下载配置不完整")
+    base_url = f"{settings.QINIU_DOWNLOAD_DOMAIN.rstrip('/')}/{object_key}"
+    return private_download_url(base_url, expires_at=int(expires_at.timestamp()))

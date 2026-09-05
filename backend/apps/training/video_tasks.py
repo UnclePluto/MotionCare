@@ -21,7 +21,7 @@ from .models import (
     TrainingVideoSegment,
     VideoAssemblyJob,
 )
-from .motion_analysis_storage import build_skeleton_object_key
+from .motion_analysis_storage import build_skeleton_object_key, queue_skeleton_cleanup
 from .motion_analysis_support import get_analysis_profile
 from .qiniu import (
     delete_object_if_exists,
@@ -800,6 +800,14 @@ def cleanup_unbound_training_video(self, video_id):
 
     cleanup_attempt = video.cleanup_attempt_count
     tombstone = _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=False)
+    skeleton_tombstones = [
+        queue_skeleton_cleanup(analysis_job)
+        for analysis_job in MotionAnalysisJob.objects.filter(
+            training_video=video,
+            skeleton_bucket__gt="",
+            skeleton_object_key__isnull=False,
+        ).exclude(skeleton_object_key="")
+    ]
     try:
         _remove_session_files(video)
     except Exception as exc:
@@ -817,6 +825,8 @@ def cleanup_unbound_training_video(self, video_id):
     deleted = _delete_unbound_cleanup_record(video_id, cleanup_attempt)
     if deleted:
         cleanup_qiniu_tombstone.delay(tombstone.id)
+        for skeleton_tombstone in skeleton_tombstones:
+            cleanup_qiniu_tombstone.delay(skeleton_tombstone.id)
     return deleted
 
 

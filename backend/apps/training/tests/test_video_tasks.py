@@ -752,6 +752,52 @@ def test_cleanup_success_removes_attached_session_and_is_idempotent(
 
 
 @pytest.mark.django_db
+def test_unbound_video_cleanup_queues_a_separate_skeleton_tombstone(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+    monkeypatch,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    video, _ = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
+    skeleton_key = "motion-analysis/1/2026/09/analysis-job/skeleton.mp4"
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        project_patient=project_patient,
+        prescription_action=video.prescription_action,
+        skeleton_bucket="motioncare-skeletons",
+        skeleton_object_key=skeleton_key,
+    )
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        project_patient=project_patient,
+        prescription_action=video.prescription_action,
+        status=MotionAnalysisJob.Status.FAILED,
+    )
+    session_id = video.client_session_id
+    video.project_patient = None
+    video.cleanup_requested_at = timezone.now()
+    video.save(update_fields=["project_patient", "cleanup_requested_at", "updated_at"])
+    tombstone_delay = Mock()
+    module = _video_tasks()
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", tombstone_delay)
+
+    assert module.cleanup_unbound_training_video.run(video.id) is True
+
+    skeleton_tombstone = QiniuCleanupTombstone.objects.get(
+        attempt_key_prefix="motion-analysis/1/2026/09/analysis-job/"
+    )
+    assert skeleton_tombstone.session_id == session_id
+    assert skeleton_tombstone.bucket == "motioncare-skeletons"
+    assert skeleton_tombstone.canonical_key == skeleton_key
+    assert skeleton_tombstone.retain_canonical is False
+    assert skeleton_tombstone.max_attempt_number == 0
+    assert tombstone_delay.call_count == 2
+
+
+@pytest.mark.django_db
 def test_expire_scan_removes_old_failed_and_unfinalized_sessions_only(
     project_patient,
     active_prescription,
