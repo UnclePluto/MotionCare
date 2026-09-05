@@ -1,0 +1,10 @@
+[build-system]
+requires = []
+build-backend = "build_backend"
+backend-path = ["."]
+
+[project]
+name = "motion-analysis-contract"
+version = "0.1.0"
+description = "Pure protocol objects for the MotionCare pp-mcare independent service"
+requires-python = ">=3.12"
