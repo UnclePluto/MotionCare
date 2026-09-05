@@ -13,6 +13,7 @@ from apps.studies.models import ProjectPatient
 
 from .motion_analysis_support import get_analysis_profile
 from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
+from .video_serializers import ANALYSIS_FAILURE_MESSAGE, skeleton_metadata_is_complete
 
 TRACKING_RANGES = {"7d", "30d", "weekly"}
 
@@ -31,9 +32,7 @@ def _is_admin(user) -> bool:
 
 def _doctor_scoped_project_patients(qs, user):
     return qs.filter(
-        Q(patient__primary_doctor=user)
-        | Q(project__created_by=user)
-        | Q(created_by=user)
+        Q(patient__primary_doctor=user) | Q(project__created_by=user) | Q(created_by=user)
     )
 
 
@@ -377,7 +376,9 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
         if value is not None
     ]
     error_counts = [
-        value for value in (_form_error_count(record.form_data) for record in records) if value is not None
+        value
+        for value in (_form_error_count(record.form_data) for record in records)
+        if value is not None
     ]
 
     by_action = {}
@@ -446,9 +447,16 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
     for record in records:
         video = getattr(record, "video", None)
         latest_job = record.ordered_analysis_jobs[0] if record.ordered_analysis_jobs else None
+        analysis_profile = get_analysis_profile(
+            record.prescription_action.action_library_item.source_key
+        )
+        analysis_status = (
+            latest_job.status
+            if latest_job
+            else ("unsupported" if analysis_profile is None else None)
+        )
         is_game = (
-            record.prescription_action.internal_type_snapshot
-            == ActionLibraryItem.InternalType.GAME
+            record.prescription_action.internal_type_snapshot == ActionLibraryItem.InternalType.GAME
         )
         game_fields = (
             {
@@ -482,10 +490,7 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 "action_source_key": (
                     record.prescription_action.action_library_item.source_key or None
                 ),
-                "analysis_available": get_analysis_profile(
-                    record.prescription_action.action_library_item.source_key
-                )
-                is not None,
+                "analysis_available": analysis_profile is not None,
                 "internal_type": record.prescription_action.internal_type_snapshot,
                 "action_type": record.prescription_action.action_type_snapshot,
                 "actual_duration_minutes": record.actual_duration_minutes,
@@ -509,10 +514,24 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                     if video and video.training_ended_at
                     else None
                 ),
-                "latest_analysis_status": latest_job.status if latest_job else None,
-                "analysis_total_count": latest_job.total_count if latest_job else None,
-                "analysis_standard_count": latest_job.standard_count if latest_job else None,
-                "analysis_nonstandard_count": latest_job.nonstandard_count if latest_job else None,
+                "motion_total_count": record.motion_total_count,
+                "motion_standard_count": record.motion_standard_count,
+                "motion_nonstandard_count": record.motion_nonstandard_count,
+                "motion_quality_data": record.motion_quality_data,
+                "motion_result_source": record.motion_result_source,
+                "motion_result_updated_by": record.motion_result_updated_by_id,
+                "motion_result_updated_at": (
+                    record.motion_result_updated_at.isoformat()
+                    if record.motion_result_updated_at
+                    else None
+                ),
+                "analysis_status": analysis_status,
+                "analysis_failure_message": (
+                    ANALYSIS_FAILURE_MESSAGE
+                    if analysis_status == MotionAnalysisJob.Status.FAILED
+                    else None
+                ),
+                "skeleton_available": skeleton_metadata_is_complete(latest_job),
             }
         )
     return rows

@@ -5,6 +5,7 @@ from .tracking_views import TrackingPatientDetailView, TrackingPatientListView
 from .video_views import (
     TrainingVideoDownloadUrlView,
     TrainingVideoLatestAnalysisJobView,
+    TrainingVideoLatestAnalysisSkeletonUrlView,
     TrainingVideoWearableWindowView,
 )
 from .views import TrainingRecordViewSet
@@ -25,6 +26,10 @@ urlpatterns = [
     path(
         "videos/<int:video_id>/analysis-jobs/latest/",
         TrainingVideoLatestAnalysisJobView.as_view(),
+    ),
+    path(
+        "videos/<int:video_id>/analysis-jobs/latest/skeleton-url/",
+        TrainingVideoLatestAnalysisSkeletonUrlView.as_view(),
     ),
     *router.urls,
 ]

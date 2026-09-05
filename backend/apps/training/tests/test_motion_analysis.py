@@ -3,9 +3,11 @@ from datetime import timedelta
 
 import pytest
 from django.conf import settings
+from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.accounts.models import User
 from apps.prescriptions.models import ActionLibraryItem
 from apps.training import tasks as training_tasks
 from apps.training.analysis import analyze_shoulder_press_keypoints
@@ -76,6 +78,161 @@ def test_doctor_cannot_create_or_recreate_analysis_job(
     response = client.post(f"/api/training/videos/{video.id}/analysis-jobs/")
 
     assert response.status_code == 404
+
+
+def _set_complete_skeleton_metadata(job):
+    job.skeleton_bucket = "motioncare-training"
+    job.skeleton_object_key = (
+        f"motion-analysis/{job.project_patient_id}/2026/09/"
+        "11111111-1111-4111-8111-111111111111/skeleton.mp4"
+    )
+    job.skeleton_object_hash = "skeleton-hash"
+    job.skeleton_size_bytes = 2048
+    job.skeleton_duration_seconds = 120.0
+    job.skeleton_width = 720
+    job.skeleton_height = 1280
+    job.skeleton_fps = 29.97
+
+
+@pytest.mark.django_db
+@override_settings(
+    QINIU_ACCESS_KEY="ak-test",
+    QINIU_SECRET_KEY="sk-test",
+    QINIU_DOWNLOAD_DOMAIN="https://cdn.example.com",
+    QINIU_DOWNLOAD_TOKEN_TTL_SECONDS=600,
+)
+def test_skeleton_url_is_issued_only_for_latest_succeeded_job_with_complete_metadata(
+    doctor,
+    project_patient,
+    active_prescription,
+):
+    job, video, _ = _analysis_job(project_patient, active_prescription)
+    job.status = MotionAnalysisJob.Status.SUCCEEDED
+    _set_complete_skeleton_metadata(job)
+    job.finished_at = timezone.now()
+    job.save()
+    before = int(timezone.now().timestamp())
+
+    response = APIClient()
+    response.force_authenticate(doctor)
+    result = response.get(f"/api/training/videos/{video.id}/analysis-jobs/latest/skeleton-url/")
+    after = int(timezone.now().timestamp())
+
+    assert result.status_code == 200, result.data
+    assert result.data["url"].startswith(f"https://cdn.example.com/{job.skeleton_object_key}?e=")
+    assert "token=ak-test:" in result.data["url"]
+    expiry = int(result.data["url"].split("?e=", 1)[1].split("&", 1)[0])
+    assert before + 600 <= expiry <= after + 600
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("analysis_status", "missing_field"),
+    [
+        (MotionAnalysisJob.Status.PENDING, None),
+        (MotionAnalysisJob.Status.RUNNING, None),
+        (MotionAnalysisJob.Status.FAILED, None),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_bucket"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_object_key"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_object_hash"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_size_bytes"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_duration_seconds"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_width"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_height"),
+        (MotionAnalysisJob.Status.SUCCEEDED, "skeleton_fps"),
+    ],
+)
+def test_skeleton_url_is_unavailable_for_non_success_or_incomplete_metadata(
+    analysis_status,
+    missing_field,
+    doctor,
+    project_patient,
+    active_prescription,
+):
+    job, video, _ = _analysis_job(project_patient, active_prescription)
+    job.status = analysis_status
+    _set_complete_skeleton_metadata(job)
+    if missing_field:
+        field = MotionAnalysisJob._meta.get_field(missing_field)
+        setattr(job, missing_field, "" if field.get_internal_type() == "CharField" else None)
+    job.save()
+    client = APIClient()
+    client.force_authenticate(doctor)
+
+    response = client.get(f"/api/training/videos/{video.id}/analysis-jobs/latest/skeleton-url/")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+@override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
+def test_skeleton_url_requires_row_level_access(
+    project_patient,
+    active_prescription,
+):
+    job, video, _ = _analysis_job(project_patient, active_prescription)
+    job.status = MotionAnalysisJob.Status.SUCCEEDED
+    _set_complete_skeleton_metadata(job)
+    job.save()
+    unrelated_doctor = User.objects.create_user(
+        phone="13800009997",
+        password="pass123456",
+        name="无权限医生",
+        role=User.Role.DOCTOR,
+    )
+    client = APIClient()
+    client.force_authenticate(unrelated_doctor)
+
+    response = client.get(f"/api/training/videos/{video.id}/analysis-jobs/latest/skeleton-url/")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.django_db
+def test_latest_analysis_status_response_never_exposes_internal_job_data(
+    doctor,
+    project_patient,
+    active_prescription,
+):
+    job, video, _ = _analysis_job(project_patient, active_prescription)
+    job.status = MotionAnalysisJob.Status.FAILED
+    job.failure_code = "subject_unstable"
+    job.failure_reason = "token=secret /private/patient/video.mp4"
+    job.result_payload = {
+        "signed_url": "https://private.example/video?token=url-secret",
+        "patient_note": "患者隐私",
+    }
+    job.skeleton_bucket = "private-bucket"
+    job.skeleton_object_key = "motion-analysis/private/skeleton.mp4"
+    job.lease_token_hash = "lease-secret-hash"
+    job.save()
+    client = APIClient()
+    client.force_authenticate(doctor)
+
+    response = client.get(f"/api/training/videos/{video.id}/analysis-jobs/latest/")
+
+    serialized = str(response.data)
+    assert response.status_code == 200
+    assert set(response.data) == {
+        "id",
+        "status",
+        "analysis_failure_message",
+        "skeleton_available",
+        "started_at",
+        "finished_at",
+        "created_at",
+    }
+    assert response.data["status"] == MotionAnalysisJob.Status.FAILED
+    assert response.data["analysis_failure_message"] == ("自动分析未完成，请填写训练结果")
+    for secret in (
+        "failure_reason",
+        "subject_unstable",
+        "secret",
+        "private-bucket",
+        "motion-analysis/private",
+        "患者隐私",
+    ):
+        assert secret not in serialized
 
 
 def _frame(
@@ -494,7 +651,5 @@ def test_recovery_leaves_lease_expiring_exactly_now_unchanged_even_if_started_lo
 def test_stale_recovery_task_is_scheduled_in_celery_beat():
     schedule = settings.CELERY_BEAT_SCHEDULE["recover-stale-motion-analysis-jobs"]
 
-    assert schedule["task"] == (
-        "apps.training.tasks.recover_stale_motion_analysis_jobs"
-    )
+    assert schedule["task"] == ("apps.training.tasks.recover_stale_motion_analysis_jobs")
     assert schedule["schedule"] == settings.MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS

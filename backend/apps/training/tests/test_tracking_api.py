@@ -109,7 +109,10 @@ def test_tracking_project_patient_includes_authoritative_project_completed_at(do
     project_patient.project.completed_at = completed_at
     project_patient.project.save(update_fields=["completed_at"])
 
-    assert serialize_project_patient(project_patient)["project_completed_at"] == completed_at.isoformat()
+    assert (
+        serialize_project_patient(project_patient)["project_completed_at"]
+        == completed_at.isoformat()
+    )
 
 
 def _active_prescription(project_patient, doctor, version=1):
@@ -227,7 +230,7 @@ def test_tracking_recent_record_includes_video_analysis_summary(
         duration_seconds=30,
         status=TrainingVideo.Status.ATTACHED,
     )
-    MotionAnalysisJob.objects.create(
+    job = MotionAnalysisJob.objects.create(
         training_video=video,
         training_record=record,
         project_patient=project_patient,
@@ -237,14 +240,92 @@ def test_tracking_recent_record_includes_video_analysis_summary(
         standard_count=6,
         nonstandard_count=2,
     )
-
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    job.skeleton_bucket = "motioncare"
+    job.skeleton_object_key = (
+        f"motion-analysis/{project_patient.id}/2026/09/"
+        "11111111-1111-4111-8111-111111111111/skeleton.mp4"
     )
+    job.skeleton_object_hash = "skeleton-hash"
+    job.skeleton_size_bytes = 2048
+    job.skeleton_duration_seconds = 30.0
+    job.skeleton_width = 720
+    job.skeleton_height = 1280
+    job.skeleton_fps = 30.0
+    job.save()
+    record.motion_total_count = 90
+    record.motion_standard_count = 85
+    record.motion_nonstandard_count = 5
+    record.motion_quality_data = {"doctor_note": "人工复核"}
+    record.motion_result_source = "doctor"
+    record.motion_result_updated_by = doctor
+    record.motion_result_updated_at = timezone.now()
+    record.save()
+
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
     recent = response.data["recent_records"][0]
     assert recent["video_id"] == video.id
-    assert recent["latest_analysis_status"] == "succeeded"
-    assert (recent["analysis_total_count"], recent["analysis_standard_count"]) == (8, 6)
+    assert recent["analysis_status"] == "succeeded"
+    assert (
+        recent["motion_total_count"],
+        recent["motion_standard_count"],
+        recent["motion_nonstandard_count"],
+    ) == (90, 85, 5)
+    assert recent["motion_quality_data"] == {"doctor_note": "人工复核"}
+    assert recent["motion_result_source"] == "doctor"
+    assert recent["motion_result_updated_by"] == doctor.id
+    assert recent["motion_result_updated_at"] == record.motion_result_updated_at.isoformat()
+    assert recent["analysis_failure_message"] is None
+    assert recent["skeleton_available"] is True
+    assert "latest_analysis_status" not in recent
+    assert "analysis_total_count" not in recent
+
+
+@pytest.mark.django_db
+def test_tracking_exposes_only_fixed_failure_message_and_no_internal_job_details(
+    doctor, project_patient, active_prescription, prescription_action
+):
+    record = _record(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        training_date=timezone.localdate(),
+    )
+    video = _training_video(
+        project_patient,
+        active_prescription,
+        prescription_action,
+        status=TrainingVideo.Status.ATTACHED,
+        training_record=record,
+    )
+    MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=record,
+        project_patient=project_patient,
+        prescription_action=prescription_action,
+        status=MotionAnalysisJob.Status.FAILED,
+        failure_code="subject_unstable",
+        failure_reason="token=secret /private/patient/video.mp4",
+        result_payload={"patient_note": "患者隐私"},
+        skeleton_bucket="private-bucket",
+        skeleton_object_key="motion-analysis/private/skeleton.mp4",
+    )
+
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
+
+    recent = response.data["recent_records"][0]
+    serialized = str(recent)
+    assert recent["analysis_status"] == MotionAnalysisJob.Status.FAILED
+    assert recent["analysis_failure_message"] == ("自动分析未完成，请填写训练结果")
+    assert recent["skeleton_available"] is False
+    for secret in (
+        "failure_reason",
+        "subject_unstable",
+        "secret",
+        "private-bucket",
+        "motion-analysis/private",
+        "患者隐私",
+    ):
+        assert secret not in serialized
 
 
 @pytest.mark.django_db
@@ -273,9 +354,7 @@ def test_tracking_hides_video_until_qiniu_publish_is_complete(
         status=TrainingVideo.Status.UPLOADING_QINIU,
     )
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     recent = response.data["recent_records"][0]
     assert recent["video_id"] is None
@@ -333,9 +412,7 @@ def test_patient_search_returns_accessible_patient_summaries(
         "/api/training/tracking/patients/",
         {"q": "13900001111"},
     )
-    assert [item["patient"]["id"] for item in phone_response.data] == [
-        project_patient.patient_id
-    ]
+    assert [item["patient"]["id"] for item in phone_response.data] == [project_patient.patient_id]
 
     admin_response = _client(_admin()).get("/api/training/tracking/patients/")
     admin_patient_ids = {item["patient"]["id"] for item in admin_response.data}
@@ -347,7 +424,11 @@ def test_tracking_summary_includes_global_wearable_binding_and_completed_day_com
     doctor, project_patient
 ):
     device = WearableDevice.objects.create(
-        provider="miwitracker", external_device_id="tracking-device", identifier_type="device_id", model="TEST", short_code="1288"
+        provider="miwitracker",
+        external_device_id="tracking-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1288",
     )
     WearableBinding.objects.create(
         patient=project_patient.patient,
@@ -382,26 +463,56 @@ def test_tracking_completeness_uses_only_full_bound_days_and_never_duplicates_mu
     second_group = StudyGroup.objects.create(project=second_project, name="对照组", target_ratio=1)
     ProjectPatient.objects.create(project=second_project, patient=patient, group=second_group)
     full_device = WearableDevice.objects.create(
-        provider="miwitracker", external_device_id="complete-device", identifier_type="device_id", model="TEST", short_code="1289"
+        provider="miwitracker",
+        external_device_id="complete-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1289",
     )
     WearableBinding.objects.create(
-        patient=patient, device=full_device, bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC), bound_by=doctor
+        patient=patient,
+        device=full_device,
+        bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC),
+        bound_by=doctor,
     )
-    WearableDailySummary.objects.create(patient=patient, record_date=timezone.datetime(2026, 7, 23).date(), steps=100, steps_attribution_status="attributed")
+    WearableDailySummary.objects.create(
+        patient=patient,
+        record_date=timezone.datetime(2026, 7, 23).date(),
+        steps=100,
+        steps_attribution_status="attributed",
+    )
 
     no_data_patient = _patient(doctor, name="无数据", phone="13900008881")
     no_data_pp = _project_patient(doctor, no_data_patient, project_name="无数据项目")
     no_data_device = WearableDevice.objects.create(
-        provider="miwitracker", external_device_id="no-data-device", identifier_type="device_id", model="TEST", short_code="1290"
+        provider="miwitracker",
+        external_device_id="no-data-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1290",
     )
-    WearableBinding.objects.create(patient=no_data_patient, device=no_data_device, bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC), bound_by=doctor)
+    WearableBinding.objects.create(
+        patient=no_data_patient,
+        device=no_data_device,
+        bound_at=datetime(2026, 6, 23, 16, tzinfo=UTC),
+        bound_by=doctor,
+    )
 
     half_day_patient = _patient(doctor, name="半日", phone="13900008882")
     half_day_pp = _project_patient(doctor, half_day_patient, project_name="半日项目")
     half_day_device = WearableDevice.objects.create(
-        provider="miwitracker", external_device_id="half-day-device", identifier_type="device_id", model="TEST", short_code="1291"
+        provider="miwitracker",
+        external_device_id="half-day-device",
+        identifier_type="device_id",
+        model="TEST",
+        short_code="1291",
     )
-    WearableBinding.objects.create(patient=half_day_patient, device=half_day_device, bound_at=datetime(2026, 7, 23, 4, tzinfo=UTC), bound_by=doctor)
+    WearableBinding.objects.create(
+        patient=half_day_patient,
+        device=half_day_device,
+        bound_at=datetime(2026, 7, 23, 4, tzinfo=UTC),
+        bound_by=doctor,
+    )
 
     rows = list_patient_tracking_summaries(doctor, today=today)
     by_patient = {item["patient"]["id"]: item for item in rows}
@@ -474,16 +585,15 @@ def test_tracking_summary_isolates_last_sync_when_device_switches_from_patient_a
     assert before_by_patient[project_patient.patient_id]["is_bound"] is False
     assert before_by_patient[project_patient_b.patient_id]["device_short_code"] == "1292"
     assert before_by_patient[project_patient_b.patient_id]["last_sync_at"] is None
-    assert after_by_patient[project_patient_b.patient_id]["last_sync_at"] == new_run_at.astimezone(
-        timezone.get_fixed_timezone(480)
-    ).isoformat()
+    assert (
+        after_by_patient[project_patient_b.patient_id]["last_sync_at"]
+        == new_run_at.astimezone(timezone.get_fixed_timezone(480)).isoformat()
+    )
 
 
 @pytest.mark.django_db
 @override_settings(TRAINING_HEALTH_ENFORCE_ROW_SCOPE=True)
-def test_tracking_list_query_count_is_constant_and_excludes_hidden_patient(
-    doctor, project_patient
-):
+def test_tracking_list_query_count_is_constant_and_excludes_hidden_patient(doctor, project_patient):
     today = datetime(2026, 7, 24).date()
     first_device = WearableDevice.objects.create(
         provider="miwitracker",
@@ -599,9 +709,7 @@ def test_tracking_is_global_for_doctors_by_default_and_excludes_unenrolled_patie
         "/api/training/tracking/patients/",
         {"q": "跨医生可见患者"},
     )
-    detail_response = _client(doctor).get(
-        f"/api/training/tracking/patients/{enrolled_patient.id}/"
-    )
+    detail_response = _client(doctor).get(f"/api/training/tracking/patients/{enrolled_patient.id}/")
     unenrolled_list = _client(doctor).get(
         "/api/training/tracking/patients/",
         {"q": "未入组患者"},
@@ -614,9 +722,10 @@ def test_tracking_is_global_for_doctors_by_default_and_excludes_unenrolled_patie
     assert [row["patient"]["id"] for row in list_response.data] == [enrolled_patient.id]
     assert list_response.data[0]["project_count"] == 2
     assert detail_response.status_code == 200
-    assert {
-        item["id"] for item in detail_response.data["project_patients"]
-    } == {other_pp.id, second_pp.id}
+    assert {item["id"] for item in detail_response.data["project_patients"]} == {
+        other_pp.id,
+        second_pp.id,
+    }
     assert unenrolled_list.data == []
     assert unenrolled_detail.status_code == 404
 
@@ -636,9 +745,7 @@ def test_tracking_row_scope_can_be_reenabled_without_changing_callers(doctor):
         "/api/training/tracking/patients/",
         {"q": "恢复受限患者"},
     )
-    detail_response = _client(doctor).get(
-        f"/api/training/tracking/patients/{patient.id}/"
-    )
+    detail_response = _client(doctor).get(f"/api/training/tracking/patients/{patient.id}/")
     admin_response = _client(_admin()).get(
         f"/api/training/tracking/patients/{patient.id}/",
         {"project_patient": project_patient.id},
@@ -694,34 +801,24 @@ def test_tracking_batch_queries_limit_binding_history_runs_and_summaries_to_need
         list_patient_tracking_summaries(doctor, today=today)
 
     binding_queries = [
-        (sql, params)
-        for sql, params in executed
-        if "wearables_wearablebinding" in sql.lower()
+        (sql, params) for sql, params in executed if "wearables_wearablebinding" in sql.lower()
     ]
     run_queries = [
         (sql, params) for sql, params in executed if "wearables_wearablesyncrun" in sql.lower()
     ]
     summary_queries = [
-        (sql, params)
-        for sql, params in executed
-        if "wearables_wearabledailysummary" in sql.lower()
+        (sql, params) for sql, params in executed if "wearables_wearabledailysummary" in sql.lower()
     ]
 
     assert len(binding_queries) == 2
     assert any('"unbound_at" IS NULL' in sql for sql, _ in binding_queries)
-    assert any(
-        '"bound_at" <' in sql and '"unbound_at" >' in sql
-        for sql, _ in binding_queries
-    )
+    assert any('"bound_at" <' in sql and '"unbound_at" >' in sql for sql, _ in binding_queries)
     assert len(run_queries) == 1
     run_sql, run_params = run_queries[0]
     assert '"created_at" >=' in run_sql
     assert active_device.id in run_params
     assert stale_device.id not in run_params
-    assert any(
-        _sql_datetime_param_matches(param, active_bound_at)
-        for param in run_params
-    )
+    assert any(_sql_datetime_param_matches(param, active_bound_at) for param in run_params)
     assert len(summary_queries) == 1
     assert '"record_date" >=' in summary_queries[0][0]
     assert '"record_date" <=' in summary_queries[0][0]
@@ -848,9 +945,7 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
         note="完成布尔指标",
     )
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     assert response.data["patient"]["phone_masked"] == "139****1111"
@@ -895,15 +990,17 @@ def test_tracking_detail_returns_default_project_current_prescription_trends_and
     assert trend["moving_average"][-1]["date"] == today.isoformat()
     assert trend["moving_average"][-1]["completed_count_avg"] > 0
     assert trend["weekly"]
-    assert {"week_start", "week_end", "completed_count", "duration_minutes", "game_average_score"} <= set(
-        trend["weekly"][0]
-    )
+    assert {
+        "week_start",
+        "week_end",
+        "completed_count",
+        "duration_minutes",
+        "game_average_score",
+    } <= set(trend["weekly"][0])
     this_week = next(
         item
         for item in trend["weekly"]
-        if item["week_start"]
-        <= today.isoformat()
-        <= item["week_end"]
+        if item["week_start"] <= today.isoformat() <= item["week_end"]
     )
     assert this_week["completed_count"] == 3
     assert this_week["duration_minutes"] == 55
@@ -1147,17 +1244,17 @@ def test_tracking_recent_records_return_null_video_and_analysis_fields_when_miss
         uploaded_at=timezone.now(),
     )
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     nullable_summary_fields = (
         "action_source_key",
-        "latest_analysis_status",
-        "analysis_total_count",
-        "analysis_standard_count",
-        "analysis_nonstandard_count",
+        "motion_total_count",
+        "motion_standard_count",
+        "motion_nonstandard_count",
+        "motion_result_updated_by",
+        "motion_result_updated_at",
+        "analysis_failure_message",
     )
     recent_by_id = {item["id"]: item for item in response.data["recent_records"]}
     assert recent_by_id[record_without_video.id]["video_id"] is None
@@ -1165,17 +1262,23 @@ def test_tracking_recent_records_return_null_video_and_analysis_fields_when_miss
     assert recent_by_id[record_without_video.id]["training_started_at"] is None
     assert recent_by_id[record_without_video.id]["training_ended_at"] is None
     assert all(
-        recent_by_id[record_without_video.id][field] is None
-        for field in nullable_summary_fields
+        recent_by_id[record_without_video.id][field] is None for field in nullable_summary_fields
     )
+    assert recent_by_id[record_without_video.id]["motion_quality_data"] == {}
+    assert recent_by_id[record_without_video.id]["motion_result_source"] == ""
+    assert recent_by_id[record_without_video.id]["analysis_status"] == "unsupported"
+    assert recent_by_id[record_without_video.id]["skeleton_available"] is False
     assert recent_by_id[record_without_analysis.id]["video_id"] is not None
     assert recent_by_id[record_without_analysis.id]["video_status"] == TrainingVideo.Status.ATTACHED
     assert recent_by_id[record_without_analysis.id]["training_started_at"] is None
     assert recent_by_id[record_without_analysis.id]["training_ended_at"] is None
     assert all(
-        recent_by_id[record_without_analysis.id][field] is None
-        for field in nullable_summary_fields
+        recent_by_id[record_without_analysis.id][field] is None for field in nullable_summary_fields
     )
+    assert recent_by_id[record_without_analysis.id]["motion_quality_data"] == {}
+    assert recent_by_id[record_without_analysis.id]["motion_result_source"] == ""
+    assert recent_by_id[record_without_analysis.id]["analysis_status"] == "unsupported"
+    assert recent_by_id[record_without_analysis.id]["skeleton_available"] is False
 
 
 @pytest.mark.django_db
@@ -1227,18 +1330,18 @@ def test_tracking_recent_records_use_latest_analysis_job_by_created_at_and_id(
     )
     MotionAnalysisJob.objects.filter(pk=latest_job.pk).update(created_at=now)
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     recent = response.data["recent_records"][0]
     assert recent["video_id"] == video.id
     assert recent["video_status"] == TrainingVideo.Status.ATTACHED
-    assert recent["latest_analysis_status"] == MotionAnalysisJob.Status.FAILED
-    assert recent["analysis_total_count"] is None
-    assert recent["analysis_standard_count"] is None
-    assert recent["analysis_nonstandard_count"] is None
+    assert recent["analysis_status"] == MotionAnalysisJob.Status.FAILED
+    assert recent["analysis_failure_message"] == "自动分析未完成，请填写训练结果"
+    assert recent["motion_total_count"] is None
+    assert recent["motion_standard_count"] is None
+    assert recent["motion_nonstandard_count"] is None
+    assert recent["skeleton_available"] is False
 
 
 @pytest.mark.django_db
@@ -1286,10 +1389,15 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
         standard_count=6,
         nonstandard_count=2,
     )
+    record.motion_total_count = 8
+    record.motion_standard_count = 6
+    record.motion_nonstandard_count = 2
+    record.motion_quality_data = {"confidence_level": "high"}
+    record.motion_result_source = "algorithm"
+    record.motion_result_updated_at = timezone.now()
+    record.save()
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     recent = response.data["recent_records"][0]
@@ -1298,10 +1406,12 @@ def test_tracking_recent_records_include_video_and_analysis_summary(
     assert recent["video_status"] == TrainingVideo.Status.ATTACHED
     assert recent["training_started_at"] == video.training_started_at.isoformat()
     assert recent["training_ended_at"] == video.training_ended_at.isoformat()
-    assert recent["latest_analysis_status"] == MotionAnalysisJob.Status.SUCCEEDED
-    assert recent["analysis_total_count"] == 8
-    assert recent["analysis_standard_count"] == 6
-    assert recent["analysis_nonstandard_count"] == 2
+    assert recent["analysis_status"] == MotionAnalysisJob.Status.SUCCEEDED
+    assert recent["motion_total_count"] == 8
+    assert recent["motion_standard_count"] == 6
+    assert recent["motion_nonstandard_count"] == 2
+    assert recent["motion_quality_data"] == {"confidence_level": "high"}
+    assert recent["motion_result_source"] == "algorithm"
 
 
 @pytest.mark.django_db
@@ -1333,9 +1443,7 @@ def test_tracking_recent_records_expose_video_and_analysis_capability_for_all_mo
             training_record=record,
         )
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     recent_by_source_key = {
@@ -1346,9 +1454,7 @@ def test_tracking_recent_records_expose_video_and_analysis_capability_for_all_mo
         recent = recent_by_source_key[source_key]
         assert recent["video_id"] is not None
         assert recent["video_status"] == TrainingVideo.Status.ATTACHED
-        assert recent["analysis_available"] is (
-            source_key == "motion-resistance-shoulder-press"
-        )
+        assert recent["analysis_available"] is (source_key == "motion-resistance-shoulder-press")
 
 
 @pytest.mark.django_db
@@ -1383,9 +1489,7 @@ def test_tracking_analysis_capability_follows_business_support_table(
     )
     monkeypatch.delitem(ANALYSIS_PROFILES, source_key)
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     assert response.data["recent_records"][0]["analysis_available"] is False
@@ -1555,9 +1659,7 @@ def test_tracking_detail_limits_pending_training_videos_to_thirty_and_orders_by_
         video.created_at = created_at
         videos.append(video)
 
-    response = _client(doctor).get(
-        f"/api/training/tracking/patients/{project_patient.patient_id}/"
-    )
+    response = _client(doctor).get(f"/api/training/tracking/patients/{project_patient.patient_id}/")
 
     assert response.status_code == 200, response.data
     expected = sorted(videos, key=lambda item: (item.created_at, item.id), reverse=True)[:30]
