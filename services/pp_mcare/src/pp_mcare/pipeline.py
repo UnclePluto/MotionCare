@@ -165,6 +165,12 @@ def run_local_pipeline(
     output_path,
     heartbeat: Callable[[str], None],
 ) -> LocalAnalysisResult:
+    """Analyze one video whose output lives inside a caller-owned private TaskWorkspace.
+
+    Media commit is irreversible after its no-replace hardlink succeeds. The TaskWorkspace
+    owner must remove the whole private workspace after upload, failure, or interruption;
+    encoder abort intentionally never unlinks the published output path.
+    """
     if not isinstance(job, ClaimedJob):
         raise TypeError("job 必须是 ClaimedJob")
     if not callable(heartbeat):

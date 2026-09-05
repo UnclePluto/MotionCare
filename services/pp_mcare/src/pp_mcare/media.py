@@ -8,9 +8,29 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO, TypeVar
+
+
+PROBE_SUMMARY_LIMIT_BYTES = 1 * 1024 * 1024
+PROBE_TIMELINE_LIMIT_BYTES = 64 * 1024 * 1024
+PROBE_STDERR_LIMIT_BYTES = 1 * 1024 * 1024
+PROBE_ERROR_SUMMARY_BYTES = 4096
+PROBE_TIMELINE_LINE_LIMIT_BYTES = 256
+PROBE_TIMEOUT_SECONDS = 3600
+PROBE_POLL_SECONDS = 0.05
+PROBE_KILL_WAIT_SECONDS = 5
+FRAME_RATE_RELATIVE_TOLERANCE = 0.001
+FRAME_RATE_ABSOLUTE_TOLERANCE = 0.001
+TIMESTAMP_RELATIVE_TOLERANCE = 0.01
+TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS = 0.001
+
+
+_ProbeResult = TypeVar("_ProbeResult")
 
 
 class MediaEncodingError(RuntimeError):
@@ -90,6 +110,81 @@ def _start_ffmpeg(command: list[str], stderr):
     )
 
 
+def _start_ffprobe(command: list[str], stdout: BinaryIO, stderr: BinaryIO):
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=stdout,
+        stderr=stderr,
+        shell=False,
+    )
+
+
+def _file_size(file: BinaryIO) -> int:
+    return os.fstat(file.fileno()).st_size
+
+
+def _kill_and_wait(process) -> None:
+    try:
+        if getattr(process, "returncode", None) is None:
+            process.kill()
+        process.wait(timeout=PROBE_KILL_WAIT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _bounded_probe_error(stderr: BinaryIO, redact_paths: tuple[Path, ...]) -> str:
+    stderr.seek(0)
+    message = stderr.read(PROBE_ERROR_SUMMARY_BYTES).decode("utf-8", errors="replace").strip()
+    for path in redact_paths:
+        message = message.replace(str(path), "<media>")
+    return message[:PROBE_ERROR_SUMMARY_BYTES]
+
+
+def _run_ffprobe(
+    command: list[str],
+    *,
+    stdout_limit: int,
+    stderr_limit: int,
+    timeout_seconds: float,
+    redact_paths: tuple[Path, ...],
+    parser: Callable[[BinaryIO], _ProbeResult],
+) -> _ProbeResult:
+    """Run ffprobe with bounded 0600 files and parse before automatic cleanup."""
+    process = None
+    with tempfile.TemporaryFile(mode="w+b") as stdout, tempfile.TemporaryFile(mode="w+b") as stderr:
+        os.fchmod(stdout.fileno(), 0o600)
+        os.fchmod(stderr.fileno(), 0o600)
+        try:
+            process = _start_ffprobe(command, stdout, stderr)
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                if _file_size(stdout) > stdout_limit:
+                    raise MediaEncodingError("ffprobe 标准输出超过上限")
+                if _file_size(stderr) > stderr_limit:
+                    raise MediaEncodingError("ffprobe 错误输出超过上限")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MediaEncodingError("ffprobe 探测超时")
+                try:
+                    return_code = process.wait(timeout=min(PROBE_POLL_SECONDS, remaining))
+                except subprocess.TimeoutExpired:
+                    continue
+                if _file_size(stdout) > stdout_limit:
+                    raise MediaEncodingError("ffprobe 标准输出超过上限")
+                if _file_size(stderr) > stderr_limit:
+                    raise MediaEncodingError("ffprobe 错误输出超过上限")
+                if return_code != 0:
+                    detail = _bounded_probe_error(stderr, redact_paths)
+                    raise MediaEncodingError(detail or f"ffprobe 探测失败（退出码 {return_code}）")
+                stdout.seek(0)
+                return parser(stdout)
+        except BaseException:
+            if process is not None:
+                _kill_and_wait(process)
+            raise
+
+
 def _parse_rate(value: object) -> float:
     try:
         numerator, denominator = str(value).split("/", 1)
@@ -99,13 +194,86 @@ def _parse_rate(value: object) -> float:
     return _positive_float(rate, "输出帧率")
 
 
-def _parse_duration(primary: object, fallback: object) -> float:
-    for candidate in (primary, fallback):
+def _optional_positive_float(value: object) -> float | None:
+    try:
+        return _positive_float(float(value), "时长")
+    except (MediaEncodingError, TypeError, ValueError):
+        return None
+
+
+def _load_probe_json(output: BinaryIO) -> dict[str, object]:
+    try:
+        payload = json.load(output)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+        raise MediaEncodingError("ffprobe 返回了无效 JSON") from exc
+    if not isinstance(payload, dict):
+        raise MediaEncodingError("ffprobe JSON 必须是对象")
+    return payload
+
+
+@dataclass(frozen=True)
+class _TimelineMetadata:
+    frame_count: int
+    duration_seconds: float
+
+
+def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMetadata:
+    nominal_interval = 1.0 / expected_fps
+    tolerance = max(
+        TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS,
+        nominal_interval * TIMESTAMP_RELATIVE_TOLERANCE,
+    )
+    first_pts: float | None = None
+    previous_pts: float | None = None
+    frame_count = 0
+    last_duration: float | None = None
+    while True:
+        raw_line = output.readline(PROBE_TIMELINE_LINE_LIMIT_BYTES + 1)
+        if not raw_line:
+            break
+        if len(raw_line) > PROBE_TIMELINE_LINE_LIMIT_BYTES:
+            raise MediaEncodingError("ffprobe 帧时间戳行超过上限")
         try:
-            return _positive_float(float(candidate), "输入时长")
-        except (MediaEncodingError, TypeError, ValueError):
+            line = raw_line.decode("utf-8", errors="strict").strip()
+        except UnicodeDecodeError as exc:
+            raise MediaEncodingError("输入视频帧时间戳编码无效") from exc
+        if not line:
             continue
-    raise MediaEncodingError("ffprobe 返回了无效输入时长")
+        fields = {}
+        for item in line.split("|"):
+            if "=" in item:
+                key, value = item.split("=", 1)
+                fields[key] = value
+        try:
+            pts = float(fields["best_effort_timestamp_time"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MediaEncodingError("输入视频帧时间戳无法可靠验证") from exc
+        if not math.isfinite(pts):
+            raise MediaEncodingError("输入视频帧时间戳无法可靠验证")
+        duration = _optional_positive_float(fields.get("pkt_duration_time"))
+        if duration is not None and not math.isclose(
+            duration,
+            nominal_interval,
+            rel_tol=TIMESTAMP_RELATIVE_TOLERANCE,
+            abs_tol=TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS,
+        ):
+            raise MediaEncodingError("输入视频帧持续时间不均匀")
+        if first_pts is None:
+            first_pts = pts
+        if previous_pts is not None:
+            interval = pts - previous_pts
+            if interval <= 0 or abs(interval - nominal_interval) > tolerance:
+                raise MediaEncodingError("输入视频帧时间戳不均匀")
+        previous_pts = pts
+        last_duration = duration
+        frame_count += 1
+    if frame_count < 2 or first_pts is None or previous_pts is None:
+        raise MediaEncodingError("输入视频时间轴无法可靠验证")
+    duration_seconds = previous_pts - first_pts + (last_duration or nominal_interval)
+    return _TimelineMetadata(
+        frame_count=frame_count,
+        duration_seconds=_positive_float(duration_seconds, "输入视频时间轴时长"),
+    )
 
 
 def _has_faststart(path: Path) -> bool:
@@ -145,25 +313,26 @@ def _probe_video(path: Path) -> VideoMetadata:
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         raise MediaEncodingError("找不到 ffprobe")
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-count_frames",
+        "-show_entries",
+        "stream=codec_name,codec_type,pix_fmt,width,height,avg_frame_rate,nb_read_frames:format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
     try:
-        completed = subprocess.run(
-            [
-                ffprobe,
-                "-v",
-                "error",
-                "-count_frames",
-                "-show_entries",
-                "stream=codec_name,codec_type,pix_fmt,width,height,avg_frame_rate,nb_read_frames:format=duration",
-                "-of",
-                "json",
-                str(path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
+        payload = _run_ffprobe(
+            command,
+            stdout_limit=PROBE_SUMMARY_LIMIT_BYTES,
+            stderr_limit=PROBE_STDERR_LIMIT_BYTES,
+            timeout_seconds=PROBE_TIMEOUT_SECONDS,
+            redact_paths=(path,),
+            parser=_load_probe_json,
         )
-        payload = json.loads(completed.stdout)
         streams = payload["streams"]
         video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
         audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
@@ -185,7 +354,6 @@ def _probe_video(path: Path) -> VideoMetadata:
     except MediaEncodingError:
         raise
     except (
-        subprocess.SubprocessError,
         OSError,
         ValueError,
         KeyError,
@@ -201,45 +369,86 @@ def probe_source_video(path) -> SourceVideoMetadata:
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         raise MediaEncodingError("找不到 ffprobe")
+    summary_command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-count_frames",
+        "-show_entries",
+        "stream=codec_name,codec_type,width,height,r_frame_rate,avg_frame_rate,nb_read_frames,duration",
+        "-of",
+        "json",
+        str(source_path),
+    ]
+    timeline_command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "frame=best_effort_timestamp_time,pkt_duration_time",
+        "-of",
+        "compact=p=0:nk=0",
+        str(source_path),
+    ]
     try:
-        completed = subprocess.run(
-            [
-                ffprobe,
-                "-v",
-                "error",
-                "-count_frames",
-                "-show_entries",
-                "stream=codec_name,codec_type,width,height,avg_frame_rate,nb_read_frames,duration:format=duration",
-                "-of",
-                "json",
-                str(source_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=3600,
+        payload = _run_ffprobe(
+            summary_command,
+            stdout_limit=PROBE_SUMMARY_LIMIT_BYTES,
+            stderr_limit=PROBE_STDERR_LIMIT_BYTES,
+            timeout_seconds=PROBE_TIMEOUT_SECONDS,
+            redact_paths=(source_path,),
+            parser=_load_probe_json,
         )
-        payload = json.loads(completed.stdout)
         video_streams = [
             stream for stream in payload["streams"] if stream.get("codec_type") == "video"
         ]
         if len(video_streams) != 1:
             raise MediaEncodingError("输入媒体必须只有一个视频流")
         video = video_streams[0]
+        average_fps = _parse_rate(video["avg_frame_rate"])
+        nominal_fps = _parse_rate(video["r_frame_rate"])
+        if not math.isclose(
+            nominal_fps,
+            average_fps,
+            rel_tol=FRAME_RATE_RELATIVE_TOLERANCE,
+            abs_tol=FRAME_RATE_ABSOLUTE_TOLERANCE,
+        ):
+            raise MediaEncodingError("输入视频为可变帧率，首版不支持")
+        timeline = _run_ffprobe(
+            timeline_command,
+            stdout_limit=PROBE_TIMELINE_LIMIT_BYTES,
+            stderr_limit=PROBE_STDERR_LIMIT_BYTES,
+            timeout_seconds=PROBE_TIMEOUT_SECONDS,
+            redact_paths=(source_path,),
+            parser=lambda output: _parse_cfr_timeline(output, expected_fps=average_fps),
+        )
+        summary_frame_count = int(video["nb_read_frames"])
+        if timeline.frame_count != summary_frame_count:
+            raise MediaEncodingError("输入视频探测帧数与时间轴帧数不一致")
+        stream_duration = _optional_positive_float(video.get("duration"))
+        if stream_duration is not None:
+            duration_tolerance = max(
+                TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS,
+                (1.0 / average_fps) * TIMESTAMP_RELATIVE_TOLERANCE,
+            )
+            if abs(stream_duration - timeline.duration_seconds) > duration_tolerance:
+                raise MediaEncodingError("输入视频流时长与帧时间轴不一致")
+            duration_seconds = stream_duration
+        else:
+            duration_seconds = timeline.duration_seconds
         return SourceVideoMetadata(
             width=int(video["width"]),
             height=int(video["height"]),
-            fps=_parse_rate(video["avg_frame_rate"]),
-            frame_count=int(video["nb_read_frames"]),
-            duration_seconds=_parse_duration(
-                video.get("duration"), payload.get("format", {}).get("duration")
-            ),
+            fps=average_fps,
+            frame_count=summary_frame_count,
+            duration_seconds=duration_seconds,
             codec_name=str(video["codec_name"]),
         )
     except MediaEncodingError:
         raise
     except (
-        subprocess.SubprocessError,
         OSError,
         ValueError,
         KeyError,
@@ -250,6 +459,13 @@ def probe_source_video(path) -> SourceVideoMetadata:
 
 
 class SkeletonVideoEncoder:
+    """Stream a video inside a private TaskWorkspace and publish once with hardlink.
+
+    A successful ``os.link`` is the irreversible commit point. ``abort`` only cleans the
+    private partial; the owning TaskWorkspace must clean a published target after an
+    interruption that occurs between that commit point and the caller's successful return.
+    """
+
     FINISH_TIMEOUT_SECONDS = 120
 
     def __init__(self, path, width, height, fps):
@@ -270,7 +486,7 @@ class SkeletonVideoEncoder:
         self._closed = False
         self._finished = False
         self._committed = False
-        self._owned_target_identity: tuple[int, int] | None = None
+        self._partial_cleanup_pending = False
         self._failure: MediaEncodingError | None = None
         self.metadata: VideoMetadata | None = None
         command = [
@@ -332,6 +548,10 @@ class SkeletonVideoEncoder:
             raise MediaEncodingError("编码尚未完成")
         candidate = self.path if self._committed else self._partial_path
         return candidate.stat().st_size
+
+    @property
+    def partial_cleanup_pending(self) -> bool:
+        return self._partial_cleanup_pending
 
     def write(self, frame) -> None:
         if self._failure is not None:
@@ -426,28 +646,36 @@ class SkeletonVideoEncoder:
             return
         if not self._finished or self.metadata is None:
             raise MediaEncodingError("提交前必须先完成编码校验")
-        identity = os.stat(self._partial_path, follow_symlinks=False)
+        partial_identity = os.stat(self._partial_path, follow_symlinks=False)
         try:
             os.link(self._partial_path, self.path, follow_symlinks=False)
         except FileExistsError as exc:
+            self._failure = MediaEncodingError("骨架视频目标已经存在")
             self.abort()
-            raise MediaEncodingError("骨架视频目标已经存在") from exc
+            raise self._failure from exc
         except OSError as exc:
+            message = (
+                "骨架视频目标已经存在" if exc.errno == errno.EEXIST else "无法原子发布骨架视频"
+            )
+            self._failure = MediaEncodingError(message)
             self.abort()
-            if exc.errno == errno.EEXIST:
-                raise MediaEncodingError("骨架视频目标已经存在") from exc
-            raise MediaEncodingError("无法原子发布骨架视频") from exc
-        except BaseException:
-            self._remove_target_if_identity((identity.st_dev, identity.st_ino))
-            raise
-        self._owned_target_identity = (identity.st_dev, identity.st_ino)
-        try:
-            self._partial_path.unlink()
-        except BaseException:
-            self._remove_owned_target()
-            raise
+            raise self._failure from exc
+        target_identity = os.stat(self.path, follow_symlinks=False)
+        current_partial_identity = os.stat(self._partial_path, follow_symlinks=False)
+        expected_identity = (partial_identity.st_dev, partial_identity.st_ino)
+        if (target_identity.st_dev, target_identity.st_ino) != expected_identity or (
+            current_partial_identity.st_dev,
+            current_partial_identity.st_ino,
+        ) != expected_identity:
+            self._failure = MediaEncodingError("骨架视频目标在提交后被替换")
+            self.abort()
+            raise self._failure
         self._committed = True
         self._closed = True
+        try:
+            self._partial_path.unlink()
+        except OSError:
+            self._partial_cleanup_pending = True
 
     def close(self) -> VideoMetadata:
         try:
@@ -461,10 +689,11 @@ class SkeletonVideoEncoder:
     def abort(self) -> None:
         self._abort_process()
         self._cleanup_partial()
-        self._remove_owned_target()
         self._closed = True
+        stderr = getattr(self, "_stderr", None)
         try:
-            self._stderr.close()
+            if stderr is not None:
+                stderr.close()
         except OSError:
             pass
 
@@ -476,7 +705,6 @@ class SkeletonVideoEncoder:
             self._failure = MediaEncodingError(redacted[:2000])
         self._abort_process()
         self._cleanup_partial()
-        self._remove_owned_target()
         self._closed = True
         try:
             self._stderr.close()
@@ -513,21 +741,6 @@ class SkeletonVideoEncoder:
     def _cleanup_partial(self) -> None:
         try:
             self._partial_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    def _remove_owned_target(self) -> None:
-        if self._owned_target_identity is None:
-            return
-        self._remove_target_if_identity(self._owned_target_identity)
-
-    def _remove_target_if_identity(self, identity: tuple[int, int]) -> None:
-        try:
-            current = os.stat(self.path, follow_symlinks=False)
-            if (current.st_dev, current.st_ino) == identity:
-                self.path.unlink()
-        except FileNotFoundError:
-            pass
         except OSError:
             pass
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
+import os
 import shutil
+import stat
 import subprocess
 
 import numpy as np
@@ -165,18 +168,35 @@ def test_encoder_commit_never_clobbers_target_created_after_initialization(tmp_p
     encoder.finish()
     output.write_bytes(b"external-owner")
 
-    with pytest.raises(MediaEncodingError, match="已经存在"):
+    with pytest.raises(MediaEncodingError, match="已经存在") as first:
+        encoder.commit()
+    with pytest.raises(MediaEncodingError) as second:
         encoder.commit()
     encoder.abort()
 
+    assert str(second.value) == str(first.value)
     assert output.read_bytes() == b"external-owner"
 
 
 @pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
-def test_abort_after_commit_only_removes_the_encoder_owned_inode(tmp_path):
+def test_abort_after_commit_never_removes_published_target(tmp_path):
     from pp_mcare.media import SkeletonVideoEncoder
 
     output = tmp_path / "committed.mp4"
+    encoder = SkeletonVideoEncoder(output, width=4, height=4, fps=1.0)
+    encoder.write(np.zeros((4, 4, 3), dtype=np.uint8))
+    encoder.finish()
+    encoder.commit()
+    encoder.abort()
+
+    assert output.exists() is True
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_abort_after_commit_preserves_later_external_replacement(tmp_path):
+    from pp_mcare.media import SkeletonVideoEncoder
+
+    output = tmp_path / "owned.mp4"
     encoder = SkeletonVideoEncoder(output, width=4, height=4, fps=1.0)
     encoder.write(np.zeros((4, 4, 3), dtype=np.uint8))
     encoder.finish()
@@ -188,21 +208,6 @@ def test_abort_after_commit_only_removes_the_encoder_owned_inode(tmp_path):
     encoder.abort()
 
     assert output.read_bytes() == b"external-replacement"
-
-
-@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
-def test_abort_after_commit_removes_encoder_owned_published_file(tmp_path):
-    from pp_mcare.media import SkeletonVideoEncoder
-
-    output = tmp_path / "owned.mp4"
-    encoder = SkeletonVideoEncoder(output, width=4, height=4, fps=1.0)
-    encoder.write(np.zeros((4, 4, 3), dtype=np.uint8))
-    encoder.finish()
-    encoder.commit()
-
-    encoder.abort()
-
-    assert output.exists() is False
 
 
 def test_encoder_initialization_preserves_base_exception_and_cleans_partial(tmp_path, monkeypatch):
@@ -395,7 +400,9 @@ def test_encoder_initialization_cleans_partial_if_stderr_file_creation_is_interr
     assert list(tmp_path.iterdir()) == []
 
 
-def test_encoder_commit_interruption_after_link_removes_only_its_new_link(tmp_path, monkeypatch):
+def test_encoder_commit_interruption_after_link_never_rolls_back_published_target(
+    tmp_path, monkeypatch
+):
     from pp_mcare import media
 
     output = tmp_path / "commit-interrupted.mp4"
@@ -421,5 +428,299 @@ def test_encoder_commit_interruption_after_link_removes_only_its_new_link(tmp_pa
     with pytest.raises(KeyboardInterrupt):
         encoder.commit()
 
-    assert output.exists() is False
+    assert output.read_bytes() == b"owned"
     assert encoder.partial_path.read_bytes() == b"owned"
+
+    encoder.abort()
+    assert output.read_bytes() == b"owned"
+    assert encoder.partial_path.exists() is False
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_encoder_reports_external_replacement_after_link_without_deleting_it(tmp_path, monkeypatch):
+    from pp_mcare import media
+
+    output = tmp_path / "replaced-after-link.mp4"
+    encoder = media.SkeletonVideoEncoder(output, width=4, height=4, fps=1.0)
+    encoder.write(np.zeros((4, 4, 3), dtype=np.uint8))
+    encoder.finish()
+    real_link = media.os.link
+
+    def link_then_replace(source, target, *, follow_symlinks):
+        real_link(source, target, follow_symlinks=follow_symlinks)
+        replacement = tmp_path / "external-replacement"
+        replacement.write_bytes(b"external")
+        replacement.replace(target)
+
+    monkeypatch.setattr(media.os, "link", link_then_replace)
+
+    with pytest.raises(media.MediaEncodingError, match="提交后被替换"):
+        encoder.commit()
+
+    assert output.read_bytes() == b"external"
+    assert encoder.partial_path.exists() is False
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_encoder_partial_unlink_failure_after_link_is_successful_and_observable(
+    tmp_path, monkeypatch
+):
+    from pp_mcare import media
+
+    output = tmp_path / "published.mp4"
+    encoder = media.SkeletonVideoEncoder(output, width=4, height=4, fps=1.0)
+    encoder.write(np.zeros((4, 4, 3), dtype=np.uint8))
+    encoder.finish()
+    partial = encoder.partial_path
+    real_unlink = media.Path.unlink
+
+    def fail_partial_unlink(path, *args, **kwargs):
+        if path == partial:
+            raise OSError("synthetic partial cleanup failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(media.Path, "unlink", fail_partial_unlink)
+
+    encoder.commit()
+
+    assert output.exists() is True
+    assert partial.exists() is True
+    assert encoder.partial_cleanup_pending is True
+    encoder.abort()
+    assert output.exists() is True
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_probe_source_video_rejects_real_vfr_rate_and_timestamp_drift(tmp_path):
+    from pp_mcare.media import MediaEncodingError, probe_source_video
+
+    source = tmp_path / "vfr.mp4"
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=10:duration=1.8",
+            "-vf",
+            "select='not(eq(n,8)+eq(n,9))'",
+            "-fps_mode",
+            "vfr",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
+        ],
+        check=True,
+    )
+    fixture_probe = subprocess.run(
+        [
+            FFPROBE,
+            "-v",
+            "error",
+            "-count_frames",
+            "-show_entries",
+            "stream=r_frame_rate,avg_frame_rate,nb_read_frames,duration",
+            "-of",
+            "json",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    fixture_stream = json.loads(fixture_probe.stdout)["streams"][0]
+    assert fixture_stream == {
+        "r_frame_rate": "10/1",
+        "avg_frame_rate": "80/9",
+        "duration": "1.800000",
+        "nb_read_frames": "16",
+    }
+
+    with pytest.raises(MediaEncodingError, match="可变帧率"):
+        probe_source_video(source)
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_probe_source_video_rejects_nonuniform_pts_even_when_rates_match(tmp_path):
+    from pp_mcare.media import MediaEncodingError, probe_source_video
+
+    source = tmp_path / "vfr-rates-match.mkv"
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=10:duration=1.8",
+            "-vf",
+            "select='not(eq(n,8)+eq(n,9))'",
+            "-fps_mode",
+            "vfr",
+            "-an",
+            "-c:v",
+            "ffv1",
+            str(source),
+        ],
+        check=True,
+    )
+
+    with pytest.raises(MediaEncodingError, match="时间戳"):
+        probe_source_video(source)
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_probe_source_video_derives_missing_stream_duration_without_using_long_audio(
+    tmp_path,
+):
+    from pp_mcare.media import probe_source_video
+
+    source = tmp_path / "stream-duration-na.mkv"
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=10:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=1000:duration=4",
+            "-c:v",
+            "ffv1",
+            "-c:a",
+            "pcm_s16le",
+            str(source),
+        ],
+        check=True,
+    )
+
+    metadata = probe_source_video(source)
+
+    assert metadata.frame_count == 20
+    assert metadata.duration_seconds == pytest.approx(2.0, abs=0.01)
+
+
+class _ProbeProcess:
+    def __init__(self, return_code=0, *, hangs=False):
+        self.returncode = None
+        self.return_code = return_code
+        self.hangs = hangs
+        self.killed = False
+        self.wait_after_kill = False
+
+    def wait(self, timeout=None):
+        if self.hangs and not self.killed:
+            raise subprocess.TimeoutExpired("ffprobe", timeout)
+        if self.killed:
+            self.wait_after_kill = True
+            self.returncode = -9
+            return -9
+        self.returncode = self.return_code
+        return self.return_code
+
+    def kill(self):
+        self.killed = True
+
+
+def test_bounded_ffprobe_rejects_stdout_and_stderr_over_limits(tmp_path, monkeypatch):
+    from pp_mcare import media
+
+    cases = [
+        (b"x" * 1_048_577, b"", "标准输出超过上限"),
+        (b"", b"secret-stderr-payload" * 49_933, "错误输出超过上限"),
+    ]
+    for stdout_payload, stderr_payload, expected in cases:
+
+        def start(command, stdout, stderr):
+            stdout.write(stdout_payload)
+            stdout.flush()
+            stderr.write(stderr_payload)
+            stderr.flush()
+            return _ProbeProcess()
+
+        monkeypatch.setattr(media, "_start_ffprobe", start)
+        with pytest.raises(media.MediaEncodingError, match=expected) as raised:
+            media._run_ffprobe(
+                ["ffprobe", str(tmp_path / "patient-secret.mp4")],
+                stdout_limit=1_048_576,
+                stderr_limit=1_048_576,
+                timeout_seconds=1,
+                redact_paths=(tmp_path / "patient-secret.mp4",),
+                parser=lambda output: None,
+            )
+        assert "secret-stderr-payload" not in str(raised.value)
+
+
+def test_bounded_ffprobe_uses_secure_temporary_files_redacts_and_cleans(tmp_path, monkeypatch):
+    from pp_mcare import media
+
+    process = _ProbeProcess(return_code=2)
+    observed_files = []
+
+    def start(command, stdout, stderr):
+        observed_files.extend((stdout, stderr))
+        assert stat.S_IMODE(os.fstat(stdout.fileno()).st_mode) == 0o600
+        assert stat.S_IMODE(os.fstat(stderr.fileno()).st_mode) == 0o600
+        stderr.write(f"open failed {tmp_path / 'patient-secret.mp4'}".encode())
+        stderr.flush()
+        return process
+
+    monkeypatch.setattr(media, "_start_ffprobe", start)
+
+    with pytest.raises(media.MediaEncodingError) as raised:
+        media._run_ffprobe(
+            ["ffprobe", str(tmp_path / "patient-secret.mp4")],
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_seconds=1,
+            redact_paths=(tmp_path / "patient-secret.mp4",),
+            parser=lambda output: None,
+        )
+
+    assert "open failed <media>" in str(raised.value)
+    assert "patient-secret.mp4" not in str(raised.value)
+    assert all(file.closed for file in observed_files)
+
+
+def test_bounded_ffprobe_timeout_kills_and_waits(monkeypatch):
+    from pp_mcare import media
+
+    process = _ProbeProcess(hangs=True)
+    monkeypatch.setattr(media, "_start_ffprobe", lambda command, stdout, stderr: process)
+
+    with pytest.raises(media.MediaEncodingError, match="超时"):
+        media._run_ffprobe(
+            ["ffprobe", "input.mp4"],
+            stdout_limit=1024,
+            stderr_limit=1024,
+            timeout_seconds=0.01,
+            redact_paths=(),
+            parser=lambda output: None,
+        )
+
+    assert process.killed is True
+    assert process.wait_after_kill is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"\xff\n",
+        b"best_effort_timestamp_time=" + b"1" * 300 + b"\n",
+    ],
+)
+def test_timeline_parser_rejects_untrusted_or_overlong_lines_stably(payload):
+    from pp_mcare import media
+
+    with pytest.raises(media.MediaEncodingError, match="时间戳"):
+        media._parse_cfr_timeline(io.BytesIO(payload), expected_fps=25.0)
