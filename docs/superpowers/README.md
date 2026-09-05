@@ -63,6 +63,7 @@ docs/superpowers/
 | `plans/2026-08-21-game-question-analytics.md` | 六款认知游戏逐题数据与长期统计 | review | `specs/2026-08-21-game-question-analytics-design.md` |
 | `plans/2026-08-31-cognitive-game-ui-scale-and-feedback.md` | 六款认知游戏大图展示、顺序切换与选择反馈 | implemented | `specs/2026-08-31-cognitive-game-ui-scale-and-feedback-design.md` |
 | `plans/2026-09-01-motion-instruction-voice.md` | 五个运动动作说明预生成语音 | implemented | `specs/2026-09-01-motion-instruction-voice-design.md` |
+| `plans/2026-09-05-pp-mcare-independent-compute-service.md` | pp-mcare 独立动作分析计算服务 | approved | `specs/2026-09-05-pp-mcare-independent-compute-service-design.md` |
 
 ## 状态语义
 
