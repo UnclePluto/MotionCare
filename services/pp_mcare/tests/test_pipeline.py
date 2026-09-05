@@ -27,6 +27,7 @@ def _job(**changes) -> ClaimedJob:
             "url": "https://example.invalid/original.mp4",
             "bucket": "bucket",
             "object_key": "original.mp4",
+            "object_hash": "FqiniuOriginalHash1234567890abc",
             "expires_at": "2026-09-05T10:00:00Z",
             "size_bytes": 100,
             "content_type": "video/mp4",

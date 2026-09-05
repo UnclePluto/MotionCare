@@ -44,6 +44,7 @@ CLAIM_RESPONSE = {
         "url": "https://private.example/original.mp4?e=1&token=download-secret",
         "bucket": "original-videos",
         "object_key": "training-videos/41/original.mp4",
+        "object_hash": "FqiniuOriginalHash1234567890abc",
         "expires_at": "2026-09-05T11:00:00+00:00",
         "size_bytes": 1024,
         "content_type": "video/mp4",

@@ -41,7 +41,7 @@ _CLAIM_FIELDS = frozenset(
     }
 )
 _DOWNLOAD_FIELDS = frozenset(
-    {"url", "bucket", "object_key", "expires_at", "size_bytes", "content_type"}
+    {"url", "bucket", "object_key", "object_hash", "expires_at", "size_bytes", "content_type"}
 )
 _UPLOAD_FIELDS = frozenset({"bucket", "object_key", "token", "expires_at"})
 _HEARTBEAT_FIELDS = frozenset(

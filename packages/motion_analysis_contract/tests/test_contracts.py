@@ -28,6 +28,7 @@ CLAIM_RESPONSE = {
         "url": "https://example.invalid/original.mp4",
         "bucket": "motion-analysis",
         "object_key": "motion-analysis/1/2026/09/job/original.mp4",
+        "object_hash": "FqiniuOriginalHash1234567890abc",
         "expires_at": "2026-09-05T10:00:00Z",
         "size_bytes": 1024,
         "content_type": "video/mp4",
@@ -39,6 +40,25 @@ CLAIM_RESPONSE = {
         "expires_at": "2026-09-05T12:00:00Z",
     },
 }
+
+
+def test_download_grant_requires_bounded_object_hash_and_round_trips_it():
+    job = ClaimedJob.from_dict(CLAIM_RESPONSE)
+    assert job.download.object_hash == "FqiniuOriginalHash1234567890abc"
+    assert job.to_dict()["download"]["object_hash"] == "FqiniuOriginalHash1234567890abc"
+
+    missing = {**CLAIM_RESPONSE, "download": dict(CLAIM_RESPONSE["download"])}
+    del missing["download"]["object_hash"]
+    with pytest.raises(ContractValidationError):
+        ClaimedJob.from_dict(missing)
+
+    for invalid in ("", "x" * 65, "bad hash"):
+        malformed = {
+            **CLAIM_RESPONSE,
+            "download": {**CLAIM_RESPONSE["download"], "object_hash": invalid},
+        }
+        with pytest.raises(ContractValidationError):
+            ClaimedJob.from_dict(malformed)
 
 
 def test_validate_counts_rejects_bool_and_broken_total():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import sys
 from collections.abc import Iterable
@@ -25,6 +26,11 @@ _SAFE_REASON_CODES = frozenset(
         "response",
         "server_error",
         "transport_error",
+        "analysis_failed",
+        "download_failed",
+        "lease_lost",
+        "resource_insufficient",
+        "upload_failed",
     }
 )
 _SAFE_MESSAGES = frozenset(
@@ -34,6 +40,11 @@ _SAFE_MESSAGES = frozenset(
         "motioncare_claim_unavailable",
         "motion_analysis_processor_failed",
         "motion_analysis_fail_report_failed",
+        "motion_analysis_stage_started",
+        "motion_analysis_stage_finished",
+        "motion_analysis_job_finished",
+        "motion_analysis_workspace_cleanup",
+        "motion_analysis_stale_cleanup",
     }
 )
 
@@ -73,6 +84,29 @@ def _safe_structured_extra(key: str, value: object) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value > 0
     if key == "reason_code":
         return value in _SAFE_REASON_CODES
+    if key == "stage":
+        return value in {None, "preflight", "download", "analyze", "upload", "complete", "cleanup"}
+    if key == "outcome":
+        return value in {None, "started", "succeeded", "failed", "removed", "retained"}
+    if key in {
+        "duration_ms",
+        "decoded_frame_count",
+        "inferred_frame_count",
+        "output_frame_count",
+        "peak_rss_bytes",
+        "system_available_memory_bytes",
+        "swap_used_bytes",
+        "disk_free_bytes",
+        "cleanup_scanned",
+        "cleanup_removed",
+        "cleanup_failed",
+    }:
+        return value is None or (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value >= 0
+        )
     return False
 
 
@@ -108,6 +142,19 @@ class SafeLogFilter(logging.Filter):
             "job_id",
             "attempt",
             "reason_code",
+            "stage",
+            "outcome",
+            "duration_ms",
+            "decoded_frame_count",
+            "inferred_frame_count",
+            "output_frame_count",
+            "peak_rss_bytes",
+            "system_available_memory_bytes",
+            "swap_used_bytes",
+            "disk_free_bytes",
+            "cleanup_scanned",
+            "cleanup_removed",
+            "cleanup_failed",
         ):
             record.__dict__.setdefault(field_name, None)
         return True
@@ -126,7 +173,14 @@ def install_safe_logging(
 _SAFE_HANDLER_MARKER = "_pp_mcare_safe_handler"
 _SAFE_FORMAT = (
     "event=%(message)s method=%(method)s path=%(path)s status=%(status)s "
-    "job_id=%(job_id)s attempt=%(attempt)s reason_code=%(reason_code)s"
+    "job_id=%(job_id)s attempt=%(attempt)s reason_code=%(reason_code)s "
+    "stage=%(stage)s outcome=%(outcome)s duration_ms=%(duration_ms)s "
+    "decoded=%(decoded_frame_count)s inferred=%(inferred_frame_count)s "
+    "output=%(output_frame_count)s peak_rss_bytes=%(peak_rss_bytes)s "
+    "system_available_memory_bytes=%(system_available_memory_bytes)s "
+    "swap_used_bytes=%(swap_used_bytes)s disk_free_bytes=%(disk_free_bytes)s "
+    "cleanup_scanned=%(cleanup_scanned)s cleanup_removed=%(cleanup_removed)s "
+    "cleanup_failed=%(cleanup_failed)s"
 )
 
 

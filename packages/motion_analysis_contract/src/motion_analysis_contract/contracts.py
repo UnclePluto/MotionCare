@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Mapping
 
@@ -10,6 +11,7 @@ POSTGRES_INT64_MAX = 9_223_372_036_854_775_807
 MAX_SKELETON_DIMENSION = 16_384
 MAX_SKELETON_DURATION_SECONDS = 3_636.0
 MAX_SKELETON_FPS = 240.0
+_OBJECT_HASH_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
 class ContractValidationError(ValueError):
@@ -200,6 +202,7 @@ class DownloadGrant:
     url: str = field(repr=False)
     bucket: str
     object_key: str
+    object_hash: str
     expires_at: str
     size_bytes: int
     content_type: str
@@ -208,6 +211,7 @@ class DownloadGrant:
         return (
             "DownloadGrant("
             f"bucket={self.bucket!r}, object_key={self.object_key!r}, "
+            f"object_hash={self.object_hash!r}, "
             f"expires_at={self.expires_at!r}, size_bytes={self.size_bytes!r}, "
             f"content_type={self.content_type!r}, download_url=<redacted>)"
         )
@@ -216,6 +220,10 @@ class DownloadGrant:
         object.__setattr__(self, "url", _require_str(self.url, "download.url"))
         object.__setattr__(self, "bucket", _require_str(self.bucket, "download.bucket"))
         object.__setattr__(self, "object_key", _require_str(self.object_key, "download.object_key"))
+        if not isinstance(self.object_hash, str) or not _OBJECT_HASH_PATTERN.fullmatch(
+            self.object_hash
+        ):
+            raise ContractValidationError("download.object_hash 格式无效")
         object.__setattr__(self, "expires_at", _require_str(self.expires_at, "download.expires_at"))
         object.__setattr__(
             self,
@@ -239,6 +247,7 @@ class DownloadGrant:
             url=_require_str(payload.get("url"), "download.url"),
             bucket=_require_str(payload.get("bucket"), "download.bucket"),
             object_key=_require_str(payload.get("object_key"), "download.object_key"),
+            object_hash=_require_str(payload.get("object_hash"), "download.object_hash"),
             expires_at=_require_str(payload.get("expires_at"), "download.expires_at"),
             size_bytes=_require_int(
                 payload.get("size_bytes"),
@@ -254,6 +263,7 @@ class DownloadGrant:
             "url": self.url,
             "bucket": self.bucket,
             "object_key": self.object_key,
+            "object_hash": self.object_hash,
             "expires_at": self.expires_at,
             "size_bytes": self.size_bytes,
             "content_type": self.content_type,

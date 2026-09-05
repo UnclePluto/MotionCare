@@ -32,6 +32,7 @@ def make_job(job_id):
                 "url": f"https://private.example/{job_id}.mp4?token=download-secret",
                 "bucket": "original-videos",
                 "object_key": f"training-videos/{job_id}/original.mp4",
+                "object_hash": "FqiniuOriginalHash1234567890abc",
                 "expires_at": "2026-09-05T11:00:00+00:00",
                 "size_bytes": 1024,
                 "content_type": "video/mp4",
@@ -314,32 +315,51 @@ def test_importing_cli_has_no_environment_or_network_side_effect(monkeypatch):
     assert callable(module.main)
 
 
-def test_cli_refuses_to_start_before_constructing_client_or_claiming_jobs(monkeypatch, capsys):
+def test_cli_wires_cleanup_client_processor_and_real_worker(monkeypatch, capsys):
     module = importlib.import_module("pp_mcare.__main__")
     configured = service_settings()
     calls = []
 
-    class PoisonClient:
+    class FakeClient:
         def __init__(self, received_settings):
             calls.append(("client", received_settings))
 
-        def claim(self):
-            calls.append(("claim",))
+        def __enter__(self):
+            return self
 
-        def fail(self, *_args, **_kwargs):
-            calls.append(("fail",))
+        def __exit__(self, *_args):
+            calls.append(("close",))
 
     monkeypatch.setattr(module.Settings, "from_env", lambda: configured)
-    monkeypatch.setattr("pp_mcare.api_client.MotionCareClient", PoisonClient)
+    monkeypatch.setattr(module, "MotionCareClient", FakeClient)
     monkeypatch.setattr(
-        "pp_mcare.worker.run_worker",
+        module,
+        "cleanup_stale_workspaces",
+        lambda root, **kwargs: calls.append(("cleanup", root, kwargs)),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_worker",
         lambda **kwargs: calls.append(("worker", kwargs)),
     )
 
-    assert module.main() != 0
+    assert module.main() == 0
 
-    assert calls == []
+    assert calls[0] == ("cleanup", configured.work_root, {"max_age_seconds": 14400, "limit": 100})
+    assert calls[1] == ("client", configured)
+    assert calls[2][0] == "worker"
+    assert calls[2][1]["client"].__class__ is FakeClient
+    assert calls[2][1]["settings"] is configured
+    assert callable(calls[2][1]["processor"])
+    assert calls[3] == ("close",)
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == "pp-mcare 执行器尚未接入，拒绝启动\n"
+    assert "尚未接入" not in captured.err
     assert "machine-service-secret" not in captured.err
+
+
+def test_cli_signal_handler_raises_control_exception_for_workspace_cleanup():
+    module = importlib.import_module("pp_mcare.__main__")
+
+    with pytest.raises(module.GracefulShutdown):
+        module._handle_shutdown_signal(15, None)

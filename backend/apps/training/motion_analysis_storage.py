@@ -62,6 +62,7 @@ def issue_storage_grant(job: MotionAnalysisJob, now) -> AnalysisStorageGrant:
             ),
             bucket=video.bucket,
             object_key=video.object_key,
+            object_hash=video.object_hash,
             expires_at=download_expires_at.isoformat(),
             size_bytes=video.size_bytes,
             content_type=video.content_type,

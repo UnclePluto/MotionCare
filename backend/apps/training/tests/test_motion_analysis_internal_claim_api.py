@@ -245,6 +245,7 @@ def test_claim_returns_shared_contract_and_hashes_one_time_lease(
     assert claimed.heartbeat_interval_seconds == 60
     assert claimed.download.bucket == "original-videos"
     assert claimed.download.object_key == job.training_video.object_key
+    assert claimed.download.object_hash == job.training_video.object_hash
     assert claimed.download.size_bytes == 1024
     assert claimed.download.content_type == "video/mp4"
     assert claimed.upload.bucket == "analysis-skeletons"
@@ -733,6 +734,7 @@ def test_postgresql_concurrent_claim_gives_single_job_to_only_one_worker(
             url="https://private.example.com/original.mp4?token=redacted",
             bucket="original-videos",
             object_key=job.training_video.object_key,
+            object_hash=job.training_video.object_hash,
             expires_at="2026-09-05T10:00:00+00:00",
             size_bytes=1024,
             content_type="video/mp4",
