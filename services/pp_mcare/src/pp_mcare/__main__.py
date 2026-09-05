@@ -24,7 +24,11 @@ def _handle_shutdown_signal(_signum, _frame) -> None:
     raise GracefulShutdown(0)
 
 
-def main() -> int:
+def main(argv=()) -> int:
+    if argv:
+        from .cli import main as cli_main
+
+        return cli_main(argv)
     try:
         settings = Settings.from_env()
     except ConfigurationError:
@@ -74,4 +78,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

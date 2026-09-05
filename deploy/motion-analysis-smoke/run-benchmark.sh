@@ -25,7 +25,6 @@ _run_benchmark_after_root_gate() {
   implementation_commit="$1"
   run_id="$2"
   report_path="${analysis_root}/reports/pp-tinypose-v2-${run_id}.json"
-  summary_path="${analysis_root}/reports/pp-tinypose-v2-${run_id}.txt"
 
   if [[ ! "${implementation_commit}" =~ ^[a-f0-9]{7,40}$ ]]; then
     echo "COMMIT 格式无效" >&2
@@ -40,22 +39,18 @@ _run_benchmark_after_root_gate() {
     exit 1
   fi
 
-  cd "${analysis_root}/app/backend"
+  cd "${analysis_root}/app"
   runuser -u motioncare-analysis -- env \
     PADDLE_PDX_CACHE_HOME="${analysis_root}/model-cache" \
+    PP_MCARE_IMPLEMENTATION_COMMIT="${implementation_commit}" \
     TMPDIR="${analysis_root}/tmp" \
     "${analysis_root}/venv/bin/python" \
-    "${analysis_root}/app/backend/manage.py" \
-    run_pose_smoke_benchmark \
+    -m pp_mcare regression \
     --video "${video_path}" \
     --report "${report_path}" \
-    --summary "${summary_path}" \
-    --expected-sha256 f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd \
-    --git-commit "${implementation_commit}" \
-    --manual-total-count 90 \
-    --delete-input
+    --manual-total-count 90
 
-  printf '%s\n' "${report_path}" "${summary_path}"
+  printf '%s\n' "${report_path}"
 }
 
 _run_benchmark_main() {

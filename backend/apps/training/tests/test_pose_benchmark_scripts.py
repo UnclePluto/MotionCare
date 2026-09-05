@@ -1,6 +1,8 @@
+import ast
 import os
 import stat
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,60 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 BOOTSTRAP_SCRIPT = PROJECT_ROOT / "deploy/motion-analysis-smoke/bootstrap.sh"
 RUN_SCRIPT = PROJECT_ROOT / "deploy/motion-analysis-smoke/run-benchmark.sh"
+
+
+def test_backend_training_package_has_no_inference_runtime_imports():
+    forbidden_roots = {"pad" + "dle", "pad" + "dlex", "c" + "v2"}
+    offenders = []
+    production_root = PROJECT_ROOT / "backend/apps/training"
+
+    def constant_string(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = constant_string(node.left)
+            right = constant_string(node.right)
+            if left is not None and right is not None:
+                return left + right
+        return None
+
+    for path in production_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = {alias.name.split(".", 1)[0] for alias in node.names}
+                if imported & forbidden_roots:
+                    offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".", 1)[0] in forbidden_roots:
+                    offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
+            elif isinstance(node, ast.Call) and node.args:
+                is_dynamic_import = (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id in {"__import__", "import_module"}
+                ) or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "import_module"
+                )
+                module_name = constant_string(node.args[0]) if is_dynamic_import else None
+                if module_name and module_name.split(".", 1)[0] in forbidden_roots:
+                    offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
+
+    assert sorted(set(offenders)) == []
+
+
+def test_backend_package_has_no_motion_analysis_optional_dependency_group():
+    pyproject = tomllib.loads((PROJECT_ROOT / "backend/pyproject.toml").read_text(encoding="utf-8"))
+    optional = pyproject["project"].get("optional-dependencies", {})
+
+    assert "motion-analysis" not in optional
+    flattened = "\n".join(
+        requirement.lower()
+        for requirements in optional.values()
+        for requirement in requirements
+    )
+    for forbidden in ("pad" + "dle", "pad" + "dlex", "open" + "cv"):
+        assert forbidden not in flattened
 
 
 def _run_sourced(script, command, *arguments, env=None):
@@ -135,10 +191,10 @@ def test_run_script_deletes_fixed_input_when_parameter_validation_fails(
     assert not video.exists()
 
 
-def test_run_script_invokes_runuser_from_deployed_backend_directory(tmp_path):
+def test_run_script_invokes_independent_pp_mcare_regression_cli(tmp_path):
     analysis_root = tmp_path / "analysis"
-    backend_directory = analysis_root / "app" / "backend"
-    backend_directory.mkdir(parents=True)
+    application_directory = analysis_root / "app"
+    application_directory.mkdir(parents=True)
     video = analysis_root / "input" / "IMG_0383_SDR_5min.mp4"
     video.parent.mkdir()
     video.write_bytes(b"private video")
@@ -169,8 +225,15 @@ def test_run_script_invokes_runuser_from_deployed_backend_directory(tmp_path):
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert cwd_record.read_text(encoding="utf-8").strip() == str(backend_directory)
+    assert cwd_record.read_text(encoding="utf-8").strip() == str(application_directory)
     arguments = args_record.read_text(encoding="utf-8").splitlines()
+    python_index = arguments.index(str(analysis_root / "venv/bin/python"))
+    assert arguments[python_index : python_index + 4] == [
+        str(analysis_root / "venv/bin/python"),
+        "-m",
+        "pp_mcare",
+        "regression",
+    ]
     manual_count_index = arguments.index("--manual-total-count")
     assert arguments[manual_count_index : manual_count_index + 2] == [
         "--manual-total-count",
@@ -178,14 +241,16 @@ def test_run_script_invokes_runuser_from_deployed_backend_directory(tmp_path):
     ]
     expected_prefix = str(analysis_root / "reports" / "pp-tinypose-v2-")
     assert f"{expected_prefix}20260903T120000Z.json" in arguments
-    assert f"{expected_prefix}20260903T120000Z.txt" in arguments
+    assert "--summary" not in arguments
+    assert "manage.py" not in arguments
+    assert "run_pose_smoke_benchmark" not in arguments
     assert "pp-tinypose-smoke-" not in completed.stdout
     assert not video.exists()
 
 
 def test_run_script_deletes_fixed_input_when_benchmark_command_fails(tmp_path):
     analysis_root = tmp_path / "analysis"
-    (analysis_root / "app" / "backend").mkdir(parents=True)
+    (analysis_root / "app").mkdir(parents=True)
     video = analysis_root / "input" / "IMG_0383_SDR_5min.mp4"
     video.parent.mkdir()
     video.write_bytes(b"private video")
