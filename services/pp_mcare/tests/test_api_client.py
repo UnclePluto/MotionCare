@@ -1,5 +1,8 @@
 import json
+import io
 import logging
+import tempfile
+from pathlib import Path
 
 import httpx
 import pytest
@@ -18,7 +21,7 @@ from pp_mcare.api_client import (
     MotionCareValidationError,
 )
 from pp_mcare.config import Settings
-from pp_mcare.safe_logging import install_safe_logging
+from pp_mcare.safe_logging import configure_safe_logging, install_safe_logging
 
 
 CAPABILITY = {
@@ -52,11 +55,21 @@ CLAIM_RESPONSE = {
 }
 
 
+TEST_DIRECTORY = tempfile.TemporaryDirectory(
+    prefix="pp-mcare-client-tests-",
+    dir=Path(tempfile.gettempdir()).resolve(),
+)
+TEST_PATH_BASE = Path(TEST_DIRECTORY.name)
+
+
 def settings():
     return Settings(
         api_base_url="https://motioncare.example",
         service_token="service-token-secret",
         worker_id="worker-1",
+        work_root=TEST_PATH_BASE / "jobs",
+        model_cache=TEST_PATH_BASE / "model-cache",
+        _trusted_path_base=TEST_PATH_BASE,
     )
 
 
@@ -84,6 +97,39 @@ def completion_payload():
             content_type="video/mp4",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("api_base_url", "http://motioncare.example"),
+        ("service_token", "bad token"),
+        ("worker_id", "../worker"),
+        ("network_attempts", 4),
+        ("connect_timeout_seconds", 0),
+        ("protocol_version", "wrong-version"),
+        ("capabilities", ()),
+    ],
+)
+def test_client_defensively_revalidates_network_settings_before_http_client(
+    monkeypatch,
+    field,
+    unsafe_value,
+):
+    configured = settings()
+    object.__setattr__(configured, field, unsafe_value)
+    constructions = []
+
+    monkeypatch.setattr(
+        "pp_mcare.api_client.httpx.Client",
+        lambda **kwargs: constructions.append(kwargs),
+    )
+
+    with pytest.raises(MotionCareValidationError) as error:
+        MotionCareClient(configured)
+
+    assert constructions == []
+    assert "service-token-secret" not in str(error.value)
 
 
 def test_claim_uses_fixed_https_path_bearer_and_shared_capability_contract():
@@ -234,8 +280,10 @@ def test_transient_failure_stops_after_configured_three_attempts():
     assert "service-token-secret" not in str(error.value)
 
 
-def test_retry_log_keeps_only_the_fixed_relative_api_path(caplog):
+def test_retry_log_keeps_only_the_fixed_relative_api_path():
     attempts = 0
+    output = io.StringIO()
+    configure_safe_logging(secrets=("service-token-secret",), stream=output)
 
     def handler(request):
         nonlocal attempts
@@ -250,15 +298,15 @@ def test_retry_log_keeps_only_the_fixed_relative_api_path(caplog):
         sleeper=lambda _: None,
     )
 
-    with caplog.at_level(logging.WARNING, logger="pp_mcare.api_client"):
-        assert client.claim() is None
+    assert client.claim() is None
 
-    retry = next(record for record in caplog.records if record.msg == "motioncare_request_retry")
-    assert retry.method == "POST"
-    assert retry.path == "/api/internal/motion-analysis/jobs/claim/"
-    assert retry.status == 503
-    assert retry.attempt == 1
-    assert retry.reason_code == "server_error"
+    rendered = output.getvalue()
+    assert "event=motioncare_request_retry" in rendered
+    assert "method=POST" in rendered
+    assert "path=/api/internal/motion-analysis/jobs/claim/" in rendered
+    assert "status=503" in rendered
+    assert "attempt=1" in rendered
+    assert "reason_code=server_error" in rendered
 
 
 def test_heartbeat_serializes_lease_but_returns_only_strict_safe_response():
@@ -448,3 +496,68 @@ def test_client_repr_exceptions_and_filtered_logs_redact_secrets(caplog):
         assert forbidden not in rendered
     assert attempts == 3
     assert "<redacted>" in rendered
+
+
+def test_pp_mcare_namespace_handler_blocks_root_and_redacts_future_child_records():
+    class UnsafeReason:
+        def __str__(self):
+            return "https://evil.example/token=service-token-secret"
+
+    safe_output = io.StringIO()
+    root_output = io.StringIO()
+    root_handler = logging.StreamHandler(root_output)
+    root = logging.getLogger()
+    root.addHandler(root_handler)
+    try:
+        configure_safe_logging(
+            secrets=("service-token-secret",),
+            stream=safe_output,
+        )
+        child = logging.getLogger("pp_mcare.future.component")
+        child.setLevel(logging.DEBUG)
+        try:
+            raise RuntimeError(
+                "Bearer service-token-secret "
+                "https://private.example/video.mp4?token=signed-secret "
+                "/private/patient-Alice.mp4"
+            )
+        except RuntimeError:
+            child.exception(
+                "patient=%s",
+                "Alice-Private-Patient",
+                extra={
+                    "method": "POST",
+                    "path": "/api/internal/motion-analysis/jobs/41/fail/",
+                    "status": 503,
+                    "job_id": 41,
+                    "attempt": 2,
+                    "reason_code": UnsafeReason(),
+                    "patient_info": "Alice-Private-Patient",
+                },
+                stack_info=True,
+            )
+
+        rendered = safe_output.getvalue()
+        for forbidden in (
+            "service-token-secret",
+            "private.example",
+            "signed-secret",
+            "/private/patient-Alice.mp4",
+            "Alice-Private-Patient",
+            "evil.example",
+        ):
+            assert forbidden not in rendered
+        assert "method=POST" in rendered
+        assert "path=/api/internal/motion-analysis/jobs/41/fail/" in rendered
+        assert "status=503" in rendered
+        assert "job_id=41" in rendered
+        assert "reason_code=<redacted>" in rendered
+        assert root_output.getvalue() == ""
+
+        before_third_party = safe_output.getvalue()
+        logging.getLogger("third_party.library").warning(
+            "Bearer service-token-secret https://private.example/leak"
+        )
+        assert safe_output.getvalue() == before_third_party
+    finally:
+        root.removeHandler(root_handler)

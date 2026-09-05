@@ -8,7 +8,7 @@ from motion_analysis_contract import ClaimedJob
 
 from .api_client import MotionCareClient, MotionCareUnavailableError
 from .config import Settings
-from .safe_logging import install_safe_logging
+from .safe_logging import configure_safe_logging, install_safe_logging
 
 
 _logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ def run_worker(
     ):
         raise ValueError("max_claims 必须是非负整数或 None")
 
+    configure_safe_logging(secrets=(settings.service_token,))
     install_safe_logging(_logger, secrets=(settings.service_token,))
     claim_count = 0
     while max_claims is None or claim_count < max_claims:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable, Mapping
+import sys
+from collections.abc import Iterable
+from typing import TextIO
 
 
 _URL_PATTERN = re.compile(r"https?://[^\s,;)}\]>]+", re.IGNORECASE)
@@ -15,7 +17,16 @@ _SECRET_ASSIGNMENT_PATTERN = re.compile(
 _SAFE_RELATIVE_PATH_PATTERN = re.compile(
     r"/api/internal/motion-analysis/jobs/(?:claim/|[1-9][0-9]*/(?:heartbeat|complete|fail)/)\Z"
 )
-_REASON_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,79}\Z")
+_SAFE_REASON_CODES = frozenset(
+    {
+        "claim_retry_exhausted",
+        "fail_report_error",
+        "processor_error",
+        "response",
+        "server_error",
+        "transport_error",
+    }
+)
 _SAFE_MESSAGES = frozenset(
     {
         "motioncare_request_retry",
@@ -40,15 +51,7 @@ def _redact_text(value: str, secrets: tuple[str, ...]) -> str:
 
 
 def _redact_untrusted_value(value: object) -> object:
-    if isinstance(value, str):
-        return "<redacted>"
-    if isinstance(value, tuple):
-        return tuple(_redact_untrusted_value(item) for item in value)
-    if isinstance(value, list):
-        return [_redact_untrusted_value(item) for item in value]
-    if isinstance(value, Mapping):
-        return {key: _redact_untrusted_value(item) for key, item in value.items()}
-    return value
+    return "<redacted>"
 
 
 def _safe_structured_extra(key: str, value: object) -> bool:
@@ -69,7 +72,7 @@ def _safe_structured_extra(key: str, value: object) -> bool:
     if key == "attempt":
         return isinstance(value, int) and not isinstance(value, bool) and value > 0
     if key == "reason_code":
-        return isinstance(value, str) and bool(_REASON_CODE_PATTERN.fullmatch(value))
+        return value in _SAFE_REASON_CODES
     return False
 
 
@@ -98,6 +101,15 @@ class SafeLogFilter(logging.Filter):
             record.msg = f"{record.msg} exception=<redacted>"
         if record.stack_info:
             record.stack_info = "<redacted>"
+        for field_name in (
+            "method",
+            "path",
+            "status",
+            "job_id",
+            "attempt",
+            "reason_code",
+        ):
+            record.__dict__.setdefault(field_name, None)
         return True
 
 
@@ -109,3 +121,44 @@ def install_safe_logging(
     filter_ = SafeLogFilter(secrets=secrets)
     logger.addFilter(filter_)
     return filter_
+
+
+_SAFE_HANDLER_MARKER = "_pp_mcare_safe_handler"
+_SAFE_FORMAT = (
+    "event=%(message)s method=%(method)s path=%(path)s status=%(status)s "
+    "job_id=%(job_id)s attempt=%(attempt)s reason_code=%(reason_code)s"
+)
+
+
+def configure_safe_logging(
+    *,
+    secrets: Iterable[str] = (),
+    stream: TextIO | None = None,
+) -> logging.Handler:
+    """配置不可向 root 传播的 pp_mcare 专用安全日志边界。"""
+
+    namespace = logging.getLogger("pp_mcare")
+    namespace.setLevel(logging.DEBUG)
+    namespace.propagate = False
+    existing = next(
+        (
+            handler
+            for handler in namespace.handlers
+            if getattr(handler, _SAFE_HANDLER_MARKER, False)
+        ),
+        None,
+    )
+    if existing is None or stream is not None:
+        for handler in tuple(namespace.handlers):
+            namespace.removeHandler(handler)
+            handler.close()
+        existing = logging.StreamHandler(stream if stream is not None else sys.stderr)
+        setattr(existing, _SAFE_HANDLER_MARKER, True)
+        existing.setFormatter(logging.Formatter(_SAFE_FORMAT))
+        namespace.addHandler(existing)
+
+    for filter_ in tuple(existing.filters):
+        if isinstance(filter_, SafeLogFilter):
+            existing.removeFilter(filter_)
+    existing.addFilter(SafeLogFilter(secrets=secrets))
+    return existing

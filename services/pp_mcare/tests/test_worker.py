@@ -1,10 +1,15 @@
-import logging
 import importlib
+import io
+import tempfile
+import threading
+from pathlib import Path
 
+import pytest
 from motion_analysis_contract import PROTOCOL_VERSION, ClaimedJob
 
 from pp_mcare.api_client import MotionCareUnavailableError
 from pp_mcare.config import Settings
+from pp_mcare.safe_logging import configure_safe_logging
 from pp_mcare.worker import run_worker
 
 
@@ -39,11 +44,21 @@ def make_job(job_id):
     )
 
 
+TEST_DIRECTORY = tempfile.TemporaryDirectory(
+    prefix="pp-mcare-worker-tests-",
+    dir=Path(tempfile.gettempdir()).resolve(),
+)
+TEST_PATH_BASE = Path(TEST_DIRECTORY.name)
+
+
 def service_settings():
     return Settings(
         api_base_url="https://motioncare.example",
         service_token="machine-service-secret",
         worker_id="worker-1",
+        work_root=TEST_PATH_BASE / "jobs",
+        model_cache=TEST_PATH_BASE / "model-cache",
+        _trusted_path_base=TEST_PATH_BASE,
     )
 
 
@@ -167,8 +182,10 @@ def test_claim_retry_exhaustion_sleeps_poll_interval_and_keeps_loop_alive():
     assert processed == [2]
 
 
-def test_processor_fail_reporting_error_does_not_exit_or_start_second_active_job(caplog):
+def test_processor_fail_reporting_error_does_not_exit_or_start_second_active_job():
     events = []
+    output = io.StringIO()
+    configure_safe_logging(secrets=("machine-service-secret",), stream=output)
     client = FakeClient([make_job(1), make_job(2)], events)
     active = 0
     maximum_active = 0
@@ -191,26 +208,24 @@ def test_processor_fail_reporting_error_does_not_exit_or_start_second_active_job
         finally:
             active -= 1
 
-    with caplog.at_level(logging.WARNING, logger="pp_mcare.worker"):
-        run_worker(
-            client=client,
-            processor=processor,
-            sleeper=lambda seconds: events.append(f"sleep:{seconds}"),
-            settings=service_settings(),
-            max_claims=2,
-        )
+    run_worker(
+        client=client,
+        processor=processor,
+        sleeper=lambda seconds: events.append(f"sleep:{seconds}"),
+        settings=service_settings(),
+        max_claims=2,
+    )
 
     assert maximum_active == 1
     assert client.claim_count == 2
     assert len(client.fail_calls) == 1
-    assert "private.example" not in caplog.text
-    assert "patient.mp4" not in caplog.text
-    assert "machine-service-secret" not in caplog.text
-    processor_failure = next(
-        record for record in caplog.records if record.msg == "motion_analysis_processor_failed"
-    )
-    assert processor_failure.method is None
-    assert processor_failure.path is None
+    rendered = output.getvalue()
+    assert "private.example" not in rendered
+    assert "patient.mp4" not in rendered
+    assert "machine-service-secret" not in rendered
+    assert "event=motion_analysis_processor_failed" in rendered
+    assert "method=None" in rendered
+    assert "path=None" in rendered
 
 
 def test_max_claims_zero_is_a_deterministic_noop():
@@ -227,6 +242,68 @@ def test_max_claims_zero_is_a_deterministic_noop():
     assert client.claim_count == 0
 
 
+def test_blocked_processor_prevents_prefetch_and_second_active_job():
+    client = FakeClient([make_job(1), make_job(2)])
+    started = threading.Event()
+    release = threading.Event()
+    active = 0
+    maximum_active = 0
+    processed = []
+
+    def processor(job):
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        processed.append(job.job_id)
+        try:
+            if job.job_id == 1:
+                started.set()
+                assert release.wait(timeout=2)
+        finally:
+            active -= 1
+
+    thread = threading.Thread(
+        target=run_worker,
+        kwargs={
+            "client": client,
+            "processor": processor,
+            "sleeper": lambda _seconds: None,
+            "settings": service_settings(),
+            "max_claims": 2,
+        },
+    )
+    thread.start()
+    assert started.wait(timeout=2)
+
+    assert client.claim_count == 1
+    assert processed == [1]
+    assert maximum_active == 1
+
+    release.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert client.claim_count == 2
+    assert processed == [1, 2]
+    assert maximum_active == 1
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt(), SystemExit(7)])
+def test_process_control_exceptions_are_not_converted_to_failure_reports(interrupt):
+    client = FakeClient([make_job(1)])
+
+    with pytest.raises(type(interrupt)):
+        run_worker(
+            client=client,
+            processor=lambda _job: (_ for _ in ()).throw(interrupt),
+            sleeper=lambda _seconds: None,
+            settings=service_settings(),
+            max_claims=1,
+        )
+
+    assert client.claim_count == 1
+    assert client.fail_calls == []
+
+
 def test_importing_cli_has_no_environment_or_network_side_effect(monkeypatch):
     monkeypatch.setenv("QINIU_ACCESS_KEY", "must-not-be-read-at-import")
 
@@ -235,32 +312,32 @@ def test_importing_cli_has_no_environment_or_network_side_effect(monkeypatch):
     assert callable(module.main)
 
 
-def test_cli_reads_settings_and_starts_worker_without_printing_token(monkeypatch, capsys):
+def test_cli_refuses_to_start_before_constructing_client_or_claiming_jobs(monkeypatch, capsys):
     module = importlib.import_module("pp_mcare.__main__")
     configured = service_settings()
     calls = []
 
-    class ClientContext:
+    class PoisonClient:
         def __init__(self, received_settings):
             calls.append(("client", received_settings))
 
-        def __enter__(self):
-            return self
+        def claim(self):
+            calls.append(("claim",))
 
-        def __exit__(self, *_args):
-            return None
+        def fail(self, *_args, **_kwargs):
+            calls.append(("fail",))
 
     monkeypatch.setattr(module.Settings, "from_env", lambda: configured)
-    monkeypatch.setattr(module, "MotionCareClient", ClientContext)
+    monkeypatch.setattr("pp_mcare.api_client.MotionCareClient", PoisonClient)
     monkeypatch.setattr(
-        module,
-        "run_worker",
-        lambda **kwargs: calls.append(("worker", kwargs["settings"], kwargs["client"])),
+        "pp_mcare.worker.run_worker",
+        lambda **kwargs: calls.append(("worker", kwargs)),
     )
 
-    assert module.main() == 0
+    assert module.main() != 0
 
-    assert calls[0] == ("client", configured)
-    assert calls[1][0:2] == ("worker", configured)
+    assert calls == []
     captured = capsys.readouterr()
-    assert "machine-service-secret" not in captured.out + captured.err
+    assert captured.out == ""
+    assert captured.err == "pp-mcare 执行器尚未接入，拒绝启动\n"
+    assert "machine-service-secret" not in captured.err

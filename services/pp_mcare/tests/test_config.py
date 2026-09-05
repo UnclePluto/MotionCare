@@ -1,5 +1,7 @@
 import json
 import stat
+import tomllib
+from pathlib import Path
 
 import pytest
 from motion_analysis_contract import PROTOCOL_VERSION, WorkerCapability
@@ -25,8 +27,25 @@ def valid_env(tmp_path):
     }
 
 
+def from_env(tmp_path, environ, **kwargs):
+    return Settings.from_env(environ, _trusted_path_base=tmp_path, **kwargs)
+
+
+def direct_settings(tmp_path, **overrides):
+    values = {
+        "api_base_url": "https://motioncare.example",
+        "service_token": "machine-secret-123",
+        "worker_id": "worker-prod-1",
+        "work_root": tmp_path / "jobs",
+        "model_cache": tmp_path / "models",
+        "_trusted_path_base": tmp_path,
+    }
+    values.update(overrides)
+    return Settings(**values)
+
+
 def test_settings_builds_exact_approved_capability_and_private_work_root(tmp_path):
-    settings = Settings.from_env(valid_env(tmp_path))
+    settings = from_env(tmp_path, valid_env(tmp_path))
 
     assert settings.api_base_url == "https://motioncare.example"
     assert settings.protocol_version == PROTOCOL_VERSION
@@ -34,6 +53,7 @@ def test_settings_builds_exact_approved_capability_and_private_work_root(tmp_pat
     assert settings.poll_interval_seconds == 900
     assert settings.network_attempts == 3
     assert stat.S_IMODE(settings.work_root.stat().st_mode) == 0o700
+    assert stat.S_IMODE(settings.model_cache.stat().st_mode) == 0o700
 
 
 @pytest.mark.parametrize(
@@ -51,18 +71,24 @@ def test_settings_rejects_long_term_business_secrets_even_when_empty(tmp_path, n
     env = valid_env(tmp_path) | {name: value}
 
     with pytest.raises(ConfigurationError) as error:
-        Settings.from_env(env)
+        from_env(tmp_path, env)
 
     assert value not in str(error.value) if value else True
     assert "machine-secret-123" not in str(error.value)
 
 
 def test_settings_ignores_unrelated_environment_but_rejects_unknown_worker_key(tmp_path):
-    settings = Settings.from_env(valid_env(tmp_path) | {"PATH": "/usr/bin", "LANG": "zh_CN"})
+    settings = from_env(
+        tmp_path,
+        valid_env(tmp_path) | {"PATH": "/usr/bin", "LANG": "zh_CN"},
+    )
     assert settings.worker_id == "worker-prod-1"
 
     with pytest.raises(ConfigurationError):
-        Settings.from_env(valid_env(tmp_path) | {"PP_MCARE_DATABASE_URL": "postgres://bad"})
+        from_env(
+            tmp_path,
+            valid_env(tmp_path) | {"PP_MCARE_DATABASE_URL": "postgres://bad"},
+        )
 
 
 @pytest.mark.parametrize(
@@ -81,7 +107,7 @@ def test_settings_rejects_non_https_credentials_and_ambiguous_base_urls(tmp_path
     env = valid_env(tmp_path) | {"PP_MCARE_API_BASE_URL": base_url}
 
     with pytest.raises(ConfigurationError) as error:
-        Settings.from_env(env)
+        from_env(tmp_path, env)
 
     rendered = repr(error.value)
     assert "machine-secret-123" not in rendered
@@ -91,7 +117,7 @@ def test_settings_rejects_non_https_credentials_and_ambiguous_base_urls(tmp_path
 @pytest.mark.parametrize("worker_id", ["", " worker-1", "worker-1 ", "worker 1", "worker/1"])
 def test_settings_rejects_noncanonical_worker_id(tmp_path, worker_id):
     with pytest.raises(ConfigurationError):
-        Settings.from_env(valid_env(tmp_path) | {"PP_MCARE_WORKER_ID": worker_id})
+        from_env(tmp_path, valid_env(tmp_path) | {"PP_MCARE_WORKER_ID": worker_id})
 
 
 @pytest.mark.parametrize(
@@ -108,7 +134,7 @@ def test_settings_rejects_noncanonical_worker_id(tmp_path, worker_id):
 )
 def test_settings_parses_environment_numbers_fail_closed(tmp_path, name, value):
     with pytest.raises(ConfigurationError):
-        Settings.from_env(valid_env(tmp_path) | {name: value})
+        from_env(tmp_path, valid_env(tmp_path) | {name: value})
 
 
 @pytest.mark.parametrize(
@@ -137,7 +163,7 @@ def test_settings_rejects_empty_duplicate_whitespace_or_wrong_explicit_capabilit
     }
 
     with pytest.raises(ConfigurationError):
-        Settings.from_env(env)
+        from_env(tmp_path, env)
 
 
 def test_settings_accepts_only_the_exact_explicit_approved_capability(tmp_path):
@@ -145,11 +171,126 @@ def test_settings_accepts_only_the_exact_explicit_approved_capability(tmp_path):
         "PP_MCARE_CAPABILITIES": json.dumps([EXPECTED_CAPABILITY.to_dict()]),
     }
 
-    assert Settings.from_env(env).capabilities == (EXPECTED_CAPABILITY,)
+    assert from_env(tmp_path, env).capabilities == (EXPECTED_CAPABILITY,)
 
 
 def test_settings_repr_never_contains_machine_token(tmp_path):
-    settings = Settings.from_env(valid_env(tmp_path))
+    settings = from_env(tmp_path, valid_env(tmp_path))
 
     assert "machine-secret-123" not in repr(settings)
     assert "<redacted>" in repr(settings)
+
+
+@pytest.mark.parametrize("field_name", ["PP_MCARE_WORK_ROOT", "PP_MCARE_MODEL_CACHE"])
+def test_settings_rejects_parent_and_leaf_symlinks(tmp_path, field_name):
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    parent_link = trusted / "linked-parent"
+    parent_link.symlink_to(outside, target_is_directory=True)
+    env = valid_env(trusted)
+    env[field_name] = str(parent_link / "child")
+
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(env, _trusted_path_base=trusted)
+
+    leaf_link = trusted / "leaf-link"
+    leaf_link.symlink_to(outside, target_is_directory=True)
+    env[field_name] = str(leaf_link)
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(env, _trusted_path_base=trusted)
+
+
+@pytest.mark.parametrize("field_name", ["PP_MCARE_WORK_ROOT", "PP_MCARE_MODEL_CACHE"])
+def test_settings_rejects_file_placeholder_at_directory_path(tmp_path, field_name):
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    placeholder = trusted / "not-a-directory"
+    placeholder.write_text("private")
+    env = valid_env(trusted)
+    env[field_name] = str(placeholder)
+
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(env, _trusted_path_base=trusted)
+
+
+def test_settings_rejects_path_outside_explicit_trusted_base(tmp_path):
+    trusted = tmp_path / "trusted"
+    env = valid_env(trusted)
+    env["PP_MCARE_MODEL_CACHE"] = str(tmp_path / "outside" / "models")
+
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(env, _trusted_path_base=trusted)
+
+
+def test_settings_detects_mkdir_replacement_race_without_following_link(tmp_path):
+    trusted = tmp_path / "trusted"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    raced_leaf = trusted / "jobs"
+
+    def replace_created_directory(path):
+        if path == raced_leaf:
+            path.rmdir()
+            path.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ConfigurationError):
+        Settings.from_env(
+            valid_env(trusted),
+            _trusted_path_base=trusted,
+            _path_operation_hook=replace_created_directory,
+        )
+
+    assert raced_leaf.is_symlink()
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"api_base_url": "http://motioncare.example"},
+        {"service_token": "bad token"},
+        {"worker_id": "worker/unsafe"},
+        {"poll_interval_seconds": 0},
+        {"network_attempts": 4},
+        {"connect_timeout_seconds": True},
+        {"read_timeout_seconds": -1},
+        {"write_timeout_seconds": 0},
+        {"pool_timeout_seconds": 0},
+        {"protocol_version": "2"},
+        {"capabilities": ()},
+        {
+            "capabilities": (
+                WorkerCapability(
+                    action_source_key="motion-resistance-shoulder-press",
+                    algorithm_version="wrong",
+                    rule_version="shoulder-press-v2",
+                    parameter_version="shoulder-press-v2-defaults",
+                ),
+            )
+        },
+    ],
+)
+def test_direct_settings_constructor_cannot_bypass_validation(tmp_path, overrides):
+    with pytest.raises(ConfigurationError):
+        direct_settings(tmp_path, **overrides)
+
+
+def test_direct_settings_constructor_rejects_path_outside_trusted_root(tmp_path):
+    with pytest.raises(ConfigurationError):
+        direct_settings(tmp_path, model_cache=tmp_path.parent / "outside-models")
+
+
+def test_package_metadata_targets_python_312_and_one_headless_opencv_provider():
+    pyproject_path = Path(__file__).parents[1] / "pyproject.toml"
+    project = tomllib.loads(pyproject_path.read_text())["project"]
+    inference = project["optional-dependencies"]["inference"]
+
+    assert project["requires-python"] == ">=3.12,<3.13"
+    assert "paddlepaddle==3.3.0" in inference
+    assert "paddlex==3.7.2" in inference
+    assert not any(requirement.startswith("paddlex[cv]") for requirement in inference)
+    assert [
+        requirement for requirement in inference if requirement.lower().startswith("opencv-")
+    ] == ["opencv-contrib-python-headless==4.10.0.84"]

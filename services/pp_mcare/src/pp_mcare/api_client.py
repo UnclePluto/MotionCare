@@ -17,9 +17,9 @@ from motion_analysis_contract import (
     MotionCounts,
 )
 
-from .config import Settings
+from .config import ConfigurationError, Settings
 from .retry import run_with_retry
-from .safe_logging import install_safe_logging
+from .safe_logging import configure_safe_logging, install_safe_logging
 
 
 _CLAIM_PATH = "/api/internal/motion-analysis/jobs/claim/"
@@ -136,9 +136,14 @@ class MotionCareClient:
         sleeper: Callable[[float], None] = time.sleep,
         logger: logging.Logger | None = None,
     ) -> None:
+        try:
+            settings.validate_network_security()
+        except (AttributeError, ConfigurationError):
+            raise MotionCareValidationError("HTTP 客户端配置无效") from None
         self._settings = settings
         self._sleeper = sleeper
         self._logger = logger or logging.getLogger(__name__)
+        configure_safe_logging(secrets=(settings.service_token,))
         self._safe_log_filter = install_safe_logging(
             self._logger,
             secrets=(settings.service_token,),
