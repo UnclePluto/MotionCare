@@ -1352,6 +1352,46 @@ def test_tracking_recent_records_expose_video_and_analysis_capability_for_all_mo
 
 
 @pytest.mark.django_db
+def test_tracking_analysis_capability_follows_business_support_table(
+    doctor,
+    project_patient,
+    active_prescription,
+    monkeypatch,
+):
+    from apps.training.motion_analysis_support import ANALYSIS_PROFILES
+
+    source_key = "motion-resistance-shoulder-press"
+    item = ActionLibraryItem.objects.get(source_key=source_key)
+    action = active_prescription.add_action_snapshot(
+        item,
+        weekly_frequency="2 次/周",
+        duration_minutes=10,
+        weekly_target_count=2,
+    )
+    record = _record(
+        project_patient,
+        active_prescription,
+        action,
+        training_date=timezone.localdate(),
+    )
+    _training_video(
+        project_patient,
+        active_prescription,
+        action,
+        status=TrainingVideo.Status.ATTACHED,
+        training_record=record,
+    )
+    monkeypatch.delitem(ANALYSIS_PROFILES, source_key)
+
+    response = _client(doctor).get(
+        f"/api/training/tracking/patients/{project_patient.patient_id}/"
+    )
+
+    assert response.status_code == 200, response.data
+    assert response.data["recent_records"][0]["analysis_available"] is False
+
+
+@pytest.mark.django_db
 def test_tracking_detail_returns_only_selected_project_pending_training_videos_with_safe_fields(
     doctor,
     project_patient,

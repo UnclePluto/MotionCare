@@ -14,12 +14,15 @@ from django.utils import timezone
 from apps.studies.models import ProjectPatient
 
 from .models import (
+    MotionAnalysisJob,
     QiniuCleanupTombstone,
     TrainingRecord,
     TrainingVideo,
     TrainingVideoSegment,
     VideoAssemblyJob,
 )
+from .motion_analysis_storage import build_skeleton_object_key
+from .motion_analysis_support import get_analysis_profile
 from .qiniu import (
     delete_object_if_exists,
     publish_attempt_to_canonical,
@@ -51,6 +54,37 @@ ASSEMBLED_VIDEO_DURATION_TOLERANCE_SECONDS = 5
 
 class AssemblyLeaseLost(ValidationError):
     pass
+
+
+def ensure_motion_analysis_job(video: TrainingVideo) -> MotionAnalysisJob | None:
+    if not settings.PP_MCARE_AUTO_ENQUEUE_ENABLED:
+        return None
+
+    existing = (
+        MotionAnalysisJob.objects.filter(training_video=video).order_by("id").first()
+    )
+    if existing is not None:
+        return existing
+
+    source_key = video.prescription_action.action_library_item.source_key
+    profile = get_analysis_profile(source_key)
+    if profile is None:
+        return None
+
+    return MotionAnalysisJob.objects.create(
+        training_video=video,
+        training_record=video.training_record,
+        project_patient=video.project_patient,
+        prescription_action=video.prescription_action,
+        action_source_key=source_key,
+        algorithm_name=profile.algorithm_name,
+        algorithm_version=profile.algorithm_version,
+        rule_version=profile.rule_version,
+        parameter_version=profile.parameter_version,
+        subject_tracker_version=profile.subject_tracker_version,
+        skeleton_bucket=settings.QINIU_BUCKET,
+        skeleton_object_key=build_skeleton_object_key(video),
+    )
 
 
 def _safe_video_failure_reason(stage, exc):
@@ -527,6 +561,7 @@ def attach_training_video(
             "updated_at",
         ]
     )
+    ensure_motion_analysis_job(video)
     tombstone = _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=True)
     transaction.on_commit(lambda job_id=job.id: cleanup_training_video_files.delay(job_id))
     transaction.on_commit(

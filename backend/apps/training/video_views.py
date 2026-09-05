@@ -9,7 +9,6 @@ from apps.wearables.services.training_windows import training_video_wearable_win
 from .models import MotionAnalysisJob
 from .video_serializers import MotionAnalysisJobSerializer
 from .video_services import (
-    create_analysis_job,
     create_private_download_url,
     get_training_video_for_user,
 )
@@ -37,24 +36,6 @@ class TrainingVideoDownloadUrlView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response({"url": url})
-
-
-class TrainingVideoAnalysisJobView(APIView):
-    permission_classes = [IsAdminOrDoctor]
-
-    def post(self, request, video_id):
-        video = get_training_video_for_user(request.user, video_id)
-        try:
-            job = create_analysis_job(video=video, requested_by=request.user)
-        except DjangoValidationError as exc:
-            return Response(
-                {"detail": validation_detail(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            MotionAnalysisJobSerializer(job).data,
-            status=status.HTTP_201_CREATED,
-        )
 
 
 class TrainingVideoLatestAnalysisJobView(APIView):

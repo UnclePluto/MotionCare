@@ -3,7 +3,6 @@ from rest_framework.routers import DefaultRouter
 
 from .tracking_views import TrackingPatientDetailView, TrackingPatientListView
 from .video_views import (
-    TrainingVideoAnalysisJobView,
     TrainingVideoDownloadUrlView,
     TrainingVideoLatestAnalysisJobView,
     TrainingVideoWearableWindowView,
@@ -22,10 +21,6 @@ urlpatterns = [
     path(
         "videos/<int:video_id>/wearable-window/",
         TrainingVideoWearableWindowView.as_view(),
-    ),
-    path(
-        "videos/<int:video_id>/analysis-jobs/",
-        TrainingVideoAnalysisJobView.as_view(),
     ),
     path(
         "videos/<int:video_id>/analysis-jobs/latest/",

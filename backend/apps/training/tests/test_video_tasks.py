@@ -10,6 +10,7 @@ from kombu.serialization import dumps
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.training.models import (
+    MotionAnalysisJob,
     QiniuCleanupTombstone,
     TrainingRecord,
     TrainingVideo,
@@ -44,7 +45,6 @@ def test_video_assembly_job_task_routes_to_dedicated_queue():
         module.recover_training_video_cleanup,
         module.expire_stale_training_video_sessions,
         module.recover_stale_video_assembly_jobs,
-        training_tasks.run_motion_analysis_job,
         training_tasks.recover_stale_motion_analysis_jobs,
     ]
     for task in default_queue_tasks:
@@ -161,6 +161,171 @@ def _remote_metadata(result, *, object_hash="qiniu-hash"):
         "fsize": result.size_bytes,
         "mimeType": "video/mp4",
     }
+
+
+def _mark_assembly_job_running(job):
+    job.status = VideoAssemblyJob.Status.RUNNING
+    job.save(update_fields=["status", "updated_at"])
+
+
+@pytest.mark.django_db
+def test_attaching_supported_video_creates_one_pending_analysis_job(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
+    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    _mark_assembly_job_running(video_job)
+    result = _assembly_result(video)
+    metadata = _remote_metadata(result)
+    module = _video_tasks()
+
+    first = module.attach_training_video(
+        video_job.id,
+        result,
+        metadata,
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+    original_skeleton_key = MotionAnalysisJob.objects.get(
+        training_video=video
+    ).skeleton_object_key
+    second = module.attach_training_video(
+        video_job.id,
+        result,
+        metadata,
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+
+    assert second.pk == first.pk
+    jobs = MotionAnalysisJob.objects.filter(training_video=video)
+    assert jobs.count() == 1
+    job = jobs.get()
+    assert job.status == MotionAnalysisJob.Status.PENDING
+    assert job.action_source_key == "motion-resistance-shoulder-press"
+    assert job.algorithm_name == "pp-tiny-pose"
+    assert job.algorithm_version == "PP-TinyPose_128x96"
+    assert job.rule_version == "shoulder-press-v2"
+    assert job.parameter_version == "shoulder-press-v2-defaults"
+    assert job.subject_tracker_version == "primary-subject-v1"
+    assert job.skeleton_bucket == "motioncare-training"
+    assert job.skeleton_object_key.startswith(
+        f"motion-analysis/{project_patient.id}/{video.training_date:%Y/%m}/"
+    )
+    assert job.skeleton_object_key.endswith("/skeleton.mp4")
+    assert job.skeleton_object_key == original_skeleton_key
+
+
+@pytest.mark.django_db
+def test_attaching_unsupported_video_does_not_create_analysis_job(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
+    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    item = ActionLibraryItem.objects.get(source_key="motion-aerobic-high-knee")
+    video.prescription_action = active_prescription.add_action_snapshot(
+        item,
+        weekly_frequency="2 次/周",
+        weekly_target_count=2,
+        duration_minutes=10,
+    )
+    video.save(update_fields=["prescription_action", "updated_at"])
+    _mark_assembly_job_running(video_job)
+    result = _assembly_result(video)
+
+    _video_tasks().attach_training_video(
+        video_job.id,
+        result,
+        _remote_metadata(result),
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+
+    assert not MotionAnalysisJob.objects.filter(training_video=video).exists()
+
+
+@pytest.mark.django_db
+def test_repeated_attach_keeps_existing_failed_analysis_job(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
+    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    _mark_assembly_job_running(video_job)
+    result = _assembly_result(video)
+    metadata = _remote_metadata(result)
+    module = _video_tasks()
+    module.attach_training_video(
+        video_job.id,
+        result,
+        metadata,
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+    existing = MotionAnalysisJob.objects.get(training_video=video)
+    existing.status = MotionAnalysisJob.Status.FAILED
+    existing.failure_code = "analysis_failed"
+    existing.save(update_fields=["status", "failure_code", "updated_at"])
+
+    module.attach_training_video(
+        video_job.id,
+        result,
+        metadata,
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+
+    assert MotionAnalysisJob.objects.filter(training_video=video).count() == 1
+    existing.refresh_from_db()
+    assert existing.status == MotionAnalysisJob.Status.FAILED
+
+
+@pytest.mark.django_db
+def test_auto_enqueue_disabled_does_not_create_analysis_job(
+    project_patient,
+    active_prescription,
+    tmp_path,
+    settings,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = False
+    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    _mark_assembly_job_running(video_job)
+    result = _assembly_result(video)
+
+    _video_tasks().attach_training_video(
+        video_job.id,
+        result,
+        _remote_metadata(result),
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+
+    assert not MotionAnalysisJob.objects.filter(training_video=video).exists()
+    settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
+    _video_tasks().attach_training_video(
+        video_job.id,
+        result,
+        _remote_metadata(result),
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+    assert not MotionAnalysisJob.objects.filter(training_video=video).exists()
 
 
 @pytest.mark.django_db

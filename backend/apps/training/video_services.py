@@ -11,12 +11,13 @@ from apps.prescriptions.action_library import is_official_motion_action
 from apps.prescriptions.models import ActionLibraryItem, Prescription, PrescriptionAction
 from apps.studies.models import ProjectPatient
 
-from .analysis_registry import get_motion_analyzer
 from .models import (
-    MotionAnalysisJob,
     TrainingVideo,
     TrainingVideoSegment,
     VideoAssemblyJob,
+)
+from .motion_analysis_support import (
+    SHOULDER_PRESS_SOURCE_KEY as _SHOULDER_PRESS_SOURCE_KEY,
 )
 from .qiniu import private_download_url
 from .video_staging import (
@@ -32,11 +33,11 @@ from .video_staging import (
     validate_video_runtime_environment,
 )
 
-SHOULDER_PRESS_SOURCE_KEY = "motion-resistance-shoulder-press"
 LEGACY_TRAINING_VIDEO_MAX_DURATION_SECONDS = 2_400
 LEGACY_TRAINING_VIDEO_MAX_SEGMENTS = 600
 CURRENT_TRAINING_VIDEO_MAX_DURATION_SECONDS = 1_800
 FINALIZE_DURATION_TOLERANCE_SECONDS = 5
+SHOULDER_PRESS_SOURCE_KEY = _SHOULDER_PRESS_SOURCE_KEY
 
 
 def _session_upload_limits(video):
@@ -532,45 +533,3 @@ def create_private_download_url(video):
     )
     base_url = f"{settings.QINIU_DOWNLOAD_DOMAIN.rstrip('/')}/{video.object_key}"
     return private_download_url(base_url, expires_at=int(expires_at.timestamp()))
-
-
-@transaction.atomic
-def create_analysis_job(*, video, requested_by):
-    locked_video = (
-        TrainingVideo.objects.select_for_update(of=("self",))
-        .select_related(
-            "training_record",
-            "prescription_action__action_library_item",
-        )
-        .get(pk=video.pk)
-    )
-    if locked_video.status != TrainingVideo.Status.ATTACHED or not locked_video.training_record_id:
-        raise ValidationError("训练视频尚未绑定训练记录")
-    source_key = locked_video.prescription_action.action_library_item.source_key
-    analyzer = get_motion_analyzer(source_key)
-    if analyzer is None:
-        raise ValidationError("不支持当前动作分析")
-    if MotionAnalysisJob.objects.filter(
-        training_video=locked_video,
-        status__in=[MotionAnalysisJob.Status.PENDING, MotionAnalysisJob.Status.RUNNING],
-    ).exists():
-        raise ValidationError("已有进行中的分析任务")
-
-    try:
-        with transaction.atomic():
-            job = MotionAnalysisJob.objects.create(
-                training_video=locked_video,
-                training_record=locked_video.training_record,
-                project_patient=locked_video.project_patient,
-                prescription_action=locked_video.prescription_action,
-                requested_by=requested_by,
-                algorithm_version=analyzer.algorithm_version,
-                rule_version=analyzer.rule_version,
-            )
-    except IntegrityError as exc:
-        raise ValidationError("已有进行中的分析任务") from exc
-
-    from .tasks import run_motion_analysis_job
-
-    transaction.on_commit(lambda: run_motion_analysis_job.delay(job.id))
-    return job
