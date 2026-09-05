@@ -5,8 +5,20 @@ import sys
 from collections.abc import Sequence
 
 
+_SAFE_PARSE_ERROR = (
+    "用法: pp_mcare regression --video <路径> "
+    "--manual-total-count 90 --report <路径>\n"
+    "pp_mcare: 参数无效\n"
+)
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, _message: str) -> None:
+        self.exit(2, _SAFE_PARSE_ERROR)
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pp_mcare")
+    parser = _SafeArgumentParser(prog="pp_mcare")
     subcommands = parser.add_subparsers(dest="command", required=True)
     regression = subcommands.add_parser("regression")
     regression.add_argument("--video", required=True)

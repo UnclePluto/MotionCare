@@ -112,13 +112,20 @@ def _start_ffmpeg(command: list[str], stderr):
     )
 
 
-def _start_ffprobe(command: list[str], stdout: BinaryIO, stderr: BinaryIO):
+def _start_ffprobe(
+    command: list[str],
+    stdout: BinaryIO,
+    stderr: BinaryIO,
+    *,
+    pass_fds: tuple[int, ...] = (),
+):
     return subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
         stdout=stdout,
         stderr=stderr,
         shell=False,
+        pass_fds=pass_fds,
     )
 
 
@@ -151,6 +158,7 @@ def _run_ffprobe(
     timeout_seconds: float,
     redact_paths: tuple[Path, ...],
     parser: Callable[[BinaryIO], _ProbeResult],
+    pass_fds: tuple[int, ...] = (),
 ) -> _ProbeResult:
     """Run ffprobe with bounded 0600 files and parse before automatic cleanup."""
     process = None
@@ -158,7 +166,12 @@ def _run_ffprobe(
         os.fchmod(stdout.fileno(), 0o600)
         os.fchmod(stderr.fileno(), 0o600)
         try:
-            process = _start_ffprobe(command, stdout, stderr)
+            for descriptor in pass_fds:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+            if pass_fds:
+                process = _start_ffprobe(command, stdout, stderr, pass_fds=pass_fds)
+            else:
+                process = _start_ffprobe(command, stdout, stderr)
             deadline = time.monotonic() + timeout_seconds
             while True:
                 if _file_size(stdout) > stdout_limit:
@@ -185,6 +198,9 @@ def _run_ffprobe(
             if process is not None:
                 _kill_and_wait(process)
             raise
+        finally:
+            for descriptor in pass_fds:
+                os.lseek(descriptor, 0, os.SEEK_SET)
 
 
 def _parse_rate(value: object) -> float:
@@ -365,7 +381,7 @@ def _probe_video(path: Path) -> VideoMetadata:
         raise MediaEncodingError("骨架视频无法通过 ffprobe 校验") from exc
 
 
-def probe_source_video(path) -> SourceVideoMetadata:
+def probe_source_video(path, *, pass_fds: tuple[int, ...] = ()) -> SourceVideoMetadata:
     """Probe and decode-count the independent input timeline before inference starts."""
     source_path = Path(path)
     ffprobe = shutil.which("ffprobe")
@@ -402,6 +418,7 @@ def probe_source_video(path) -> SourceVideoMetadata:
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
             redact_paths=(source_path,),
             parser=_load_probe_json,
+            pass_fds=pass_fds,
         )
         video_streams = [
             stream for stream in payload["streams"] if stream.get("codec_type") == "video"
@@ -425,6 +442,7 @@ def probe_source_video(path) -> SourceVideoMetadata:
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
             redact_paths=(source_path,),
             parser=lambda output: _parse_cfr_timeline(output, expected_fps=average_fps),
+            pass_fds=pass_fds,
         )
         summary_frame_count = int(video["nb_read_frames"])
         if timeline.frame_count != summary_frame_count:

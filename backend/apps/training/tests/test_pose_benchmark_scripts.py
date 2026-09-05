@@ -13,44 +13,120 @@ BOOTSTRAP_SCRIPT = PROJECT_ROOT / "deploy/motion-analysis-smoke/bootstrap.sh"
 RUN_SCRIPT = PROJECT_ROOT / "deploy/motion-analysis-smoke/run-benchmark.sh"
 
 
-def test_backend_training_package_has_no_inference_runtime_imports():
+@pytest.mark.parametrize(
+    "source",
+    [
+        'import importlib as loader\nloader.import_module("pad" + "dle")\n',
+        'from importlib import import_module as load\nload("pad" + "dlex")\n',
+        'from importlib import import_module\nimport_module("c" + "v2")\n',
+        'from importlib import import_module as load\nMODULE = "pad" + "dle"\nload(MODULE)\n',
+        '__import__("pad" + "dle")\n',
+    ],
+)
+def test_inference_import_scanner_detects_common_dynamic_aliases(tmp_path, source):
+    module = tmp_path / "dynamic_import.py"
+    module.write_text(source, encoding="utf-8")
+
+    assert _scan_inference_runtime_imports(tmp_path) == ["dynamic_import.py"]
+
+
+def test_dependency_scanner_checks_main_and_optional_dependencies():
+    payload = {
+        "project": {
+            "dependencies": ["Django>=5", "paddlepaddle==3.3.0"],
+            "optional-dependencies": {
+                "dev": ["pytest", "opencv-contrib-python-headless==4.10.0.84"]
+            },
+        }
+    }
+
+    assert _find_inference_requirements(payload) == [
+        "opencv-contrib-python-headless==4.10.0.84",
+        "paddlepaddle==3.3.0",
+    ]
+
+
+def _constant_string(node, constants):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _constant_string(node.left, constants)
+        right = _constant_string(node.right, constants)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _scan_inference_runtime_imports(root):
     forbidden_roots = {"pad" + "dle", "pad" + "dlex", "c" + "v2"}
     offenders = []
-    production_root = PROJECT_ROOT / "backend/apps/training"
-
-    def constant_string(node):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left = constant_string(node.left)
-            right = constant_string(node.right)
-            if left is not None and right is not None:
-                return left + right
-        return None
-
-    for path in production_root.rglob("*.py"):
+    for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        importlib_aliases = {"importlib"}
+        import_module_aliases = {"__import__"}
+        constants = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "importlib":
+                        importlib_aliases.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module == "importlib":
+                for alias in node.names:
+                    if alias.name == "import_module":
+                        import_module_aliases.add(alias.asname or alias.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                value = _constant_string(node.value, constants)
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if value is not None:
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            constants[target.id] = value
+
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported = {alias.name.split(".", 1)[0] for alias in node.names}
                 if imported & forbidden_roots:
-                    offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
+                    offenders.append(path.relative_to(root).as_posix())
             elif isinstance(node, ast.ImportFrom) and node.module:
                 if node.module.split(".", 1)[0] in forbidden_roots:
-                    offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
+                    offenders.append(path.relative_to(root).as_posix())
             elif isinstance(node, ast.Call) and node.args:
-                is_dynamic_import = (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id in {"__import__", "import_module"}
+                dynamic_import = (
+                    isinstance(node.func, ast.Name) and node.func.id in import_module_aliases
                 ) or (
                     isinstance(node.func, ast.Attribute)
                     and node.func.attr == "import_module"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id in importlib_aliases
                 )
-                module_name = constant_string(node.args[0]) if is_dynamic_import else None
+                module_name = (
+                    _constant_string(node.args[0], constants) if dynamic_import else None
+                )
                 if module_name and module_name.split(".", 1)[0] in forbidden_roots:
-                    offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
+                    offenders.append(path.relative_to(root).as_posix())
+    return sorted(set(offenders))
 
-    assert sorted(set(offenders)) == []
+
+def _find_inference_requirements(payload):
+    project = payload.get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for group in project.get("optional-dependencies", {}).values():
+        requirements.extend(group)
+    forbidden_prefixes = ("paddle", "paddlex", "opencv")
+    return sorted(
+        requirement
+        for requirement in requirements
+        if isinstance(requirement, str)
+        and requirement.lower().replace("_", "-").startswith(forbidden_prefixes)
+    )
+
+
+def test_backend_training_package_has_no_inference_runtime_imports():
+    production_root = PROJECT_ROOT / "backend/apps/training"
+
+    assert _scan_inference_runtime_imports(production_root) == []
 
 
 def test_backend_package_has_no_motion_analysis_optional_dependency_group():
@@ -58,13 +134,14 @@ def test_backend_package_has_no_motion_analysis_optional_dependency_group():
     optional = pyproject["project"].get("optional-dependencies", {})
 
     assert "motion-analysis" not in optional
-    flattened = "\n".join(
-        requirement.lower()
-        for requirements in optional.values()
-        for requirement in requirements
-    )
+    assert _find_inference_requirements(pyproject) == []
+
+
+def test_backend_deployment_metadata_does_not_install_inference_dependencies():
+    dockerfile = (PROJECT_ROOT / "backend/Dockerfile").read_text(encoding="utf-8").lower()
+
     for forbidden in ("pad" + "dle", "pad" + "dlex", "open" + "cv"):
-        assert forbidden not in flattened
+        assert forbidden not in dockerfile
 
 
 def _run_sourced(script, command, *arguments, env=None):
@@ -244,6 +321,7 @@ def test_run_script_invokes_independent_pp_mcare_regression_cli(tmp_path):
     assert "--summary" not in arguments
     assert "manage.py" not in arguments
     assert "run_pose_smoke_benchmark" not in arguments
+    assert not any(argument.startswith("PP_MCARE_IMPLEMENTATION_COMMIT=") for argument in arguments)
     assert "pp-tinypose-smoke-" not in completed.stdout
     assert not video.exists()
 

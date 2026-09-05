@@ -42,7 +42,6 @@ _run_benchmark_after_root_gate() {
   cd "${analysis_root}/app"
   runuser -u motioncare-analysis -- env \
     PADDLE_PDX_CACHE_HOME="${analysis_root}/model-cache" \
-    PP_MCARE_IMPLEMENTATION_COMMIT="${implementation_commit}" \
     TMPDIR="${analysis_root}/tmp" \
     "${analysis_root}/venv/bin/python" \
     -m pp_mcare regression \
