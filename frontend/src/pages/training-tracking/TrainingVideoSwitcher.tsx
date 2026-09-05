@@ -142,7 +142,12 @@ export function TrainingVideoSwitcher({
     source: TrainingVideoSource,
   ) => {
     const transaction = playbackTransactionRef.current;
-    if (!transaction || transaction.targetSource !== source || videoRef.current !== node) return;
+    if (
+      !transaction ||
+      transaction.generation !== transitionRef.current ||
+      transaction.targetSource !== source ||
+      videoRef.current !== node
+    ) return;
     try {
       node.currentTime = clampedPlaybackTime(node, transaction.snapshot.currentTime);
     } catch {
@@ -215,13 +220,23 @@ export function TrainingVideoSwitcher({
             src={currentUrl}
             onLoadedMetadata={(event) => void restorePlayback(event.currentTarget, activeSource)}
             onError={(event) => {
-              transitionRef.current += 1;
-              playbackTransactionRef.current = {
-                generation: transitionRef.current,
-                targetSource: activeSource,
-                snapshot: snapshotPlayback(event.currentTarget),
-              };
-              unload(event.currentTarget);
+              const failedNode = event.currentTarget;
+              if (videoRef.current !== failedNode) {
+                unload(failedNode);
+                return;
+              }
+              const transaction = playbackTransactionRef.current;
+              const hasCurrentTargetSnapshot = transaction?.generation === transitionRef.current &&
+                transaction.targetSource === activeSource;
+              if (!hasCurrentTargetSnapshot) {
+                transitionRef.current += 1;
+                playbackTransactionRef.current = {
+                  generation: transitionRef.current,
+                  targetSource: activeSource,
+                  snapshot: snapshotPlayback(failedNode),
+                };
+              }
+              unload(failedNode);
               setMediaError(true);
             }}
           />

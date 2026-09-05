@@ -47,6 +47,22 @@ function ErrorRetrySwitcher() {
   );
 }
 
+function SwitchFailureRetrySwitcher() {
+  const [skeletonUrl, setSkeletonUrl] = React.useState("skeleton-v1");
+  const [activeSource, setActiveSource] = React.useState<TrainingVideoSource>("original");
+  return (
+    <TrainingVideoSwitcher
+      originalUrl="original"
+      skeletonUrl={skeletonUrl}
+      skeletonAvailable
+      resetKey="video-1"
+      activeSource={activeSource}
+      onChange={setActiveSource}
+      onSkeletonRetry={() => setSkeletonUrl("skeleton-v2")}
+    />
+  );
+}
+
 function setMediaState(node: HTMLVideoElement, state: { currentTime: number; paused: boolean }) {
   Object.defineProperty(node, "currentTime", { configurable: true, writable: true, value: state.currentTime });
   Object.defineProperty(node, "paused", { configurable: true, get: () => state.paused });
@@ -221,5 +237,46 @@ describe("TrainingVideoSwitcher", () => {
     expect(recoveredVideo.currentTime).toBeGreaterThanOrEqual(19.9);
     expect(recoveredVideo.currentTime).toBeLessThan(20);
     expect(recoveredVideo.play).toHaveBeenCalled();
+  });
+
+  it("切换目标在元数据前失败并重取时保留来源视频的播放快照", async () => {
+    vi.mocked(window.HTMLMediaElement.prototype.load).mockImplementation(function resetMedia(this: HTMLMediaElement) {
+      Object.defineProperty(this, "currentTime", { configurable: true, writable: true, value: 0 });
+      Object.defineProperty(this, "paused", { configurable: true, get: () => true });
+    });
+    render(<SwitchFailureRetrySwitcher />);
+    const original = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(original, { currentTime: 42, paused: false });
+
+    fireEvent.click(screen.getByRole("radio", { name: "骨架视频" }));
+    const failedSkeleton = screen.getByLabelText("骨架视频播放器") as HTMLVideoElement;
+    fireEvent.error(failedSkeleton);
+    fireEvent.click(await screen.findByRole("button", { name: "重新获取骨架视频" }));
+    const recoveredSkeleton = await screen.findByLabelText("骨架视频播放器") as HTMLVideoElement;
+    Object.defineProperty(recoveredSkeleton, "duration", { configurable: true, value: 60 });
+    fireEvent.loadedMetadata(recoveredSkeleton);
+
+    expect(recoveredSkeleton.currentTime).toBe(42);
+    expect(recoveredSkeleton.play).toHaveBeenCalled();
+  });
+
+  it("旧 URL 节点迟到报错不会破坏新节点的播放恢复事务", () => {
+    vi.mocked(window.HTMLMediaElement.prototype.load).mockImplementation(function resetMedia(this: HTMLMediaElement) {
+      Object.defineProperty(this, "currentTime", { configurable: true, writable: true, value: 0 });
+      Object.defineProperty(this, "paused", { configurable: true, get: () => true });
+    });
+    const { rerender } = render(<ControlledSwitcher originalUrl="original-v1" />);
+    const staleOriginal = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(staleOriginal, { currentTime: 42, paused: false });
+
+    rerender(<ControlledSwitcher originalUrl="original-v2" />);
+    const refreshedOriginal = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    fireEvent.error(staleOriginal);
+    Object.defineProperty(refreshedOriginal, "duration", { configurable: true, value: 60 });
+    fireEvent.loadedMetadata(refreshedOriginal);
+
+    expect(screen.queryByText("原视频地址已失效或加载失败")).not.toBeInTheDocument();
+    expect(refreshedOriginal.currentTime).toBe(42);
+    expect(refreshedOriginal.play).toHaveBeenCalled();
   });
 });
