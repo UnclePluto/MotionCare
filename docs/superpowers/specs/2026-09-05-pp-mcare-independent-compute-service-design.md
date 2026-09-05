@@ -1,4 +1,4 @@
-> 状态：review
+> 状态：approved
 > 日期：2026-09-05
 > 范围：将 pp-mcare 建设为独立部署的串行动作分析服务，自动消费七牛云训练视频，回写训练记录并产出骨架视频。
 > 关联：`docs/superpowers/specs/2026-07-14-segmented-training-video-pipeline-design.md`、`docs/superpowers/specs/2026-09-03-pp-tinypose-full-frame-streaming-counter-v2-design.md`

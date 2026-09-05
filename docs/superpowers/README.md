@@ -38,7 +38,7 @@ docs/superpowers/
 | `specs/2026-09-01-motion-instruction-voice-design.md` | 五个运动动作说明预生成语音 | implemented |
 | `specs/2026-09-03-pp-tinypose-algorithm-server-smoke-test-design.md` | PP-TinyPose 独立算法服务器冒烟测试 | approved |
 | `specs/2026-09-03-pp-tinypose-full-frame-streaming-counter-v2-design.md` | PP-TinyPose 全帧流式肩部推举计数 v2 | implemented |
-| `specs/2026-09-05-pp-mcare-independent-compute-service-design.md` | pp-mcare 独立动作分析计算服务 | review |
+| `specs/2026-09-05-pp-mcare-independent-compute-service-design.md` | pp-mcare 独立动作分析计算服务 | approved |
 
 ## 实施计划（plans/）当前清单
 
