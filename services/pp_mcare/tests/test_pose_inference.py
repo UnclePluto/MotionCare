@@ -1,10 +1,12 @@
 import math
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 
 from pp_mcare.pose_inference import (
+    InferenceFrame,
     InferenceDataValidationError,
     MotionAnalysisDependencyError,
     MotionAnalysisInferenceError,
@@ -14,10 +16,12 @@ from pp_mcare.pose_inference import (
 )
 
 
-@dataclass(frozen=True)
-class FakeFrame:
+class FakeFrame(NamedTuple):
     index: int
-    shape: tuple[int, int, int] = (100, 200, 3)
+
+    @property
+    def shape(self):
+        return (100, 200, 3)
 
 
 class FakeCapture:
@@ -71,10 +75,14 @@ class FakeModel:
     def __init__(self, results):
         self.results = list(results)
         self.seen_frames = []
+        self.closed = False
 
     def predict(self, frame):
         self.seen_frames.append(frame.index)
         return [self.results[len(self.seen_frames) - 1]]
+
+    def close(self):
+        self.closed = True
 
 
 def test_pose_stream_infers_every_decoded_frame_and_keeps_all_people():
@@ -112,6 +120,7 @@ def test_pose_stream_is_lazy_and_releases_on_consumer_error():
 
     assert model.seen_frames == [0]
     assert capture.released is True
+    assert model.closed is False
 
 
 def test_pose_stream_releases_on_inference_and_conversion_errors():
@@ -298,3 +307,69 @@ def test_runtime_import_is_lazy_and_reports_missing_dependencies(monkeypatch):
 
     with pytest.raises(MotionAnalysisDependencyError, match="推理依赖"):
         create_pose_model()
+
+
+def test_open_stream_releases_supplied_capture_when_model_creation_fails(monkeypatch):
+    capture = FakeCapture([])
+
+    def fail_model_creation(**kwargs):
+        raise RuntimeError("model creation failed")
+
+    monkeypatch.setattr(
+        "pp_mcare.pose_inference.load_motion_analysis_runtime",
+        lambda: (object(), fail_model_creation),
+    )
+
+    with pytest.raises(RuntimeError, match="model creation failed"):
+        open_full_frame_pose_stream("video.mp4", capture=capture)
+
+    assert capture.released is True
+
+
+def test_inference_frame_copies_and_freezes_numpy_style_image():
+    class Flags:
+        writeable = True
+
+    class NumpyStyleImage:
+        def __init__(self, pixels):
+            self.pixels = list(pixels)
+            self.flags = Flags()
+
+        def copy(self):
+            return NumpyStyleImage(self.pixels)
+
+        def setflags(self, *, write):
+            self.flags.writeable = write
+
+        def __getitem__(self, index):
+            return self.pixels[index]
+
+        def __setitem__(self, index, value):
+            if not self.flags.writeable:
+                raise ValueError("image is read-only")
+            self.pixels[index] = value
+
+    source = NumpyStyleImage([1, 2, 3])
+    inference_frame = InferenceFrame(
+        timestamp_ms=0,
+        source_fps=30.0,
+        image=source,
+        people=(),
+    )
+    source.pixels[0] = 99
+
+    assert inference_frame.image is not source
+    assert inference_frame.image[0] == 1
+    assert inference_frame.image.flags.writeable is False
+    with pytest.raises(ValueError, match="read-only"):
+        inference_frame.image[0] = 42
+
+
+def test_inference_frame_rejects_mutable_image_without_readonly_freeze_support():
+    with pytest.raises(InferenceDataValidationError, match="image"):
+        InferenceFrame(
+            timestamp_ms=0,
+            source_fps=30.0,
+            image=[1, 2, 3],
+            people=(),
+        )

@@ -17,6 +17,10 @@ MAX_AMBIGUITY_RATIO = 0.10
 CENTRAL_REGION_MARGIN = 0.15
 RELIABLE_KEYPOINT_SCORE = 0.5
 AMBIGUOUS_DISTANCE_DELTA = 0.03
+MINIMUM_COMMON_RELIABLE_KEYPOINTS = 4
+MINIMUM_FALLBACK_IOU = 0.70
+HISTORY_CLEAR_MATCH_DISTANCE = MAX_NORMALIZED_JUMP / 2
+MAX_PREDICTION_INTERVALS = 3.0
 
 
 class SubjectUnstable(RuntimeError):
@@ -69,7 +73,13 @@ def _bbox_iou(
     return intersection / union if union > 0 else 0.0
 
 
-def _keypoint_distance(previous: PersonPose, candidate: PersonPose) -> float | None:
+def _keypoint_distance(
+    previous: PersonPose,
+    candidate: PersonPose,
+    *,
+    prior: PersonPose | None,
+    prediction_intervals: float,
+) -> tuple[float | None, int]:
     distances: list[float] = []
     common_names = previous.named_keypoints.keys() & candidate.named_keypoints.keys()
     for name in common_names:
@@ -79,13 +89,17 @@ def _keypoint_distance(previous: PersonPose, candidate: PersonPose) -> float | N
             previous_point[2] >= RELIABLE_KEYPOINT_SCORE
             and candidate_point[2] >= RELIABLE_KEYPOINT_SCORE
         ):
+            expected_x = previous_point[0]
+            expected_y = previous_point[1]
+            if prior is not None:
+                prior_point = prior.named_keypoints[name]
+                if prior_point[2] >= RELIABLE_KEYPOINT_SCORE:
+                    expected_x += (previous_point[0] - prior_point[0]) * prediction_intervals
+                    expected_y += (previous_point[1] - prior_point[1]) * prediction_intervals
             distances.append(
-                math.hypot(
-                    previous_point[0] - candidate_point[0],
-                    previous_point[1] - candidate_point[1],
-                )
+                math.hypot(expected_x - candidate_point[0], expected_y - candidate_point[1])
             )
-    return median(distances) if distances else None
+    return (median(distances), len(distances)) if distances else (None, 0)
 
 
 @dataclass(frozen=True)
@@ -93,13 +107,16 @@ class _CandidateMatch:
     person: PersonPose
     distance: float
     iou: float
+    reliable_keypoint_count: int
 
 
 class PrimarySubjectTracker:
     def __init__(self) -> None:
         self._primary: PersonPose | None = None
+        self._prior_primary: PersonPose | None = None
         self._track_fingerprint: str | None = None
         self._last_primary_timestamp_ms: int | None = None
+        self._prior_primary_timestamp_ms: int | None = None
         self._last_observation_timestamp_ms: int | None = None
         self._total_frames = 0
         self._emitted_frames = 0
@@ -123,7 +140,7 @@ class PrimarySubjectTracker:
                 raise SubjectUnstable("无法建立画面中心的主训练者")
             return self._emit(frame, selected)
 
-        matches = self._matches(frame.people)
+        matches = self._matches(frame.people, frame_timestamp_ms=frame.timestamp_ms)
         if not matches:
             return self._skip(frame, ambiguous=False)
         if self._is_ambiguous(matches):
@@ -131,6 +148,8 @@ class PrimarySubjectTracker:
         return self._emit(frame, matches[0].person)
 
     def finish(self) -> Mapping[str, object]:
+        if self._primary is None or self._last_primary_timestamp_ms is None:
+            raise SubjectUnstable("主训练者从未建立")
         ambiguity_ratio = self._ambiguous_frames / self._total_frames if self._total_frames else 0.0
         if ambiguity_ratio > MAX_AMBIGUITY_RATIO:
             raise SubjectUnstable("主训练者歧义帧占比超过 10%")
@@ -141,6 +160,13 @@ class PrimarySubjectTracker:
                 "max_normalized_jump": MAX_NORMALIZED_JUMP,
                 "lost_timeout_ms": LOST_TIMEOUT_MS,
                 "max_ambiguity_ratio": MAX_AMBIGUITY_RATIO,
+                "minimum_common_reliable_keypoints": MINIMUM_COMMON_RELIABLE_KEYPOINTS,
+                "minimum_fallback_iou": MINIMUM_FALLBACK_IOU,
+                "reliable_keypoint_score": RELIABLE_KEYPOINT_SCORE,
+                "central_region_margin": CENTRAL_REGION_MARGIN,
+                "ambiguous_distance_delta": AMBIGUOUS_DISTANCE_DELTA,
+                "history_clear_match_distance": HISTORY_CLEAR_MATCH_DISTANCE,
+                "max_prediction_intervals": MAX_PREDICTION_INTERVALS,
                 "total_frames": self._total_frames,
                 "emitted_frames": self._emitted_frames,
                 "missing_frames": self._missing_frames,
@@ -164,21 +190,59 @@ class PrimarySubjectTracker:
             return None
         return max(central, key=lambda person: (_bbox_area(person.bbox), person.mean_score))
 
-    def _matches(self, people: tuple[PersonPose, ...]) -> list[_CandidateMatch]:
+    def _matches(
+        self,
+        people: tuple[PersonPose, ...],
+        *,
+        frame_timestamp_ms: int,
+    ) -> list[_CandidateMatch]:
         assert self._primary is not None
+        prediction_intervals = self._prediction_intervals(frame_timestamp_ms)
         matches: list[_CandidateMatch] = []
         for person in people:
-            distance = _keypoint_distance(self._primary, person)
+            distance, reliable_count = _keypoint_distance(
+                self._primary,
+                person,
+                prior=self._prior_primary,
+                prediction_intervals=prediction_intervals,
+            )
             iou = _bbox_iou(self._primary.bbox, person.bbox)
-            if distance is None:
-                if iou <= 0.0:
+            if distance is None or reliable_count < MINIMUM_COMMON_RELIABLE_KEYPOINTS:
+                if iou < MINIMUM_FALLBACK_IOU:
                     continue
                 distance = 1.0 - iou
             elif distance > MAX_NORMALIZED_JUMP + 1e-12:
                 continue
-            matches.append(_CandidateMatch(person=person, distance=distance, iou=iou))
+            else:
+                if (
+                    self._prior_primary is not None
+                    and distance > HISTORY_CLEAR_MATCH_DISTANCE
+                    and iou < MINIMUM_FALLBACK_IOU
+                ):
+                    continue
+            matches.append(
+                _CandidateMatch(
+                    person=person,
+                    distance=distance,
+                    iou=iou,
+                    reliable_keypoint_count=reliable_count,
+                )
+            )
         matches.sort(key=lambda match: (match.distance, -match.iou, match.person.fingerprint))
         return matches
+
+    def _prediction_intervals(self, frame_timestamp_ms: int) -> float:
+        if (
+            self._prior_primary is None
+            or self._prior_primary_timestamp_ms is None
+            or self._last_primary_timestamp_ms is None
+        ):
+            return 0.0
+        historical_interval_ms = self._last_primary_timestamp_ms - self._prior_primary_timestamp_ms
+        if historical_interval_ms <= 0:
+            return 0.0
+        elapsed_ms = frame_timestamp_ms - self._last_primary_timestamp_ms
+        return min(MAX_PREDICTION_INTERVALS, elapsed_ms / historical_interval_ms)
 
     @staticmethod
     def _is_ambiguous(matches: list[_CandidateMatch]) -> bool:
@@ -192,6 +256,8 @@ class PrimarySubjectTracker:
             self._track_fingerprint = person.fingerprint
         elif person.fingerprint != self._track_fingerprint:
             person = replace(person, fingerprint=self._track_fingerprint)
+        self._prior_primary = self._primary
+        self._prior_primary_timestamp_ms = self._last_primary_timestamp_ms
         self._primary = person
         self._last_primary_timestamp_ms = frame.timestamp_ms
         self._emitted_frames += 1

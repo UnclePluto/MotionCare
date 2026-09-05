@@ -201,16 +201,38 @@ class PersonPose:
         )
 
 
+def _is_deeply_immutable(value: object) -> bool:
+    if value is None or isinstance(value, (bool, int, float, complex, str, bytes)):
+        return True
+    if isinstance(value, tuple):
+        return all(_is_deeply_immutable(item) for item in value)
+    if isinstance(value, frozenset):
+        return all(_is_deeply_immutable(item) for item in value)
+    return False
+
+
 def _freeze_image(image: object) -> object:
-    if image is None:
-        return None
+    if _is_deeply_immutable(image):
+        return image
     copy_method = getattr(image, "copy", None)
     if not callable(copy_method):
-        return image
-    copied = copy_method()
+        raise InferenceDataValidationError("image 必须可复制并冻结为只读")
+    try:
+        copied = copy_method()
+    except Exception as exc:
+        raise InferenceDataValidationError("image 无法创建独立只读副本") from exc
+    if copied is image:
+        raise InferenceDataValidationError("image.copy() 必须返回独立副本")
     setflags = getattr(copied, "setflags", None)
-    if callable(setflags):
+    if not callable(setflags):
+        raise InferenceDataValidationError("image 副本不支持只读冻结")
+    try:
         setflags(write=False)
+    except Exception as exc:
+        raise InferenceDataValidationError("image 副本无法冻结为只读") from exc
+    flags = getattr(copied, "flags", None)
+    if getattr(flags, "writeable", None) is not False:
+        raise InferenceDataValidationError("image 副本未进入只读状态")
     return copied
 
 
@@ -433,26 +455,22 @@ def open_full_frame_pose_stream(
     capture: object | None = None,
 ) -> VideoPoseStream:
     cv2 = None
-    if model is None or capture is None:
-        cv2, _ = load_motion_analysis_runtime()
-    if model is None:
-        model = create_pose_model()
-    if capture is None:
-        capture = cv2.VideoCapture(str(video_path))
-
     try:
+        if model is None or capture is None:
+            cv2, _ = load_motion_analysis_runtime()
+        if model is None:
+            model = create_pose_model()
+        if capture is None:
+            capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
             raise MotionAnalysisInferenceError("训练视频无法解码")
         fps_value = capture.get(CAP_PROP_FPS)
         source_fps = _positive_dimension(fps_value, field_name="source_fps")
-    except InferenceDataValidationError as exc:
-        release = getattr(capture, "release", None)
+    except Exception as exc:
+        release = getattr(capture, "release", None) if capture is not None else None
         if callable(release):
             release()
-        raise MotionAnalysisInferenceError("训练视频帧率无效") from exc
-    except Exception:
-        release = getattr(capture, "release", None)
-        if callable(release):
-            release()
+        if isinstance(exc, InferenceDataValidationError):
+            raise MotionAnalysisInferenceError("训练视频帧率无效") from exc
         raise
     return VideoPoseStream(capture=capture, model=model, source_fps=source_fps)
