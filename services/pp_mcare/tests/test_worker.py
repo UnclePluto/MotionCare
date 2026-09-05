@@ -1,5 +1,6 @@
 import importlib
 import io
+import signal
 import tempfile
 import threading
 from pathlib import Path
@@ -363,3 +364,34 @@ def test_cli_signal_handler_raises_control_exception_for_workspace_cleanup():
 
     with pytest.raises(module.GracefulShutdown):
         module._handle_shutdown_signal(15, None)
+
+
+def test_cli_returns_nonzero_and_restores_signals_on_heartbeat_fatal(monkeypatch):
+    module = importlib.import_module("pp_mcare.__main__")
+    configured = service_settings()
+    previous = {
+        signal_number: signal.getsignal(signal_number)
+        for signal_number in (signal.SIGTERM, signal.SIGINT)
+    }
+
+    class FakeClient:
+        def __init__(self, _settings):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(module.Settings, "from_env", lambda: configured)
+    monkeypatch.setattr(module, "MotionCareClient", FakeClient)
+    monkeypatch.setattr(module, "cleanup_stale_workspaces", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        module,
+        "run_worker",
+        lambda **_kwargs: (_ for _ in ()).throw(module.HeartbeatFatalError("stuck")),
+    )
+
+    assert module.main() == 3
+    assert {number: signal.getsignal(number) for number in previous} == previous

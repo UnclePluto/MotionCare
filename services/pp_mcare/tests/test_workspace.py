@@ -106,3 +106,84 @@ def test_workspace_creation_detects_leaf_replacement_race(tmp_path, monkeypatch)
         TaskWorkspace.create(root, 12)
 
     assert list(outside.iterdir()) == []
+    assert list(root.iterdir()) == []
+
+
+def test_workspace_creation_rolls_back_when_child_permission_step_fails(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    root.mkdir()
+    original_fchmod = workspace_module.os.fchmod
+    calls = 0
+
+    def failing_child_fchmod(fd, mode):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic permission failure")
+        return original_fchmod(fd, mode)
+
+    monkeypatch.setattr(workspace_module.os, "fchmod", failing_child_fchmod)
+    with pytest.raises(OSError):
+        TaskWorkspace.create(root, 14)
+
+    assert list(root.iterdir()) == []
+
+
+def test_workspace_holds_directory_identity_across_parent_replacement(tmp_path):
+    root = tmp_path / "jobs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace = TaskWorkspace.create(root, 13)
+    original = workspace.path.with_name("saved-original")
+    workspace.path.rename(original)
+    workspace.path.symlink_to(outside, target_is_directory=True)
+
+    fd = workspace.create_file("original.mp4")
+    os.write(fd, b"private")
+    os.close(fd)
+    workspace.cleanup()
+
+    assert list(root.iterdir()) == []
+    assert list(outside.iterdir()) == []
+
+
+def test_stale_cleanup_cursor_prevents_prefix_starvation(tmp_path):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    for index in range(24):
+        (root / f"aaa-unrelated-{index:02d}").mkdir()
+    old = root / f"job-99-{'d' * 32}"
+    old.mkdir(mode=0o700)
+    os.utime(old, (1, 1))
+
+    for _ in range(8):
+        cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+        if not old.exists():
+            break
+
+    assert not old.exists()
+    cursor = root / ".pp-mcare-cleanup-cursor"
+    assert cursor.is_file()
+    assert stat.S_IMODE(cursor.stat().st_mode) == 0o600
+
+
+def test_stale_cleanup_rechecks_age_after_open(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    root.mkdir(mode=0o700)
+    name = f"job-88-{'e' * 32}"
+    candidate = root / name
+    candidate.mkdir(mode=0o700)
+    os.utime(candidate, (1, 1))
+    original_open = workspace_module.os.open
+
+    def touching_open(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if path == name and kwargs.get("dir_fd") is not None:
+            os.utime(candidate, None)
+        return fd
+
+    monkeypatch.setattr(workspace_module.os, "open", touching_open)
+    result = cleanup_stale_workspaces(root, max_age_seconds=10, limit=2, now=time.time())
+
+    assert candidate.exists()
+    assert result.removed == 0

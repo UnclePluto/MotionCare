@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -19,6 +21,9 @@ from .paddle_visualize_pose import render_primary_pose
 from .pose_inference import open_full_frame_pose_stream
 from .registry import get_action_plugin
 from .subject_tracker import PrimarySubjectTracker, SUBJECT_TRACKER_VERSION
+
+
+_CLOCK = time.monotonic
 
 
 class LocalPipelineError(RuntimeError):
@@ -52,6 +57,8 @@ class LocalAnalysisResult:
     decoded_frame_count: int
     inferred_frame_count: int
     encoded_frame_count: int
+    inference_seconds: float
+    encoding_seconds: float
     media_metadata: VideoMetadata
 
     __hash__ = None
@@ -65,6 +72,15 @@ class LocalAnalysisResult:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise LocalPipelineError(f"{name} 必须是正整数")
+        for name in ("inference_seconds", "encoding_seconds"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise LocalPipelineError(f"{name} 必须是非负有限数值")
         object.__setattr__(self, "quality_summary", _freeze(dict(self.quality_summary)))
         object.__setattr__(self, "result_payload", _freeze(dict(self.result_payload)))
         object.__setattr__(self, "tracking_summary", _freeze(dict(self.tracking_summary)))
@@ -164,6 +180,8 @@ def run_local_pipeline(
     input_path,
     output_path,
     heartbeat: Callable[[str], None],
+    *,
+    source_metadata=None,
 ) -> LocalAnalysisResult:
     """Analyze one video whose output lives inside a caller-owned private TaskWorkspace.
 
@@ -186,18 +204,19 @@ def run_local_pipeline(
     if plugin is None:
         raise LocalPipelineError("任务要求了不支持的动作插件版本")
 
-    source = probe_source_video(input_path)
+    source = source_metadata if source_metadata is not None else probe_source_video(input_path)
     tracker = PrimarySubjectTracker()
     encoder: SkeletonVideoEncoder | None = None
     frames: _OneShotActionFrames | None = None
     action_stream_completed = False
     published = False
+    render_seconds = 0.0
 
     try:
         with open_full_frame_pose_stream(input_path) as pose_stream:
 
             def action_frames() -> Iterator[PoseFrame]:
-                nonlocal encoder, action_stream_completed
+                nonlocal encoder, action_stream_completed, render_seconds
                 for inference_frame in pose_stream:
                     heartbeat("inference")
                     image = inference_frame.image
@@ -217,11 +236,11 @@ def run_local_pipeline(
                             fps=pose_stream.source_fps,
                         )
                     tracked = tracker.observe(inference_frame)
-                    encoded_frame = (
-                        image
-                        if tracked.primary is None
-                        else render_primary_pose(image, tracked.primary)
-                    )
+                    render_started = _CLOCK()
+                    encoded_frame = image
+                    if tracked.primary is not None:
+                        encoded_frame = render_primary_pose(image, tracked.primary)
+                    render_seconds += max(0.0, _CLOCK() - render_started)
                     encoder.write(encoded_frame)
                     action_frame = tracked.to_action_frame()
                     if action_frame is not None:
@@ -264,6 +283,8 @@ def run_local_pipeline(
                 decoded_frame_count=decoded,
                 inferred_frame_count=inferred,
                 encoded_frame_count=encoded,
+                inference_seconds=pose_stream.inference_seconds,
+                encoding_seconds=render_seconds + encoder.encoding_seconds,
                 media_metadata=metadata,
             )
             result.to_completion_payload(

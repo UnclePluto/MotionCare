@@ -43,6 +43,9 @@ _CAPABILITY_FIELDS = (
     "rule_version",
     "parameter_version",
 )
+_MAX_INVALID_SOURCES_PER_CLAIM = 25
+_SOURCE_METADATA_FAILURE = "原视频元数据无效，请医生手动填写训练结果"
+_SOURCE_OBJECT_HASH_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 _logger = logging.getLogger(__name__)
 
 
@@ -240,19 +243,56 @@ def claim_next_job(
         )
         return None
 
-    job = (
-        MotionAnalysisJob.objects.select_for_update(skip_locked=True)
-        .select_related("training_video")
-        .filter(compatible, status=MotionAnalysisJob.Status.PENDING)
-        .order_by("created_at", "id")
-        .first()
-    )
-    if job is None:
-        _log_incompatible_pending_job(
-            worker_id=worker_id,
-            capabilities=capabilities,
-            compatible=compatible,
+    job = None
+    for _ in range(_MAX_INVALID_SOURCES_PER_CLAIM):
+        job = (
+            MotionAnalysisJob.objects.select_for_update(skip_locked=True)
+            .select_related("training_video")
+            .filter(compatible, status=MotionAnalysisJob.Status.PENDING)
+            .order_by("created_at", "id")
+            .first()
         )
+        if job is None:
+            _log_incompatible_pending_job(
+                worker_id=worker_id,
+                capabilities=capabilities,
+                compatible=compatible,
+            )
+            return None
+        video = job.training_video
+        source_valid = (
+            isinstance(video.bucket, str)
+            and bool(video.bucket.strip())
+            and isinstance(video.object_key, str)
+            and bool(video.object_key)
+            and isinstance(video.object_hash, str)
+            and bool(_SOURCE_OBJECT_HASH_PATTERN.fullmatch(video.object_hash))
+            and video.content_type == "video/mp4"
+            and isinstance(video.size_bytes, int)
+            and not isinstance(video.size_bytes, bool)
+            and video.size_bytes > 0
+        )
+        if source_valid:
+            break
+        job.status = MotionAnalysisJob.Status.FAILED
+        job.failure_code = "source_metadata_invalid"
+        job.failure_reason = _SOURCE_METADATA_FAILURE
+        job.finished_at = now
+        _clear_lease(job, "failed")
+        job.save(
+            update_fields=[
+                "status",
+                "failure_code",
+                "failure_reason",
+                "finished_at",
+                "lease_token_hash",
+                "lease_expires_at",
+                "current_stage",
+                "updated_at",
+            ]
+        )
+        job = None
+    if job is None:
         return None
 
     lease_token = secrets.token_urlsafe(32)

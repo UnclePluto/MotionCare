@@ -158,6 +158,40 @@ def test_encoder_surfaces_broken_pipe_stderr_and_removes_partial_output(tmp_path
         encoder.close()
 
 
+def test_encoder_accumulates_write_and_finish_time_separately(tmp_path, monkeypatch):
+    from pp_mcare import media
+
+    class Sink:
+        def write(self, _value):
+            return None
+
+        def close(self):
+            return None
+
+    class Process:
+        stdin = Sink()
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(media, "_start_ffmpeg", lambda _command, _stderr: Process())
+    monkeypatch.setattr(
+        media,
+        "_probe_video",
+        lambda _path: media.VideoMetadata(4, 4, 1.0, 1, 1.0, "h264", "yuv420p", False, True),
+    )
+    ticks = iter([1.0, 1.2, 2.0, 2.7])
+    monkeypatch.setattr(media, "_CLOCK", lambda: next(ticks), raising=False)
+    encoder = media.SkeletonVideoEncoder(tmp_path / "timed.mp4", 4, 4, 1.0)
+
+    encoder.write(np.zeros((4, 4, 3), dtype=np.uint8))
+    encoder.finish()
+
+    assert encoder.encoding_seconds == pytest.approx(0.9)
+    encoder.abort()
+
+
 @pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
 def test_encoder_commit_never_clobbers_target_created_after_initialization(tmp_path):
     from pp_mcare.media import MediaEncodingError, SkeletonVideoEncoder

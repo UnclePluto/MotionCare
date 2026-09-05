@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import BinaryIO, TypeVar
 
 
+_CLOCK = time.monotonic
+
 PROBE_SUMMARY_LIMIT_BYTES = 1 * 1024 * 1024
 PROBE_TIMELINE_LIMIT_BYTES = 64 * 1024 * 1024
 PROBE_STDERR_LIMIT_BYTES = 1 * 1024 * 1024
@@ -487,6 +489,7 @@ class SkeletonVideoEncoder:
         self._finished = False
         self._committed = False
         self._partial_cleanup_pending = False
+        self._encoding_seconds = 0.0
         self._failure: MediaEncodingError | None = None
         self.metadata: VideoMetadata | None = None
         command = [
@@ -553,6 +556,10 @@ class SkeletonVideoEncoder:
     def partial_cleanup_pending(self) -> bool:
         return self._partial_cleanup_pending
 
+    @property
+    def encoding_seconds(self) -> float:
+        return self._encoding_seconds
+
     def write(self, frame) -> None:
         if self._failure is not None:
             raise self._failure
@@ -572,6 +579,7 @@ class SkeletonVideoEncoder:
         if not frame.flags.c_contiguous:
             self._fail("骨架帧必须是连续 BGR 内存")
             raise self._failure
+        started = _CLOCK()
         try:
             if self._process.stdin is None:
                 raise BrokenPipeError
@@ -580,6 +588,8 @@ class SkeletonVideoEncoder:
             message = self._stderr_message() or "ffmpeg 管道提前关闭"
             self._fail(message)
             raise self._failure from exc
+        finally:
+            self._encoding_seconds += max(0.0, _CLOCK() - started)
         self._frame_count += 1
 
     def finish(self) -> VideoMetadata:
@@ -592,6 +602,7 @@ class SkeletonVideoEncoder:
         if self._frame_count == 0:
             self._fail("骨架视频没有帧")
             raise self._failure
+        started = _CLOCK()
         try:
             if self._process.stdin is not None:
                 self._process.stdin.close()
@@ -638,6 +649,8 @@ class SkeletonVideoEncoder:
             else:
                 self._fail("校验骨架视频失败")
             raise self._failure from exc
+        finally:
+            self._encoding_seconds += max(0.0, _CLOCK() - started)
 
     def commit(self) -> None:
         if self._failure is not None:

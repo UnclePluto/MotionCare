@@ -71,6 +71,7 @@ class FakePoseStream:
         self.inferred_frame_count = 0
         self.iteration_count = 0
         self.closed = False
+        self.inference_seconds = 0.4
 
     def __iter__(self):
         self.iteration_count += 1
@@ -105,6 +106,7 @@ class FakeEncoder:
         self.finished = False
         self.committed = False
         self.metadata = None
+        self.encoding_seconds = 0.7
         self.__class__.instances.append(self)
 
     def write(self, frame):
@@ -229,6 +231,8 @@ def test_pipeline_uses_one_full_frame_stream_for_counting_and_video(monkeypatch,
     assert [int(frame[0, 0, 0]) for frame in encoder.frames] == [10, 11, 12]
     assert heartbeats == ["inference", "inference", "inference"]
     assert result.counts == MotionCounts(0, 0, 0)
+    assert result.inference_seconds == pytest.approx(0.4)
+    assert result.encoding_seconds >= 0.7
     assert encoder.finished is True
     assert encoder.committed is True
     assert result.result_payload["quality_flags"] == ()
@@ -237,6 +241,21 @@ def test_pipeline_uses_one_full_frame_stream_for_counting_and_video(monkeypatch,
         result.result_payload["new"] = "bad"
     with pytest.raises(FrozenInstanceError):
         result.decoded_frame_count = 0
+
+
+def test_pipeline_separates_model_and_render_encoding_timers(monkeypatch, tmp_path):
+    frames = [_frame(index, (_person(),)) for index in range(2)]
+    stream = FakePoseStream(frames)
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, RecordingPlugin())
+    ticks = iter([1.0, 1.2, 2.0, 2.3])
+    monkeypatch.setattr(pipeline, "_CLOCK", lambda: next(ticks), raising=False)
+
+    result = pipeline.run_local_pipeline(
+        _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda _stage: None
+    )
+
+    assert result.inference_seconds == pytest.approx(0.4)
+    assert result.encoding_seconds == pytest.approx(1.2)
 
 
 def test_pipeline_writes_ambiguous_frame_unchanged_but_skips_it_for_algorithm(

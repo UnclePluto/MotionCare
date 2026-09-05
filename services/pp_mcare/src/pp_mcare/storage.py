@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass, field
@@ -12,11 +13,18 @@ import httpx
 import qiniu
 from motion_analysis_contract import DownloadGrant, UploadGrant
 
+from .safe_logging import SafeLogFilter
+from .workspace import TaskWorkspace
+
 
 _DOWNLOAD_TRANSPORT: httpx.BaseTransport | None = None
 _SLEEP = time.sleep
 _ATTEMPTS = 3
 _CONTENT_TYPE = "video/mp4"
+_SKELETON_KEY = re.compile(
+    r"motion-analysis/[1-9][0-9]*/[0-9]{4}/(?:0[1-9]|1[0-2])/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/skeleton\.mp4\Z"
+)
 
 
 class StorageError(RuntimeError):
@@ -61,9 +69,8 @@ class UploadedObject:
 
 
 def configure_storage_logging(secrets=()) -> None:
-    """Quarantine SDK log namespaces; worker emits only its own safe events."""
+    """Quarantine SDK namespaces and qiniu 7.18's direct root logging calls."""
 
-    del secrets
     roots = ("httpx", "httpcore", "qiniu")
     existing = tuple(logging.root.manager.loggerDict)
     names = {
@@ -74,6 +81,16 @@ def configure_storage_logging(secrets=()) -> None:
         logger = logging.getLogger(name)
         logger.handlers[:] = [logging.NullHandler()]
         logger.propagate = False
+    root = logging.getLogger()
+    if not root.handlers:
+        handler = logging.NullHandler()
+        setattr(handler, "_pp_mcare_safe_root_handler", True)
+        root.addHandler(handler)
+    for handler in root.handlers:
+        for filter_ in tuple(handler.filters):
+            if isinstance(filter_, SafeLogFilter):
+                handler.removeFilter(filter_)
+        handler.addFilter(SafeLogFilter(secrets=secrets))
 
 
 def _safe_https_url(value: str) -> None:
@@ -90,7 +107,15 @@ def _safe_https_url(value: str) -> None:
         raise StoragePermanentError("下载授权格式无效")
 
 
-def _qiniu_etag(path: Path) -> str:
+def _fd_path(descriptor: int) -> str:
+    for root in ("/proc/self/fd", "/dev/fd"):
+        candidate = f"{root}/{descriptor}"
+        if os.path.exists(candidate):
+            return candidate
+    raise StoragePermanentError("当前平台不支持安全文件描述符路径")
+
+
+def _qiniu_etag(path: Path | str) -> str:
     try:
         value = qiniu.etag(str(path))
     except Exception:
@@ -100,11 +125,12 @@ def _qiniu_etag(path: Path) -> str:
     return value
 
 
-def _unlink_owned(path: Path) -> None:
+def qiniu_etag_fd(descriptor: int) -> str:
     try:
-        path.unlink()
-    except FileNotFoundError:
-        pass
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return _qiniu_etag(_fd_path(descriptor))
+    except OSError:
+        raise StoragePermanentError("对象完整性计算失败") from None
 
 
 def _validate_mp4_prefix(prefix: bytes) -> None:
@@ -114,7 +140,7 @@ def _validate_mp4_prefix(prefix: bytes) -> None:
 
 def download_original(
     grant: DownloadGrant,
-    destination: Path,
+    destination: TaskWorkspace,
     expected_size: int,
     expected_hash: str,
 ) -> DownloadedObject:
@@ -130,18 +156,20 @@ def download_original(
     ):
         raise StoragePermanentError("下载对象元数据无效")
     _safe_https_url(grant.url)
-    target = Path(destination)
-    if target.exists() or not target.parent.is_dir():
-        raise StoragePermanentError("下载目标无效")
+    if not isinstance(destination, TaskWorkspace):
+        raise TypeError("destination 必须是 TaskWorkspace")
+    workspace = destination
+    target = workspace.input_path
     configure_storage_logging((grant.url,))
     timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
     for attempt in range(1, _ATTEMPTS + 1):
         created = False
+        descriptor = -1
         try:
-            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            descriptor = workspace.create_file("original.mp4")
             created = True
-            with os.fdopen(descriptor, "wb") as output:
+            with os.fdopen(descriptor, "w+b", closefd=False) as output:
                 with httpx.Client(
                     follow_redirects=False,
                     transport=_DOWNLOAD_TRANSPORT,
@@ -173,30 +201,42 @@ def download_original(
             if size != expected_size:
                 raise StoragePermanentError("下载对象大小不匹配")
             _validate_mp4_prefix(bytes(prefix))
-            actual_hash = _qiniu_etag(target)
+            actual_hash = qiniu_etag_fd(descriptor)
+            verified = os.fstat(descriptor)
             if actual_hash != expected_hash:
                 raise StoragePermanentError("下载对象完整性不匹配")
-            mode = os.stat(target, follow_symlinks=False).st_mode
-            if not stat.S_ISREG(mode) or stat.S_IMODE(mode) & 0o077:
+            if not stat.S_ISREG(verified.st_mode) or stat.S_IMODE(verified.st_mode) & 0o077:
                 raise StoragePermanentError("下载文件权限无效")
+            if not workspace.file_matches("original.mp4", descriptor):
+                raise StoragePermanentError("下载文件在校验期间发生变化")
+            os.close(descriptor)
+            descriptor = -1
             return DownloadedObject(target, actual_hash, size, _CONTENT_TYPE)
         except StoragePermanentError:
+            if descriptor >= 0:
+                os.close(descriptor)
             if created:
-                _unlink_owned(target)
+                workspace.unlink_file("original.mp4")
             raise
         except (httpx.TimeoutException, httpx.TransportError):
+            if descriptor >= 0:
+                os.close(descriptor)
             if created:
-                _unlink_owned(target)
+                workspace.unlink_file("original.mp4")
             if attempt == _ATTEMPTS:
                 raise StorageTransientError("下载重试耗尽") from None
             _SLEEP(float(attempt))
         except OSError:
+            if descriptor >= 0:
+                os.close(descriptor)
             if created:
-                _unlink_owned(target)
+                workspace.unlink_file("original.mp4")
             raise StoragePermanentError("下载文件写入失败") from None
         except StorageTransientError:
+            if descriptor >= 0:
+                os.close(descriptor)
             if created:
-                _unlink_owned(target)
+                workspace.unlink_file("original.mp4")
             if attempt == _ATTEMPTS:
                 raise StorageTransientError("下载重试耗尽") from None
             _SLEEP(float(attempt))
@@ -211,62 +251,98 @@ def _status_code(info: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _ambiguous_response(info: object, status: int | None) -> bool:
+    if status is not None and status < 0:
+        return True
+    if getattr(info, "exception", None) is not None:
+        return True
+    connect_failed = getattr(info, "connect_failed", None)
+    if callable(connect_failed):
+        try:
+            return bool(connect_failed())
+        except Exception:
+            return False
+    return False
+
+
 def _unique_skeleton_key(key: str) -> bool:
-    parts = key.split("/")
-    return (
-        len(parts) >= 3
-        and parts[0] == "motion-analysis"
-        and parts[-1] == "skeleton.mp4"
-        and all(part not in ("", ".", "..") for part in parts)
-    )
+    return isinstance(key, str) and bool(_SKELETON_KEY.fullmatch(key))
 
 
-def upload_skeleton(grant: UploadGrant, path: Path) -> UploadedObject:
+def upload_skeleton(grant: UploadGrant, path: TaskWorkspace) -> UploadedObject:
     if not isinstance(grant, UploadGrant):
         raise TypeError("grant 必须是 UploadGrant")
-    source = Path(path)
+    if not isinstance(path, TaskWorkspace):
+        raise TypeError("path 必须是 TaskWorkspace")
+    workspace = path
     try:
-        metadata = os.stat(source, follow_symlinks=False)
+        descriptor = workspace.open_file("skeleton.mp4")
+        metadata = os.fstat(descriptor)
     except OSError:
         raise StoragePermanentError("上传文件无效") from None
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
+        os.close(descriptor)
         raise StoragePermanentError("上传文件无效")
     if not _unique_skeleton_key(grant.object_key):
+        os.close(descriptor)
         raise StoragePermanentError("上传对象键无效")
-    local_hash = _qiniu_etag(source)
-    configure_storage_logging((grant.token,))
-    ambiguous_attempt = False
+    try:
+        local_hash = qiniu_etag_fd(descriptor)
+        descriptor_path = _fd_path(descriptor)
+        configure_storage_logging((grant.token,))
+        qiniu.config.set_default(connection_retries=1)
+        ambiguous_attempt = False
 
-    for attempt in range(1, _ATTEMPTS + 1):
-        try:
-            result, info = qiniu.put_file(
-                grant.token,
-                grant.object_key,
-                str(source),
-                mime_type=_CONTENT_TYPE,
-                check_crc=True,
-            )
-        except OSError:
-            ambiguous_attempt = True
-            if attempt == _ATTEMPTS:
-                raise StorageTransientError("上传重试耗尽") from None
-            _SLEEP(float(attempt))
-            continue
-        except Exception:
-            raise StoragePermanentError("上传客户端失败") from None
-        status = _status_code(info)
-        if status == 614 and ambiguous_attempt:
+        for attempt in range(1, _ATTEMPTS + 1):
+            try:
+                result, info = qiniu.put_file(
+                    grant.token,
+                    grant.object_key,
+                    descriptor_path,
+                    mime_type=_CONTENT_TYPE,
+                    check_crc=True,
+                )
+            except OSError:
+                ambiguous_attempt = True
+                if attempt == _ATTEMPTS:
+                    raise StorageTransientError("上传重试耗尽") from None
+                _SLEEP(float(attempt))
+                continue
+            except Exception:
+                raise StoragePermanentError("上传客户端失败") from None
+            status = _status_code(info)
+            if status == 614 and ambiguous_attempt:
+                after = os.fstat(descriptor)
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                ):
+                    raise StoragePermanentError("上传文件在传输期间发生变化")
+                return UploadedObject(grant.bucket, grant.object_key, local_hash, metadata.st_size)
+            ambiguous_response = _ambiguous_response(info, status)
+            if ambiguous_response or (status is not None and 500 <= status <= 599):
+                ambiguous_attempt = ambiguous_attempt or ambiguous_response
+                if attempt == _ATTEMPTS:
+                    raise StorageTransientError("上传重试耗尽")
+                _SLEEP(float(attempt))
+                continue
+            if status != 200 or not isinstance(result, dict):
+                raise StoragePermanentError("上传请求被拒绝")
+            if result.get("key") != grant.object_key:
+                raise StoragePermanentError("上传对象键不匹配")
+            if result.get("hash") != local_hash:
+                raise StoragePermanentError("上传对象完整性不匹配")
+            after = os.fstat(descriptor)
+            if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+            ):
+                raise StoragePermanentError("上传文件在传输期间发生变化")
             return UploadedObject(grant.bucket, grant.object_key, local_hash, metadata.st_size)
-        if status is not None and 500 <= status <= 599:
-            if attempt == _ATTEMPTS:
-                raise StorageTransientError("上传重试耗尽")
-            _SLEEP(float(attempt))
-            continue
-        if status != 200 or not isinstance(result, dict):
-            raise StoragePermanentError("上传请求被拒绝")
-        if result.get("key") != grant.object_key:
-            raise StoragePermanentError("上传对象键不匹配")
-        if result.get("hash") != local_hash:
-            raise StoragePermanentError("上传对象完整性不匹配")
-        return UploadedObject(grant.bucket, grant.object_key, local_hash, metadata.st_size)
-    raise StorageTransientError("上传重试耗尽")
+        raise StorageTransientError("上传重试耗尽")
+    finally:
+        os.close(descriptor)

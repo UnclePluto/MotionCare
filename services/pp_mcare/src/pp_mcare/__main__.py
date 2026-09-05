@@ -9,7 +9,7 @@ from .api_client import MotionCareClient
 from .config import ConfigurationError, Settings
 from .safe_logging import configure_safe_logging
 from .storage import configure_storage_logging
-from .worker import process_claimed_job, run_worker
+from .worker import HeartbeatFatalError, process_claimed_job, run_worker
 from .workspace import CleanupSummary, cleanup_stale_workspaces
 
 
@@ -62,6 +62,11 @@ def main() -> int:
             )
     except GracefulShutdown:
         return 0
+    except HeartbeatFatalError:
+        _logger.critical(
+            "motion_analysis_heartbeat_fatal", extra={"reason_code": "heartbeat_stuck"}
+        )
+        return 3
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)

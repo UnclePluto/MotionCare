@@ -274,6 +274,19 @@ def test_pose_stream_uses_deterministic_strictly_monotonic_timestamp_fallback():
     assert [frame.timestamp_ms for frame in frames] == [0, 100, 200, 300, 400]
 
 
+def test_pose_stream_counts_only_real_predict_and_result_materialization_time(monkeypatch):
+    from pp_mcare import pose_inference
+
+    capture = FakeCapture([0.0, 100.0], fps=10.0)
+    model = FakeModel([_result(_person()), _result(_person())])
+    ticks = iter([1.0, 1.25, 2.0, 2.5])
+    monkeypatch.setattr(pose_inference.time, "monotonic", lambda: next(ticks))
+
+    with open_full_frame_pose_stream("video.mp4", model=model, capture=capture) as stream:
+        list(stream)
+        assert stream.inference_seconds == pytest.approx(0.75)
+
+
 def test_pose_stream_rejects_invalid_frame_and_empty_video_and_releases():
     invalid_capture = FakeCapture([0], frames=[object()])
     with pytest.raises(MotionAnalysisInferenceError, match="视频帧尺寸无效"):

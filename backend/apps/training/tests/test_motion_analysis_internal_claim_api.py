@@ -218,6 +218,59 @@ def test_claim_locks_oldest_compatible_job(
 
 
 @pytest.mark.django_db
+def test_claim_terminally_skips_invalid_oldest_source_metadata(
+    api_client,
+    machine_auth,
+    analysis_job_factory,
+):
+    now = timezone.now()
+    invalid = analysis_job_factory(created_at=now - timedelta(minutes=2))
+    invalid.training_video.object_hash = ""
+    invalid.training_video.save(update_fields=["object_hash", "updated_at"])
+    healthy = analysis_job_factory(created_at=now - timedelta(minutes=1))
+
+    response = api_client.post(
+        CLAIM_URL,
+        CLAIM_BODY,
+        format="json",
+        secure=True,
+        **machine_auth,
+    )
+
+    assert response.status_code == 200
+    assert response.data["job_id"] == healthy.id
+    invalid.refresh_from_db()
+    assert invalid.status == MotionAnalysisJob.Status.FAILED
+    assert invalid.failure_code == "source_metadata_invalid"
+    assert invalid.failure_reason == "原视频元数据无效，请医生手动填写训练结果"
+
+
+@pytest.mark.django_db
+def test_claim_all_invalid_sources_finishes_them_and_returns_empty(
+    api_client,
+    machine_auth,
+    analysis_job_factory,
+):
+    jobs = [analysis_job_factory() for _ in range(3)]
+    for job in jobs:
+        job.training_video.size_bytes = 0
+        job.training_video.save(update_fields=["size_bytes", "updated_at"])
+
+    response = api_client.post(
+        CLAIM_URL,
+        CLAIM_BODY,
+        format="json",
+        secure=True,
+        **machine_auth,
+    )
+
+    assert response.status_code == 204
+    assert not MotionAnalysisJob.objects.filter(
+        id__in=[job.id for job in jobs], status=MotionAnalysisJob.Status.PENDING
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_claim_returns_shared_contract_and_hashes_one_time_lease(
     api_client,
     machine_auth,
@@ -793,3 +846,50 @@ def test_postgresql_concurrent_claim_gives_single_job_to_only_one_worker(
     job.refresh_from_db()
     assert job.status == MotionAnalysisJob.Status.RUNNING
     assert job.worker_id == "worker-1"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgresql_concurrent_claim_skips_one_invalid_head_without_duplicate(
+    analysis_job_factory,
+):
+    from apps.training import internal_services
+
+    assert connection.vendor == "postgresql"
+    now = timezone.now()
+    invalid = analysis_job_factory(created_at=now - timedelta(minutes=3))
+    invalid.training_video.object_hash = ""
+    invalid.training_video.save(update_fields=["object_hash", "updated_at"])
+    healthy = {
+        analysis_job_factory(created_at=now - timedelta(minutes=2)).id,
+        analysis_job_factory(created_at=now - timedelta(minutes=1)).id,
+    }
+    barrier = threading.Barrier(2)
+    results = []
+    errors = []
+
+    def claim(worker_id):
+        close_old_connections()
+        try:
+            barrier.wait(10)
+            result = internal_services.claim_next_job(
+                worker_id=worker_id,
+                capabilities=[WorkerCapability(**CAPABILITY)],
+                now=timezone.now(),
+            )
+            results.append(result.job.id if result else None)
+        except Exception as exc:  # pragma: no cover - assertion below captures detail
+            errors.append(exc)
+        finally:
+            close_old_connections()
+
+    threads = [threading.Thread(target=claim, args=(f"worker-{index}",)) for index in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(15)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert set(results) == healthy
+    invalid.refresh_from_db()
+    assert invalid.status == MotionAnalysisJob.Status.FAILED

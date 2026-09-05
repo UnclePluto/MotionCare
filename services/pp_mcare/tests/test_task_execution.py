@@ -13,6 +13,7 @@ import pp_mcare.config as config_module
 import pp_mcare.worker as worker
 from pp_mcare.config import Settings
 from pp_mcare.media import VideoMetadata
+from pp_mcare.media import SourceVideoMetadata
 from pp_mcare.pipeline import LocalAnalysisResult
 from pp_mcare.safe_logging import configure_safe_logging
 
@@ -45,7 +46,10 @@ def make_job(job_id=41, heartbeat_interval_seconds=60):
             },
             "upload": {
                 "bucket": "private",
-                "object_key": f"motion-analysis/{job_id}/skeleton.mp4",
+                "object_key": (
+                    f"motion-analysis/{job_id}/2026/09/"
+                    "11111111-1111-4111-8111-111111111111/skeleton.mp4"
+                ),
                 "token": "upload-secret-token",
                 "expires_at": "2026-09-05T13:00:00Z",
             },
@@ -73,7 +77,24 @@ def local_result():
         decoded_frame_count=8929,
         inferred_frame_count=8929,
         encoded_frame_count=8929,
+        inference_seconds=100.0,
+        encoding_seconds=50.0,
         media_metadata=VideoMetadata(1920, 1080, 30.0, 8929, 297.6, "h264", "yuv420p", False, True),
+    )
+
+
+@pytest.fixture(autouse=True)
+def source_probe(monkeypatch):
+    monkeypatch.setattr(
+        worker,
+        "_workspace_tool_paths",
+        lambda workspace: (workspace.input_path, workspace.output_path),
+    )
+    monkeypatch.setattr(
+        worker,
+        "probe_source_video",
+        lambda _path: SourceVideoMetadata(1920, 1080, 30.0, 8929, 297.6, "h264"),
+        raising=False,
     )
 
 
@@ -98,10 +119,10 @@ def test_process_uploads_completes_once_reuses_pipeline_and_cleans(tmp_path, mon
     client = FakeClient()
     pipeline_calls = []
 
-    def download(_grant, path, _size, _hash):
-        path.write_bytes(b"input")
+    def download(_grant, workspace, _size, _hash):
+        workspace.input_path.write_bytes(b"input")
 
-    def pipeline(job, _input, output, heartbeat):
+    def pipeline(job, _input, output, heartbeat, **_kwargs):
         pipeline_calls.append(job.job_id)
         heartbeat("inference")
         output.write_bytes(b"skeleton")
@@ -112,8 +133,8 @@ def test_process_uploads_completes_once_reuses_pipeline_and_cleans(tmp_path, mon
     monkeypatch.setattr(
         worker,
         "upload_skeleton",
-        lambda grant, path: worker.UploadedObject(
-            grant.bucket, grant.object_key, "etag", path.stat().st_size
+        lambda grant, workspace: worker.UploadedObject(
+            grant.bucket, grant.object_key, "etag", workspace.output_path.stat().st_size
         ),
     )
 
@@ -131,9 +152,11 @@ def test_process_logs_only_safe_resource_and_cleanup_metrics(tmp_path, monkeypat
     configure_safe_logging(stream=output)
     settings = make_settings(tmp_path)
     client = FakeClient()
-    monkeypatch.setattr(worker, "download_original", lambda _g, p, _s, _h: p.write_bytes(b"x"))
+    monkeypatch.setattr(
+        worker, "download_original", lambda _g, w, _s, _h: w.input_path.write_bytes(b"x")
+    )
 
-    def pipeline(_job, _input, output_path, _heartbeat):
+    def pipeline(_job, _input, output_path, _heartbeat, **_kwargs):
         output_path.write_bytes(b"skeleton")
         return local_result()
 
@@ -141,7 +164,9 @@ def test_process_logs_only_safe_resource_and_cleanup_metrics(tmp_path, monkeypat
     monkeypatch.setattr(
         worker,
         "upload_skeleton",
-        lambda g, p: worker.UploadedObject(g.bucket, g.object_key, "etag", p.stat().st_size),
+        lambda g, w: worker.UploadedObject(
+            g.bucket, g.object_key, "etag", w.output_path.stat().st_size
+        ),
     )
 
     worker.process_claimed_job(make_job(), client, settings)
@@ -159,6 +184,9 @@ def test_process_logs_only_safe_resource_and_cleanup_metrics(tmp_path, monkeypat
     assert "download-secret" not in rendered
     assert "upload-secret-token" not in rendered
     assert "observation_fingerprint" not in rendered
+    assert "stage=inference" in rendered
+    assert "stage=encoding" in rendered
+    assert "stage=analyze" not in rendered
 
 
 def test_complete_response_loss_reuses_same_idempotency_without_pipeline_retry(
@@ -168,7 +196,7 @@ def test_complete_response_loss_reuses_same_idempotency_without_pipeline_retry(
     bodies = []
     pipeline_calls = 0
 
-    def pipeline(_job, _input, output, _heartbeat):
+    def pipeline(_job, _input, output, _heartbeat, **_kwargs):
         nonlocal pipeline_calls
         pipeline_calls += 1
         output.write_bytes(b"skeleton")
@@ -197,12 +225,16 @@ def test_complete_response_loss_reuses_same_idempotency_without_pipeline_retry(
         transport=httpx.MockTransport(handler),
         sleeper=lambda _seconds: None,
     )
-    monkeypatch.setattr(worker, "download_original", lambda _g, p, _s, _h: p.write_bytes(b"x"))
+    monkeypatch.setattr(
+        worker, "download_original", lambda _g, w, _s, _h: w.input_path.write_bytes(b"x")
+    )
     monkeypatch.setattr(worker, "run_local_pipeline", pipeline)
     monkeypatch.setattr(
         worker,
         "upload_skeleton",
-        lambda g, p: worker.UploadedObject(g.bucket, g.object_key, "etag", p.stat().st_size),
+        lambda g, w: worker.UploadedObject(
+            g.bucket, g.object_key, "etag", w.output_path.stat().st_size
+        ),
     )
 
     try:
@@ -221,7 +253,9 @@ def test_pipeline_failure_reports_once_with_fixed_redacted_payload_and_cleans(
 ):
     settings = make_settings(tmp_path)
     client = FakeClient()
-    monkeypatch.setattr(worker, "download_original", lambda _g, p, _s, _h: p.write_bytes(b"x"))
+    monkeypatch.setattr(
+        worker, "download_original", lambda _g, w, _s, _h: w.input_path.write_bytes(b"x")
+    )
     monkeypatch.setattr(
         worker,
         "run_local_pipeline",
@@ -249,9 +283,11 @@ def test_complete_exhaustion_after_upload_fails_once_and_still_cleans(tmp_path, 
         raise worker.MotionCareUnavailableError("provider secret")
 
     client.complete = complete
-    monkeypatch.setattr(worker, "download_original", lambda _g, p, _s, _h: p.write_bytes(b"x"))
+    monkeypatch.setattr(
+        worker, "download_original", lambda _g, w, _s, _h: w.input_path.write_bytes(b"x")
+    )
 
-    def pipeline(_job, _input, output, _heartbeat):
+    def pipeline(_job, _input, output, _heartbeat, **_kwargs):
         output.write_bytes(b"skeleton")
         return local_result()
 
@@ -259,7 +295,9 @@ def test_complete_exhaustion_after_upload_fails_once_and_still_cleans(tmp_path, 
     monkeypatch.setattr(
         worker,
         "upload_skeleton",
-        lambda g, p: worker.UploadedObject(g.bucket, g.object_key, "etag", p.stat().st_size),
+        lambda g, w: worker.UploadedObject(
+            g.bucket, g.object_key, "etag", w.output_path.stat().st_size
+        ),
     )
 
     worker.process_claimed_job(make_job(), client, settings)
@@ -347,3 +385,137 @@ def test_worker_does_not_double_fail_processor_that_owns_failure_reporting(tmp_p
         max_claims=2,
     )
     assert len(client.fail_calls) == 1
+
+
+def test_video_over_60_minutes_fails_before_pipeline_or_upload(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    client = FakeClient()
+    pipeline_calls = []
+    upload_calls = []
+    monkeypatch.setattr(
+        worker, "download_original", lambda _g, w, _s, _h: w.input_path.write_bytes(b"x")
+    )
+    monkeypatch.setattr(
+        worker,
+        "probe_source_video",
+        lambda _path: SourceVideoMetadata(1920, 1080, 30.0, 108001, 3600.001, "h264"),
+    )
+    monkeypatch.setattr(worker, "run_local_pipeline", lambda *_a, **_k: pipeline_calls.append(1))
+    monkeypatch.setattr(worker, "upload_skeleton", lambda *_a, **_k: upload_calls.append(1))
+
+    worker.process_claimed_job(make_job(), client, settings)
+
+    assert pipeline_calls == []
+    assert upload_calls == []
+    assert client.fail_calls[0][1]["failure_code"] == "video_too_long"
+
+
+def test_exactly_60_minutes_is_allowed(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    client = FakeClient()
+    monkeypatch.setattr(
+        worker, "download_original", lambda _g, w, _s, _h: w.input_path.write_bytes(b"x")
+    )
+    monkeypatch.setattr(
+        worker,
+        "probe_source_video",
+        lambda _path: SourceVideoMetadata(1920, 1080, 30.0, 108000, 3600.0, "h264"),
+    )
+
+    def pipeline(_job, _input, output, _heartbeat, **_kwargs):
+        output.write_bytes(b"skeleton")
+        return local_result()
+
+    monkeypatch.setattr(worker, "run_local_pipeline", pipeline)
+    monkeypatch.setattr(
+        worker,
+        "upload_skeleton",
+        lambda g, w: worker.UploadedObject(
+            g.bucket, g.object_key, "etag", w.output_path.stat().st_size
+        ),
+    )
+
+    worker.process_claimed_job(make_job(), client, settings)
+
+    assert len(client.complete_calls) == 1
+    assert client.fail_calls == []
+
+
+def test_heartbeat_join_timeout_is_process_fatal_and_stops_next_claim(tmp_path):
+    settings = make_settings(tmp_path)
+    job = make_job()
+
+    class ClaimClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.claim_count = 0
+
+        def claim(self):
+            self.claim_count += 1
+            return job
+
+    client = ClaimClient()
+    entered = threading.Event()
+    release = threading.Event()
+    original_join_timeout = worker._HEARTBEAT_JOIN_SECONDS
+    worker._HEARTBEAT_JOIN_SECONDS = 0.01
+
+    def fatal(_job):
+        client.heartbeat = lambda *_args: (entered.set(), release.wait(2))
+        with worker.HeartbeatLease(client, _job, wait=lambda _seconds: False):
+            assert entered.wait(1)
+
+    try:
+        with pytest.raises(worker.HeartbeatFatalError):
+            worker.run_worker(
+                client=client,
+                processor=fatal,
+                sleeper=lambda _n: None,
+                settings=settings,
+            )
+    finally:
+        release.set()
+        worker._HEARTBEAT_JOIN_SECONDS = original_join_timeout
+    assert client.claim_count == 1
+
+
+def test_control_baseexception_wins_over_workspace_cleanup_failure(tmp_path, monkeypatch):
+    from pp_mcare.__main__ import GracefulShutdown
+    from pp_mcare.workspace import TaskWorkspace
+
+    workspace = TaskWorkspace.create(tmp_path, 55)
+    monkeypatch.setattr(workspace, "cleanup", lambda: (_ for _ in ()).throw(OSError("cleanup")))
+
+    with pytest.raises(GracefulShutdown):
+        with workspace:
+            raise GracefulShutdown(0)
+    TaskWorkspace.cleanup(workspace)
+
+
+def test_sigterm_wins_when_heartbeat_is_blocked_and_cleanup_fails(tmp_path, monkeypatch):
+    from pp_mcare.__main__ import GracefulShutdown, _handle_shutdown_signal
+    from pp_mcare.workspace import TaskWorkspace
+
+    entered = threading.Event()
+    release = threading.Event()
+    client = FakeClient()
+
+    def blocking_heartbeat(*_args):
+        entered.set()
+        release.wait(2)
+
+    client.heartbeat = blocking_heartbeat
+    monkeypatch.setattr(worker, "_HEARTBEAT_JOIN_SECONDS", 0.01, raising=False)
+    workspace = TaskWorkspace.create(tmp_path, 56)
+    monkeypatch.setattr(workspace, "cleanup", lambda: (_ for _ in ()).throw(OSError("cleanup")))
+    lease = worker.HeartbeatLease(client, make_job(), wait=lambda _seconds: False)
+
+    try:
+        with pytest.raises(GracefulShutdown):
+            with workspace, lease:
+                assert entered.wait(1)
+                _handle_shutdown_signal(15, None)
+    finally:
+        release.set()
+        lease.stop()
+        TaskWorkspace.cleanup(workspace)

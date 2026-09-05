@@ -1,16 +1,27 @@
 import logging
+import io
+import os
 import stat
 
 import httpx
 import pytest
 import qiniu
+import requests
+from qiniu.http import ResponseInfo
 from motion_analysis_contract import DownloadGrant, UploadGrant
 
 import pp_mcare.storage as storage
 from pp_mcare.storage import StoragePermanentError, StorageTransientError
+from pp_mcare.workspace import TaskWorkspace
 
 
 MP4 = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2" + b"video" * 50
+
+
+@pytest.fixture
+def task_workspace(tmp_path):
+    with TaskWorkspace.create(tmp_path / "jobs", 41) as workspace:
+        yield workspace
 
 
 def download_grant(
@@ -31,13 +42,15 @@ def download_grant(
 def upload_grant():
     return UploadGrant(
         bucket="private",
-        object_key="motion-analysis/41/skeleton.mp4",
+        object_key=("motion-analysis/41/2026/09/11111111-1111-4111-8111-111111111111/skeleton.mp4"),
         token="upload-secret-token",
         expires_at="2026-09-05T13:00:00Z",
     )
 
 
-def test_download_streams_private_mp4_and_validates_qiniu_etag(tmp_path, monkeypatch):
+def test_download_streams_private_mp4_and_validates_qiniu_etag(
+    tmp_path, task_workspace, monkeypatch
+):
     calls = []
 
     def handler(request):
@@ -45,11 +58,11 @@ def test_download_streams_private_mp4_and_validates_qiniu_etag(tmp_path, monkeyp
         return httpx.Response(200, content=MP4, headers={"Content-Type": "video/mp4"})
 
     monkeypatch.setattr(storage, "_DOWNLOAD_TRANSPORT", httpx.MockTransport(handler))
-    target = tmp_path / "original.mp4"
+    target = task_workspace.input_path
     expected = qiniu.etag(str(_write_fixture(tmp_path / "expected.mp4", MP4)))
 
     result = storage.download_original(
-        download_grant(object_hash=expected), target, len(MP4), expected
+        download_grant(object_hash=expected), task_workspace, len(MP4), expected
     )
 
     assert result.size_bytes == len(MP4)
@@ -66,7 +79,9 @@ def _write_fixture(path, data):
 
 
 @pytest.mark.parametrize("case", ["too_large", "too_small", "hash", "content_type", "body"])
-def test_download_data_failures_are_not_retried_and_leave_no_partial(tmp_path, monkeypatch, case):
+def test_download_data_failures_are_not_retried_and_leave_no_partial(
+    tmp_path, task_workspace, monkeypatch, case
+):
     attempts = 0
     body = MP4
     expected_size = len(MP4)
@@ -89,10 +104,13 @@ def test_download_data_failures_are_not_retried_and_leave_no_partial(tmp_path, m
         return httpx.Response(200, content=body, headers=headers)
 
     monkeypatch.setattr(storage, "_DOWNLOAD_TRANSPORT", httpx.MockTransport(handler))
-    target = tmp_path / "original.mp4"
+    target = task_workspace.input_path
     with pytest.raises(StoragePermanentError):
         storage.download_original(
-            download_grant(object_hash=expected_hash), target, expected_size, expected_hash
+            download_grant(object_hash=expected_hash),
+            task_workspace,
+            expected_size,
+            expected_hash,
         )
 
     assert attempts == 1
@@ -100,7 +118,7 @@ def test_download_data_failures_are_not_retried_and_leave_no_partial(tmp_path, m
 
 
 @pytest.mark.parametrize("status", [400, 401, 404, 416])
-def test_download_4xx_and_redirect_are_not_retried(tmp_path, monkeypatch, status):
+def test_download_4xx_and_redirect_are_not_retried(tmp_path, task_workspace, monkeypatch, status):
     attempts = 0
 
     def handler(request):
@@ -111,12 +129,12 @@ def test_download_4xx_and_redirect_are_not_retried(tmp_path, monkeypatch, status
     monkeypatch.setattr(storage, "_DOWNLOAD_TRANSPORT", httpx.MockTransport(handler))
     with pytest.raises(StoragePermanentError):
         storage.download_original(
-            download_grant(object_hash="hash"), tmp_path / "x.mp4", len(MP4), "hash"
+            download_grant(object_hash="hash"), task_workspace, len(MP4), "hash"
         )
     assert attempts == 1
 
 
-def test_download_retries_5xx_three_times_with_clean_files(tmp_path, monkeypatch):
+def test_download_retries_5xx_three_times_with_clean_files(task_workspace, monkeypatch):
     attempts = 0
     sleeps = []
 
@@ -127,15 +145,19 @@ def test_download_retries_5xx_three_times_with_clean_files(tmp_path, monkeypatch
 
     monkeypatch.setattr(storage, "_DOWNLOAD_TRANSPORT", httpx.MockTransport(handler))
     monkeypatch.setattr(storage, "_SLEEP", sleeps.append)
-    target = tmp_path / "x.mp4"
+    target = task_workspace.input_path
     with pytest.raises(StorageTransientError):
-        storage.download_original(download_grant(object_hash="hash"), target, len(MP4), "hash")
+        storage.download_original(
+            download_grant(object_hash="hash"), task_workspace, len(MP4), "hash"
+        )
     assert attempts == 3
     assert sleeps == [1.0, 2.0]
     assert not target.exists()
 
 
-def test_download_retries_interrupted_response_from_a_clean_file(tmp_path, monkeypatch):
+def test_download_retries_interrupted_response_from_a_clean_file(
+    tmp_path, task_workspace, monkeypatch
+):
     attempts = 0
     expected_path = _write_fixture(tmp_path / "expected.mp4", MP4)
     expected_hash = qiniu.etag(str(expected_path))
@@ -154,9 +176,9 @@ def test_download_retries_interrupted_response_from_a_clean_file(tmp_path, monke
 
     monkeypatch.setattr(storage, "_DOWNLOAD_TRANSPORT", httpx.MockTransport(handler))
     monkeypatch.setattr(storage, "_SLEEP", lambda _: None)
-    target = tmp_path / "original.mp4"
+    target = task_workspace.input_path
     result = storage.download_original(
-        download_grant(object_hash=expected_hash), target, len(MP4), expected_hash
+        download_grant(object_hash=expected_hash), task_workspace, len(MP4), expected_hash
     )
 
     assert attempts == 3
@@ -164,8 +186,8 @@ def test_download_retries_interrupted_response_from_a_clean_file(tmp_path, monke
     assert result.size_bytes == len(MP4)
 
 
-def test_upload_validates_key_hash_and_size(tmp_path, monkeypatch):
-    path = _write_fixture(tmp_path / "skeleton.mp4", MP4)
+def test_upload_validates_key_hash_and_size(task_workspace, monkeypatch):
+    path = _write_fixture(task_workspace.output_path, MP4)
     local_hash = qiniu.etag(str(path))
     calls = []
 
@@ -174,7 +196,7 @@ def test_upload_validates_key_hash_and_size(tmp_path, monkeypatch):
         return {"key": key, "hash": local_hash}, {"status_code": 200}
 
     monkeypatch.setattr(storage.qiniu, "put_file", put_file)
-    result = storage.upload_skeleton(upload_grant(), path)
+    result = storage.upload_skeleton(upload_grant(), task_workspace)
 
     assert result.object_hash == local_hash
     assert result.size_bytes == len(MP4)
@@ -182,8 +204,8 @@ def test_upload_validates_key_hash_and_size(tmp_path, monkeypatch):
     assert "upload-secret-token" not in repr(result)
 
 
-def test_upload_retries_transient_but_not_4xx(tmp_path, monkeypatch):
-    path = _write_fixture(tmp_path / "skeleton.mp4", MP4)
+def test_upload_retries_transient_but_not_4xx(task_workspace, monkeypatch):
+    _write_fixture(task_workspace.output_path, MP4)
     attempts = 0
 
     def put_file(_token, _key, _path, **_kwargs):
@@ -194,7 +216,7 @@ def test_upload_retries_transient_but_not_4xx(tmp_path, monkeypatch):
     monkeypatch.setattr(storage.qiniu, "put_file", put_file)
     monkeypatch.setattr(storage, "_SLEEP", lambda _: None)
     with pytest.raises(StorageTransientError):
-        storage.upload_skeleton(upload_grant(), path)
+        storage.upload_skeleton(upload_grant(), task_workspace)
     assert attempts == 3
 
     attempts = 0
@@ -206,15 +228,15 @@ def test_upload_retries_transient_but_not_4xx(tmp_path, monkeypatch):
 
     monkeypatch.setattr(storage.qiniu, "put_file", bad_request)
     with pytest.raises(StoragePermanentError):
-        storage.upload_skeleton(upload_grant(), path)
+        storage.upload_skeleton(upload_grant(), task_workspace)
     assert attempts == 1
 
 
 @pytest.mark.parametrize("wrong_field", ["key", "hash"])
 def test_upload_rejects_provider_identity_mismatch_without_retry(
-    tmp_path, monkeypatch, wrong_field
+    task_workspace, monkeypatch, wrong_field
 ):
-    path = _write_fixture(tmp_path / "skeleton.mp4", MP4)
+    path = _write_fixture(task_workspace.output_path, MP4)
     local_hash = qiniu.etag(str(path))
     calls = 0
 
@@ -227,12 +249,12 @@ def test_upload_rejects_provider_identity_mismatch_without_retry(
 
     monkeypatch.setattr(storage.qiniu, "put_file", put_file)
     with pytest.raises(StoragePermanentError):
-        storage.upload_skeleton(upload_grant(), path)
+        storage.upload_skeleton(upload_grant(), task_workspace)
     assert calls == 1
 
 
-def test_upload_only_accepts_614_after_an_ambiguous_attempt(tmp_path, monkeypatch):
-    path = _write_fixture(tmp_path / "skeleton.mp4", MP4)
+def test_upload_only_accepts_614_after_an_ambiguous_attempt(task_workspace, monkeypatch):
+    path = _write_fixture(task_workspace.output_path, MP4)
     outcomes = [OSError("response lost token=secret"), (None, {"status_code": 614})]
 
     def put_file(*_args, **_kwargs):
@@ -243,7 +265,9 @@ def test_upload_only_accepts_614_after_an_ambiguous_attempt(tmp_path, monkeypatc
 
     monkeypatch.setattr(storage.qiniu, "put_file", put_file)
     monkeypatch.setattr(storage, "_SLEEP", lambda _: None)
-    assert storage.upload_skeleton(upload_grant(), path).object_hash == qiniu.etag(str(path))
+    assert storage.upload_skeleton(upload_grant(), task_workspace).object_hash == qiniu.etag(
+        str(path)
+    )
 
     monkeypatch.setattr(
         storage.qiniu,
@@ -251,7 +275,167 @@ def test_upload_only_accepts_614_after_an_ambiguous_attempt(tmp_path, monkeypatc
         lambda *_a, **_kw: (None, {"status_code": 614}),
     )
     with pytest.raises(StoragePermanentError):
-        storage.upload_skeleton(upload_grant(), path)
+        storage.upload_skeleton(upload_grant(), task_workspace)
+
+
+def test_upload_real_response_info_transport_failure_is_ambiguous_and_bounded(
+    task_workspace, monkeypatch
+):
+    path = _write_fixture(task_workspace.output_path, MP4)
+    outcomes = [
+        (None, ResponseInfo(None, OSError("https://secret.example?token=leak"))),
+        (None, {"status_code": 614}),
+    ]
+    calls = []
+
+    def put_file(*args, **kwargs):
+        calls.append((args, kwargs))
+        return outcomes.pop(0)
+
+    monkeypatch.setattr(storage.qiniu, "put_file", put_file)
+    monkeypatch.setattr(storage, "_SLEEP", lambda _: None)
+
+    result = storage.upload_skeleton(upload_grant(), task_workspace)
+
+    assert result.object_hash == qiniu.etag(str(path))
+    assert len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr(
+        storage.qiniu,
+        "put_file",
+        lambda *_a, **_kw: (
+            calls.append(1) or None,
+            ResponseInfo(None, ConnectionError("connection lost")),
+        ),
+    )
+    with pytest.raises(StorageTransientError):
+        storage.upload_skeleton(upload_grant(), task_workspace)
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("kind", ["negative", "exception", "connect_failed"])
+def test_real_qiniu_response_info_ambiguous_shapes_each_retry_three_times(
+    task_workspace, monkeypatch, kind
+):
+    _write_fixture(task_workspace.output_path, MP4)
+    calls = 0
+
+    def response_info():
+        if kind == "negative":
+            return ResponseInfo(None)
+        response = requests.Response()
+        response.status_code = 400
+        response.url = "https://upload.qiniup.com"
+        response._content = b'{"error":"safe"}'
+        if kind == "exception":
+            response.headers["X-Reqid"] = "request-id"
+            return ResponseInfo(response, ConnectionError("response interrupted"))
+        return ResponseInfo(response)
+
+    def put_file(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return None, response_info()
+
+    monkeypatch.setattr(storage.qiniu, "put_file", put_file)
+    monkeypatch.setattr(storage, "_SLEEP", lambda _: None)
+
+    with pytest.raises(StorageTransientError):
+        storage.upload_skeleton(upload_grant(), task_workspace)
+    assert calls == 3
+    assert qiniu.config.get_default("connection_retries") == 1
+
+
+def test_upload_rejects_malformed_provider_response_without_retry(task_workspace, monkeypatch):
+    _write_fixture(task_workspace.output_path, MP4)
+    calls = 0
+
+    def malformed(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return "not-a-result", object()
+
+    monkeypatch.setattr(storage.qiniu, "put_file", malformed)
+    with pytest.raises(StoragePermanentError):
+        storage.upload_skeleton(upload_grant(), task_workspace)
+    assert calls == 1
+
+
+def test_storage_root_logging_boundary_redacts_real_qiniu_root_messages(monkeypatch):
+    stream = io.StringIO()
+    root = logging.getLogger()
+    handler = logging.StreamHandler(stream)
+    root.addHandler(handler)
+    try:
+        storage.configure_storage_logging(("upload-secret-token",))
+        # qiniu 7.18 的 HTTP 错误路径直接调用 logging.error/debug（root logger）。
+        logging.error(
+            "https://cdn.example/x?token=upload-secret-token /private/patient.mp4 body=PHI"
+        )
+        rendered = stream.getvalue()
+        assert "upload-secret-token" not in rendered
+        assert "patient.mp4" not in rendered
+        assert "PHI" not in rendered
+        assert "<redacted>" in rendered
+    finally:
+        root.removeHandler(handler)
+
+
+def test_upload_uses_anchored_fd_when_leaf_is_replaced(tmp_path, monkeypatch):
+    with TaskWorkspace.create(tmp_path / "jobs", 41) as workspace:
+        fd = workspace.create_file("skeleton.mp4")
+        os.write(fd, MP4)
+        os.fsync(fd)
+        os.close(fd)
+        outside = tmp_path / "outside.mp4"
+        outside.write_bytes(b"outside")
+        expected = qiniu.etag(str(workspace.output_path))
+
+        def put_file(_token, key, fd_path, **_kwargs):
+            workspace.output_path.unlink()
+            workspace.output_path.symlink_to(outside)
+            with open(fd_path, "rb") as uploaded:
+                assert uploaded.read() == MP4
+            return {"key": key, "hash": expected}, {"status_code": 200}
+
+        monkeypatch.setattr(storage.qiniu, "put_file", put_file)
+        result = storage.upload_skeleton(upload_grant(), workspace)
+
+        assert result.object_hash == expected
+        assert outside.read_bytes() == b"outside"
+
+
+def test_download_hashes_open_fd_and_rejects_leaf_replacement(tmp_path, monkeypatch):
+    root = tmp_path / "jobs"
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(MP4.replace(b"video", b"other"))
+
+    with TaskWorkspace.create(root, 42) as workspace:
+        expected_path = _write_fixture(tmp_path / "expected.mp4", MP4)
+        expected_hash = qiniu.etag(str(expected_path))
+
+        class ReplacingBody(httpx.SyncByteStream):
+            def __iter__(self):
+                yield MP4[:20]
+                workspace.input_path.rename(workspace.path / "saved-original.mp4")
+                workspace.input_path.symlink_to(outside)
+                yield MP4[20:]
+
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "video/mp4"},
+                stream=ReplacingBody(),
+            )
+
+        monkeypatch.setattr(storage, "_DOWNLOAD_TRANSPORT", httpx.MockTransport(handler))
+        with pytest.raises(StoragePermanentError, match="发生变化"):
+            storage.download_original(
+                download_grant(object_hash=expected_hash), workspace, len(MP4), expected_hash
+            )
+
+        assert outside.read_bytes() != MP4
 
 
 def test_third_party_loggers_do_not_propagate_credentials(caplog):

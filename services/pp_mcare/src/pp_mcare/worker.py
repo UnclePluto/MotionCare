@@ -18,6 +18,7 @@ from .api_client import (
     MotionCareUnavailableError,
 )
 from .config import Settings
+from .media import probe_source_video
 from .pipeline import LocalAnalysisResult, run_local_pipeline
 from .safe_logging import configure_safe_logging, install_safe_logging
 from .storage import (
@@ -31,10 +32,15 @@ from .workspace import TaskWorkspace
 
 
 _logger = logging.getLogger(__name__)
+_HEARTBEAT_JOIN_SECONDS = 5.0
 
 
 class LeaseLostError(RuntimeError):
     pass
+
+
+class HeartbeatFatalError(BaseException):
+    """Heartbeat could not be stopped; continuing this process could duplicate work."""
 
 
 class JobAlreadyFinalized(RuntimeError):
@@ -42,6 +48,10 @@ class JobAlreadyFinalized(RuntimeError):
 
 
 class ResourceInsufficientError(RuntimeError):
+    pass
+
+
+class SourceVideoTooLongError(RuntimeError):
     pass
 
 
@@ -76,7 +86,16 @@ class HeartbeatLease:
         return self
 
     def __exit__(self, _type, _value, _traceback) -> None:
-        self.stop()
+        try:
+            self.stop()
+        except HeartbeatFatalError:
+            _logger.critical(
+                "motion_analysis_heartbeat_fatal",
+                extra={"job_id": self._job.job_id, "reason_code": "heartbeat_stuck"},
+            )
+            if _type is not None and not issubclass(_type, Exception):
+                return
+            raise
 
     def _pump(self) -> None:
         while not self._stop.is_set():
@@ -88,7 +107,7 @@ class HeartbeatLease:
                 stage = self._stage
             try:
                 self._client.heartbeat(self._job.job_id, self._job.lease_token, stage)
-            except Exception:
+            except BaseException:
                 with self._lock:
                     self._failure = LeaseLostError("任务租约已失效")
                 self._stop.set()
@@ -112,11 +131,11 @@ class HeartbeatLease:
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None and self._thread is not threading.current_thread():
-            self._thread.join(timeout=5.0)
+            self._thread.join(timeout=_HEARTBEAT_JOIN_SECONDS)
             if self._thread.is_alive():
                 with self._lock:
                     self._failure = LeaseLostError("心跳线程无法停止")
-                raise LeaseLostError("心跳线程无法停止")
+                raise HeartbeatFatalError("心跳线程无法停止")
 
 
 @dataclass
@@ -200,11 +219,36 @@ def _failure_details(error: Exception, stage: str) -> tuple[str, str]:
         return "lease_lost", "任务租约已失效"
     if isinstance(error, ResourceInsufficientError):
         return "resource_insufficient", "计算资源不足"
+    if isinstance(error, SourceVideoTooLongError):
+        return "video_too_long", "训练视频超过60分钟，请医生手动填写训练结果"
     if stage == "download" and isinstance(error, (StoragePermanentError, StorageTransientError)):
         return "download_failed", "原视频下载或校验失败"
     if stage == "upload" and isinstance(error, (StoragePermanentError, StorageTransientError)):
         return "upload_failed", "骨架视频上传失败"
     return "analysis_failed", "动作分析失败"
+
+
+def _workspace_tool_paths(workspace: TaskWorkspace):
+    return (
+        workspace.secure_tool_path("original.mp4"),
+        workspace.secure_tool_path("skeleton.mp4"),
+    )
+
+
+def _record_measured_stage(
+    timings: dict[str, float], *, stage: str, seconds: float, job_id: int
+) -> None:
+    duration_ms = max(0.0, seconds * 1000.0)
+    timings[stage] = duration_ms
+    _logger.info(
+        "motion_analysis_stage_finished",
+        extra={
+            "job_id": job_id,
+            "stage": stage,
+            "outcome": "succeeded",
+            "duration_ms": duration_ms,
+        },
+    )
 
 
 def process_claimed_job(job: ClaimedJob, client, settings: Settings) -> None:
@@ -232,27 +276,73 @@ def process_claimed_job(job: ClaimedJob, client, settings: Settings) -> None:
                     lease.checkpoint(stage)
                     download_original(
                         job.download,
-                        workspace.input_path,
+                        workspace,
                         job.download.size_bytes,
                         job.download.object_hash,
                     )
                     lease.raise_if_lost()
 
-                stage = "analyze"
-                with _StageTimer(timings, stage, job.job_id):
+                input_path, output_path = _workspace_tool_paths(workspace)
+                source = probe_source_video(input_path)
+                if source.duration_seconds > 3600.0:
+                    raise SourceVideoTooLongError("训练视频超过60分钟")
+
+                stage = "inference"
+                _logger.info(
+                    "motion_analysis_stage_started",
+                    extra={"job_id": job.job_id, "stage": "inference", "outcome": "started"},
+                )
+                _logger.info(
+                    "motion_analysis_stage_started",
+                    extra={"job_id": job.job_id, "stage": "encoding", "outcome": "started"},
+                )
+                try:
                     lease.checkpoint("inference")
                     local = run_local_pipeline(
                         job,
-                        workspace.input_path,
-                        workspace.output_path,
+                        input_path,
+                        output_path,
                         lease.checkpoint,
+                        source_metadata=source,
                     )
                     lease.raise_if_lost()
+                except Exception:
+                    _logger.info(
+                        "motion_analysis_stage_finished",
+                        extra={
+                            "job_id": job.job_id,
+                            "stage": "inference",
+                            "outcome": "failed",
+                            "duration_ms": 0.0,
+                        },
+                    )
+                    _logger.info(
+                        "motion_analysis_stage_finished",
+                        extra={
+                            "job_id": job.job_id,
+                            "stage": "encoding",
+                            "outcome": "failed",
+                            "duration_ms": 0.0,
+                        },
+                    )
+                    raise
+                _record_measured_stage(
+                    timings,
+                    stage="inference",
+                    seconds=local.inference_seconds,
+                    job_id=job.job_id,
+                )
+                _record_measured_stage(
+                    timings,
+                    stage="encoding",
+                    seconds=local.encoding_seconds,
+                    job_id=job.job_id,
+                )
 
                 stage = "upload"
                 with _StageTimer(timings, stage, job.job_id):
                     lease.checkpoint("upload")
-                    uploaded = upload_skeleton(job.upload, workspace.output_path)
+                    uploaded = upload_skeleton(job.upload, workspace)
                     lease.raise_if_lost()
 
                 stage = "complete"

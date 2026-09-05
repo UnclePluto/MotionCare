@@ -31,6 +31,8 @@ _SAFE_REASON_CODES = frozenset(
         "lease_lost",
         "resource_insufficient",
         "upload_failed",
+        "video_too_long",
+        "heartbeat_stuck",
     }
 )
 _SAFE_MESSAGES = frozenset(
@@ -45,6 +47,8 @@ _SAFE_MESSAGES = frozenset(
         "motion_analysis_job_finished",
         "motion_analysis_workspace_cleanup",
         "motion_analysis_stale_cleanup",
+        "motion_analysis_heartbeat_fatal",
+        "motion_analysis_workspace_cleanup_fatal",
     }
 )
 
@@ -85,7 +89,16 @@ def _safe_structured_extra(key: str, value: object) -> bool:
     if key == "reason_code":
         return value in _SAFE_REASON_CODES
     if key == "stage":
-        return value in {None, "preflight", "download", "analyze", "upload", "complete", "cleanup"}
+        return value in {
+            None,
+            "preflight",
+            "download",
+            "inference",
+            "encoding",
+            "upload",
+            "complete",
+            "cleanup",
+        }
     if key == "outcome":
         return value in {None, "started", "succeeded", "failed", "removed", "retained"}
     if key in {
