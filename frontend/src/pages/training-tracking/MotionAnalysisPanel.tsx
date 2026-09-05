@@ -1,16 +1,20 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Form, Input, InputNumber, Space, Tag, Typography } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { apiClient } from "../../api/client";
 import type { MotionAnalysisStatus, TrackingRecentRecord } from "./types";
 
 type MotionResultValues = {
-  total_count: number;
-  standard_count: number;
-  nonstandard_count: number;
+  total_count: string;
+  standard_count: string;
+  nonstandard_count: string;
   quality_note: string;
 };
+
+type SaveError = "validation" | "conflict" | "missing" | "network" | null;
+
+const MAX_COUNT = 2_147_483_647;
 
 type MotionAnalysisPanelProps = {
   record: TrackingRecentRecord;
@@ -39,49 +43,113 @@ function statusMessage(status: MotionAnalysisStatus) {
   return null;
 }
 
+function responseStatus(error: unknown) {
+  if (!error || typeof error !== "object" || !("response" in error)) return undefined;
+  return (error as { response?: { status?: unknown } }).response?.status;
+}
+
+function countRules(requiredMessage: string) {
+  return [{
+    validator: (_: unknown, value: string | number | null | undefined) => {
+      if (value == null || value === "") return Promise.reject(new Error(requiredMessage));
+      const raw = String(value);
+      if (!/^(0|[1-9]\d*)$/.test(raw) || BigInt(raw) > BigInt(MAX_COUNT)) {
+        return Promise.reject(new Error("请输入 0 至 2147483647 之间的整数"));
+      }
+      return Promise.resolve();
+    },
+  }];
+}
+
 export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProps) {
   const [form] = Form.useForm<MotionResultValues>();
   const queryClient = useQueryClient();
   const [saved, setSaved] = useState(record.motion_result_source === "doctor");
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  const [savingRecordId, setSavingRecordId] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState<SaveError>(null);
+  const [submissionBlocked, setSubmissionBlocked] = useState(false);
+  const activeRecordIdRef = useRef(record.id);
+  const requestGenerationRef = useRef(0);
+  const mountedRef = useRef(false);
+  if (activeRecordIdRef.current !== record.id) {
+    activeRecordIdRef.current = record.id;
+    requestGenerationRef.current += 1;
+  }
   const currentQualityNote = qualityNote(record);
-  const editable = record.analysis_status === "succeeded" ||
-    record.analysis_status === "failed" ||
-    record.analysis_status === "unsupported";
+  const saving = savingRecordId === record.id;
+  const effectiveStatus = saveError === "conflict" ? "running" : record.analysis_status;
+  const editable = !submissionBlocked && (
+    effectiveStatus === "succeeded" || effectiveStatus === "failed" || effectiveStatus === "unsupported"
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     form.setFieldsValue({
-      total_count: record.motion_total_count ?? undefined,
-      standard_count: record.motion_standard_count ?? undefined,
-      nonstandard_count: record.motion_nonstandard_count ?? undefined,
+      total_count: record.motion_total_count == null ? undefined : String(record.motion_total_count),
+      standard_count: record.motion_standard_count == null ? undefined : String(record.motion_standard_count),
+      nonstandard_count: record.motion_nonstandard_count == null ? undefined : String(record.motion_nonstandard_count),
       quality_note: currentQualityNote,
     });
     setSaved(record.motion_result_source === "doctor");
-    setSaveError(false);
-  }, [currentQualityNote, form, record.id, record.motion_nonstandard_count, record.motion_result_source,
-    record.motion_standard_count, record.motion_total_count]);
+    setSavingRecordId(null);
+    setSaveError(null);
+    setSubmissionBlocked(false);
+  }, [currentQualityNote, form, record.analysis_status, record.id, record.motion_nonstandard_count,
+    record.motion_result_source, record.motion_standard_count, record.motion_total_count]);
 
   const persist = async (values: MotionResultValues) => {
-    setSaving(true);
-    setSaveError(false);
+    const recordId = record.id;
+    const videoId = record.video_id;
+    requestGenerationRef.current += 1;
+    const requestGeneration = requestGenerationRef.current;
+    const isCurrentRequest = () => mountedRef.current && activeRecordIdRef.current === recordId &&
+      requestGenerationRef.current === requestGeneration;
+    setSavingRecordId(recordId);
+    setSaveError(null);
     try {
-      await apiClient.patch(`/training/${record.id}/motion-result/`, values);
-      setSaved(true);
+      await apiClient.patch(`/training/${recordId}/motion-result/`, {
+        total_count: Number(values.total_count),
+        standard_count: Number(values.standard_count),
+        nonstandard_count: Number(values.nonstandard_count),
+        quality_note: values.quality_note ?? "",
+      });
+      if (!isCurrentRequest()) return;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["training-tracking"] }),
-        queryClient.invalidateQueries({ queryKey: ["latest-analysis", record.video_id] }),
+        queryClient.invalidateQueries({ queryKey: ["latest-analysis", videoId] }),
       ]);
+      if (!isCurrentRequest()) return;
+      setSaved(true);
       onSaved?.();
-    } catch {
-      setSaveError(true);
+    } catch (error) {
+      if (!isCurrentRequest()) return;
+      const status = responseStatus(error);
+      if (status === 400) {
+        setSaveError("validation");
+      } else if (status === 409 || status === 404) {
+        setSaveError(status === 409 ? "conflict" : "missing");
+        setSubmissionBlocked(true);
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["training-tracking"] }),
+          queryClient.invalidateQueries({ queryKey: ["latest-analysis", videoId] }),
+        ]);
+      } else {
+        setSaveError("network");
+      }
     } finally {
-      setSaving(false);
+      if (isCurrentRequest()) setSavingRecordId(null);
     }
   };
 
   const submit = (values: MotionResultValues) => {
-    if (values.total_count !== values.standard_count + values.nonstandard_count) {
+    if (BigInt(values.total_count) !== BigInt(values.standard_count) + BigInt(values.nonstandard_count)) {
       form.setFields([
         {
           name: "total_count",
@@ -90,16 +158,19 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
       ]);
       return;
     }
-    setSaved(false);
-    void persist({
-      total_count: values.total_count,
-      standard_count: values.standard_count,
-      nonstandard_count: values.nonstandard_count,
-      quality_note: values.quality_note ?? "",
-    });
+    void persist(values);
   };
 
-  const message = statusMessage(record.analysis_status);
+  const message = statusMessage(effectiveStatus);
+  const saveErrorMessage = saveError === "validation"
+    ? "输入内容未通过校验，请检查后重试"
+    : saveError === "conflict"
+      ? "分析状态已变化，系统正在分析视频，请等待完成"
+      : saveError === "missing"
+        ? "训练记录已不可用，请刷新页面后重新选择"
+        : saveError === "network"
+          ? "网络连接异常，输入已保留，请重试保存"
+          : null;
 
   return (
     <section className="motion-analysis-panel" aria-labelledby="motion-analysis-heading">
@@ -108,15 +179,15 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
           <Typography.Title id="motion-analysis-heading" level={5} style={{ margin: 0 }}>
             动作分析
           </Typography.Title>
-          <Tag>{record.analysis_status ? STATUS_LABEL[record.analysis_status] : "等待任务"}</Tag>
+          <Tag>{effectiveStatus ? STATUS_LABEL[effectiveStatus] : "等待任务"}</Tag>
           {saved ? <Tag color="green">医生已修正</Tag> : null}
         </Space>
 
         {message ? (
           <Alert
-            type={record.analysis_status === "failed" ? "warning" : "info"}
+            type={effectiveStatus === "failed" ? "warning" : "info"}
             showIcon
-            message={record.analysis_status === "failed" ? (record.analysis_failure_message || message) : message}
+            message={effectiveStatus === "failed" ? (record.analysis_failure_message || message) : message}
           />
         ) : null}
 
@@ -127,14 +198,14 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
           disabled={!editable}
           onFinish={submit}
         >
-          <Form.Item name="total_count" label="总次数" rules={[{ required: true, message: "请输入总次数" }]}>
-            <InputNumber aria-label="总次数" min={0} max={2_147_483_647} precision={0} style={{ width: "100%" }} />
+          <Form.Item name="total_count" label="总次数" rules={countRules("请输入总次数")}>
+            <InputNumber<string> aria-label="总次数" stringMode style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="standard_count" label="标准次数" rules={[{ required: true, message: "请输入标准次数" }]}>
-            <InputNumber aria-label="标准次数" min={0} max={2_147_483_647} precision={0} style={{ width: "100%" }} />
+          <Form.Item name="standard_count" label="标准次数" rules={countRules("请输入标准次数")}>
+            <InputNumber<string> aria-label="标准次数" stringMode style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="nonstandard_count" label="不标准次数" rules={[{ required: true, message: "请输入不标准次数" }]}>
-            <InputNumber aria-label="不标准次数" min={0} max={2_147_483_647} precision={0} style={{ width: "100%" }} />
+          <Form.Item name="nonstandard_count" label="不标准次数" rules={countRules("请输入不标准次数")}>
+            <InputNumber<string> aria-label="不标准次数" stringMode style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item name="quality_note" label="质量备注" className="motion-analysis-note">
             <Input.TextArea aria-label="质量备注" maxLength={2000} rows={3} placeholder="可填写动作质量说明" />
@@ -146,11 +217,11 @@ export function MotionAnalysisPanel({ record, onSaved }: MotionAnalysisPanelProp
           </Form.Item>
         </Form>
 
-        {saveError ? (
+        {saveErrorMessage ? (
           <Alert
             type="error"
             showIcon
-            message="保存训练结果失败，请稍后再试"
+            message={saveErrorMessage}
           />
         ) : null}
       </Space>

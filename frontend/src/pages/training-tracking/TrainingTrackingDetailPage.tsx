@@ -265,18 +265,15 @@ export function TrainingTrackingDetailPage() {
     patientId: number;
     projectPatientId: number;
   } | null>(null);
-  const [videoDrawerRecord, setVideoDrawerRecord] = useState<TrackingRecentRecord | null>(null);
+  const [videoDrawerRecordId, setVideoDrawerRecordId] = useState<number | null>(null);
   const [activeVideoSource, setActiveVideoSource] = useState<TrainingVideoSource>("original");
   const selectedProjectPatientId =
     selectedProjectPatient?.patientId === numericPatientId ? selectedProjectPatient.projectPatientId : undefined;
-  const drawerOpen = videoDrawerRecord !== null;
-  const selectedVideoId = videoDrawerRecord?.video_id ?? null;
-  const selectedVideoSupportsAnalysis = videoDrawerRecord?.analysis_available === true;
 
   useEffect(() => {
     setSelectedProjectPatient(null);
     setActiveTab("training");
-    setVideoDrawerRecord(null);
+    setVideoDrawerRecordId(null);
     setActiveVideoSource("original");
   }, [numericPatientId]);
 
@@ -304,6 +301,13 @@ export function TrainingTrackingDetailPage() {
       previousQuery?.queryKey[2] === numericPatientId ? previousData : undefined,
   });
 
+  const videoDrawerRecord = videoDrawerRecordId == null
+    ? null
+    : data?.recent_records.find((record) => record.id === videoDrawerRecordId) ?? null;
+  const drawerOpen = videoDrawerRecord !== null;
+  const selectedVideoId = videoDrawerRecord?.video_id ?? null;
+  const selectedVideoSupportsAnalysis = videoDrawerRecord?.analysis_available === true;
+
   const latestAnalysisQuery = useQuery({
     queryKey: ["latest-analysis", selectedVideoId],
     queryFn: async () => {
@@ -324,8 +328,9 @@ export function TrainingTrackingDetailPage() {
     },
     enabled: drawerOpen && selectedVideoId != null,
     retry: false,
-    staleTime: 0,
+    staleTime: 5 * 60_000,
     refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
   const effectiveAnalysisStatus = latestAnalysisQuery.data?.status ?? videoDrawerRecord?.analysis_status ?? null;
@@ -347,8 +352,9 @@ export function TrainingTrackingDetailPage() {
       activeVideoSource === "skeleton" &&
       effectiveSkeletonAvailable,
     retry: false,
-    staleTime: 0,
+    staleTime: 5 * 60_000,
     refetchOnMount: "always",
+    refetchOnWindowFocus: false,
   });
 
   const wearableWindowQuery = useQuery({
@@ -387,12 +393,12 @@ export function TrainingTrackingDetailPage() {
       queryClient.removeQueries({ queryKey: ["training-video-download-url", selectedVideoId], exact: true });
       queryClient.removeQueries({ queryKey: ["training-video-skeleton-url", selectedVideoId], exact: true });
     }
-    setVideoDrawerRecord(null);
+    setVideoDrawerRecordId(null);
     setActiveVideoSource("original");
   };
 
   const openVideoDrawer = (record: TrackingRecentRecord) => {
-    setVideoDrawerRecord(record);
+    setVideoDrawerRecordId(record.id);
     setActiveVideoSource("original");
   };
 

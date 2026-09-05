@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -457,6 +457,7 @@ describe("TrainingTrackingDetailPage", () => {
   });
 
   afterEach(() => {
+    focusManager.setFocused(undefined);
     vi.useRealTimers();
     cleanup();
     vi.restoreAllMocks();
@@ -1035,6 +1036,82 @@ describe("TrainingTrackingDetailPage", () => {
     );
     expect(screen.queryByText(/token=secret/)).not.toBeInTheDocument();
     expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("轮询终态触发 tracking 刷新后使用同一记录的最新动作结果", async () => {
+    const refreshed = cloneTrackingDetail();
+    Object.assign(refreshed.recent_records[0], {
+      analysis_status: "succeeded",
+      skeleton_available: true,
+      motion_total_count: 90,
+      motion_standard_count: 72,
+      motion_nonstandard_count: 18,
+      motion_quality_data: { doctor_note: "复核后稳定" },
+      motion_result_source: "doctor",
+      motion_result_updated_by: 5,
+      motion_result_updated_at: "2026-05-14T10:00:00+08:00",
+    });
+    let trackingCalls = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        trackingCalls += 1;
+        return Promise.resolve({ data: trackingCalls === 1 ? trackingDetail : refreshed });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/") {
+        return Promise.resolve({
+          data: {
+            id: 9202,
+            status: "succeeded",
+            analysis_failure_message: null,
+            skeleton_available: true,
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-05-14T09:00:00+08:00",
+          },
+        });
+      }
+      if (url === "/training/videos/8101/download-url/") {
+        return Promise.resolve({ data: { url: "https://cdn.example.com/original.mp4" } });
+      }
+      if (url.endsWith("/wearable-window/")) return Promise.resolve({ data: { available: false } });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
+
+    await waitFor(() => expect(trackingCalls).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(screen.getByRole("spinbutton", { name: "总次数" })).toHaveValue("90"));
+    expect(screen.getByRole("spinbutton", { name: "标准次数" })).toHaveValue("72");
+    expect(screen.getByRole("textbox", { name: "质量备注" })).toHaveValue("复核后稳定");
+    expect(screen.getByText("医生已修正")).toBeInTheDocument();
+  });
+
+  it("窗口重新聚焦不会自动刷新同一来源的短期视频地址", async () => {
+    let downloadCalls = 0;
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") return Promise.resolve({ data: trackingDetail });
+      if (url === "/training/videos/8101/download-url/") {
+        downloadCalls += 1;
+        return Promise.resolve({ data: { url: `https://cdn.example.com/original-${downloadCalls}.mp4` } });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/") return Promise.resolve({ data: null });
+      if (url.endsWith("/wearable-window/")) return Promise.resolve({ data: { available: false } });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+    expect(await screen.findByLabelText("原视频播放器")).toBeInTheDocument();
+    expect(downloadCalls).toBe(1);
+
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(downloadCalls).toBe(1);
   });
 
   it("切换训练记录后忽略前一条记录晚返回的骨架地址", async () => {

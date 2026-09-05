@@ -118,4 +118,72 @@ describe("TrainingVideoSwitcher", () => {
     await waitFor(() => expect(screen.getByRole("radio", { name: "原视频" })).toBeChecked());
     expect(screen.getByLabelText("原视频播放器")).toBeInTheDocument();
   });
+
+  it("同一来源签名 URL 更新后恢复当前时间和播放状态", async () => {
+    const { rerender } = render(<ControlledSwitcher originalUrl="original-v1" />);
+    const original = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(original, { currentTime: 23, paused: false });
+
+    rerender(<ControlledSwitcher originalUrl="original-v2" />);
+    const refreshed = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    Object.defineProperty(refreshed, "duration", { configurable: true, value: 60 });
+    fireEvent.loadedMetadata(refreshed);
+
+    expect(refreshed.currentTime).toBe(23);
+    expect(refreshed.play).toHaveBeenCalled();
+  });
+
+  it("目标元数据未加载时快速往返仍使用最初播放快照", async () => {
+    render(<ControlledSwitcher />);
+    const original = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(original, { currentTime: 42, paused: false });
+
+    fireEvent.click(screen.getByRole("radio", { name: "骨架视频" }));
+    const staleSkeleton = screen.getByLabelText("骨架视频播放器") as HTMLVideoElement;
+    fireEvent.click(screen.getByRole("radio", { name: "原视频" }));
+    const restoredOriginal = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    Object.defineProperty(restoredOriginal, "duration", { configurable: true, value: 90 });
+
+    fireEvent.loadedMetadata(staleSkeleton);
+    fireEvent.loadedMetadata(restoredOriginal);
+
+    await waitFor(() => expect(restoredOriginal.currentTime).toBe(42));
+    expect(restoredOriginal.play).toHaveBeenCalled();
+  });
+
+  it("恢复时间会过滤非有限负值并限制在目标视频时长内", () => {
+    const { rerender } = render(<ControlledSwitcher originalUrl="original-v1" />);
+    const original = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(original, { currentTime: 42, paused: true });
+    rerender(<ControlledSwitcher originalUrl="original-v2" />);
+    const shorter = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    Object.defineProperty(shorter, "duration", { configurable: true, value: 10 });
+    fireEvent.loadedMetadata(shorter);
+    expect(shorter.currentTime).toBeLessThan(10);
+    expect(shorter.currentTime).toBeGreaterThanOrEqual(9.9);
+  });
+
+  it.each([Number.NaN, -4])("恢复时间会把非有限或负值 %s 安全归零", (invalidTime) => {
+    const { rerender } = render(<ControlledSwitcher originalUrl="original-v1" />);
+    const original = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    setMediaState(original, { currentTime: invalidTime, paused: true });
+    rerender(<ControlledSwitcher originalUrl="original-v2" />);
+    const refreshed = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+    Object.defineProperty(refreshed, "duration", { configurable: true, value: 30 });
+
+    fireEvent.loadedMetadata(refreshed);
+
+    expect(refreshed.currentTime).toBe(0);
+  });
+
+  it("媒体加载错误时立即卸载失败节点", () => {
+    render(<ControlledSwitcher />);
+    const video = screen.getByLabelText("原视频播放器") as HTMLVideoElement;
+
+    fireEvent.error(video);
+
+    expect(video.pause).toHaveBeenCalled();
+    expect(video.load).toHaveBeenCalled();
+    expect(video).not.toHaveAttribute("src");
+  });
 });

@@ -1,5 +1,5 @@
 import { Alert, Button, Radio, Skeleton, Space } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type TrainingVideoSource = "original" | "skeleton";
 
@@ -23,6 +23,38 @@ type PlaybackSnapshot = {
   paused: boolean;
 };
 
+type PlaybackTransaction = {
+  generation: number;
+  targetSource: TrainingVideoSource;
+  snapshot: PlaybackSnapshot;
+};
+
+function snapshotPlayback(node: HTMLVideoElement | null): PlaybackSnapshot {
+  const currentTime = node?.currentTime;
+  return {
+    currentTime: typeof currentTime === "number" && Number.isFinite(currentTime) && currentTime >= 0 ? currentTime : 0,
+    paused: node?.paused ?? true,
+  };
+}
+
+function clampedPlaybackTime(node: HTMLVideoElement, requested: number) {
+  let lower = 0;
+  let upper = Number.POSITIVE_INFINITY;
+  if (Number.isFinite(node.duration) && node.duration > 0) {
+    upper = Math.max(0, node.duration - 0.05);
+  }
+  try {
+    if (node.seekable.length > 0) {
+      lower = Math.max(0, node.seekable.start(0));
+      const seekableEnd = node.seekable.end(node.seekable.length - 1);
+      if (Number.isFinite(seekableEnd)) upper = Math.min(upper, Math.max(lower, seekableEnd - 0.05));
+    }
+  } catch {
+    // 浏览器可能在元数据刚就绪时暂时拒绝读取 seekable，退回 duration 边界。
+  }
+  return Math.min(Math.max(requested, lower), upper);
+}
+
 function unload(node: HTMLVideoElement | null) {
   if (!node) return;
   node.pause();
@@ -45,7 +77,7 @@ export function TrainingVideoSwitcher({
   onSkeletonRetry,
 }: TrainingVideoSwitcherProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const playbackRef = useRef<PlaybackSnapshot | null>(null);
+  const playbackTransactionRef = useRef<PlaybackTransaction | null>(null);
   const transitionRef = useRef(0);
   const previousResetKeyRef = useRef(resetKey);
   const [mediaError, setMediaError] = useState(false);
@@ -58,7 +90,7 @@ export function TrainingVideoSwitcher({
   useEffect(() => {
     if (previousResetKeyRef.current !== resetKey) {
       previousResetKeyRef.current = resetKey;
-      playbackRef.current = null;
+      playbackTransactionRef.current = null;
       transitionRef.current += 1;
       setMediaError(false);
       setPlaybackWarning(false);
@@ -68,7 +100,7 @@ export function TrainingVideoSwitcher({
 
   useEffect(() => {
     if (!skeletonAvailable && activeSource === "skeleton") {
-      playbackRef.current = null;
+      playbackTransactionRef.current = null;
       transitionRef.current += 1;
       setMediaError(false);
       setPlaybackWarning(false);
@@ -76,40 +108,57 @@ export function TrainingVideoSwitcher({
     }
   }, [activeSource, onChange, skeletonAvailable]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = videoRef.current;
-    return () => unload(node);
-  }, [currentUrl]);
+    return () => {
+      if (node && !playbackTransactionRef.current) {
+        transitionRef.current += 1;
+        playbackTransactionRef.current = {
+          generation: transitionRef.current,
+          targetSource: activeSource,
+          snapshot: snapshotPlayback(node),
+        };
+      }
+      unload(node);
+    };
+  }, [activeSource, currentUrl]);
 
   const changeSource = (source: TrainingVideoSource) => {
     if (source === activeSource || (source === "skeleton" && !skeletonAvailable)) return;
     const node = videoRef.current;
-    playbackRef.current = node
-      ? { currentTime: node.currentTime, paused: node.paused }
-      : { currentTime: 0, paused: true };
     transitionRef.current += 1;
+    playbackTransactionRef.current = {
+      generation: transitionRef.current,
+      targetSource: source,
+      snapshot: playbackTransactionRef.current?.snapshot ?? snapshotPlayback(node),
+    };
     setMediaError(false);
     setPlaybackWarning(false);
     onChange(source);
   };
 
-  const restorePlayback = async (node: HTMLVideoElement) => {
-    const snapshot = playbackRef.current;
-    if (!snapshot) return;
-    const transition = transitionRef.current;
+  const restorePlayback = async (
+    node: HTMLVideoElement,
+    source: TrainingVideoSource,
+  ) => {
+    const transaction = playbackTransactionRef.current;
+    if (!transaction || transaction.targetSource !== source || videoRef.current !== node) return;
     try {
-      node.currentTime = snapshot.currentTime;
+      node.currentTime = clampedPlaybackTime(node, transaction.snapshot.currentTime);
     } catch {
       // 部分浏览器会在元数据不足时拒绝 seek；播放器仍可从起点安全播放。
     }
-    if (snapshot.paused) {
+    if (transaction.snapshot.paused) {
       node.pause();
+      if (playbackTransactionRef.current === transaction) playbackTransactionRef.current = null;
       return;
     }
     try {
       await node.play();
+      if (playbackTransactionRef.current === transaction) playbackTransactionRef.current = null;
     } catch {
-      if (transition !== transitionRef.current) return;
+      if (playbackTransactionRef.current !== transaction || videoRef.current !== node) return;
+      playbackTransactionRef.current = null;
       node.pause();
       setPlaybackWarning(true);
     }
@@ -164,8 +213,11 @@ export function TrainingVideoSwitcher({
             controls
             preload="metadata"
             src={currentUrl}
-            onLoadedMetadata={(event) => void restorePlayback(event.currentTarget)}
-            onError={() => setMediaError(true)}
+            onLoadedMetadata={(event) => void restorePlayback(event.currentTarget, activeSource)}
+            onError={(event) => {
+              unload(event.currentTarget);
+              setMediaError(true);
+            }}
           />
         ) : null}
       </div>
