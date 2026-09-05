@@ -48,3 +48,96 @@
 .training-health-tabs > .ant-tabs-nav .ant-tabs-ink-bar {
   display: none;
 }
+
+.training-video-switcher-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.training-video-hint {
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+}
+
+.training-video-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 360px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #0f1115;
+}
+
+.training-video-stage > video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: 360px;
+  object-fit: contain;
+  background: #000;
+}
+
+.training-video-stage > .ant-alert,
+.training-video-stage > .ant-skeleton {
+  width: calc(100% - 32px);
+  margin: 16px;
+}
+
+.motion-analysis-panel {
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.motion-analysis-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.motion-analysis-note,
+.motion-analysis-actions {
+  grid-column: 1 / -1;
+}
+
+.motion-analysis-actions {
+  margin-bottom: 0;
+}
+
+@media (max-width: 575px) {
+  .training-video-drawer .ant-drawer-body {
+    padding: 16px;
+  }
+
+  .training-video-stage {
+    min-height: 220px;
+  }
+
+  .training-video-stage > video {
+    height: 220px;
+  }
+
+  .motion-analysis-form {
+    grid-template-columns: 1fr;
+  }
+
+  .motion-analysis-note,
+  .motion-analysis-actions {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .training-video-drawer *,
+  .training-video-drawer *::before,
+  .training-video-drawer *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

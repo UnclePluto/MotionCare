@@ -1,5 +1,19 @@
 export type TrainingTrackingRange = "30d" | "7d" | "weekly";
 
+export type MotionAnalysisStatus = "pending" | "running" | "succeeded" | "failed" | "unsupported" | null;
+
+export type MotionResultSource = "" | "algorithm" | "doctor";
+
+export type LatestMotionAnalysisJob = {
+  id: number;
+  status: Exclude<MotionAnalysisStatus, "unsupported" | null>;
+  analysis_failure_message: string | null;
+  skeleton_available: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+};
+
 export type TrackingPatient = {
   id: number;
   name: string;
@@ -162,10 +176,16 @@ export type TrackingRecentRecord = {
   video_status: string | null;
   training_started_at: string | null;
   training_ended_at: string | null;
-  latest_analysis_status: "pending" | "running" | "succeeded" | "failed" | null;
-  analysis_total_count: number | null;
-  analysis_standard_count: number | null;
-  analysis_nonstandard_count: number | null;
+  motion_total_count: number | null;
+  motion_standard_count: number | null;
+  motion_nonstandard_count: number | null;
+  motion_quality_data: Record<string, unknown>;
+  motion_result_source: MotionResultSource;
+  motion_result_updated_by: number | null;
+  motion_result_updated_at: string | null;
+  analysis_status: MotionAnalysisStatus;
+  analysis_failure_message: string | null;
+  skeleton_available: boolean;
 };
 
 export type TrackingPendingVideo = {

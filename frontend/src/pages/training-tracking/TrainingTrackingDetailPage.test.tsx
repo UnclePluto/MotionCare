@@ -9,8 +9,9 @@ import type {
   TrainingVideoWearableWindowResponse,
 } from "./types";
 
-const { mockGet, mockPost, mockDualAxesProps } = vi.hoisted(() => ({
+const { mockGet, mockPatch, mockPost, mockDualAxesProps } = vi.hoisted(() => ({
   mockGet: vi.fn(),
+  mockPatch: vi.fn(),
   mockPost: vi.fn(),
   mockDualAxesProps: [] as Array<Record<string, unknown>>,
 }));
@@ -24,6 +25,7 @@ type TooltipConfig = {
 vi.mock("../../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
+    patch: (...args: unknown[]) => mockPatch(...args),
     post: (...args: unknown[]) => mockPost(...args),
   },
 }));
@@ -239,10 +241,16 @@ const trackingDetail = {
       video_status: "attached",
       training_started_at: "2026-08-06T01:32:14Z",
       training_ended_at: "2026-08-06T01:41:27Z",
-      latest_analysis_status: null,
-      analysis_total_count: null,
-      analysis_standard_count: null,
-      analysis_nonstandard_count: null,
+      motion_total_count: null,
+      motion_standard_count: null,
+      motion_nonstandard_count: null,
+      motion_quality_data: {},
+      motion_result_source: "",
+      motion_result_updated_by: null,
+      motion_result_updated_at: null,
+      analysis_status: "pending",
+      analysis_failure_message: null,
+      skeleton_available: false,
     },
     {
       id: 7001,
@@ -271,10 +279,16 @@ const trackingDetail = {
       video_status: null,
       training_started_at: null,
       training_ended_at: null,
-      latest_analysis_status: null,
-      analysis_total_count: null,
-      analysis_standard_count: null,
-      analysis_nonstandard_count: null,
+      motion_total_count: null,
+      motion_standard_count: null,
+      motion_nonstandard_count: null,
+      motion_quality_data: {},
+      motion_result_source: "",
+      motion_result_updated_by: null,
+      motion_result_updated_at: null,
+      analysis_status: "unsupported",
+      analysis_failure_message: null,
+      skeleton_available: false,
     },
     {
       id: 7002,
@@ -303,10 +317,16 @@ const trackingDetail = {
       video_status: null,
       training_started_at: null,
       training_ended_at: null,
-      latest_analysis_status: null,
-      analysis_total_count: null,
-      analysis_standard_count: null,
-      analysis_nonstandard_count: null,
+      motion_total_count: null,
+      motion_standard_count: null,
+      motion_nonstandard_count: null,
+      motion_quality_data: {},
+      motion_result_source: "",
+      motion_result_updated_by: null,
+      motion_result_updated_at: null,
+      analysis_status: "unsupported",
+      analysis_failure_message: null,
+      skeleton_available: false,
     },
     {
       id: 7003,
@@ -335,10 +355,16 @@ const trackingDetail = {
       video_status: "failed",
       training_started_at: null,
       training_ended_at: null,
-      latest_analysis_status: null,
-      analysis_total_count: null,
-      analysis_standard_count: null,
-      analysis_nonstandard_count: null,
+      motion_total_count: null,
+      motion_standard_count: null,
+      motion_nonstandard_count: null,
+      motion_quality_data: {},
+      motion_result_source: "",
+      motion_result_updated_by: null,
+      motion_result_updated_at: null,
+      analysis_status: "unsupported",
+      analysis_failure_message: null,
+      skeleton_available: false,
     },
   ],
 };
@@ -414,7 +440,11 @@ describe("TrainingTrackingDetailPage", () => {
   beforeEach(() => {
     mockDualAxesProps.length = 0;
     mockGet.mockReset();
+    mockPatch.mockReset();
     mockPost.mockReset();
+    vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    vi.spyOn(window.HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     mockGet.mockImplementation((url: string) => {
       if (url === "/training/tracking/patients/201/") {
         return Promise.resolve({ data: trackingDetail });
@@ -429,6 +459,7 @@ describe("TrainingTrackingDetailPage", () => {
   afterEach(() => {
     vi.useRealTimers();
     cleanup();
+    vi.restoreAllMocks();
   });
 
   it("展示项目下拉、当前处方、完成率、趋势图、游戏摘要和最近记录", async () => {
@@ -642,15 +673,15 @@ describe("TrainingTrackingDetailPage", () => {
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
 
-    expect(await screen.findByText("加载动作分析结果失败")).toBeInTheDocument();
+    expect(await screen.findByText("加载动作分析状态失败")).toBeInTheDocument();
     expect(screen.queryByText(/ak-value/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新加载分析状态" }));
 
     await waitFor(() => {
       expect(latestCallCount).toBe(2);
     });
-    expect(await screen.findByText("暂无动作分析结果")).toBeInTheDocument();
+    expect(await screen.findByText(/进入自动分析队列/)).toBeInTheDocument();
   });
 
   it("待处理失败视频摘要使用固定宽度省略并保留完整安全摘要", async () => {
@@ -667,8 +698,8 @@ describe("TrainingTrackingDetailPage", () => {
   });
 
   it("打开视频 Drawer 后才请求下载地址，关闭时卸载视频并清理短效 URL", async () => {
-    const pauseSpy = vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
-    const loadSpy = vi.spyOn(window.HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+    const pauseSpy = vi.mocked(window.HTMLMediaElement.prototype.pause);
+    const loadSpy = vi.mocked(window.HTMLMediaElement.prototype.load);
     mockGet.mockImplementation((url: string) => {
       if (url === "/training/tracking/patients/201/") {
         return Promise.resolve({ data: trackingDetail });
@@ -682,7 +713,7 @@ describe("TrainingTrackingDetailPage", () => {
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
 
-    renderAt("/training-tracking/patients/201");
+    const { queryClient } = renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
     expect(mockGet).not.toHaveBeenCalledWith("/training/videos/8101/download-url/");
@@ -692,8 +723,7 @@ describe("TrainingTrackingDetailPage", () => {
     await waitFor(() => {
       expect(mockGet).toHaveBeenCalledWith("/training/videos/8101/download-url/");
     });
-    const video = document.querySelector("video");
-    expect(video).toBeTruthy();
+    const video = await screen.findByLabelText("原视频播放器");
     expect(video).toHaveAttribute("controls");
     expect(video).toHaveAttribute("preload", "metadata");
     expect(video).toHaveAttribute("src", "https://signed.example.com/video.mp4?token=secret");
@@ -706,6 +736,7 @@ describe("TrainingTrackingDetailPage", () => {
     });
     expect(pauseSpy).toHaveBeenCalled();
     expect(loadSpy).toHaveBeenCalled();
+    expect(queryClient.getQueryData(["training-video-download-url", 8101])).toBeUndefined();
   });
 
   it("实际结束时间缺失时仍查询固定穿戴窗口且不展示实际训练时段", async () => {
@@ -750,7 +781,7 @@ describe("TrainingTrackingDetailPage", () => {
     });
     await waitForWearableQueryToSettle(queryClient, "success");
     expect(
-      await screen.findByLabelText("训练视频播放器"),
+      await screen.findByLabelText("原视频播放器"),
     ).toBeInTheDocument();
     expect(screen.getByText("动作分析")).toBeInTheDocument();
     expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
@@ -774,7 +805,7 @@ describe("TrainingTrackingDetailPage", () => {
 
     await waitForWearableQueryToSettle(queryClient, "error");
     expect(
-      await screen.findByLabelText("训练视频播放器"),
+      await screen.findByLabelText("原视频播放器"),
     ).toBeInTheDocument();
     expect(screen.getByText("动作分析")).toBeInTheDocument();
     expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
@@ -833,7 +864,7 @@ describe("TrainingTrackingDetailPage", () => {
     await waitFor(() => expect(wearableCallCount).toBe(2));
     await waitForWearableQueryToSettle(queryClient, "error");
     expect(
-      await screen.findByLabelText("训练视频播放器"),
+      await screen.findByLabelText("原视频播放器"),
     ).toBeInTheDocument();
     expect(screen.getByText("动作分析")).toBeInTheDocument();
     expect(screen.queryByText("wearable failed")).not.toBeInTheDocument();
@@ -863,7 +894,7 @@ describe("TrainingTrackingDetailPage", () => {
     });
     await waitForWearableQueryToSettle(queryClient, "success");
     expect(
-      await screen.findByLabelText("训练视频播放器"),
+      await screen.findByLabelText("原视频播放器"),
     ).toBeInTheDocument();
     expect(screen.getByText("动作分析")).toBeInTheDocument();
     expect(screen.queryByText("训练时段")).not.toBeInTheDocument();
@@ -913,116 +944,13 @@ describe("TrainingTrackingDetailPage", () => {
     });
     await waitForWearableQueryToSettle(queryClient, "success");
     expect(
-      await screen.findByLabelText("训练视频播放器"),
+      await screen.findByLabelText("原视频播放器"),
     ).toBeInTheDocument();
     expect(screen.getByText("动作分析")).toBeInTheDocument();
     expect(screen.queryByText("训练时段穿戴趋势")).not.toBeInTheDocument();
   });
 
-  it("手动创建动作分析任务，进行中禁用重复触发并每 2 秒轮询到成功计数后停止", async () => {
-    const latestResponses = [
-      null,
-      {
-        id: 9201,
-        training_video: 8101,
-        training_record: 7000,
-        status: "pending",
-        algorithm_name: "pp-tiny-pose",
-        algorithm_version: "",
-        rule_version: "shoulder-press-v1",
-        total_count: null,
-        standard_count: null,
-        nonstandard_count: null,
-        result_payload: {},
-        failure_reason: "",
-        started_at: null,
-        finished_at: null,
-        created_at: "2026-05-14T09:00:00+08:00",
-      },
-      {
-        id: 9201,
-        training_video: 8101,
-        training_record: 7000,
-        status: "succeeded",
-        algorithm_name: "pp-tiny-pose",
-        algorithm_version: "",
-        rule_version: "shoulder-press-v1",
-        total_count: 8,
-        standard_count: 6,
-        nonstandard_count: 2,
-        result_payload: {},
-        failure_reason: "",
-        started_at: "2026-05-14T09:00:01+08:00",
-        finished_at: "2026-05-14T09:00:05+08:00",
-        created_at: "2026-05-14T09:00:00+08:00",
-      },
-    ];
-    let latestCallCount = 0;
-    mockGet.mockImplementation((url: string) => {
-      if (url === "/training/tracking/patients/201/") {
-        return Promise.resolve({ data: trackingDetail });
-      }
-      if (url === "/training/videos/8101/download-url/") {
-        return Promise.resolve({ data: { url: "https://signed.example.com/video.mp4?token=secret" } });
-      }
-      if (url === "/training/videos/8101/analysis-jobs/latest/") {
-        const data = latestResponses[Math.min(latestCallCount, latestResponses.length - 1)];
-        latestCallCount += 1;
-        return Promise.resolve({ data });
-      }
-      return Promise.reject(new Error(`unmocked GET ${url}`));
-    });
-    mockPost.mockResolvedValue({
-      data: {
-        id: 9201,
-        training_video: 8101,
-        training_record: 7000,
-        status: "pending",
-        algorithm_name: "pp-tiny-pose",
-        algorithm_version: "",
-        rule_version: "shoulder-press-v1",
-        total_count: null,
-        standard_count: null,
-        nonstandard_count: null,
-        result_payload: {},
-        failure_reason: "",
-        started_at: null,
-        finished_at: null,
-        created_at: "2026-05-14T09:00:00+08:00",
-      },
-    });
-
-    renderAt("/training-tracking/patients/201");
-
-    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
-    expect(await screen.findByRole("button", { name: "开始动作分析" })).toBeEnabled();
-
-    vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "开始动作分析" }));
-
-    await vi.waitFor(() => {
-      expect(mockPost).toHaveBeenCalledWith("/training/videos/8101/analysis-jobs/");
-    });
-    await vi.waitFor(() => {
-      expect(screen.getByRole("button", { name: "分析处理中" })).toBeDisabled();
-    });
-
-    await vi.advanceTimersByTimeAsync(2000);
-
-    await vi.waitFor(() => {
-      expect(screen.getByText("总数 8")).toBeInTheDocument();
-    });
-    expect(screen.getByText("标准 6")).toBeInTheDocument();
-    expect(screen.getByText("不标准 2")).toBeInTheDocument();
-    const callsAfterSucceeded = latestCallCount;
-
-    await vi.advanceTimersByTimeAsync(2200);
-
-    expect(latestCallCount).toBe(callsAfterSucceeded);
-  });
-
-  it("动作分析失败时展示安全摘要并允许重试", async () => {
+  it("自动分析进行中只展示等待状态且没有创建、重试或重新分析入口", async () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/training/tracking/patients/201/") {
         return Promise.resolve({ data: trackingDetail });
@@ -1033,46 +961,152 @@ describe("TrainingTrackingDetailPage", () => {
       if (url === "/training/videos/8101/analysis-jobs/latest/") {
         return Promise.resolve({
           data: {
-            id: 9202,
-            training_video: 8101,
-            training_record: 7000,
-            status: "failed",
-            algorithm_name: "pp-tiny-pose",
-            algorithm_version: "",
-            rule_version: "shoulder-press-v1",
-            total_count: null,
-            standard_count: null,
-            nonstandard_count: null,
-            result_payload: {},
-            failure_reason: "动作分析失败，请稍后重试",
-            started_at: "2026-05-14T09:00:01+08:00",
-            finished_at: "2026-05-14T09:00:05+08:00",
+            id: 9201,
+            status: "pending",
+            analysis_failure_message: null,
+            skeleton_available: false,
+            started_at: null,
+            finished_at: null,
             created_at: "2026-05-14T09:00:00+08:00",
           },
         });
       }
       return Promise.reject(new Error(`unmocked GET ${url}`));
     });
-    mockPost.mockResolvedValue({
-      data: {
-        id: 9203,
-        training_video: 8101,
-        training_record: 7000,
-        status: "pending",
-      },
-    });
 
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "动作分析" }));
+    expect(await screen.findByText(/进入自动分析队列/)).toBeInTheDocument();
+    expect(screen.getByRole("spinbutton", { name: "总次数" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /开始动作分析|重新分析|重试分析/ })).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
 
-    expect(await screen.findByText("动作分析失败，请稍后重试")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新分析" }));
-
-    await waitFor(() => {
-      expect(mockPost).toHaveBeenCalledWith("/training/videos/8101/analysis-jobs/");
+  it("分析成功且骨架可用时仅在切换后获取骨架短期地址", async () => {
+    const detail = cloneTrackingDetail();
+    Object.assign(detail.recent_records[0], {
+      analysis_status: "succeeded",
+      skeleton_available: true,
+      motion_total_count: 90,
+      motion_standard_count: 72,
+      motion_nonstandard_count: 18,
+      motion_result_source: "algorithm",
     });
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") {
+        return Promise.resolve({ data: detail });
+      }
+      if (url === "/training/videos/8101/download-url/") {
+        return Promise.resolve({ data: { url: "https://signed.example.com/video.mp4?token=secret" } });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/") {
+        return Promise.resolve({
+          data: {
+            id: 9202,
+            status: "succeeded",
+            analysis_failure_message: null,
+            skeleton_available: true,
+            started_at: "2026-05-14T09:00:01+08:00",
+            finished_at: "2026-05-14T09:00:05+08:00",
+            created_at: "2026-05-14T09:00:00+08:00",
+          },
+        });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/skeleton-url/") {
+        return Promise.resolve({ data: { url: "https://signed.example.com/skeleton.mp4?token=secret" } });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "播放训练视频" }));
+    expect(await screen.findByLabelText("原视频播放器")).toBeInTheDocument();
+    expect(mockGet).not.toHaveBeenCalledWith("/training/videos/8101/analysis-jobs/latest/skeleton-url/");
+
+    fireEvent.click(screen.getByRole("radio", { name: "骨架视频" }));
+
+    expect(await screen.findByLabelText("骨架视频播放器")).toHaveAttribute(
+      "src",
+      "https://signed.example.com/skeleton.mp4?token=secret",
+    );
+    expect(screen.queryByText(/token=secret/)).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it("切换训练记录后忽略前一条记录晚返回的骨架地址", async () => {
+    const detail = cloneTrackingDetail();
+    Object.assign(detail.recent_records[0], {
+      analysis_status: "succeeded",
+      skeleton_available: true,
+    });
+    detail.recent_records.push({
+      ...detail.recent_records[0],
+      id: 7004,
+      video_id: 8103,
+      action_name: "第二段肩部推举",
+    });
+
+    let resolveFirstSkeleton: ((value: { data: { url: string } }) => void) | undefined;
+    const firstSkeletonResponse = new Promise<{ data: { url: string } }>((resolve) => {
+      resolveFirstSkeleton = resolve;
+    });
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") return Promise.resolve({ data: detail });
+      if (url.endsWith("/download-url/")) {
+        const videoId = url.includes("8103") ? "8103" : "8101";
+        return Promise.resolve({ data: { url: `https://cdn.example.com/original-${videoId}.mp4` } });
+      }
+      if (url.endsWith("/analysis-jobs/latest/")) {
+        return Promise.resolve({
+          data: {
+            id: url.includes("8103") ? 9203 : 9202,
+            status: "succeeded",
+            analysis_failure_message: null,
+            skeleton_available: true,
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-05-14T09:00:00+08:00",
+          },
+        });
+      }
+      if (url === "/training/videos/8101/analysis-jobs/latest/skeleton-url/") return firstSkeletonResponse;
+      if (url === "/training/videos/8103/analysis-jobs/latest/skeleton-url/") {
+        return Promise.resolve({ data: { url: "https://cdn.example.com/skeleton-8103.mp4" } });
+      }
+      if (url.endsWith("/wearable-window/")) return Promise.resolve({ data: { available: false } });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("第二段肩部推举")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "播放训练视频" })[0]);
+    fireEvent.click(await screen.findByRole("radio", { name: "骨架视频" }));
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/training/videos/8101/analysis-jobs/latest/skeleton-url/");
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Close|关闭/ }));
+    await waitFor(() => expect(document.querySelector("video")).toBeNull());
+
+    fireEvent.click(screen.getAllByRole("button", { name: "播放训练视频" })[1]);
+    fireEvent.click(await screen.findByRole("radio", { name: "骨架视频" }));
+    expect(await screen.findByLabelText("骨架视频播放器")).toHaveAttribute(
+      "src",
+      "https://cdn.example.com/skeleton-8103.mp4",
+    );
+
+    resolveFirstSkeleton?.({ data: { url: "https://cdn.example.com/stale-skeleton-8101.mp4" } });
+    await waitFor(() => {
+      expect(screen.getByLabelText("骨架视频播放器")).toHaveAttribute(
+        "src",
+        "https://cdn.example.com/skeleton-8103.mp4",
+      );
+    });
+    expect(screen.queryByText(/stale-skeleton-8101/)).not.toBeInTheDocument();
   });
 
   it("初次请求不带 project_patient，并按 range 切换趋势图数据", async () => {
