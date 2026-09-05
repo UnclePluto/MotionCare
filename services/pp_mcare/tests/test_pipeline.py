@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
-from motion_analysis_contract import ClaimedJob, MotionCounts
+from motion_analysis_contract import ClaimedJob, CompletionPayload, MotionCounts, SkeletonArtifact
 
 from pp_mcare.actions.base import AnalysisResult
 from pp_mcare.pose_inference import InferenceFrame, PersonPose
@@ -101,6 +101,8 @@ class FakeEncoder:
         self.frames = []
         self.aborted = False
         self.closed = False
+        self.finished = False
+        self.committed = False
         self.metadata = None
         self.__class__.instances.append(self)
 
@@ -111,10 +113,14 @@ class FakeEncoder:
     def frame_count(self):
         return len(self.frames)
 
-    def close(self):
+    @property
+    def artifact_size_bytes(self):
+        return 123
+
+    def finish(self):
         from pp_mcare.media import VideoMetadata
 
-        self.closed = True
+        self.finished = True
         self.metadata = VideoMetadata(
             width=self.width,
             height=self.height,
@@ -127,6 +133,17 @@ class FakeEncoder:
             faststart=True,
         )
         return self.metadata
+
+    def commit(self):
+        if not self.finished:
+            raise RuntimeError("finish required")
+        self.committed = True
+        self.closed = True
+
+    def close(self):
+        metadata = self.finish()
+        self.commit()
+        return metadata
 
     def abort(self):
         self.aborted = True
@@ -163,11 +180,24 @@ class RecordingPlugin:
 
 def _install_pipeline_fakes(monkeypatch, stream, plugin):
     from pp_mcare import pipeline
+    from pp_mcare.media import SourceVideoMetadata
 
     FakeEncoder.instances.clear()
     monkeypatch.setattr(pipeline, "open_full_frame_pose_stream", lambda path: stream)
     monkeypatch.setattr(pipeline, "get_action_plugin", lambda *versions: plugin)
     monkeypatch.setattr(pipeline, "SkeletonVideoEncoder", FakeEncoder)
+    monkeypatch.setattr(
+        pipeline,
+        "probe_source_video",
+        lambda path: SourceVideoMetadata(
+            width=80,
+            height=60,
+            fps=25.0,
+            frame_count=len(stream.frames),
+            duration_seconds=len(stream.frames) / 25.0,
+            codec_name="h264",
+        ),
+    )
     monkeypatch.setattr(
         pipeline,
         "render_primary_pose",
@@ -198,6 +228,8 @@ def test_pipeline_uses_one_full_frame_stream_for_counting_and_video(monkeypatch,
     assert [int(frame[0, 0, 0]) for frame in encoder.frames] == [10, 11, 12]
     assert heartbeats == ["inference", "inference", "inference"]
     assert result.counts == MotionCounts(0, 0, 0)
+    assert encoder.finished is True
+    assert encoder.committed is True
     assert result.result_payload["quality_flags"] == ()
     assert "observation_fingerprint" not in repr(result.result_payload)
     with pytest.raises(TypeError):
@@ -317,17 +349,187 @@ def test_pipeline_surfaces_tracker_finish_and_encoder_close_failures(monkeypatch
     assert FakeEncoder.instances[0].aborted is True
 
     class CloseFailureEncoder(FakeEncoder):
-        def close(self):
-            raise RuntimeError("encoder close failed")
+        def finish(self):
+            raise RuntimeError("encoder finish failed")
 
     stream = FakePoseStream([_frame(0, (_person(),))])
     monkeypatch.setattr(pipeline, "PrimarySubjectTracker", PrimarySubjectTracker)
     monkeypatch.setattr(pipeline, "open_full_frame_pose_stream", lambda path: stream)
     monkeypatch.setattr(pipeline, "SkeletonVideoEncoder", CloseFailureEncoder)
     monkeypatch.setattr(pipeline, "get_action_plugin", lambda *versions: RecordingPlugin())
-    with pytest.raises(RuntimeError, match="encoder close failed"):
+    with pytest.raises(RuntimeError, match="encoder finish failed"):
         pipeline.run_local_pipeline(
             _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
         )
     assert stream.closed is True
     assert CloseFailureEncoder.instances[-1].aborted is True
+
+
+def test_pipeline_compares_output_to_independent_input_duration_before_commit(
+    monkeypatch, tmp_path
+):
+    from pp_mcare.media import SourceVideoMetadata
+
+    stream = FakePoseStream([_frame(index, (_person(),)) for index in range(3)])
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, RecordingPlugin())
+    monkeypatch.setattr(
+        pipeline,
+        "probe_source_video",
+        lambda path: SourceVideoMetadata(
+            width=80,
+            height=60,
+            fps=25.0,
+            frame_count=3,
+            duration_seconds=10.0,
+            codec_name="h264",
+        ),
+    )
+
+    with pytest.raises(pipeline.LocalPipelineError, match="输入视频时长"):
+        pipeline.run_local_pipeline(
+            _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
+        )
+
+    encoder = FakeEncoder.instances[0]
+    assert encoder.finished is True
+    assert encoder.committed is False
+    assert encoder.aborted is True
+
+
+def test_pipeline_rejects_vfr_duration_drift_instead_of_using_encoded_frames_as_truth(
+    monkeypatch, tmp_path
+):
+    from pp_mcare.media import SourceVideoMetadata
+
+    stream = FakePoseStream([_frame(index, (_person(),)) for index in range(100)])
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, RecordingPlugin())
+    monkeypatch.setattr(
+        pipeline,
+        "probe_source_video",
+        lambda path: SourceVideoMetadata(
+            width=80,
+            height=60,
+            fps=25.0,
+            frame_count=100,
+            duration_seconds=6.0,
+            codec_name="h264",
+        ),
+    )
+
+    with pytest.raises(pipeline.LocalPipelineError, match="输入视频时长"):
+        pipeline.run_local_pipeline(
+            _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
+        )
+
+
+@pytest.mark.parametrize("when", ["before_consumption", "after_consumption"])
+def test_pipeline_action_frames_are_explicitly_one_shot(monkeypatch, tmp_path, when):
+    stream = FakePoseStream([_frame(0, (_person(),))])
+
+    class DoubleIterPlugin(RecordingPlugin):
+        def analyze(self, frames):
+            first = iter(frames)
+            if when == "before_consumption":
+                iter(frames)
+            list(first)
+            if when == "after_consumption":
+                iter(frames)
+            raise AssertionError("第二次 iter 必须先失败")
+
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, DoubleIterPlugin())
+
+    with pytest.raises(pipeline.LocalPipelineError, match="只能迭代一次"):
+        pipeline.run_local_pipeline(
+            _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
+        )
+    assert stream.closed is True
+    if FakeEncoder.instances:
+        assert FakeEncoder.instances[0].aborted is True
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_pipeline_aborts_committed_media_on_base_exception_before_return(
+    monkeypatch, tmp_path, interruption
+):
+    stream = FakePoseStream([_frame(0, (_person(),))])
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, RecordingPlugin())
+
+    class CommitThenInterruptEncoder(FakeEncoder):
+        def commit(self):
+            super().commit()
+            raise interruption
+
+    monkeypatch.setattr(pipeline, "SkeletonVideoEncoder", CommitThenInterruptEncoder)
+
+    with pytest.raises(interruption):
+        pipeline.run_local_pipeline(
+            _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
+        )
+
+    encoder = CommitThenInterruptEncoder.instances[-1]
+    assert encoder.committed is True
+    assert encoder.aborted is True
+    assert stream.closed is True
+
+
+def test_local_result_exports_independent_json_and_builds_shared_completion_payload(
+    monkeypatch, tmp_path
+):
+    from pp_mcare.actions.shoulder_press_v2 import ShoulderPressV2Plugin
+
+    stream = FakePoseStream([_frame(index, (_person(),)) for index in range(3)])
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, ShoulderPressV2Plugin())
+    job = _job()
+    result = pipeline.run_local_pipeline(
+        job, tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
+    )
+    skeleton = SkeletonArtifact(
+        bucket=job.upload.bucket,
+        object_key=job.upload.object_key,
+        object_hash="dummy-hash",
+        size_bytes=123,
+        duration_seconds=result.media_metadata.duration_seconds,
+        width=result.media_metadata.width,
+        height=result.media_metadata.height,
+        fps=result.media_metadata.fps,
+        content_type="video/mp4",
+    )
+
+    first = result.result_payload_json()
+    second = result.result_payload_json()
+    first_quality = result.quality_summary_json()
+    second_quality = result.quality_summary_json()
+    first["quality_flags"].append("mutation")
+    first_quality["quality_flags"].append("mutation")
+    completion = result.to_completion_payload(
+        job=job,
+        skeleton=skeleton,
+        idempotency_key="task-10-test",
+    )
+
+    assert isinstance(completion, CompletionPayload)
+    assert "mutation" not in second["quality_flags"]
+    assert "mutation" not in second_quality["quality_flags"]
+    assert completion.algorithm_version == job.algorithm_version
+    assert completion.quality_summary == result.quality_summary_json()
+    assert "observation_fingerprint" not in repr(completion.to_dict())
+
+
+def test_pipeline_validates_completion_compatibility_before_media_commit(monkeypatch, tmp_path):
+    stream = FakePoseStream([_frame(0, (_person(),))])
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, RecordingPlugin())
+
+    def incompatible(self, **kwargs):
+        raise RuntimeError("completion incompatible")
+
+    monkeypatch.setattr(pipeline.LocalAnalysisResult, "to_completion_payload", incompatible)
+
+    with pytest.raises(RuntimeError, match="completion incompatible"):
+        pipeline.run_local_pipeline(
+            _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda stage: None
+        )
+
+    encoder = FakeEncoder.instances[0]
+    assert encoder.finished is True
+    assert encoder.committed is False
+    assert encoder.aborted is True

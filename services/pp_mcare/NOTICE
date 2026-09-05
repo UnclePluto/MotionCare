@@ -5,6 +5,7 @@ Version: release/2.9, v2.9.0 commit b25522a
 Source: https://github.com/PaddlePaddle/PaddleDetection/blob/b25522a/deploy/python/visualize.py
 Copyright: 2021 PaddlePaddle Authors
 License: Apache License 2.0
+Full license text: LICENSE.paddledetection
 
 Only the get_color function and the COCO-17 return-image behavior of visualize_pose
 are retained in pp_mcare.paddle_visualize_pose.py. Unrelated visualization functions

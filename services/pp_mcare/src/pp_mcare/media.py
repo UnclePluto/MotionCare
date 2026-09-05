@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import importlib
 import json
 import math
@@ -45,6 +46,25 @@ class VideoMetadata:
             raise MediaEncodingError("骨架媒体类型必须是 video/mp4")
 
 
+@dataclass(frozen=True)
+class SourceVideoMetadata:
+    width: int
+    height: int
+    fps: float
+    frame_count: int
+    duration_seconds: float
+    codec_name: str
+
+    def __post_init__(self) -> None:
+        _positive_int(self.width, "width")
+        _positive_int(self.height, "height")
+        _positive_float(self.fps, "fps")
+        _positive_int(self.frame_count, "frame_count")
+        _positive_float(self.duration_seconds, "duration_seconds")
+        if not isinstance(self.codec_name, str) or not self.codec_name:
+            raise MediaEncodingError("codec_name 必须是非空字符串")
+
+
 def _positive_int(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise MediaEncodingError(f"{name} 必须是正整数")
@@ -77,6 +97,15 @@ def _parse_rate(value: object) -> float:
     except (ValueError, ZeroDivisionError) as exc:
         raise MediaEncodingError("ffprobe 返回了无效帧率") from exc
     return _positive_float(rate, "输出帧率")
+
+
+def _parse_duration(primary: object, fallback: object) -> float:
+    for candidate in (primary, fallback):
+        try:
+            return _positive_float(float(candidate), "输入时长")
+        except (MediaEncodingError, TypeError, ValueError):
+            continue
+    raise MediaEncodingError("ffprobe 返回了无效输入时长")
 
 
 def _has_faststart(path: Path) -> bool:
@@ -166,7 +195,63 @@ def _probe_video(path: Path) -> VideoMetadata:
         raise MediaEncodingError("骨架视频无法通过 ffprobe 校验") from exc
 
 
+def probe_source_video(path) -> SourceVideoMetadata:
+    """Probe and decode-count the independent input timeline before inference starts."""
+    source_path = Path(path)
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        raise MediaEncodingError("找不到 ffprobe")
+    try:
+        completed = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-count_frames",
+                "-show_entries",
+                "stream=codec_name,codec_type,width,height,avg_frame_rate,nb_read_frames,duration:format=duration",
+                "-of",
+                "json",
+                str(source_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        payload = json.loads(completed.stdout)
+        video_streams = [
+            stream for stream in payload["streams"] if stream.get("codec_type") == "video"
+        ]
+        if len(video_streams) != 1:
+            raise MediaEncodingError("输入媒体必须只有一个视频流")
+        video = video_streams[0]
+        return SourceVideoMetadata(
+            width=int(video["width"]),
+            height=int(video["height"]),
+            fps=_parse_rate(video["avg_frame_rate"]),
+            frame_count=int(video["nb_read_frames"]),
+            duration_seconds=_parse_duration(
+                video.get("duration"), payload.get("format", {}).get("duration")
+            ),
+            codec_name=str(video["codec_name"]),
+        )
+    except MediaEncodingError:
+        raise
+    except (
+        subprocess.SubprocessError,
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise MediaEncodingError("输入视频无法通过 ffprobe 解码校验") from exc
+
+
 class SkeletonVideoEncoder:
+    FINISH_TIMEOUT_SECONDS = 120
+
     def __init__(self, path, width, height, fps):
         self.path = Path(path)
         self.width = _positive_int(width, "width")
@@ -180,12 +265,12 @@ class SkeletonVideoEncoder:
         if ffmpeg is None:
             raise MediaEncodingError("找不到 ffmpeg")
         self._partial_path = self.path.with_name(f".{self.path.stem}.{uuid.uuid4().hex}.mp4")
-        descriptor = os.open(self._partial_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(descriptor)
-        self._stderr = tempfile.TemporaryFile(mode="w+b")
+        self._stderr = None
         self._frame_count = 0
         self._closed = False
-        self._published = False
+        self._finished = False
+        self._committed = False
+        self._owned_target_identity: tuple[int, int] | None = None
         self._failure: MediaEncodingError | None = None
         self.metadata: VideoMetadata | None = None
         command = [
@@ -213,21 +298,45 @@ class SkeletonVideoEncoder:
             "+faststart",
             str(self._partial_path),
         ]
+        descriptor: int | None = None
         try:
+            descriptor = os.open(self._partial_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(descriptor)
+            descriptor = None
+            self._stderr = tempfile.TemporaryFile(mode="w+b")
             self._process = _start_ffmpeg(command, self._stderr)
-        except Exception as exc:
-            self._cleanup_files()
-            self._stderr.close()
+        except BaseException as exc:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            self._cleanup_partial()
+            if self._stderr is not None:
+                self._stderr.close()
+            if not isinstance(exc, Exception):
+                raise
             raise MediaEncodingError("无法启动 ffmpeg") from exc
 
     @property
     def frame_count(self) -> int:
         return self._frame_count
 
+    @property
+    def partial_path(self) -> Path:
+        return self._partial_path
+
+    @property
+    def artifact_size_bytes(self) -> int:
+        if not self._finished:
+            raise MediaEncodingError("编码尚未完成")
+        candidate = self.path if self._committed else self._partial_path
+        return candidate.stat().st_size
+
     def write(self, frame) -> None:
         if self._failure is not None:
             raise self._failure
-        if self._closed:
+        if self._closed or self._finished:
             raise MediaEncodingError("骨架编码器已经关闭")
         try:
             np = importlib.import_module("numpy")
@@ -253,10 +362,10 @@ class SkeletonVideoEncoder:
             raise self._failure from exc
         self._frame_count += 1
 
-    def close(self) -> VideoMetadata:
+    def finish(self) -> VideoMetadata:
         if self._failure is not None:
             raise self._failure
-        if self._closed:
+        if self._finished:
             if self.metadata is None:
                 raise MediaEncodingError("骨架编码器未产出媒体")
             return self.metadata
@@ -266,8 +375,14 @@ class SkeletonVideoEncoder:
         try:
             if self._process.stdin is not None:
                 self._process.stdin.close()
-            return_code = self._process.wait()
-        except Exception as exc:
+            return_code = self._process.wait(timeout=self.FINISH_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            self._fail("ffmpeg 编码收尾超时")
+            raise self._failure from exc
+        except BaseException as exc:
+            self.abort()
+            if not isinstance(exc, Exception):
+                raise
             self._fail("等待 ffmpeg 结束失败")
             raise self._failure from exc
         if return_code != 0:
@@ -290,24 +405,63 @@ class SkeletonVideoEncoder:
             ):
                 raise MediaEncodingError("骨架视频媒体属性不符合协议")
             os.chmod(self._partial_path, 0o600)
-            os.replace(self._partial_path, self.path)
-            self._published = True
             self.metadata = metadata
-            self._closed = True
+            self._finished = True
             self._stderr.close()
             return metadata
-        except Exception as exc:
+        except BaseException as exc:
+            if not isinstance(exc, Exception):
+                self.abort()
+                raise
             if isinstance(exc, MediaEncodingError):
                 self._fail(str(exc))
             else:
-                self._fail("发布骨架视频失败")
+                self._fail("校验骨架视频失败")
             raise self._failure from exc
 
-    def abort(self) -> None:
-        if self._closed:
+    def commit(self) -> None:
+        if self._failure is not None:
+            raise self._failure
+        if self._committed:
             return
+        if not self._finished or self.metadata is None:
+            raise MediaEncodingError("提交前必须先完成编码校验")
+        identity = os.stat(self._partial_path, follow_symlinks=False)
+        try:
+            os.link(self._partial_path, self.path, follow_symlinks=False)
+        except FileExistsError as exc:
+            self.abort()
+            raise MediaEncodingError("骨架视频目标已经存在") from exc
+        except OSError as exc:
+            self.abort()
+            if exc.errno == errno.EEXIST:
+                raise MediaEncodingError("骨架视频目标已经存在") from exc
+            raise MediaEncodingError("无法原子发布骨架视频") from exc
+        except BaseException:
+            self._remove_target_if_identity((identity.st_dev, identity.st_ino))
+            raise
+        self._owned_target_identity = (identity.st_dev, identity.st_ino)
+        try:
+            self._partial_path.unlink()
+        except BaseException:
+            self._remove_owned_target()
+            raise
+        self._committed = True
+        self._closed = True
+
+    def close(self) -> VideoMetadata:
+        try:
+            metadata = self.finish()
+            self.commit()
+            return metadata
+        except BaseException:
+            self.abort()
+            raise
+
+    def abort(self) -> None:
         self._abort_process()
-        self._cleanup_files()
+        self._cleanup_partial()
+        self._remove_owned_target()
         self._closed = True
         try:
             self._stderr.close()
@@ -321,7 +475,8 @@ class SkeletonVideoEncoder:
             )
             self._failure = MediaEncodingError(redacted[:2000])
         self._abort_process()
-        self._cleanup_files()
+        self._cleanup_partial()
+        self._remove_owned_target()
         self._closed = True
         try:
             self._stderr.close()
@@ -341,11 +496,13 @@ class SkeletonVideoEncoder:
         try:
             if getattr(process, "returncode", None) is None:
                 process.kill()
-            process.wait()
+            process.wait(timeout=5)
         except (OSError, subprocess.SubprocessError):
             pass
 
     def _stderr_message(self) -> str:
+        if self._stderr is None:
+            return ""
         try:
             self._stderr.flush()
             self._stderr.seek(0)
@@ -353,15 +510,26 @@ class SkeletonVideoEncoder:
         except (OSError, ValueError):
             return ""
 
-    def _cleanup_files(self) -> None:
-        candidates = [self._partial_path]
-        if self._published:
-            candidates.append(self.path)
-        for candidate in candidates:
-            try:
-                candidate.unlink(missing_ok=True)
-            except OSError:
-                pass
+    def _cleanup_partial(self) -> None:
+        try:
+            self._partial_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _remove_owned_target(self) -> None:
+        if self._owned_target_identity is None:
+            return
+        self._remove_target_if_identity(self._owned_target_identity)
+
+    def _remove_target_if_identity(self, identity: tuple[int, int]) -> None:
+        try:
+            current = os.stat(self.path, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) == identity:
+                self.path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
     def __enter__(self):
         return self
