@@ -306,7 +306,12 @@ def test_incompatible_pending_job_logs_structured_redacted_diagnostic(
     caplog,
 ):
     job = analysis_job_factory(result_payload={"patient_note": "private-patient-note"})
-    declared = {**CAPABILITY, "rule_version": "shoulder-press-v1"}
+    declared = {
+        "action_source_key": ("https://evil.example/private.mp4?token=client-url-secret"),
+        "algorithm_version": "algorithm-secret-token-abc123",
+        "rule_version": "patient-alice-sensitive",
+        "parameter_version": "upload-token-qiniu-sensitive-xyz",
+    }
     body = {
         **CLAIM_BODY,
         "worker_id": "worker-diagnostic-1",
@@ -331,9 +336,14 @@ def test_incompatible_pending_job_logs_structured_redacted_diagnostic(
     assert diagnostic.oldest_pending_job_id == job.id
     assert diagnostic.required_capability == CAPABILITY
     assert diagnostic.worker_id == "worker-diagnostic-1"
-    assert diagnostic.declared_capabilities == [declared]
-    rendered = repr(diagnostic.__dict__)
+    assert diagnostic.declared_capability_count == 1
+    assert diagnostic.declared_capabilities_sha256 == (
+        "1bc029c30b264b9e9054fe7203d814ff6886ce549b059ba9ecaed8fd53da6ee5"
+    )
+    assert "declared_capabilities" not in diagnostic.__dict__
+    rendered = "\n".join(f"{record.getMessage()}\n{record.__dict__!r}" for record in caplog.records)
     for forbidden in (
+        *declared.values(),
         "machine-secret",
         "private-patient-note",
         job.project_patient.patient.name,
@@ -345,6 +355,7 @@ def test_incompatible_pending_job_logs_structured_redacted_diagnostic(
         "upload_token",
     ):
         assert forbidden not in rendered
+        assert forbidden not in caplog.text
 
 
 @pytest.mark.django_db

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -76,8 +77,13 @@ def _capability_filter(capabilities):
     return compatible if keys else None
 
 
-def _capability_payload(capability):
-    return dict(zip(_CAPABILITY_FIELDS, capability_key(capability), strict=True))
+def _capabilities_digest(capabilities):
+    canonical_payload = json.dumps(
+        sorted(capability_key(capability) for capability in capabilities),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical_payload.encode()).hexdigest()
 
 
 def _log_incompatible_pending_job(*, worker_id, capabilities, compatible):
@@ -107,9 +113,8 @@ def _log_incompatible_pending_job(*, worker_id, capabilities, compatible):
                 field_name: oldest_pending[field_name] for field_name in _CAPABILITY_FIELDS
             },
             "worker_id": worker_id,
-            "declared_capabilities": [
-                _capability_payload(capability) for capability in capabilities[:32]
-            ],
+            "declared_capability_count": len(capabilities),
+            "declared_capabilities_sha256": _capabilities_digest(capabilities),
         },
     )
 
