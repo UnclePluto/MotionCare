@@ -2,14 +2,22 @@ from datetime import timedelta
 import os
 import subprocess
 import sys
+import threading
 from unittest.mock import Mock
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import close_old_connections, connection
+from django.db.models.query import QuerySet
 from django.test import override_settings
 from django.utils import timezone
 
-from apps.training.models import MotionAnalysisJob, TrainingRecord, TrainingVideo
+from apps.training.models import (
+    MotionAnalysisJob,
+    QiniuCleanupTombstone,
+    TrainingRecord,
+    TrainingVideo,
+)
 
 
 def _storage_module():
@@ -242,3 +250,62 @@ def test_queue_skeleton_cleanup_keeps_only_the_job_skeleton_directory(analysis_j
     assert first.max_attempt_number == 0
     assert first.canonical_key == analysis_job.skeleton_object_key
     assert first.retain_canonical is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgresql_concurrent_skeleton_tombstone_unique_race_rereads_winner(
+    analysis_job,
+    monkeypatch,
+):
+    module = _storage_module()
+    assert connection.vendor == "postgresql"
+    expected_prefix = analysis_job.skeleton_object_key.rpartition("/")[0] + "/"
+    initial_reads = threading.Barrier(2)
+    read_lock = threading.Lock()
+    local_state = threading.local()
+    initial_miss_count = 0
+    tombstone_ids = []
+    errors = []
+    original_get = QuerySet.get
+
+    def synchronized_get(queryset, *args, **kwargs):
+        nonlocal initial_miss_count
+        try:
+            return original_get(queryset, *args, **kwargs)
+        except QiniuCleanupTombstone.DoesNotExist:
+            is_target_initial_read = (
+                queryset.model is QiniuCleanupTombstone
+                and kwargs.get("attempt_key_prefix") == expected_prefix
+                and not getattr(local_state, "waited", False)
+            )
+            if is_target_initial_read:
+                local_state.waited = True
+                with read_lock:
+                    initial_miss_count += 1
+                initial_reads.wait(timeout=5)
+            raise
+
+    def register_cleanup():
+        close_old_connections()
+        try:
+            thread_job = MotionAnalysisJob.objects.select_related("training_video").get(
+                pk=analysis_job.pk
+            )
+            tombstone_ids.append(module.queue_skeleton_cleanup(thread_job).id)
+        except Exception as exc:  # pragma: no branch - thread result capture
+            errors.append(exc)
+        finally:
+            close_old_connections()
+
+    monkeypatch.setattr(QuerySet, "get", synchronized_get)
+    threads = [threading.Thread(target=register_cleanup) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert initial_miss_count == 2
+    assert errors == []
+    assert len(set(tombstone_ids)) == 1
+    assert QiniuCleanupTombstone.objects.filter(attempt_key_prefix=expected_prefix).count() == 1

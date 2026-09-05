@@ -159,22 +159,21 @@ def queue_skeleton_cleanup(job: MotionAnalysisJob) -> QiniuCleanupTombstone:
 
     prefix = _skeleton_directory_prefix(job)
     now = timezone.now()
-    tombstone = (
-        QiniuCleanupTombstone.objects.select_for_update()
-        .filter(attempt_key_prefix=prefix)
-        .first()
+    tombstone, created = QiniuCleanupTombstone.objects.get_or_create(
+        attempt_key_prefix=prefix,
+        defaults={
+            "session_id": job.training_video.client_session_id,
+            "bucket": job.skeleton_bucket,
+            "max_attempt_number": 0,
+            "canonical_key": job.skeleton_object_key,
+            "retain_canonical": False,
+            "next_check_at": now,
+        },
     )
-    if tombstone is None:
-        return QiniuCleanupTombstone.objects.create(
-            session_id=job.training_video.client_session_id,
-            bucket=job.skeleton_bucket,
-            attempt_key_prefix=prefix,
-            max_attempt_number=0,
-            canonical_key=job.skeleton_object_key,
-            retain_canonical=False,
-            next_check_at=now,
-        )
+    if created:
+        return tombstone
 
+    tombstone = QiniuCleanupTombstone.objects.select_for_update().get(pk=tombstone.pk)
     tombstone.session_id = job.training_video.client_session_id
     tombstone.bucket = job.skeleton_bucket
     tombstone.max_attempt_number = 0

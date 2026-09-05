@@ -2,7 +2,7 @@ import logging
 from dataclasses import asdict, dataclass
 
 from django.db import transaction
-from django.db.models import DateTimeField, Min
+from django.db.models import DateTimeField, Exists, Min, OuterRef
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -56,66 +56,74 @@ def motion_analysis_health_snapshot(now=None) -> MotionAnalysisHealthSnapshot:
     )
 
 
-def register_motion_analysis_cleanup(job: MotionAnalysisJob) -> bool:
+def register_motion_analysis_cleanup(
+    job: MotionAnalysisJob,
+    *,
+    emit_failure_log: bool = True,
+) -> bool:
     if not job.skeleton_bucket or not job.skeleton_object_key:
         return True
     try:
         queue_skeleton_cleanup(job)
     except Exception:
-        logger.critical(
-            "motion_analysis_cleanup_registration_failed",
-            extra={
-                "reason_code": "skeleton_cleanup_registration_failed",
-                "job_id": job.id,
-            },
-        )
+        if emit_failure_log:
+            logger.critical(
+                "motion_analysis_cleanup_registration_failed",
+                extra={
+                    "reason_code": "skeleton_cleanup_registration_failed",
+                    "job_id": job.id,
+                },
+            )
         return False
     return True
 
 
-def _skeleton_prefix(object_key: str) -> str:
-    directory, separator, _filename = object_key.rpartition("/")
-    return f"{directory}/" if separator and directory else ""
-
-
 def reconcile_motion_analysis_cleanup_tombstones() -> int:
-    registered_count = 0
-    last_job_id = 0
-    while registered_count < _CLEANUP_RECONCILIATION_BATCH_SIZE:
+    correct_tombstone = QiniuCleanupTombstone.objects.filter(
+        bucket=OuterRef("skeleton_bucket"),
+        canonical_key=OuterRef("skeleton_object_key"),
+        max_attempt_number=0,
+        retain_canonical=False,
+    )
+    with transaction.atomic():
         jobs = list(
-            MotionAnalysisJob.objects.select_related("training_video")
+            MotionAnalysisJob.objects.annotate(
+                has_cleanup_tombstone=Exists(correct_tombstone)
+            )
             .filter(
-                id__gt=last_job_id,
                 status=MotionAnalysisJob.Status.FAILED,
                 skeleton_bucket__gt="",
                 skeleton_object_key__gt="",
+                has_cleanup_tombstone=False,
             )
-            .order_by("id")[:_CLEANUP_RECONCILIATION_BATCH_SIZE]
+            .select_related("training_video")
+            .select_for_update(of=("self",), skip_locked=True)
+            .order_by("updated_at", "id")[:_CLEANUP_RECONCILIATION_BATCH_SIZE]
         )
-        if not jobs:
-            break
-        last_job_id = jobs[-1].id
-        prefixes = {
-            prefix
-            for job in jobs
-            if (prefix := _skeleton_prefix(job.skeleton_object_key or ""))
-        }
-        existing_prefixes = set(
-            QiniuCleanupTombstone.objects.filter(attempt_key_prefix__in=prefixes).values_list(
-                "attempt_key_prefix", flat=True
+        attempted_count = len(jobs)
+        succeeded_count = 0
+        failed_count = 0
+        if jobs:
+            MotionAnalysisJob.objects.filter(pk__in=[job.pk for job in jobs]).update(
+                updated_at=timezone.now()
             )
-        )
         for job in jobs:
-            prefix = _skeleton_prefix(job.skeleton_object_key or "")
-            if prefix in existing_prefixes:
-                continue
-            if register_motion_analysis_cleanup(job):
-                registered_count += 1
-                if prefix:
-                    existing_prefixes.add(prefix)
-            if registered_count >= _CLEANUP_RECONCILIATION_BATCH_SIZE:
-                break
-    return registered_count
+            if register_motion_analysis_cleanup(job, emit_failure_log=False):
+                succeeded_count += 1
+            else:
+                failed_count += 1
+
+    if failed_count:
+        logger.critical(
+            "motion_analysis_cleanup_reconciliation_failed",
+            extra={
+                "reason_code": "skeleton_cleanup_reconciliation_failed",
+                "attempted_count": attempted_count,
+                "succeeded_count": succeeded_count,
+                "failed_count": failed_count,
+            },
+        )
+    return succeeded_count
 
 
 def expire_stale_motion_analysis_jobs(now=None) -> int:

@@ -1,8 +1,11 @@
 import logging
+import threading
 from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from django.db import close_old_connections, connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from apps.training.models import (
@@ -67,6 +70,32 @@ def analysis_job_factory(
         return job
 
     return create
+
+
+def _bulk_analysis_jobs(
+    template,
+    *,
+    count,
+    start=0,
+    status=MotionAnalysisJob.Status.FAILED,
+):
+    return MotionAnalysisJob.objects.bulk_create(
+        [
+            MotionAnalysisJob(
+                training_video=template.training_video,
+                training_record=template.training_record,
+                project_patient=template.project_patient,
+                prescription_action=template.prescription_action,
+                status=status,
+                skeleton_bucket="analysis-skeletons",
+                skeleton_object_key=(
+                    f"motion-analysis/{template.project_patient_id}/2026/09/"
+                    f"bulk-{status}-{index:06d}/skeleton.mp4"
+                ),
+            )
+            for index in range(start, start + count)
+        ]
+    )
 
 
 @pytest.mark.django_db
@@ -188,22 +217,170 @@ def test_expiry_reaches_terminal_when_cleanup_registration_fails_and_retries_saf
 
 
 @pytest.mark.django_db
-def test_cleanup_reconciliation_pages_past_failed_jobs_with_existing_tombstones(
+def test_cleanup_reconciliation_excludes_existing_tombstones_before_database_limit(
     analysis_job_factory,
     monkeypatch,
 ):
     from apps.training import motion_analysis_monitoring as monitoring
     from apps.training.motion_analysis_storage import queue_skeleton_cleanup
 
-    already_registered = analysis_job_factory(status=MotionAnalysisJob.Status.FAILED)
-    missing = analysis_job_factory(status=MotionAnalysisJob.Status.FAILED)
-    queue_skeleton_cleanup(already_registered)
-    monkeypatch.setattr(monitoring, "_CLEANUP_RECONCILIATION_BATCH_SIZE", 1)
+    template = analysis_job_factory(status=MotionAnalysisJob.Status.FAILED)
+    existing = [template, *_bulk_analysis_jobs(template, count=24)]
+    missing = _bulk_analysis_jobs(template, count=3, start=24)
+    succeeded = _bulk_analysis_jobs(
+        template,
+        count=1,
+        status=MotionAnalysisJob.Status.SUCCEEDED,
+    )[0]
+    for job in existing:
+        queue_skeleton_cleanup(job)
+    succeeded_tombstone = queue_skeleton_cleanup(succeeded)
+    succeeded_tombstone.retain_canonical = True
+    succeeded_tombstone.save(update_fields=["retain_canonical", "updated_at"])
+    monkeypatch.setattr(monitoring, "_CLEANUP_RECONCILIATION_BATCH_SIZE", 3)
 
-    assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 1
+    with CaptureQueriesContext(connection) as queries:
+        assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 3
+
+    assert set(
+        QiniuCleanupTombstone.objects.filter(
+            canonical_key__in=[job.skeleton_object_key for job in missing],
+            retain_canonical=False,
+        ).values_list("canonical_key", flat=True)
+    ) == {job.skeleton_object_key for job in missing}
+    succeeded_tombstone.refresh_from_db()
+    assert succeeded_tombstone.retain_canonical is True
+    candidate_queries = [
+        query["sql"]
+        for query in queries.captured_queries
+        if query["sql"].lstrip().upper().startswith("SELECT")
+        and 'FROM "training_motionanalysisjob"' in query["sql"]
+        and "FOR UPDATE" in query["sql"]
+    ]
+    assert len(candidate_queries) == 1
+    assert "NOT EXISTS" in candidate_queries[0]
+    assert "LIMIT 3" in candidate_queries[0]
+    assert "SKIP LOCKED" in candidate_queries[0]
+
+
+@pytest.mark.django_db
+def test_cleanup_reconciliation_limits_attempts_and_rotates_persistent_failures(
+    analysis_job_factory,
+    monkeypatch,
+    caplog,
+):
+    from apps.training import motion_analysis_monitoring as monitoring
+
+    template = analysis_job_factory(status=MotionAnalysisJob.Status.FAILED)
+    _bulk_analysis_jobs(template, count=1000)
+    attempted_ids = []
+    provider_detail = (
+        f"Bearer provider-secret C:\\private key={template.skeleton_object_key}"
+    )
+
+    def always_fail(job):
+        attempted_ids.append(job.id)
+        raise RuntimeError(provider_detail)
+
+    monkeypatch.setattr(monitoring, "queue_skeleton_cleanup", always_fail)
+    with caplog.at_level(logging.CRITICAL, logger=monitoring.__name__):
+        assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 0
+
+    first_attempt_ids = set(attempted_ids)
+    assert len(first_attempt_ids) == 500
+    diagnostics = [
+        record
+        for record in caplog.records
+        if getattr(record, "reason_code", None)
+        == "skeleton_cleanup_reconciliation_failed"
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].attempted_count == 500
+    assert diagnostics[0].succeeded_count == 0
+    assert diagnostics[0].failed_count == 500
+    rendered = "\n".join(
+        f"{record.getMessage()} {record.__dict__!r}" for record in caplog.records
+    )
+    for forbidden in (
+        provider_detail,
+        "provider-secret",
+        template.skeleton_object_key,
+        template.project_patient.patient.name,
+    ):
+        assert forbidden not in rendered
+
+    attempted_ids.clear()
+    caplog.clear()
+    with caplog.at_level(logging.CRITICAL, logger=monitoring.__name__):
+        assert monitoring.reconcile_motion_analysis_cleanup_tombstones() == 0
+
+    assert len(attempted_ids) == 500
+    assert first_attempt_ids.isdisjoint(attempted_ids)
+    assert len(
+        [
+            record
+            for record in caplog.records
+            if getattr(record, "reason_code", None)
+            == "skeleton_cleanup_reconciliation_failed"
+        ]
+    ) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_postgresql_concurrent_cleanup_reconciliation_claims_distinct_jobs(
+    analysis_job_factory,
+    monkeypatch,
+    caplog,
+):
+    from apps.training import motion_analysis_monitoring as monitoring
+
+    assert connection.vendor == "postgresql"
+    jobs = [
+        analysis_job_factory(status=MotionAnalysisJob.Status.FAILED),
+        analysis_job_factory(status=MotionAnalysisJob.Status.FAILED),
+    ]
+    original_queue = monitoring.queue_skeleton_cleanup
+    both_claimed = threading.Barrier(2)
+    results = []
+    errors = []
+
+    def synchronized_queue(job):
+        both_claimed.wait(timeout=5)
+        return original_queue(job)
+
+    def run_reconciliation():
+        close_old_connections()
+        try:
+            results.append(monitoring.reconcile_motion_analysis_cleanup_tombstones())
+        except Exception as exc:  # pragma: no branch - thread result capture
+            errors.append(exc)
+        finally:
+            close_old_connections()
+
+    monkeypatch.setattr(monitoring, "_CLEANUP_RECONCILIATION_BATCH_SIZE", 1)
+    monkeypatch.setattr(monitoring, "queue_skeleton_cleanup", synchronized_queue)
+    threads = [threading.Thread(target=run_reconciliation) for _ in range(2)]
+    with caplog.at_level(logging.CRITICAL, logger=monitoring.__name__):
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert sorted(results) == [1, 1]
     assert QiniuCleanupTombstone.objects.filter(
-        canonical_key=missing.skeleton_object_key
-    ).exists()
+        canonical_key__in=[job.skeleton_object_key for job in jobs],
+        retain_canonical=False,
+    ).count() == 2
+    assert not any(
+        getattr(record, "reason_code", None)
+        in {
+            "skeleton_cleanup_registration_failed",
+            "skeleton_cleanup_reconciliation_failed",
+        }
+        for record in caplog.records
+    )
 
 
 @pytest.mark.django_db
