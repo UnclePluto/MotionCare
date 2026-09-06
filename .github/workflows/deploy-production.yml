@@ -161,9 +161,14 @@ jobs:
         run: |
           scp -i ~/.ssh/motioncare_deploy -P "${{ vars.SERVER_PORT }}" \
             deploy/docker-compose.prod.yml deploy/deploy.sh deploy/renew-certificate.sh \
+            deploy/configure-pp-mcare-control-plane.sh \
             "${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }}:/opt/motioncare-prod/"
       - name: 部署指定版本
+        env:
+          PP_MCARE_SERVICE_TOKEN_SHA256: ${{ secrets.PP_MCARE_SERVICE_TOKEN_SHA256 }}
+          PP_MCARE_AUTO_ENQUEUE_ENABLED: ${{ vars.PP_MCARE_AUTO_ENQUEUE_ENABLED || 'false' }}
         run: |
-          ssh -i ~/.ssh/motioncare_deploy -p "${{ vars.SERVER_PORT }}" \
+          printf '%s\n%s\n' "$PP_MCARE_SERVICE_TOKEN_SHA256" "$PP_MCARE_AUTO_ENQUEUE_ENABLED" | \
+            ssh -i ~/.ssh/motioncare_deploy -p "${{ vars.SERVER_PORT }}" \
             "${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }}" \
-            "cd /opt/motioncare-prod && sed -i 's/^APP_VERSION=.*/APP_VERSION=${{ github.sha }}/' .env && chmod +x deploy.sh && ./deploy.sh"
+            "cd /opt/motioncare-prod && chmod +x configure-pp-mcare-control-plane.sh deploy.sh && ./configure-pp-mcare-control-plane.sh && sed -i 's/^APP_VERSION=.*/APP_VERSION=${{ github.sha }}/' .env && ./deploy.sh"

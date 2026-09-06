@@ -2,8 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> 状态：approved
+> 状态：implementing
 > 日期：2026-09-05
+> 执行记录（2026-09-06, codex）：Tasks 1–14 已落地；Task 15 Step 1–4 与算法服务器候选安装/固定视频回归已落地至 `bf7682f`，业务控制面生产部署、token/AUTO 启用和七牛端到端验收待授权。
 
 **Goal:** 把现有 PP-TinyPose 全帧肩部推举能力迁移为部署在独立服务器的 `pp-mcare` 串行服务，实现自动领取、主训练者骨架视频、训练记录回写和医生修正闭环。
 
@@ -108,7 +109,7 @@ deploy/pp-mcare/
 - Produces: `validate_counts(payload: Mapping[str, object]) -> MotionCounts`
 - Produces: `capability_key(capability: WorkerCapability) -> tuple[str, str, str, str]`
 
-- [ ] **Step 1: 写协议校验失败测试**
+- [x] **Step 1: 写协议校验失败测试**
 
 ```python
 def test_validate_counts_rejects_bool_and_broken_total():
@@ -125,13 +126,13 @@ def test_claimed_job_round_trip_keeps_exact_storage_scope():
     assert job.protocol_version == PROTOCOL_VERSION
 ```
 
-- [ ] **Step 2: 运行测试并确认因包不存在而失败**
+- [x] **Step 2: 运行测试并确认因包不存在而失败**
 
 Run: `python -m pytest packages/motion_analysis_contract/tests/test_contracts.py -q`
 
 Expected: FAIL，提示无法导入 `motion_analysis_contract`。
 
-- [ ] **Step 3: 实现无第三方依赖的协议对象和严格转换**
+- [x] **Step 3: 实现无第三方依赖的协议对象和严格转换**
 
 ```python
 @dataclass(frozen=True)
@@ -156,7 +157,7 @@ def validate_counts(payload: Mapping[str, object]) -> MotionCounts:
 
 所有 `from_dict()` 必须拒绝缺字段、未知协议版本、布尔伪装整数和非字符串凭证；`to_dict()` 只输出 JSON 基础类型。
 
-- [ ] **Step 4: 安装协议包并运行测试**
+- [x] **Step 4: 安装协议包并运行测试**
 
 Run: `python -m pip install -e ./packages/motion_analysis_contract`
 
@@ -164,7 +165,7 @@ Run: `python -m pytest packages/motion_analysis_contract/tests/test_contracts.py
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交协议包**
+- [x] **Step 5: 提交协议包**
 
 ```bash
 git add packages/motion_analysis_contract
@@ -184,7 +185,7 @@ git commit -m "feat(动作分析): 建立独立服务协议包"
 - Produces: `MotionAnalysisJob` 租约、版本、幂等和骨架元数据字段
 - Consumes: `motion_analysis_contract.MotionCounts`
 
-- [ ] **Step 1: 写当前结果约束和旧任务收口测试**
+- [x] **Step 1: 写当前结果约束和旧任务收口测试**
 
 ```python
 def test_training_record_rejects_inconsistent_motion_counts(training_record):
@@ -205,13 +206,13 @@ def test_set_motion_result_records_doctor_provenance(training_record, doctor):
 
 迁移测试还要断言升级时既有 `pending/running` 任务被标记为 `failed`，失败代码为 `service_migration`，防止旧 Celery 任务与新 worker 并行执行。
 
-- [ ] **Step 2: 运行模型测试并确认失败**
+- [x] **Step 2: 运行模型测试并确认失败**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_analysis_models.py -q`
 
 Expected: FAIL，字段和 `set_motion_result` 尚不存在。
 
-- [ ] **Step 3: 增加字段、模型方法和数据库约束**
+- [x] **Step 3: 增加字段、模型方法和数据库约束**
 
 ```python
 class MotionResultSource(models.TextChoices):
@@ -231,7 +232,7 @@ def set_motion_result(self, counts, quality_data, source, updated_by, now):
 
 `MotionAnalysisJob` 新增 `worker_id`、`lease_token_hash`、`lease_expires_at`、`last_heartbeat_at`、`action_source_key`、`parameter_version`、`subject_tracker_version`、`completion_idempotency_key`、`failure_code` 和全部 `skeleton_*` 字段。骨架 key 使用 nullable + unique，避免空字符串唯一冲突。
 
-- [ ] **Step 4: 生成并验证 migration**
+- [x] **Step 4: 生成并验证 migration**
 
 Run: `cd backend && python manage.py makemigrations training --name pp_mcare_control_plane`
 
@@ -239,7 +240,7 @@ Run: `cd backend && pytest apps/training/tests/test_motion_analysis_models.py -q
 
 Expected: PASS，且没有额外 migration。
 
-- [ ] **Step 5: 提交模型变更**
+- [x] **Step 5: 提交模型变更**
 
 ```bash
 git add backend/apps/training/models.py backend/apps/training/video_models.py backend/apps/training/migrations/0014_pp_mcare_control_plane.py backend/apps/training/tests/test_motion_analysis_models.py
@@ -269,7 +270,7 @@ git commit -m "feat(动作分析): 增加独立任务与训练结果字段"
 - Removes: `POST /api/training/videos/{video_id}/analysis-jobs/`
 - Removes: `run_motion_analysis_job.delay(job_id)` 和业务端 PP 推理入口
 
-- [ ] **Step 1: 把旧测试改为自动建任务和无手动入口的失败测试**
+- [x] **Step 1: 把旧测试改为自动建任务和无手动入口的失败测试**
 
 ```python
 def test_attaching_supported_video_creates_one_pending_analysis_job(video_job):
@@ -301,13 +302,13 @@ def test_doctor_cannot_create_or_recreate_analysis_job(api_client, doctor, attac
 
 另加不支持动作不建任务、重复 attach 在失败任务后也不新建、自动开关关闭时不建任务的测试。
 
-- [ ] **Step 2: 运行相关测试并确认旧行为导致失败**
+- [x] **Step 2: 运行相关测试并确认旧行为导致失败**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_analysis.py apps/training/tests/test_video_tasks.py apps/training/tests/test_tracking_api.py -q`
 
 Expected: FAIL，当前仍由医生 POST 并投递 Celery。
 
-- [ ] **Step 3: 实现纯业务支持表和幂等自动创建**
+- [x] **Step 3: 实现纯业务支持表和幂等自动创建**
 
 ```python
 ANALYSIS_PROFILES = {
@@ -348,7 +349,7 @@ def ensure_motion_analysis_job(video):
 
 在 `motion_analysis_storage.py` 先实现只依赖 video/job 标识的 `build_skeleton_object_key()`；Task 4 再在同一模块增加七牛授权。`backend/config/settings.py` 新增默认关闭的 `PP_MCARE_AUTO_ENQUEUE_ENABLED`。从 `attach_training_video()` 的现有事务中调用自动建任务；删除手动 view/URL、`create_analysis_job()` 和 `run_motion_analysis_job()`。保留租约超时恢复任务，后续 Task 6 改写。
 
-- [ ] **Step 4: 更新 tracking 的支持标志并运行回归**
+- [x] **Step 4: 更新 tracking 的支持标志并运行回归**
 
 `tracking.py` 只能导入 `motion_analysis_support.py`，不得再从含 Paddle 逻辑的 registry 推导支持能力。
 
@@ -356,7 +357,7 @@ Run: `cd backend && pytest apps/training/tests/test_motion_analysis.py apps/trai
 
 Expected: PASS，且测试中没有 `.delay()` 动作分析调用。
 
-- [ ] **Step 5: 提交自动任务切换**
+- [x] **Step 5: 提交自动任务切换**
 
 ```bash
 git add backend/apps/training backend/config/settings.py
@@ -378,7 +379,7 @@ git commit -m "feat(动作分析): 视频绑定后自动创建分析任务"
 - Produces: `verify_skeleton_upload(job: MotionAnalysisJob, metadata: Mapping) -> dict`
 - Produces: `queue_skeleton_cleanup(job: MotionAnalysisJob) -> QiniuCleanupTombstone`
 
-- [ ] **Step 1: 写凭证 scope、TTL 和对象校验测试**
+- [x] **Step 1: 写凭证 scope、TTL 和对象校验测试**
 
 ```python
 @override_settings(PP_MCARE_DOWNLOAD_TOKEN_TTL_SECONDS=3600, PP_MCARE_UPLOAD_TOKEN_TTL_SECONDS=10800)
@@ -392,13 +393,13 @@ def test_issue_grant_limits_upload_to_preallocated_key(job, mocker):
 
 再写 hash、大小、MIME 不一致拒绝和骨架 tombstone `retain_canonical=False` 测试。
 
-- [ ] **Step 2: 运行存储测试并确认失败**
+- [x] **Step 2: 运行存储测试并确认失败**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_analysis_storage.py -q`
 
 Expected: FAIL，存储授权模块尚不存在。
 
-- [ ] **Step 3: 实现任务对象键、私有下载和限定上传 token**
+- [x] **Step 3: 实现任务对象键、私有下载和限定上传 token**
 
 ```python
 def issue_storage_grant(job, now):
@@ -422,7 +423,7 @@ def issue_storage_grant(job, now):
 
 日志对象的 `repr` 必须隐藏 token 和签名 URL；验证函数复用 `stat_object_metadata()` 和 `validate_object_metadata()`。
 
-- [ ] **Step 4: 接入骨架清理墓碑并运行测试**
+- [x] **Step 4: 接入骨架清理墓碑并运行测试**
 
 训练视频删除/解绑清理创建骨架墓碑，`attempt_key_prefix` 使用任务目录前缀，`canonical_key` 为骨架 key，`retain_canonical=False`。
 
@@ -430,7 +431,7 @@ Run: `cd backend && pytest apps/training/tests/test_motion_analysis_storage.py a
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交存储边界**
+- [x] **Step 5: 提交存储边界**
 
 ```bash
 git add backend/apps/training/motion_analysis_storage.py backend/apps/training/qiniu.py backend/config/settings.py deploy/env.production.example deploy/docker-compose.prod.yml backend/apps/training/tests/test_motion_analysis_storage.py
@@ -454,7 +455,7 @@ git commit -m "feat(动作分析): 签发单任务七牛存储权限"
 - Produces: `heartbeat_job(*, job_id, lease_token, stage, now) -> MotionAnalysisJob`
 - Produces endpoints: `POST /api/internal/motion-analysis/jobs/claim/`、`POST /api/internal/motion-analysis/jobs/{id}/heartbeat/`
 
-- [ ] **Step 1: 写鉴权、能力匹配和租约测试**
+- [x] **Step 1: 写鉴权、能力匹配和租约测试**
 
 ```python
 def test_claim_requires_exact_bearer_token(api_client, settings):
@@ -472,13 +473,13 @@ def test_claim_locks_oldest_compatible_job(api_client, machine_auth, compatible_
 
 还要覆盖空队列 204、不匹配能力不领取、并发 claim 只能一个获胜、令牌只存 SHA-256、错误/过期租约拒绝心跳。
 
-- [ ] **Step 2: 运行内部 API 测试并确认失败**
+- [x] **Step 2: 运行内部 API 测试并确认失败**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_analysis_internal_claim_api.py -q`
 
 Expected: FAIL，URL 和服务尚不存在。
 
-- [ ] **Step 3: 实现常量时间机器鉴权和原子 claim**
+- [x] **Step 3: 实现常量时间机器鉴权和原子 claim**
 
 ```python
 class IsPpMcareWorker(BasePermission):
@@ -523,7 +524,7 @@ def claim_next_job(*, worker_id, capabilities, now):
 
 不能把机器 token、租约原文或存储凭证写日志。
 
-- [ ] **Step 4: 返回存储 grant 并实现心跳续租**
+- [x] **Step 4: 返回存储 grant 并实现心跳续租**
 
 claim 成功调用 Task 4 的 `issue_storage_grant()`，初始租约 300 秒；heartbeat 每次续回 300 秒并保存 `last_heartbeat_at` 与脱敏阶段名。
 
@@ -531,7 +532,7 @@ Run: `cd backend && pytest apps/training/tests/test_motion_analysis_internal_cla
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交领取 API**
+- [x] **Step 5: 提交领取 API**
 
 ```bash
 git add backend/apps/training/internal_* backend/config/urls.py backend/config/settings.py backend/apps/training/tests/test_motion_analysis_internal_claim_api.py
@@ -557,7 +558,7 @@ git commit -m "feat(动作分析): 提供任务领取与心跳接口"
 - Produces: `expire_stale_motion_analysis_jobs(now=None) -> int`
 - Produces: `motion_analysis_health_snapshot(now=None) -> MotionAnalysisHealthSnapshot`
 
-- [ ] **Step 1: 写完成原子性和幂等测试**
+- [x] **Step 1: 写完成原子性和幂等测试**
 
 ```python
 def test_complete_verifies_object_and_updates_job_and_record_atomically(running_job, api_client, machine_auth, mocker):
@@ -580,13 +581,13 @@ def test_duplicate_completion_does_not_overwrite_later_doctor_edit(succeeded_job
 
 另测对象不存在时整个事务回滚、不同幂等键返回 409、失败不清空训练结果、租约过期置失败且不回队列。
 
-- [ ] **Step 2: 运行完成 API 测试并确认失败**
+- [x] **Step 2: 运行完成 API 测试并确认失败**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_analysis_internal_completion_api.py -q`
 
 Expected: FAIL，complete/fail 服务尚不存在。
 
-- [ ] **Step 3: 实现 complete/fail 的锁与终态规则**
+- [x] **Step 3: 实现 complete/fail 的锁与终态规则**
 
 ```python
 @transaction.atomic
@@ -644,7 +645,7 @@ def complete_job(*, job_id, lease_token, idempotency_key, payload, now):
 
 `fail_job()` 使用同样的租约和幂等边界，只保存稳定 `failure_code` 与最长 2000 字的脱敏摘要。
 
-- [ ] **Step 4: 把 stale recovery 改为租约过期并运行测试**
+- [x] **Step 4: 把 stale recovery 改为租约过期并运行测试**
 
 Celery Beat 每 300 秒执行 `recover_stale_motion_analysis_jobs`，条件改为 `status=running AND lease_expires_at < now`；结果只到 `failed`，不重新投递。
 
@@ -654,7 +655,7 @@ Run: `cd backend && pytest apps/training/tests/test_motion_analysis_internal_com
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交完成和失败控制面**
+- [x] **Step 5: 提交完成和失败控制面**
 
 ```bash
 git add backend/apps/training/internal_* backend/apps/training/motion_analysis_monitoring.py backend/apps/training/tasks.py backend/config/settings.py backend/apps/training/tests/test_motion_analysis_internal_completion_api.py backend/apps/training/tests/test_motion_analysis_monitoring.py
@@ -681,7 +682,7 @@ git commit -m "feat(动作分析): 原子完成独立分析任务"
 - Produces: `MotionCareClient.claim/heartbeat/complete/fail`
 - Produces: `run_worker(*, client, processor, sleeper, settings, max_claims: int | None = None) -> None`
 
-- [ ] **Step 1: 写 900 秒空轮询和积压连续处理测试**
+- [x] **Step 1: 写 900 秒空轮询和积压连续处理测试**
 
 ```python
 def test_worker_sleeps_only_after_empty_claim():
@@ -700,13 +701,13 @@ def test_settings_rejects_qiniu_long_term_secrets():
 
 另测启动立即 claim、成功/失败后不 sleep、机器 token 不出现在日志、可重试状态码只限超时/连接错误/5xx。
 
-- [ ] **Step 2: 运行 service 测试并确认失败**
+- [x] **Step 2: 运行 service 测试并确认失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_config.py services/pp_mcare/tests/test_api_client.py services/pp_mcare/tests/test_worker.py -q`
 
 Expected: FAIL，service 尚不存在。
 
-- [ ] **Step 3: 建立独立包和配置边界**
+- [x] **Step 3: 建立独立包和配置边界**
 
 ```python
 @dataclass(frozen=True)
@@ -722,7 +723,7 @@ class Settings:
 
 生产依赖固定 `httpx>=0.27,<1`、`qiniu>=7.17,<8`、`psutil>=6,<8`；`inference` extra 固定已验收的 Paddle/OpenCV 版本；dev extra 固定 pytest/ruff。
 
-- [ ] **Step 4: 实现客户端重试和 worker 循环**
+- [x] **Step 4: 实现客户端重试和 worker 循环**
 
 `MotionCareClient` 每次请求设置 Bearer 机器 token；日志只写 method、path、status、job ID，不写 headers/body 中的 URL/token。`run_worker()` 每次只把一个 `ClaimedJob` 交给 processor。
 
@@ -732,7 +733,7 @@ Run: `python -m pytest services/pp_mcare/tests/test_config.py services/pp_mcare/
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交 worker 基础**
+- [x] **Step 5: 提交 worker 基础**
 
 ```bash
 git add services/pp_mcare
@@ -757,7 +758,7 @@ git commit -m "feat(pp-mcare): 建立串行轮询服务"
 - Produces: `get_action_plugin(source_key, algorithm_version, rule_version, parameter_version) -> ActionPlugin | None`
 - Produces: `ShoulderPressV2Plugin.analyze(frames: Iterable[PoseFrame]) -> AnalysisResult`
 
-- [ ] **Step 1: 复制现有回归测试到 service 并增加插件契约测试**
+- [x] **Step 1: 复制现有回归测试到 service 并增加插件契约测试**
 
 ```python
 def test_registry_resolves_only_exact_shoulder_press_v2_versions():
@@ -779,13 +780,13 @@ def test_registry_resolves_only_exact_shoulder_press_v2_versions():
 
 原 `test_shoulder_press_v2.py` 的完整周期、左右最大值、锚点、质量、边界和 90 次语义全部保留，不精简为少量冒烟。
 
-- [ ] **Step 2: 运行迁移后的测试并确认失败**
+- [x] **Step 2: 运行迁移后的测试并确认失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_shoulder_press_v2.py services/pp_mcare/tests/test_registry.py -q`
 
 Expected: FAIL，插件文件尚不存在。
 
-- [ ] **Step 3: 无行为变化迁移计数实现并加插件包装**
+- [x] **Step 3: 无行为变化迁移计数实现并加插件包装**
 
 ```python
 @dataclass(frozen=True)
@@ -814,13 +815,13 @@ class ShoulderPressV2Plugin:
 
 迁移时只调整 import 和类型，不调整阈值、左右计数或质量规则。
 
-- [ ] **Step 4: 运行插件与协议测试**
+- [x] **Step 4: 运行插件与协议测试**
 
 Run: `python -m pytest services/pp_mcare/tests/test_shoulder_press_v2.py services/pp_mcare/tests/test_registry.py packages/motion_analysis_contract/tests/test_contracts.py -q`
 
 Expected: PASS，测试数量不低于原 shoulder v2 测试数量。
 
-- [ ] **Step 5: 提交动作插件**
+- [x] **Step 5: 提交动作插件**
 
 ```bash
 git add services/pp_mcare/src/pp_mcare/actions services/pp_mcare/src/pp_mcare/registry.py services/pp_mcare/tests/test_shoulder_press_v2.py services/pp_mcare/tests/test_registry.py
@@ -843,7 +844,7 @@ git commit -m "feat(pp-mcare): 迁移肩部推举全帧算法插件"
 - Produces: `PrimarySubjectTracker.observe(frame: InferenceFrame) -> TrackedPoseFrame`
 - Produces: `TrackedPoseFrame.to_action_frame() -> PoseFrame`
 
-- [ ] **Step 1: 写“每帧所有人”和跨帧不换人的失败测试**
+- [x] **Step 1: 写“每帧所有人”和跨帧不换人的失败测试**
 
 ```python
 def test_pose_stream_infers_every_decoded_frame_and_keeps_all_people(fake_capture, fake_model):
@@ -863,13 +864,13 @@ def test_tracker_keeps_original_subject_when_larger_bystander_enters():
 
 还要覆盖中心最大主体初始化、短缺失保持、连续失锁 3000ms 抛 `SubjectUnstable`、歧义帧不输出旁人、异常时间戳单调回退。
 
-- [ ] **Step 2: 运行推理与追踪测试并确认失败**
+- [x] **Step 2: 运行推理与追踪测试并确认失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_pose_inference.py services/pp_mcare/tests/test_subject_tracker.py -q`
 
 Expected: FAIL，模块尚不存在。
 
-- [ ] **Step 3: 把 PaddleX 结果转换为完整多人结构**
+- [x] **Step 3: 把 PaddleX 结果转换为完整多人结构**
 
 ```python
 def convert_paddlex_people(result, *, frame_width, frame_height):
@@ -885,7 +886,7 @@ def convert_paddlex_people(result, *, frame_width, frame_height):
 
 `TrackedPoseFrame.to_action_frame()` 只把已锁定主训练者的 `named_keypoints` 交给动作插件；原始多人集合不得进入计数算法。
 
-- [ ] **Step 4: 实现 `primary-subject-v1` 追踪器**
+- [x] **Step 4: 实现 `primary-subject-v1` 追踪器**
 
 初始主体优先画面中心 70% 区域内面积最大者；后续用共同可靠关键点的归一化中位距离为主、bbox IoU 为辅匹配既有主体。默认最大归一化跳变 0.35、连续失锁上限 3000ms、歧义帧占比上限 10%，常量集中在模块顶部并写入结果摘要。
 
@@ -893,7 +894,7 @@ Run: `python -m pytest services/pp_mcare/tests/test_pose_inference.py services/p
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交推理与主体追踪**
+- [x] **Step 5: 提交推理与主体追踪**
 
 ```bash
 git add services/pp_mcare/src/pp_mcare/pose_inference.py services/pp_mcare/src/pp_mcare/subject_tracker.py services/pp_mcare/tests/test_pose_inference.py services/pp_mcare/tests/test_subject_tracker.py
@@ -916,7 +917,7 @@ git commit -m "feat(pp-mcare): 锁定全帧主训练者"
 - Produces: `SkeletonVideoEncoder(path, width, height, fps)` with `write(frame)` and `close()`
 - Produces: `run_local_pipeline(job, input_path, output_path, heartbeat) -> LocalAnalysisResult`
 
-- [ ] **Step 1: 写单人绘制、单次推理双路消费和无音轨测试**
+- [x] **Step 1: 写单人绘制、单次推理双路消费和无音轨测试**
 
 ```python
 def test_renderer_passes_exactly_one_skeleton_to_pp_visualizer(mocker, person, frame):
@@ -934,13 +935,13 @@ def test_pipeline_infers_each_frame_once_for_analysis_and_video(fake_pose_stream
 
 媒体集成测试用 2 秒夹具运行 `ffprobe`，断言只有一个 H.264 视频流、无音频流、像素格式 yuv420p、时长误差符合 `max(1 秒, 1%)`。
 
-- [ ] **Step 2: 运行流水线测试并确认失败**
+- [x] **Step 2: 运行流水线测试并确认失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_paddle_visualize_pose.py services/pp_mcare/tests/test_media.py services/pp_mcare/tests/test_pipeline.py -q`
 
 Expected: FAIL，可视化和流水线尚不存在。
 
-- [ ] **Step 3: 引入 PP 官方可视化语义并保留许可证**
+- [x] **Step 3: 引入 PP 官方可视化语义并保留许可证**
 
 从 PaddleDetection `release/2.9` 的 `deploy/python/visualize.py::visualize_pose` 提取 `visualize_pose`/`get_color` 到独立模块，保留 Apache-2.0 文件头，并在 `NOTICE` 记录来源 URL 和版本。包装器只传一个主训练者：
 
@@ -953,7 +954,7 @@ def render_primary_pose(image, person, threshold=0.6):
     return _visualize_pose(image.copy(), results, visual_thresh=threshold, returnimg=True)
 ```
 
-- [ ] **Step 4: 用 FFmpeg stdin 流式编码并编排生成器**
+- [x] **Step 4: 用 FFmpeg stdin 流式编码并编排生成器**
 
 编码命令固定包含：
 
@@ -967,7 +968,7 @@ Run: `python -m pytest services/pp_mcare/tests/test_paddle_visualize_pose.py ser
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交骨架视频流水线**
+- [x] **Step 5: 提交骨架视频流水线**
 
 ```bash
 git add services/pp_mcare/src/pp_mcare/paddle_visualize_pose.py services/pp_mcare/src/pp_mcare/media.py services/pp_mcare/src/pp_mcare/pipeline.py services/pp_mcare/NOTICE services/pp_mcare/tests
@@ -991,7 +992,7 @@ git commit -m "feat(pp-mcare): 生成单主体无声骨架视频"
 - Produces: `upload_skeleton(grant, path) -> UploadedObject`
 - Produces: `process_claimed_job(job, client, settings) -> None`
 
-- [ ] **Step 1: 写安全目录、网络重试和完整执行测试**
+- [x] **Step 1: 写安全目录、网络重试和完整执行测试**
 
 ```python
 def test_task_workspace_cleans_files_on_exception(tmp_path):
@@ -1013,13 +1014,13 @@ def test_process_uploads_then_completes_then_cleans(fake_qiniu, fake_motioncare,
 
 另测下载 hash/大小不符、上传 4xx 不重试、5xx 最多 3 次、complete 响应丢失使用同一幂等键、失败只调用 fail 不重跑 pipeline、启动清理超龄目录。
 
-- [ ] **Step 2: 运行执行测试并确认失败**
+- [x] **Step 2: 运行执行测试并确认失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_workspace.py services/pp_mcare/tests/test_storage.py services/pp_mcare/tests/test_task_execution.py -q`
 
 Expected: FAIL，任务工作目录和存储客户端尚不存在。
 
-- [ ] **Step 3: 实现精确目录边界和无长期凭证上传**
+- [x] **Step 3: 实现精确目录边界和无长期凭证上传**
 
 ```python
 with TaskWorkspace.create(settings.work_root, job.job_id) as workspace:
@@ -1033,7 +1034,7 @@ with TaskWorkspace.create(settings.work_root, job.job_id) as workspace:
 
 `upload_skeleton()` 只把后端给出的 token 和 key 传给 Qiniu SDK；模块不得读取 `QINIU_ACCESS_KEY/QINIU_SECRET_KEY`。
 
-- [ ] **Step 4: 加入独立心跳泵和 fail-safe 收口**
+- [x] **Step 4: 加入独立心跳泵和 fail-safe 收口**
 
 心跳泵每 60 秒调用 heartbeat，在下载、推理、编码和上传期间持续续租，但不启动第二个推理任务。任务异常先构造稳定 failure code 并调用 `fail`；无论 fail 是否成功都清理本地目录。上传成功而 complete 失败时仍清理，本地记录对象 key，业务端租约回收负责创建孤儿清理墓碑。
 
@@ -1043,7 +1044,7 @@ Run: `python -m pytest services/pp_mcare/tests -q`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交端到端 worker 执行**
+- [x] **Step 5: 提交端到端 worker 执行**
 
 ```bash
 git add services/pp_mcare
@@ -1068,7 +1069,7 @@ git commit -m "feat(pp-mcare): 接通任务下载上传与清理"
 - Produces: `GET /api/training/videos/{video_id}/analysis-jobs/latest/skeleton-url/`
 - Produces: tracking fields `motion_*`, `analysis_status`, `analysis_failure_message`, `skeleton_available`
 
-- [ ] **Step 1: 写医生编辑和骨架私有 URL 测试**
+- [x] **Step 1: 写医生编辑和骨架私有 URL 测试**
 
 ```python
 def test_doctor_overwrites_algorithm_fields_on_same_training_record(api_client, doctor, analyzed_record):
@@ -1092,13 +1093,13 @@ def test_skeleton_url_requires_row_level_access(api_client, unrelated_doctor, su
 
 还要覆盖 pending/running 时 409、failed/unsupported 可填写、计数不守恒 400、公开响应不含内部 `failure_reason`/对象 key/令牌。
 
-- [ ] **Step 2: 运行公开 API 测试并确认失败**
+- [x] **Step 2: 运行公开 API 测试并确认失败**
 
 Run: `cd backend && pytest apps/training/tests/test_motion_result_edit_api.py apps/training/tests/test_tracking_api.py apps/training/tests/test_motion_analysis.py -q`
 
 Expected: FAIL，编辑 action 与骨架 URL 尚不存在。
 
-- [ ] **Step 3: 实现受控编辑 action**
+- [x] **Step 3: 实现受控编辑 action**
 
 ```python
 @action(detail=True, methods=["patch"], url_path="motion-result")
@@ -1115,7 +1116,7 @@ def motion_result(self, request, pk=None):
     return Response(TrainingRecordSerializer(record).data)
 ```
 
-- [ ] **Step 4: 实现骨架下载和 tracking 当前值**
+- [x] **Step 4: 实现骨架下载和 tracking 当前值**
 
 骨架 URL 只在最新任务 `succeeded` 且对象元数据完整时签发；tracking 直接读 `TrainingRecord.motion_*`，任务仅提供状态。失败对医生固定为“自动分析未完成，请填写训练结果”，不返回内部摘要。
 
@@ -1123,7 +1124,7 @@ Run: `cd backend && pytest apps/training/tests/test_motion_result_edit_api.py ap
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交医生端业务 API**
+- [x] **Step 5: 提交医生端业务 API**
 
 ```bash
 git add backend/apps/training/serializers.py backend/apps/training/views.py backend/apps/training/video_serializers.py backend/apps/training/video_views.py backend/apps/training/urls.py backend/apps/training/tracking.py backend/apps/training/tests
@@ -1147,7 +1148,7 @@ git commit -m "feat(动作分析): 支持医生修正结果与查看骨架视频
 - Produces: `<TrainingVideoSwitcher originalUrl skeletonUrl activeSource onChange />`
 - Consumes: Task 12 tracking、编辑与短期 URL API
 
-- [ ] **Step 1: 用 UI 测试固定五种状态和无触发按钮**
+- [x] **Step 1: 用 UI 测试固定五种状态和无触发按钮**
 
 ```tsx
 it.each(["pending", "running"])("%s 时只展示状态且禁止编辑", async (status) => {
@@ -1165,7 +1166,7 @@ it("失败时允许医生填写同一结果字段", async () => {
 
 再测 succeeded 可修改、unsupported 可填写、守恒错误、保存后“医生已修正”、不显示内部错误。
 
-- [ ] **Step 2: 写视频切换保持时间点测试并确认全部失败**
+- [x] **Step 2: 写视频切换保持时间点测试并确认全部失败**
 
 ```tsx
 it("切换骨架视频时复制 currentTime 和暂停状态", async () => {
@@ -1181,11 +1182,11 @@ Run: `cd frontend && npm run test -- MotionAnalysisPanel.test.tsx TrainingVideoS
 
 Expected: FAIL，新组件尚不存在且旧页面仍有手动分析按钮。
 
-- [ ] **Step 3: 实现结果表单和状态文案**
+- [x] **Step 3: 实现结果表单和状态文案**
 
 使用 AntD `Form` + `InputNumber`，只提交 Task 12 的四个允许字段。pending/running 禁用；succeeded/failed/unsupported 可编辑。保存成功失效 `training-tracking` 与 `latest-analysis` query。
 
-- [ ] **Step 4: 实现原视频/骨架视频切换并移除旧 mutation**
+- [x] **Step 4: 实现原视频/骨架视频切换并移除旧 mutation**
 
 删除 `createAnalysisMutation`、开始/重新分析按钮和 POST 调用。骨架选项只有成功且 URL 可取时启用；切换前保存 `currentTime` 与 `paused`，新视频 `loadedMetadata` 后恢复，播放失败只保持暂停并展示提示。
 
@@ -1193,7 +1194,7 @@ Run: `cd frontend && npm run test -- MotionAnalysisPanel.test.tsx TrainingVideoS
 
 Expected: PASS。
 
-- [ ] **Step 5: 运行前端门禁并提交**
+- [x] **Step 5: 运行前端门禁并提交**
 
 Run: `cd frontend && npm run lint && npm run build`
 
@@ -1226,7 +1227,7 @@ git commit -m "feat(训练追踪): 展示骨架视频并支持医生修正"
 - Produces: `python -m pp_mcare regression --video /Users/nick/my_dev/ai/agents/IMG_0383_SDR_5min.mp4 --manual-total-count 90 --report /private/tmp/pp-mcare-regression.json`
 - Removes: Django/Celery 进程对 Paddle、PaddleX 和 OpenCV 的任何运行时 import
 
-- [ ] **Step 1: 写独立回归 CLI 和业务包无 Paddle import 测试**
+- [x] **Step 1: 写独立回归 CLI 和业务包无 Paddle import 测试**
 
 ```python
 def test_regression_cli_rejects_manual_count_other_than_90(runner, video):
@@ -1239,7 +1240,7 @@ def test_backend_training_package_has_no_paddle_imports():
     assert offenders == []
 ```
 
-- [ ] **Step 2: 运行测试并确认旧代码边界失败**
+- [x] **Step 2: 运行测试并确认旧代码边界失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_regression.py -q`
 
@@ -1247,11 +1248,11 @@ Run: `cd backend && pytest apps/training/tests/test_pose_benchmark_scripts.py -q
 
 Expected: FAIL，回归 CLI 不存在且 backend 仍包含推理模块。
 
-- [ ] **Step 3: 迁移 benchmark 资源采样、报告和命令**
+- [x] **Step 3: 迁移 benchmark 资源采样、报告和命令**
 
 保留现有报告的人工真值、帧数一致、耗时、RSS、Swap 与 SHA-256 校验；入口改为 service CLI，唯一模式仍为 `all_frames`。`deploy/motion-analysis-smoke/run-benchmark.sh` 改为调用 `/opt/motioncare-analysis/venv/bin/python -m pp_mcare regression`。
 
-- [ ] **Step 4: 删除业务端算法实现和可选依赖**
+- [x] **Step 4: 删除业务端算法实现和可选依赖**
 
 确认 Task 8–10 已承接全部测试后删除旧模块与重复测试，从 `backend/pyproject.toml` 删除 `motion-analysis` extra。保留与任务控制面、Qiniu 和视频组装相关模块。
 
@@ -1261,7 +1262,7 @@ Run: `python -m pytest services/pp_mcare/tests -q`
 
 Expected: 全部 PASS，backend 安装不需要 Paddle/OpenCV。
 
-- [ ] **Step 5: 提交依赖隔离**
+- [x] **Step 5: 提交依赖隔离**
 
 ```bash
 git add backend services/pp_mcare deploy/motion-analysis-smoke
@@ -1290,7 +1291,7 @@ git commit -m "refactor(动作分析): 将推理能力完全迁出业务服务"
 - Produces: `/opt/motioncare-analysis/current` 原子发布目录
 - Produces: CI 对协议包、backend、frontend、pp-mcare 非推理测试的完整门禁
 
-- [ ] **Step 1: 写脚本安全和 CI 构建失败测试**
+- [x] **Step 1: 写脚本安全和 CI 构建失败测试**
 
 ```python
 def test_install_release_rejects_non_commit_release_name(tmp_path):
@@ -1307,18 +1308,18 @@ def test_systemd_unit_runs_unprivileged_without_inbound_port():
 
 CI 测试断言 backend Dockerfile 先安装 `motion_analysis_contract`，工作流运行 contract 和 pp-mcare 测试，但不在通用 CI 下载重量级推理模型。
 
-- [ ] **Step 2: 运行部署测试并确认失败**
+- [x] **Step 2: 运行部署测试并确认失败**
 
 Run: `python -m pytest services/pp_mcare/tests/test_deploy_scripts.py backend/tests/test_deploy_workflow.py -q`
 
 Expected: FAIL，正式部署脚本和 CI 步骤尚不存在。
 
-- [ ] **Step 3: 实现安全安装、systemd 和 CI**
+- [x] **Step 3: 实现安全安装、systemd 和 CI**
 
 `bootstrap.sh` 复用现有目录/用户/Swap 安全检查；`install-release.sh` 只接收 7–40 位提交 SHA，把归档解压到 `/opt/motioncare-analysis/releases/` 下以该 SHA 命名的目录，在该 release 的 `.venv` 完成安装和自检后原子切换 `current`。systemd 始终执行 `/opt/motioncare-analysis/current/.venv/bin/python -m pp_mcare`。`env.example` 只允许：
 
 ```text
-PP_MCARE_API_BASE_URL=https://mcare-api.whestsun.com/api/internal/motion-analysis
+PP_MCARE_API_BASE_URL=https://mcare-api.whestsun.com
 PP_MCARE_SERVICE_TOKEN=
 PP_MCARE_WORKER_ID=pp-mcare-01
 PP_MCARE_POLL_INTERVAL_SECONDS=900
@@ -1327,7 +1328,7 @@ PADDLE_PDX_CACHE_HOME=/opt/motioncare-analysis/model-cache
 
 明确禁止 Qiniu AK/SK、DATABASE_URL 和 REDIS_URL。
 
-- [ ] **Step 4: 运行全部本地门禁**
+- [x] **Step 4: 运行全部本地门禁**
 
 Run: `python -m pytest packages/motion_analysis_contract/tests services/pp_mcare/tests -q`
 

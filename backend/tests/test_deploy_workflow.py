@@ -1,3 +1,8 @@
+import os
+import signal
+import stat
+import subprocess
+import time
 from pathlib import Path
 
 
@@ -10,6 +15,9 @@ WORKFLOW_PATH = (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DOCKERFILE = REPOSITORY_ROOT / "backend" / "Dockerfile"
 PRODUCTION_COMPOSE = REPOSITORY_ROOT / "deploy" / "docker-compose.prod.yml"
+PP_MCARE_CONTROL_PLANE_ENV_SCRIPT = (
+    REPOSITORY_ROOT / "deploy" / "configure-pp-mcare-control-plane.sh"
+)
 
 
 def _build_push_action_inputs() -> list[dict[str, str]]:
@@ -82,3 +90,172 @@ def test_production_control_plane_defaults_auto_enqueue_off_and_requires_token_d
         "PP_MCARE_SERVICE_TOKEN_SHA256: "
         "${PP_MCARE_SERVICE_TOKEN_SHA256:?PP_MCARE_SERVICE_TOKEN_SHA256 is required}"
     ) in compose
+
+
+def test_control_plane_env_script_atomically_sets_digest_and_keeps_auto_disabled(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "APP_VERSION=old\n"
+        "PP_MCARE_SERVICE_TOKEN_SHA256=stale\n"
+        "PP_MCARE_AUTO_ENQUEUE_ENABLED=true\n"
+        "POSTGRES_DB=motioncare\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+
+    completed = subprocess.run(
+        [str(PP_MCARE_CONTROL_PLANE_ENV_SCRIPT)],
+        cwd=tmp_path,
+        input=f"{'a' * 64}\nfalse\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert env_file.read_text(encoding="utf-8").splitlines() == [
+        "APP_VERSION=old",
+        "POSTGRES_DB=motioncare",
+        f"PP_MCARE_SERVICE_TOKEN_SHA256={'a' * 64}",
+        "PP_MCARE_AUTO_ENQUEUE_ENABLED=false",
+    ]
+    assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
+
+
+def test_control_plane_env_script_rejects_bad_digest_without_changing_env(tmp_path):
+    env_file = tmp_path / ".env"
+    original = b"APP_VERSION=old\nPOSTGRES_DB=motioncare\n"
+    env_file.write_bytes(original)
+    env_file.chmod(0o600)
+
+    completed = subprocess.run(
+        [str(PP_MCARE_CONTROL_PLANE_ENV_SCRIPT)],
+        cwd=tmp_path,
+        input="not-a-sha256\nfalse\n",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert env_file.read_bytes() == original
+
+
+def test_control_plane_env_script_rejects_unterminated_extra_input(tmp_path):
+    env_file = tmp_path / ".env"
+    original = b"APP_VERSION=old\nPOSTGRES_DB=motioncare\n"
+    env_file.write_bytes(original)
+    env_file.chmod(0o600)
+
+    completed = subprocess.run(
+        [str(PP_MCARE_CONTROL_PLANE_ENV_SCRIPT)],
+        cwd=tmp_path,
+        input=f"{'a' * 64}\nfalse\nunexpected-without-newline",
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert env_file.read_bytes() == original
+
+
+def test_control_plane_env_script_does_not_replace_env_after_sigterm(tmp_path):
+    env_file = tmp_path / ".env"
+    original = b"APP_VERSION=old\nPOSTGRES_DB=motioncare\n"
+    env_file.write_bytes(original)
+    env_file.chmod(0o600)
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "awk-started"
+    fake_awk = fake_bin / "awk"
+    fake_awk.write_text(
+        "#!/bin/sh\n"
+        ': > "$PP_MCARE_TEST_MARKER"\n'
+        "sleep 1\n"
+        'exec /usr/bin/awk "$@"\n',
+        encoding="utf-8",
+    )
+    fake_awk.chmod(0o755)
+
+    process = subprocess.Popen(
+        [str(PP_MCARE_CONTROL_PLANE_ENV_SCRIPT)],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PP_MCARE_TEST_MARKER": str(marker),
+        },
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdin is not None
+    process.stdin.write(f"{'a' * 64}\nfalse\n")
+    process.stdin.close()
+
+    deadline = time.monotonic() + 2
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert marker.exists()
+
+    process.send_signal(signal.SIGTERM)
+    returncode = process.wait(timeout=3)
+
+    assert returncode != 0
+    assert env_file.read_bytes() == original
+    assert list(tmp_path.glob(".env.pp-mcare.*")) == []
+
+
+def test_control_plane_env_script_rejects_malicious_auto_value_as_data(tmp_path):
+    env_file = tmp_path / ".env"
+    original = b"APP_VERSION=old\nPOSTGRES_DB=motioncare\n"
+    env_file.write_bytes(original)
+    env_file.chmod(0o600)
+    injected_marker = tmp_path / "must-not-exist"
+
+    completed = subprocess.run(
+        [str(PP_MCARE_CONTROL_PLANE_ENV_SCRIPT)],
+        cwd=tmp_path,
+        input=(
+            f"{'a' * 64}\n"
+            f'false"; touch {injected_marker}; #\n'
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert env_file.read_bytes() == original
+    assert not injected_marker.exists()
+
+
+def test_production_workflow_supplies_token_digest_before_deploying():
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    deploy_step = workflow[workflow.index("      - name: 部署指定版本") :]
+    configure_position = deploy_step.index("./configure-pp-mcare-control-plane.sh")
+    deploy_position = deploy_step.index("./deploy.sh")
+    assert configure_position < deploy_position
+    assert "secrets.PP_MCARE_SERVICE_TOKEN_SHA256" in deploy_step
+    assert (
+        'printf \'%s\\n%s\\n\' "$PP_MCARE_SERVICE_TOKEN_SHA256" '
+        '"$PP_MCARE_AUTO_ENQUEUE_ENABLED"'
+    ) in deploy_step
+
+
+def test_production_workflow_reads_auto_enqueue_flag_with_safe_false_default():
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    deploy_step = workflow[workflow.index("      - name: 部署指定版本") :]
+
+    assert (
+        "PP_MCARE_AUTO_ENQUEUE_ENABLED: "
+        "${{ vars.PP_MCARE_AUTO_ENQUEUE_ENABLED || 'false' }}"
+    ) in deploy_step
+    remote_command = deploy_step[deploy_step.index('"cd /opt/motioncare-prod') :]
+    assert "./configure-pp-mcare-control-plane.sh &&" in remote_command
+    assert "$PP_MCARE_AUTO_ENQUEUE_ENABLED" not in remote_command
+    assert "$PP_MCARE_SERVICE_TOKEN_SHA256" not in remote_command
