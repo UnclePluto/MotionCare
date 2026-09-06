@@ -39,6 +39,8 @@ _run_regression() {
   metadata="$(stat -c '%U:%G:%a:%h' -- "${video_path}")"
   [[ "${metadata}" == "${SERVICE_USER}:${SERVICE_USER}:600:1" ]] \
     || _fail "回归输入权限不安全"
+  _cleanup_video_path="${video_path}"
+  trap _cleanup_regression_input EXIT
 
   report_path="${ANALYSIS_ROOT}/reports/pp-mcare-v2-${implementation_commit}-${run_id}.json"
   [[ ! -e "${report_path}" && ! -L "${report_path}" ]] || _fail "回归报告已存在"
@@ -56,8 +58,6 @@ if payload.get("manifest_version") != "1" or not payload.get("git_commit", "").s
     raise SystemExit("发布清单与回归标识不匹配")
 PY
 
-  _cleanup_video_path="${video_path}"
-  trap _cleanup_regression_input EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM HUP
   (

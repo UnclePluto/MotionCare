@@ -299,6 +299,7 @@ def test_package_metadata_targets_python_312_and_paddlex_supported_cv_bundle():
     assert "paddlepaddle==3.3.0" in inference
     assert "paddlex[cv]==3.7.2" in inference
     assert not any(requirement.lower().startswith("opencv-") for requirement in inference)
+    assert "numpy>=1.26,<2.4" in project["optional-dependencies"]["dev"]
 
 
 def test_trusted_root_and_race_hook_are_not_public_settings_inputs(tmp_path):

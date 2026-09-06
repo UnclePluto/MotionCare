@@ -341,15 +341,36 @@ def _release_artifact_identity(
         "package_version": package_version,
         "installed_distribution_sha256": distribution_content_sha256,
     }
+    expected_keys = {
+        *expected,
+        "wheel_sha256",
+        "contract_wheel_sha256",
+        "git_commit",
+        "release_name",
+    }
+    git_commit = payload.get("git_commit") if isinstance(payload, dict) else None
+    release_name = payload.get("release_name") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
+        or set(payload) != expected_keys
         or any(payload.get(key) != value for key, value in expected.items())
         or not _valid_sha256(payload.get("wheel_sha256"))
+        or not _valid_sha256(payload.get("contract_wheel_sha256"))
+        or not isinstance(git_commit, str)
+        or len(git_commit) != 40
+        or any(character not in "0123456789abcdef" for character in git_commit)
+        or not isinstance(release_name, str)
+        or not 7 <= len(release_name) <= 40
+        or any(character not in "0123456789abcdef" for character in release_name)
+        or not git_commit.startswith(release_name)
     ):
         raise RegressionFailure("发布清单身份不匹配")
     return {
         "manifest_status": "verified",
         "wheel_sha256": payload["wheel_sha256"],
+        "contract_wheel_sha256": payload["contract_wheel_sha256"],
+        "git_commit": git_commit,
+        "release_name": release_name,
     }
 
 
@@ -359,19 +380,23 @@ def read_implementation_identity() -> dict[str, object]:
     source_checkout = _source_checkout_identity(package_root)
     source_checkout_commit = None if source_checkout is None else source_checkout.commit
     distribution_content_sha256 = _distribution_content_sha256(package_root)
+    release_artifact = _release_artifact_identity(
+        package_root=package_root,
+        package_version=package_version,
+        distribution_content_sha256=distribution_content_sha256,
+        source_checkout_commit=source_checkout_commit,
+    )
+    reported_commit = source_checkout_commit
+    if reported_commit is None and release_artifact["manifest_status"] == "verified":
+        reported_commit = release_artifact["git_commit"]
     return {
         "package_name": "pp-mcare",
         "package_version": package_version,
         "regression_runtime_sha256": _implementation_sha256(package_root),
         "distribution_content_sha256": distribution_content_sha256,
-        "git_commit": source_checkout_commit,
+        "git_commit": reported_commit,
         "git_dirty": None if source_checkout is None else source_checkout.dirty,
-        "release_artifact": _release_artifact_identity(
-            package_root=package_root,
-            package_version=package_version,
-            distribution_content_sha256=distribution_content_sha256,
-            source_checkout_commit=source_checkout_commit,
-        ),
+        "release_artifact": release_artifact,
         "capability": {
             "protocol_version": PROTOCOL_VERSION,
             "action_source_key": _ACTION_PLUGIN.source_key,

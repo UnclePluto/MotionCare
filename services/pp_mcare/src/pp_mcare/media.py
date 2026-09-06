@@ -274,6 +274,7 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
     frame_count = 0
     nominal_tick_count = 0
     last_duration: float | None = None
+    last_duration_tick_count = 1
     while True:
         raw_line = output.readline(PROBE_TIMELINE_LINE_LIMIT_BYTES + 1)
         if not raw_line:
@@ -305,6 +306,9 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
                 or abs(duration - duration_ticks * nominal_interval) > tolerance
             ):
                 raise MediaEncodingError("输入视频帧持续时间不均匀")
+            last_duration_tick_count = duration_ticks
+        else:
+            last_duration_tick_count = 1
         if first_pts is None:
             first_pts = pts
         if previous_pts is not None:
@@ -323,6 +327,7 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
         frame_count += 1
     if frame_count < 2 or first_pts is None or previous_pts is None:
         raise MediaEncodingError("输入视频时间轴无法可靠验证")
+    nominal_tick_count += last_duration_tick_count - 1
     missing_tick_count = nominal_tick_count - frame_count
     if missing_tick_count / nominal_tick_count > MAX_MISSING_NOMINAL_TICK_RATIO:
         raise MediaEncodingError("输入视频缺帧比例过高")

@@ -669,6 +669,24 @@ def test_probe_source_video_accepts_sparse_missing_nominal_ticks_below_one_perce
     assert metadata.duration_seconds == pytest.approx(4.0, abs=0.01)
 
 
+def test_timeline_parser_counts_missing_ticks_in_last_frame_duration():
+    from pp_mcare.media import MediaEncodingError, _parse_cfr_timeline
+
+    lines = []
+    for frame_index in range(100):
+        duration = 2.0 if frame_index == 99 else 1 / 30
+        lines.append(
+            "best_effort_timestamp_time="
+            f"{frame_index / 30:.6f}|pkt_duration_time={duration:.6f}\n"
+        )
+
+    with pytest.raises(MediaEncodingError, match="缺帧比例"):
+        _parse_cfr_timeline(
+            io.BytesIO("".join(lines).encode("utf-8")),
+            expected_fps=30.0,
+        )
+
+
 @pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
 def test_probe_source_video_rejects_excessive_missing_ticks_even_when_rates_match(tmp_path):
     from pp_mcare.media import MediaEncodingError, probe_source_video

@@ -61,7 +61,11 @@ def _write_archive(path: Path, *, member_name: str, member_type: bytes) -> None:
             archive.addfile(member)
 
 
-def _run_regression_with_fake_boundaries(tmp_path: Path):
+def _run_regression_with_fake_boundaries(
+    tmp_path: Path,
+    *,
+    actual_hash: str = "f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd",
+):
     analysis_root = tmp_path / "analysis"
     run_id = "20260906T120000Z"
     video = analysis_root / "input" / f"pp-mcare-{run_id}.mp4"
@@ -90,7 +94,7 @@ def _run_regression_with_fake_boundaries(tmp_path: Path):
         "sha256sum": (
             "#!/usr/bin/env bash\n"
             "printf '%s  %s\\n' "
-            "'f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee71458a78dd' "
+            f"'{actual_hash}' "
             '"$1"\n'
         ),
         "runuser": "#!/usr/bin/env bash\npwd > \"${PP_MCARE_TEST_CWD_LOG}\"\n",
@@ -280,3 +284,13 @@ def test_regression_script_runs_worker_from_current_release_directory(tmp_path):
 
     assert completed.returncode == 0, completed.stderr
     assert cwd_log.read_text(encoding="utf-8").strip() == str(current)
+
+
+def test_regression_script_cleans_validated_input_when_hash_check_fails(tmp_path):
+    completed, video, _current, _cwd_log = _run_regression_with_fake_boundaries(
+        tmp_path,
+        actual_hash="0" * 64,
+    )
+
+    assert completed.returncode != 0
+    assert video.exists() is False

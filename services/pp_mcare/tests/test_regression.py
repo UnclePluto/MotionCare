@@ -495,7 +495,10 @@ def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_ma
                 "package_name": "pp-mcare",
                 "package_version": "0.1.0",
                 "wheel_sha256": "a" * 64,
+                "contract_wheel_sha256": "b" * 64,
                 "installed_distribution_sha256": "d" * 64,
+                "git_commit": "c" * 40,
+                "release_name": "c" * 40,
             }
         ),
         encoding="utf-8",
@@ -514,13 +517,60 @@ def test_release_manifest_wheel_identity_is_only_accepted_when_install_digest_ma
     assert identity["release_artifact"] == {
         "manifest_status": "verified",
         "wheel_sha256": "a" * 64,
+        "contract_wheel_sha256": "b" * 64,
+        "git_commit": "c" * 40,
+        "release_name": "c" * 40,
     }
+    assert identity["git_commit"] == "c" * 40
 
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["installed_distribution_sha256"] = "e" * 64
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(RegressionFailure, match="发布清单身份不匹配"):
         regression.read_implementation_identity()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("git_commit", "not-a-commit"),
+        ("release_name", "d" * 40),
+        ("contract_wheel_sha256", "not-a-hash"),
+    ],
+)
+def test_release_manifest_rejects_untrusted_release_identity_fields(
+    monkeypatch,
+    tmp_path,
+    field,
+    invalid_value,
+):
+    manifest = tmp_path / "release-manifest.json"
+    payload = {
+        "manifest_version": "1",
+        "package_name": "pp-mcare",
+        "package_version": "0.1.0",
+        "wheel_sha256": "a" * 64,
+        "contract_wheel_sha256": "b" * 64,
+        "installed_distribution_sha256": "d" * 64,
+        "git_commit": "c" * 40,
+        "release_name": "c" * 40,
+    }
+    payload[field] = invalid_value
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(regression, "_RELEASE_MANIFEST_PATH", manifest)
+    monkeypatch.setattr(
+        regression,
+        "_release_manifest_path_for_package",
+        lambda _root: manifest,
+    )
+
+    with pytest.raises(RegressionFailure, match="发布清单身份不匹配"):
+        regression._release_artifact_identity(
+            package_root=tmp_path,
+            package_version="0.1.0",
+            distribution_content_sha256="d" * 64,
+            source_checkout_commit=None,
+        )
 
 
 def test_candidate_wheel_does_not_inherit_manifest_from_previous_current_release(
