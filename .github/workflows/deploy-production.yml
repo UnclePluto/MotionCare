@@ -43,6 +43,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: 安装 worker 媒体测试依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
       - name: 安装并验证动作分析协议与 worker 非推理能力
         run: |
           pip install -e './packages/motion_analysis_contract'

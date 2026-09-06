@@ -18,6 +18,7 @@ PRODUCTION_COMPOSE = REPOSITORY_ROOT / "deploy" / "docker-compose.prod.yml"
 PP_MCARE_CONTROL_PLANE_ENV_SCRIPT = (
     REPOSITORY_ROOT / "deploy" / "configure-pp-mcare-control-plane.sh"
 )
+PP_MCARE_PYPROJECT = REPOSITORY_ROOT / "services" / "pp_mcare" / "pyproject.toml"
 
 
 def _build_push_action_inputs() -> list[dict[str, str]]:
@@ -53,7 +54,14 @@ def test_acr_application_image_builds_disable_unsupported_provenance_attestation
 
 def test_verify_job_gates_contract_worker_backend_frontend_and_miniapp_without_models():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    worker_pyproject = PP_MCARE_PYPROJECT.read_text(encoding="utf-8")
 
+    ffmpeg_install = workflow.index("sudo apt-get install -y ffmpeg")
+    worker_dev_install = workflow.index("pip install -e './services/pp_mcare[dev]'")
+    worker_test = workflow.index(
+        "pytest -q packages/motion_analysis_contract/tests services/pp_mcare/tests"
+    )
+    assert ffmpeg_install < worker_dev_install < worker_test
     assert "packages/motion_analysis_contract" in workflow
     assert "services/pp_mcare" in workflow
     assert "packages/motion_analysis_contract/tests" in workflow
@@ -65,6 +73,10 @@ def test_verify_job_gates_contract_worker_backend_frontend_and_miniapp_without_m
     assert "npm run build:h5" in workflow
     assert "PADDLE_PDX_CACHE_HOME" not in workflow
     assert "pp_mcare[inference]" not in workflow
+    assert '"opencv-python-headless==4.10.0.84"' in worker_pyproject
+    dev_dependencies = worker_pyproject.split("dev = [", 1)[1]
+    assert '"paddlex[cv]' not in dev_dependencies
+    assert '"paddlepaddle' not in dev_dependencies
 
 
 def test_backend_image_installs_contract_before_backend_without_inference_dependencies():
