@@ -80,7 +80,7 @@ jobs:
       - name: 验证患者端
         working-directory: miniapp
         env:
-          TARO_APP_ASSET_BASE_URL: ${{ vars.TARO_APP_ASSET_BASE_URL }}
+          TARO_APP_ASSET_BASE_URL: ${{ vars.TARO_APP_ASSET_BASE_URL || 'https://assets.example.invalid/motioncare/static-assets' }}
         run: |
           npm ci
           npm run test
@@ -123,6 +123,7 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
       - name: 构建并推送患者 H5 镜像
+        if: ${{ vars.TARO_APP_ASSET_BASE_URL != '' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -137,6 +138,16 @@ jobs:
             TARO_APP_ASSET_BASE_URL=${{ vars.TARO_APP_ASSET_BASE_URL }}
           cache-from: type=gha,scope=wx
           cache-to: type=gha,mode=max,scope=wx
+      - name: 公共素材域名未就绪时沿用已发布患者 H5 镜像
+        if: ${{ vars.TARO_APP_ASSET_BASE_URL == '' }}
+        env:
+          WX_FALLBACK_VERSION: ${{ vars.WX_FALLBACK_VERSION }}
+        run: |
+          [[ "$WX_FALLBACK_VERSION" =~ ^[0-9a-f]{40}$ ]]
+          docker pull --platform linux/amd64 "${ACR_IMAGE}:wx-${WX_FALLBACK_VERSION}"
+          docker tag "${ACR_IMAGE}:wx-${WX_FALLBACK_VERSION}" \
+            "${ACR_IMAGE}:wx-${{ github.sha }}"
+          docker push "${ACR_IMAGE}:wx-${{ github.sha }}"
       - name: 镜像 PostgreSQL 和 Redis
         run: |
           docker pull --platform linux/amd64 postgres:16

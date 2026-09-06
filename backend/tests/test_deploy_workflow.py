@@ -79,6 +79,25 @@ def test_verify_job_gates_contract_worker_backend_frontend_and_miniapp_without_m
     assert '"paddlepaddle' not in dev_dependencies
 
 
+def test_production_workflow_keeps_last_wx_image_when_public_asset_domain_is_missing():
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    verify_job, publish_job = workflow.split("  publish:\n", 1)
+
+    assert (
+        "TARO_APP_ASSET_BASE_URL: "
+        "${{ vars.TARO_APP_ASSET_BASE_URL || "
+        "'https://assets.example.invalid/motioncare/static-assets' }}"
+    ) in verify_job
+    assert "if: ${{ vars.TARO_APP_ASSET_BASE_URL != '' }}" in publish_job
+    assert "if: ${{ vars.TARO_APP_ASSET_BASE_URL == '' }}" in publish_job
+    assert "WX_FALLBACK_VERSION: ${{ vars.WX_FALLBACK_VERSION }}" in publish_job
+    assert '[[ "$WX_FALLBACK_VERSION" =~ ^[0-9a-f]{40}$ ]]' in publish_job
+    assert "grep -Eq '^[0-9a-f]{40}$'" not in publish_job
+    assert 'docker pull --platform linux/amd64 "${ACR_IMAGE}:wx-${WX_FALLBACK_VERSION}"' in publish_job
+    assert 'docker tag "${ACR_IMAGE}:wx-${WX_FALLBACK_VERSION}"' in publish_job
+    assert '"${ACR_IMAGE}:wx-${{ github.sha }}"' in publish_job
+
+
 def test_backend_image_installs_contract_before_backend_without_inference_dependencies():
     dockerfile = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
 
