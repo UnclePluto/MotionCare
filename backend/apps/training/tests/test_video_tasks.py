@@ -1,3 +1,4 @@
+import hashlib
 from datetime import timedelta
 from unittest.mock import Mock
 
@@ -7,6 +8,8 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError
 from django.utils import timezone
 from kombu.serialization import dumps
+from motion_analysis_contract import PROTOCOL_VERSION
+from rest_framework.test import APIClient
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.training.models import (
@@ -19,6 +22,25 @@ from apps.training.models import (
 )
 from apps.training.video_assembly import AssemblyResult, VideoProbe
 from apps.training.video_staging import segment_path, session_root
+
+
+@pytest.fixture(
+    params=[
+        ("motion-resistance-shoulder-press", "shoulder-press-v2", "shoulder-press-v2-defaults"),
+        ("motion-balance-sit-stand", "sit-stand-v1", "sit-stand-v1-relaxed-stand-up"),
+        ("motion-resistance-row", "seated-row-v1", "seated-row-v1-relaxed"),
+        ("motion-resistance-leg-kickback", "leg-kickback-v1", "leg-kickback-v1-relaxed"),
+    ],
+    ids=["shoulder-press", "sit-stand", "seated-row", "leg-kickback"],
+)
+def supported_analysis_capability(request):
+    source_key, rule_version, parameter_version = request.param
+    return {
+        "action_source_key": source_key,
+        "algorithm_version": "PP-TinyPose_128x96",
+        "rule_version": rule_version,
+        "parameter_version": parameter_version,
+    }
 
 
 def _video_tasks():
@@ -73,8 +95,8 @@ def test_video_assembly_task_returns_json_serializable_job_summary(
     dumps(result, serializer="json")
 
 
-def _shoulder_press_action(prescription):
-    item = ActionLibraryItem.objects.get(source_key="motion-resistance-shoulder-press")
+def _motion_action(prescription, source_key="motion-resistance-shoulder-press"):
+    item = ActionLibraryItem.objects.get(source_key=source_key)
     return prescription.add_action_snapshot(
         item,
         weekly_frequency="2 次/周",
@@ -91,8 +113,9 @@ def _pending_job(
     duration=61,
     segment_count=2,
     segment_duration_ms=None,
+    source_key="motion-resistance-shoulder-press",
 ):
-    action = _shoulder_press_action(active_prescription)
+    action = _motion_action(active_prescription, source_key)
     video = TrainingVideo.objects.create(
         project_patient=project_patient,
         prescription=active_prescription,
@@ -174,11 +197,16 @@ def test_attaching_supported_video_creates_one_pending_analysis_job(
     active_prescription,
     tmp_path,
     settings,
+    supported_analysis_capability,
 ):
     settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
     settings.QINIU_BUCKET = "motioncare-training"
     settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
-    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    capability = supported_analysis_capability
+    video, video_job = _pending_job(
+        project_patient, active_prescription, tmp_path,
+        source_key=capability["action_source_key"],
+    )
     _mark_assembly_job_running(video_job)
     result = _assembly_result(video)
     metadata = _remote_metadata(result)
@@ -207,11 +235,11 @@ def test_attaching_supported_video_creates_one_pending_analysis_job(
     assert jobs.count() == 1
     job = jobs.get()
     assert job.status == MotionAnalysisJob.Status.PENDING
-    assert job.action_source_key == "motion-resistance-shoulder-press"
+    assert job.action_source_key == capability["action_source_key"]
     assert job.algorithm_name == "pp-tiny-pose"
     assert job.algorithm_version == "PP-TinyPose_128x96"
-    assert job.rule_version == "shoulder-press-v2"
-    assert job.parameter_version == "shoulder-press-v2-defaults"
+    assert job.rule_version == capability["rule_version"]
+    assert job.parameter_version == capability["parameter_version"]
     assert job.subject_tracker_version == "primary-subject-v1"
     assert job.skeleton_bucket == "motioncare-training"
     assert job.skeleton_object_key.startswith(
@@ -219,6 +247,131 @@ def test_attaching_supported_video_creates_one_pending_analysis_job(
     )
     assert job.skeleton_object_key.endswith("/skeleton.mp4")
     assert job.skeleton_object_key == original_skeleton_key
+
+
+@pytest.mark.django_db
+def test_attached_supported_action_completes_and_exposes_private_skeleton_to_doctor(
+    project_patient,
+    active_prescription,
+    doctor,
+    tmp_path,
+    settings,
+    monkeypatch,
+    supported_analysis_capability,
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "motioncare-training"
+    settings.QINIU_ACCESS_KEY = "ak-test"
+    settings.QINIU_SECRET_KEY = "sk-test"
+    settings.QINIU_DOWNLOAD_DOMAIN = "https://private.example.com"
+    settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
+    settings.PP_MCARE_SERVICE_TOKEN_SHA256 = hashlib.sha256(b"machine-secret").hexdigest()
+    capability = supported_analysis_capability
+    video, video_job = _pending_job(
+        project_patient, active_prescription, tmp_path,
+        source_key=capability["action_source_key"],
+    )
+    _mark_assembly_job_running(video_job)
+    result = _assembly_result(video)
+    video.size_bytes = result.size_bytes
+    video.duration_seconds = result.probe.duration_seconds
+    video.content_type = "video/mp4"
+    video.save()
+    _video_tasks().attach_training_video(
+        video_job.id,
+        result,
+        _remote_metadata(result),
+        lease_attempt=video_job.attempt_count,
+        object_key=video_job.qiniu_object_key,
+    )
+    job = MotionAnalysisJob.objects.get(training_video=video)
+    machine = APIClient()
+    machine.credentials(HTTP_AUTHORIZATION="Bearer machine-secret")
+    claim_url = "/api/internal/motion-analysis/jobs/claim/"
+    claim_body = {
+        "protocol_version": PROTOCOL_VERSION,
+        "worker_id": "worker-actions",
+        "capabilities": [capability],
+    }
+    for field in capability:
+        mismatch = {**capability, field: "unsupported-version-or-action"}
+        rejected = machine.post(
+            claim_url, {**claim_body, "capabilities": [mismatch]},
+            format="json", secure=True,
+        )
+        assert rejected.status_code == 204
+        job.refresh_from_db()
+        assert job.status == MotionAnalysisJob.Status.PENDING
+
+    claimed = machine.post(claim_url, claim_body, format="json", secure=True)
+    assert claimed.status_code == 200, claimed.data
+    assert claimed.data["job_id"] == job.id
+    for field, expected in capability.items():
+        assert claimed.data[field] == expected
+    assert claimed.data["subject_tracker_version"] == "primary-subject-v1"
+    assert claimed.data["upload"]["object_key"] == job.skeleton_object_key
+    client = APIClient()
+    client.force_authenticate(doctor)
+    latest_url = f"/api/training/videos/{video.id}/analysis-jobs/latest/"
+    assert client.get(latest_url).data["skeleton_available"] is False
+
+    skeleton_hash = "F" + "a" * 27
+
+    def remote_stat(*, bucket, key):
+        assert bucket == job.skeleton_bucket
+        assert key == job.skeleton_object_key
+        return {"hash": skeleton_hash, "fsize": 2048, "mimeType": "video/mp4"}
+
+    monkeypatch.setattr("apps.training.motion_analysis_storage.stat_object_metadata", remote_stat)
+    completion_body = {
+        "protocol_version": PROTOCOL_VERSION,
+        "lease_token": claimed.data["lease_token"],
+        "idempotency_key": "complete-actions-001",
+        "algorithm_version": "PP-TinyPose_128x96",
+        "rule_version": capability["rule_version"],
+        "parameter_version": capability["parameter_version"],
+        "subject_tracker_version": "primary-subject-v1",
+        "total_count": 12,
+        "standard_count": 10,
+        "nonstandard_count": 2,
+        "quality_summary": {"confidence_level": 0.98, "quality_flags": []},
+        "result_payload": {"frames_decoded": 1830},
+        "skeleton": {
+            "bucket": job.skeleton_bucket,
+            "object_key": job.skeleton_object_key,
+            "object_hash": skeleton_hash,
+            "size_bytes": 2048,
+            "duration_seconds": 61.0,
+            "width": 640,
+            "height": 480,
+            "fps": 30.0,
+            "content_type": "video/mp4",
+        },
+    }
+    completed = machine.post(
+        f"/api/internal/motion-analysis/jobs/{job.id}/complete/",
+        completion_body, format="json", secure=True,
+    )
+    assert completed.status_code == 200, completed.data
+    job.refresh_from_db()
+    record = job.training_record
+    assert job.status == MotionAnalysisJob.Status.SUCCEEDED
+    assert (job.total_count, job.standard_count, job.nonstandard_count) == (12, 10, 2)
+    assert (record.motion_total_count, record.motion_standard_count,
+            record.motion_nonstandard_count) == (12, 10, 2)
+    assert record.motion_result_source == "algorithm"
+    assert record.motion_quality_data == completion_body["quality_summary"]
+    assert record.motion_result_updated_by is None
+    assert job.result_payload == {"frames_decoded": 1830}
+    latest = client.get(latest_url)
+    assert latest.data["status"] == "succeeded"
+    assert latest.data["skeleton_available"] is True
+    skeleton = client.get(f"{latest_url}skeleton-url/")
+    assert skeleton.status_code == 200, skeleton.data
+    assert skeleton.data["url"].startswith(
+        f"https://private.example.com/{job.skeleton_object_key}?e="
+    )
+    assert "token=ak-test:" in skeleton.data["url"]
 
 
 @pytest.mark.django_db
@@ -260,11 +413,15 @@ def test_repeated_attach_keeps_existing_failed_analysis_job(
     active_prescription,
     tmp_path,
     settings,
+    supported_analysis_capability,
 ):
     settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
     settings.QINIU_BUCKET = "motioncare-training"
     settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = True
-    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    video, video_job = _pending_job(
+        project_patient, active_prescription, tmp_path,
+        source_key=supported_analysis_capability["action_source_key"],
+    )
     _mark_assembly_job_running(video_job)
     result = _assembly_result(video)
     metadata = _remote_metadata(result)
@@ -300,11 +457,15 @@ def test_auto_enqueue_disabled_does_not_create_analysis_job(
     active_prescription,
     tmp_path,
     settings,
+    supported_analysis_capability,
 ):
     settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
     settings.QINIU_BUCKET = "motioncare-training"
     settings.PP_MCARE_AUTO_ENQUEUE_ENABLED = False
-    video, video_job = _pending_job(project_patient, active_prescription, tmp_path)
+    video, video_job = _pending_job(
+        project_patient, active_prescription, tmp_path,
+        source_key=supported_analysis_capability["action_source_key"],
+    )
     _mark_assembly_job_running(video_job)
     result = _assembly_result(video)
 

@@ -49,6 +49,14 @@ _APPROVED_CAPABILITY = WorkerCapability(
     rule_version="shoulder-press-v2",
     parameter_version="shoulder-press-v2-defaults",
 )
+_APPROVED_CAPABILITIES = (_APPROVED_CAPABILITY,) + tuple(
+    WorkerCapability(source, "PP-TinyPose_128x96", rule, parameters)
+    for source, rule, parameters in (
+        ("motion-balance-sit-stand", "sit-stand-v1", "sit-stand-v1-relaxed-stand-up"),
+        ("motion-resistance-row", "seated-row-v1", "seated-row-v1-relaxed"),
+        ("motion-resistance-leg-kickback", "leg-kickback-v1", "leg-kickback-v1-relaxed"),
+    )
+)
 _TRUSTED_PATH_BASE = Path("/opt/motioncare-analysis")
 _DIRECTORY_OPERATION_HOOK: Callable[[Path], None] | None = None
 
@@ -211,23 +219,32 @@ def _validate_integer_value(
 def _parse_capabilities(environ: Mapping[str, str]) -> tuple[WorkerCapability, ...]:
     raw = environ.get("PP_MCARE_CAPABILITIES")
     if raw is None:
-        return (_APPROVED_CAPABILITY,)
+        return _APPROVED_CAPABILITIES
     try:
         decoded = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         raise ConfigurationError("PP_MCARE_CAPABILITIES 必须是有效 JSON") from None
-    if not isinstance(decoded, list) or len(decoded) != 1 or not isinstance(decoded[0], dict):
+    if not isinstance(decoded, list) or not 1 <= len(decoded) <= len(_APPROVED_CAPABILITIES):
         raise ConfigurationError("PP_MCARE_CAPABILITIES 必须只包含已批准能力")
     expected_fields = set(_APPROVED_CAPABILITY.to_dict())
-    if set(decoded[0]) != expected_fields:
+    if any(not isinstance(item, dict) or set(item) != expected_fields for item in decoded):
         raise ConfigurationError("PP_MCARE_CAPABILITIES 字段无效")
     try:
-        capability = WorkerCapability.from_dict(decoded[0])
+        capabilities = tuple(WorkerCapability.from_dict(item) for item in decoded)
     except (TypeError, ValueError):
         raise ConfigurationError("PP_MCARE_CAPABILITIES 内容无效") from None
-    if capability != _APPROVED_CAPABILITY:
-        raise ConfigurationError("PP_MCARE_CAPABILITIES 与已批准能力不一致")
-    return (capability,)
+    _validate_capabilities(capabilities)
+    return capabilities
+
+
+def _validate_capabilities(capabilities):
+    if (
+        not isinstance(capabilities, tuple)
+        or not 1 <= len(capabilities) <= len(_APPROVED_CAPABILITIES)
+        or any(c not in _APPROVED_CAPABILITIES for c in capabilities)
+        or len(set(capabilities)) != len(capabilities)
+    ):
+        raise ConfigurationError("worker 能力必须是无重复的已批准能力")
 
 
 @dataclass(frozen=True, repr=False)
@@ -244,7 +261,7 @@ class Settings:
     write_timeout_seconds: int = 30
     pool_timeout_seconds: int = 5
     protocol_version: str = PROTOCOL_VERSION
-    capabilities: tuple[WorkerCapability, ...] = (_APPROVED_CAPABILITY,)
+    capabilities: tuple[WorkerCapability, ...] = _APPROVED_CAPABILITIES
 
     def __post_init__(self) -> None:
         if not isinstance(self.api_base_url, str):
@@ -296,8 +313,7 @@ class Settings:
             _validate_integer_value(value, name, minimum=minimum, maximum=maximum)
         if self.protocol_version != PROTOCOL_VERSION:
             raise ConfigurationError("协议版本必须来自共享契约")
-        if self.capabilities != (_APPROVED_CAPABILITY,):
-            raise ConfigurationError("worker 能力必须精确匹配已批准能力")
+        _validate_capabilities(self.capabilities)
 
     def __repr__(self) -> str:
         return (

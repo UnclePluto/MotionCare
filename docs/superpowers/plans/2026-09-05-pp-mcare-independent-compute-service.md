@@ -5,6 +5,7 @@
 > 状态：implementing
 > 日期：2026-09-05
 > 执行记录（2026-09-06, codex）：Tasks 1–14 已落地；Task 15 Step 1–4 与算法服务器候选安装/固定视频回归已落地至 `bf7682f`，业务控制面生产部署、token/AUTO 启用和七牛端到端验收待授权。
+> 部署记录（2026-09-06, codex）：用户已授权生产部署和令牌摘要同步；业务端 `46fe29d` 经 Actions `34009512769` 部署成功，生产容器健康检查通过。Task 15 Step 5–6 已完成；11:59 首次正常 claim 返回 204，算法服务 enabled/active、重启次数 0、空轮询间隔 900 秒、任务缓存为空；12:00 自动建任务开关 true 已部署。患者 H5 因公共素材域名未配置沿用已发布版本。Step 7 的真实七牛端到端与医生修改验收仍待一条新上传的测试训练视频，未将固定视频本地回归等同于生产端到端验收。
 
 **Goal:** 把现有 PP-TinyPose 全帧肩部推举能力迁移为部署在独立服务器的 `pp-mcare` 串行服务，实现自动领取、主训练者骨架视频、训练记录回写和医生修正闭环。
 
@@ -1340,11 +1341,11 @@ Run: `cd miniapp && npm run test && npm run build:weapp && npm run build:h5`
 
 Expected: 所有测试和构建通过；lint 无 error；没有未生成 migration。
 
-- [ ] **Step 5: 先部署业务控制面但保持自动建任务关闭**
+- [x] **Step 5: 先部署业务控制面但保持自动建任务关闭**
 
 生成高熵机器 token；明文只配置到算法服务器的受限环境文件，业务服务器只配置 `PP_MCARE_SERVICE_TOKEN_SHA256`。先部署 migration、内部 API、医生端 API 和前端，设置 `PP_MCARE_AUTO_ENQUEUE_ENABLED=false`，验证无 token 为 403、正确 token 的空队列 claim 为 204，并确认既有训练记录没有被批量补任务。
 
-- [ ] **Step 6: 在独立算法服务器安装候选版本**
+- [x] **Step 6: 在独立算法服务器安装候选版本**
 
 先保存当前 `/opt/motioncare-analysis/app` 版本信息，不删除历史 app、模型缓存和脱敏报告。使用明确提交 SHA 生成归档并调用 `install-release.sh`，配置机器 token 后：
 
@@ -1355,6 +1356,8 @@ ssh mcare-pp 'sudo systemctl daemon-reload && sudo systemctl enable --now pp-mca
 Expected: 服务以 `motioncare-analysis` 用户运行；没有监听业务端口；日志显示启动后立即 claim，空队列后等待 900 秒；此时尚未自动产生新任务。
 
 - [ ] **Step 7: 启用自动建任务并执行真实 90 次视频端到端验收**
+
+执行进度（2026-09-06）：自动建任务已启用，部署日志确认 `PP_MCARE_AUTO_ENQUEUE_ENABLED: true`。真实七牛视频处理、骨架回传和医生修改验收未执行，本步骤保持未完成。
 
 在业务服务器设置 `PP_MCARE_AUTO_ENQUEUE_ENABLED=true` 并滚动重启业务进程；只对启用后的新视频创建分析任务，不扫描或重投历史记录。
 

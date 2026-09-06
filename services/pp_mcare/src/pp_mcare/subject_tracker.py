@@ -55,9 +55,22 @@ class TrackedPoseFrame:
     def to_action_frame(self) -> PoseFrame | None:
         if self.primary is None:
             return None
+        if self.frame.image is None:
+            return PoseFrame(self.frame.timestamp_ms, self.primary.named_keypoints)
+        named = dict(self.primary.named_keypoints)
+        # Tracking remains on the original eight points; only the action input
+        # gains lower-body points. This preserves the deployed tracker identity.
+        height, width = self.frame.image.shape[:2]
+        for name, index in (
+            ("left_knee", 13), ("right_knee", 14),
+            ("left_ankle", 15), ("right_ankle", 16),
+        ):
+            x, y, score = self.primary.raw_keypoints[index]
+            named[name] = (max(0, min(1, x / width)), max(0, min(1, y / height)), score)
         return PoseFrame(
             timestamp_ms=self.frame.timestamp_ms,
-            named_keypoints=self.primary.named_keypoints,
+            named_keypoints=named,
+            coordinate_aspect_ratio=width / height,
         )
 
 

@@ -142,7 +142,8 @@ def test_claim_uses_fixed_https_path_bearer_and_shared_capability_contract():
         requests.append(request)
         return httpx.Response(200, json=CLAIM_RESPONSE)
 
-    client = MotionCareClient(settings(), transport=httpx.MockTransport(handler))
+    configured = settings()
+    client = MotionCareClient(configured, transport=httpx.MockTransport(handler))
 
     job = client.claim()
 
@@ -156,7 +157,7 @@ def test_claim_uses_fixed_https_path_bearer_and_shared_capability_contract():
     assert json.loads(request.content) == {
         "worker_id": "worker-1",
         "protocol_version": PROTOCOL_VERSION,
-        "capabilities": [CAPABILITY],
+        "capabilities": [capability.to_dict() for capability in configured.capabilities],
     }
 
 

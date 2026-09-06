@@ -209,6 +209,26 @@ def _install_pipeline_fakes(monkeypatch, stream, plugin):
     return pipeline
 
 
+def test_new_plugins_receive_missing_frames_and_their_selected_pose_model(monkeypatch, tmp_path):
+    stream = FakePoseStream([_frame(0, (_person(),)), _frame(1, ()), _frame(2, (_person(),))])
+    plugin = RecordingPlugin()
+    plugin.preserve_missing_frames = True
+    pipeline = _install_pipeline_fakes(monkeypatch, stream, plugin)
+    sentinel = object()
+    monkeypatch.setattr(pipeline, "pose_stream_options", lambda selected: {"model": sentinel})
+
+    def open_stream(path, *, model):
+        assert model is sentinel
+        return stream
+
+    monkeypatch.setattr(pipeline, "open_full_frame_pose_stream", open_stream)
+    result = pipeline.run_local_pipeline(
+        _job(), tmp_path / "input.mp4", tmp_path / "output.mp4", lambda _: None
+    )
+    assert plugin.timestamps == [0, 40, 80]
+    assert result.decoded_frame_count == 3
+
+
 def test_pipeline_uses_one_full_frame_stream_for_counting_and_video(monkeypatch, tmp_path):
     frames = [_frame(index, (_person(center_x=0.5 + index * 0.001),)) for index in range(3)]
     stream = FakePoseStream(frames)

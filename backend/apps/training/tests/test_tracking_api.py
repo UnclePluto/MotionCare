@@ -1499,7 +1499,7 @@ def test_tracking_recent_records_expose_video_and_analysis_capability_for_all_mo
         recent = recent_by_source_key[source_key]
         assert recent["video_id"] is not None
         assert recent["video_status"] == TrainingVideo.Status.ATTACHED
-        assert recent["analysis_available"] is (source_key == "motion-resistance-shoulder-press")
+        assert recent["analysis_available"] is (source_key != "motion-aerobic-high-knee")
 
 
 @pytest.mark.django_db

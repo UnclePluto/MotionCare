@@ -19,6 +19,14 @@ EXPECTED_CAPABILITY = WorkerCapability(
     rule_version="shoulder-press-v2",
     parameter_version="shoulder-press-v2-defaults",
 )
+EXPECTED_CAPABILITIES = (EXPECTED_CAPABILITY,) + tuple(
+    WorkerCapability(source, "PP-TinyPose_128x96", rule, parameters)
+    for source, rule, parameters in (
+        ("motion-balance-sit-stand", "sit-stand-v1", "sit-stand-v1-relaxed-stand-up"),
+        ("motion-resistance-row", "seated-row-v1", "seated-row-v1-relaxed"),
+        ("motion-resistance-leg-kickback", "leg-kickback-v1", "leg-kickback-v1-relaxed"),
+    )
+)
 
 
 def valid_env(tmp_path):
@@ -57,7 +65,7 @@ def test_settings_builds_exact_approved_capability_and_private_work_root(tmp_pat
 
     assert settings.api_base_url == "https://motioncare.example"
     assert settings.protocol_version == PROTOCOL_VERSION
-    assert settings.capabilities == (EXPECTED_CAPABILITY,)
+    assert settings.capabilities == EXPECTED_CAPABILITIES
     assert settings.poll_interval_seconds == 900
     assert settings.network_attempts == 3
     assert stat.S_IMODE(settings.work_root.stat().st_mode) == 0o700
@@ -180,6 +188,35 @@ def test_settings_accepts_only_the_exact_explicit_approved_capability(tmp_path):
     }
 
     assert from_env(tmp_path, env).capabilities == (EXPECTED_CAPABILITY,)
+
+
+def test_settings_accepts_all_approved_plugins_and_controlled_subset(tmp_path):
+    from pp_mcare.registry import get_action_plugin
+
+    for capabilities in (EXPECTED_CAPABILITIES, EXPECTED_CAPABILITIES[1:]):
+        env = valid_env(tmp_path) | {
+            "PP_MCARE_CAPABILITIES": json.dumps([c.to_dict() for c in capabilities])
+        }
+        configured = from_env(tmp_path, env).capabilities
+        assert configured == capabilities
+        for c in configured:
+            assert (
+                get_action_plugin(
+                    c.action_source_key, c.algorithm_version, c.rule_version, c.parameter_version
+                )
+                is not None
+            )
+
+
+def test_settings_rejects_duplicate_new_action_and_unimplemented_high_knee(tmp_path):
+    for capabilities in (
+        [EXPECTED_CAPABILITIES[1].to_dict()] * 2,
+        [{**EXPECTED_CAPABILITIES[1].to_dict(), "action_source_key": "motion-aerobic-high-knee"}],
+    ):
+        with pytest.raises(ConfigurationError):
+            from_env(
+                tmp_path, valid_env(tmp_path) | {"PP_MCARE_CAPABILITIES": json.dumps(capabilities)}
+            )
 
 
 def test_settings_repr_never_contains_machine_token(tmp_path):

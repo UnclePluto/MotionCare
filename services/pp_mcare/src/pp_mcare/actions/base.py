@@ -57,10 +57,17 @@ def _to_json_value(value: object) -> JsonValue:
 class PoseFrame:
     timestamp_ms: int
     named_keypoints: Mapping[str, tuple[float, float, float]]
+    coordinate_aspect_ratio: float = 1.0
 
     __hash__ = None
 
     def __post_init__(self) -> None:
+        ratio = self.coordinate_aspect_ratio
+        if (
+            isinstance(ratio, bool) or not isinstance(ratio, (int, float))
+            or not math.isfinite(ratio) or ratio <= 0
+        ):
+            raise ActionDataValidationError("坐标宽高比必须是有限正数")
         if isinstance(self.timestamp_ms, bool) or not isinstance(self.timestamp_ms, int):
             raise ActionDataValidationError("timestamp_ms 必须是整数")
         if not isinstance(self.named_keypoints, Mapping):

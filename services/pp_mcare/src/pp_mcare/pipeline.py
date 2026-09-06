@@ -19,6 +19,7 @@ from .actions.base import AnalysisResult, PoseFrame
 from .media import SkeletonVideoEncoder, VideoMetadata, probe_source_video
 from .paddle_visualize_pose import render_primary_pose
 from .pose_inference import open_full_frame_pose_stream
+from .pose_refinement import pose_stream_options
 from .registry import get_action_plugin
 from .subject_tracker import PrimarySubjectTracker, SUBJECT_TRACKER_VERSION
 
@@ -213,7 +214,7 @@ def run_local_pipeline(
     render_seconds = 0.0
 
     try:
-        with open_full_frame_pose_stream(input_path) as pose_stream:
+        with open_full_frame_pose_stream(input_path, **pose_stream_options(plugin)) as pose_stream:
 
             def action_frames() -> Iterator[PoseFrame]:
                 nonlocal encoder, action_stream_completed, render_seconds
@@ -245,6 +246,12 @@ def run_local_pipeline(
                     action_frame = tracked.to_action_frame()
                     if action_frame is not None:
                         yield action_frame
+                    elif getattr(plugin, "preserve_missing_frames", False):
+                        yield PoseFrame(
+                            timestamp_ms=inference_frame.timestamp_ms,
+                            named_keypoints={},
+                            coordinate_aspect_ratio=width / height,
+                        )
                 action_stream_completed = True
 
             frames = _OneShotActionFrames(action_frames())
