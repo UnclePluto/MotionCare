@@ -358,9 +358,8 @@ def test_assemble_video_rejects_real_probeable_but_corrupted_h264(tmp_path):
     payload = bytearray(corrupted.read_bytes())
     mdat = payload.find(b"mdat")
     assert mdat > 0
-    corrupt_start = mdat + 8 + len(payload[mdat + 8 :]) // 3
-    for index in range(corrupt_start, min(corrupt_start + 5000, len(payload))):
-        payload[index] ^= 0xFF
+    media_start = mdat + len(b"mdat")
+    payload[media_start:] = b"\xff" * (len(payload) - media_start)
     corrupted.write_bytes(payload)
     probe_video(corrupted, ffprobe_path=ffprobe_path, timeout=30)
 
