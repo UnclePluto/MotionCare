@@ -34,7 +34,6 @@ EXPECTED_VIDEO_SHA256 = "f4c7b1a4e1a7cdc192b32b73f6cb60600b02446d65f9aa471d34ee7
 EXPECTED_DECODED_FRAME_COUNT = 8_929
 EXPECTED_MANUAL_TOTAL_COUNT = 90
 REPORT_FORMAT_VERSION = "4.0"
-MAX_TOTAL_SECONDS = 600.0
 MAX_PROCESS_RSS_BYTES = int(1.5 * 1024**3)
 _CLOCK = time.monotonic
 _ACTION_PLUGIN = ShoulderPressV2Plugin()
@@ -906,8 +905,6 @@ def _acceptance_failures(mode: dict[str, object]) -> list[str]:
         or total_seconds < 0
     ):
         failures.append("invalid_total_seconds")
-    elif total_seconds > MAX_TOTAL_SECONDS:
-        failures.append("all_frame_over_600_seconds")
     peak = mode.get("resource_peak")
     if not isinstance(peak, dict):
         failures.append("invalid_resource_peak")

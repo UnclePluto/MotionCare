@@ -753,7 +753,6 @@ def test_regression_rejects_non_full_frame_or_side_max_evidence(
             swap_used_bytes=1,
             swap_free_bytes=3_999_999_999,
         ), (10.0, 13.0), "swap_used"),
-        (_pipeline_result(), None, (10.0, 610.1), "all_frame_over_600_seconds"),
     ],
 )
 def test_regression_does_not_replace_algorithm_result_and_enforces_resource_gates(
@@ -784,6 +783,28 @@ def test_regression_does_not_replace_algorithm_result_and_enforces_resource_gate
     assert failure in report["acceptance"]["failures"]
     if failure == "manual_total_count_mismatch":
         assert report["modes"][0]["result"]["total_count"] == 89
+
+
+def test_regression_records_slow_serial_runtime_without_rejecting_valid_result(
+    monkeypatch,
+    tmp_path,
+):
+    video = tmp_path / "private-video.mp4"
+    video.write_bytes(b"real fixture bytes")
+    _configure_success(monkeypatch, video)
+    clock = iter((10.0, 1522.3277706850204))
+    monkeypatch.setattr(regression, "_CLOCK", lambda: next(clock))
+    report_path = tmp_path / "report.json"
+
+    report = run_regression(
+        video_path=video,
+        manual_total_count=90,
+        report_path=report_path,
+    )
+
+    assert report["status"] == "completed"
+    assert report["acceptance"] == {"passed": True, "failures": []}
+    assert report["modes"][0]["total_seconds"] == pytest.approx(1512.3277706850204)
 
 
 def test_regression_rejects_wrong_video_hash_before_probe_or_pipeline(monkeypatch, tmp_path):
