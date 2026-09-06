@@ -158,7 +158,9 @@ describe("WearableBindingPanel", () => {
     expect(screen.queryByRole("button", { name: "让设备响铃" })).not.toBeInTheDocument();
     expect(mockPost).toHaveBeenCalledWith("/wearables/project-patients/12/bind/", { short_code: "0826" });
     expect(mockPost).toHaveBeenCalledWith("/wearables/devices/7/check-status/");
-    expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    });
   });
 
   it("组合片段在未绑定时通过共享 Provider 打开绑定弹窗", async () => {
@@ -207,7 +209,9 @@ describe("WearableBindingPanel", () => {
       );
     });
     expect(await screen.findByText(/设备简码：0826/)).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    });
     expect(screen.getByRole("button", { name: "确认绑定" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "强制提交绑定" }));
 
@@ -230,7 +234,9 @@ describe("WearableBindingPanel", () => {
       );
     });
     expect(await screen.findByText(/设备简码：0826/)).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "绑定穿戴设备" })).toHaveClass("ant-zoom-leave");
+    });
 
     act(() => {
       queryClient.setQueryData<ProjectPatientWearableBinding>(
