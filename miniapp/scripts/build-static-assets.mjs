@@ -10,6 +10,7 @@ try {
   const result = await buildStaticAssets({
     projectRoot,
     outputRoot: join(projectRoot, 'output', 'static-assets'),
+    backendManifestRoot: join(projectRoot, '..', 'backend', 'apps', 'common', 'miniapp_static_asset_manifests'),
     check,
   })
   console.log(`${check ? 'checked' : 'built'} ${result.entries.length} static assets (${result.assetVersion})`)

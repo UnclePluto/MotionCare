@@ -74,6 +74,12 @@ function motionAudioManifest(entries) {
   return `// 此文件由 scripts/build-static-assets.mjs 自动生成，请勿手动修改。\nimport type { MotionSourceKey } from './catalog'\n\nexport const MOTION_INSTRUCTION_AUDIO_ASSET_PATHS: Record<MotionSourceKey, string> = {\n${paths}\n}\n`
 }
 
+function completeClientManifest(assetVersion, entries) {
+  return '// 此文件由 scripts/build-static-assets.mjs 自动生成，请勿手动修改。\n' +
+    'export const STATIC_ASSET_MANIFEST = ' +
+    JSON.stringify({ assetVersion, entries }, null, 2) + ' as const\n'
+}
+
 async function exists(path) {
   try {
     await access(path)
@@ -169,10 +175,15 @@ async function assertVersionDirectory(versionDirectory, entries, manifest) {
 /**
  * 构建静态素材，并生成供 CDN 上传和运行时接线使用的确定性清单。
  *
- * @param {{ projectRoot: string, outputRoot: string, check: boolean }} options
+ * @param {{ projectRoot: string, outputRoot: string, check: boolean, backendManifestRoot?: string }} options
  * @returns {Promise<StaticAssetBuildResult>}
  */
-export async function buildStaticAssets({ projectRoot, outputRoot, check }) {
+export async function buildStaticAssets({
+  projectRoot,
+  outputRoot,
+  check,
+  backendManifestRoot = join(dirname(projectRoot), 'backend', 'apps', 'common', 'miniapp_static_asset_manifests'),
+}) {
   const buildEntriesWithContent = await buildEntries(projectRoot)
   const assetVersion = assetVersionFor(buildEntriesWithContent)
   const entriesWithContent = buildEntriesWithContent.map((entry) => ({
@@ -185,14 +196,17 @@ export async function buildStaticAssets({ projectRoot, outputRoot, check }) {
   const manifestPath = join(versionDirectory, 'manifest.json')
   const currentVersionPath = join(outputRoot, 'current-version.txt')
   const expectedCurrentVersion = assetVersion
+  const backendPath = join(backendManifestRoot, `${assetVersion}.json`)
   const generatedFiles = [
     [join(projectRoot, 'src', 'pages', 'game-session', 'gameImageAssetManifest.generated.ts'), gameImageManifest(entries)],
     [join(projectRoot, 'src', 'features', 'motion-training', 'instructionAudioAssetManifest.generated.ts'), motionAudioManifest(entries)],
+    [join(projectRoot, 'src', 'assets', 'staticAssetManifest.generated.ts'), completeClientManifest(assetVersion, entries)],
   ]
 
   if (check) {
     await assertVersionDirectory(versionDirectory, entriesWithContent, manifest)
     await assertFileEquals(currentVersionPath, expectedCurrentVersion)
+    await assertFileEquals(backendPath, manifest)
     await Promise.all(generatedFiles.map(([path, content]) => assertFileEquals(path, content)))
     return { assetVersion, manifestPath, entries }
   }
@@ -208,6 +222,21 @@ export async function buildStaticAssets({ projectRoot, outputRoot, check }) {
       await rename(join(temporaryRoot, assetVersion), versionDirectory)
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true })
+    }
+  }
+
+  await mkdir(backendManifestRoot, { recursive: true })
+  if (await exists(backendPath)) {
+    await assertFileEquals(backendPath, manifest)
+  } else {
+    try {
+      await writeFile(backendPath, manifest, { flag: 'wx' })
+    } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'EEXIST') {
+        await assertFileEquals(backendPath, manifest)
+      } else {
+        throw error
+      }
     }
   }
 

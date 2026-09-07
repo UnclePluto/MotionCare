@@ -40,6 +40,7 @@ function fixtureOptions() {
   return {
     projectRoot: fixtureRoot,
     outputRoot: join(fixtureRoot, 'output', 'static-assets'),
+    backendManifestRoot: join(fixtureRoot, 'backend-manifests'),
     check: false,
   }
 }
@@ -137,6 +138,28 @@ describe('buildStaticAssets', () => {
     for (const entry of result.entries.filter((item) => item.kind === 'motion-instruction-audio')) {
       expect(audioMap).toContain(entry.relativePath)
       expect(gameMap).not.toContain(entry.key)
+    }
+  })
+
+  it('生成前后端一致的完整清单且拒绝覆盖后端版本', async () => {
+    const options = fixtureOptions()
+    const result = await buildStaticAssets(options)
+    const serverPath = join(options.backendManifestRoot, result.assetVersion + '.json')
+    const original = await readFile(serverPath, 'utf8')
+    expect(JSON.parse(original)).toEqual({
+      assetVersion: result.assetVersion, entries: result.entries,
+    })
+    const clientText = await readFile(
+      join(fixtureRoot, 'src/assets/staticAssetManifest.generated.ts'), 'utf8',
+    )
+    expect(clientText).toContain(JSON.stringify(result.assetVersion))
+    for (const entry of result.entries) expect(clientText).toContain(entry.sha256)
+    try {
+      await writeFile(serverPath, '{"assetVersion":"corrupted","entries":[]}')
+      await expect(buildStaticAssets(options)).rejects.toThrow(/drift/i)
+      await expect(buildStaticAssets({ ...options, check: true })).rejects.toThrow(/drift/i)
+    } finally {
+      await writeFile(serverPath, original)
     }
   })
 
