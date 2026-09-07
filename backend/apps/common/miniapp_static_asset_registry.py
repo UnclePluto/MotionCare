@@ -21,6 +21,8 @@ def _validate_registered_manifest(payload: object, version: str) -> dict:
         raise ValueError("已登记固定素材清单项目格式无效")
 
     keys = [entry.get("key") for entry in entries]
+    if any(not isinstance(key, str) for key in keys):
+        raise ValueError("已登记固定素材清单 key 无效")
     if len(set(keys)) != len(keys) or set(keys) != set(CANONICAL_ASSET_SPECS):
         raise ValueError("已登记固定素材清单 key 无效")
 
