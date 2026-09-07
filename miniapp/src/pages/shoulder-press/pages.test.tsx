@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../../app'
+import { SignedAssetManifestError } from '../../assets/signedAssetManifest'
 import { getPatientAppToken, setPatientAppToken } from '../../auth/token'
 import * as session from '../../demo/session'
 import type { CurrentPrescription } from '../../types/patientApp'
@@ -213,18 +214,18 @@ const alertPlayerHarness = vi.hoisted(() => ({
 }))
 
 const motionInstructionAudioCdnSrc = vi.hoisted(() => ({
-  'motion-aerobic-high-knee': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-aerobic-high-knee.d5650f7b5bee.m4a',
-  'motion-balance-sit-stand': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-balance-sit-stand.b6e32e46d404.m4a',
-  'motion-resistance-row': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-row.4e47b657633b.m4a',
-  'motion-resistance-leg-kickback': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-leg-kickback.725ea66457c3.m4a',
-  'motion-resistance-shoulder-press': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-shoulder-press.3fed2a4235ef.m4a',
+  'motion-aerobic-high-knee': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-aerobic-high-knee.d5650f7b5bee.m4a?e=1800000600&token=fixture%3Asignature',
+  'motion-balance-sit-stand': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-balance-sit-stand.b6e32e46d404.m4a?e=1800000600&token=fixture%3Asignature',
+  'motion-resistance-row': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-row.4e47b657633b.m4a?e=1800000600&token=fixture%3Asignature',
+  'motion-resistance-leg-kickback': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-leg-kickback.725ea66457c3.m4a?e=1800000600&token=fixture%3Asignature',
+  'motion-resistance-shoulder-press': 'https://cdn.example.com/assets/v-3aafe09211fd/motion-resistance-shoulder-press.3fed2a4235ef.m4a?e=1800000600&token=fixture%3Asignature',
 } as const))
 
 const motionInstructionAudioHarness = vi.hoisted(() => ({
   play: vi.fn(async () => true),
   stop: vi.fn(),
   dispose: vi.fn(),
-  getSrc: vi.fn((sourceKey: unknown) => (
+  getSrc: vi.fn(async (sourceKey: unknown): Promise<string | undefined> => (
     typeof sourceKey === 'string' && sourceKey in motionInstructionAudioCdnSrc
       ? motionInstructionAudioCdnSrc[sourceKey as keyof typeof motionInstructionAudioCdnSrc]
       : undefined
@@ -368,8 +369,23 @@ vi.mock('../../features/motion-training/alertAudio', () => ({
     ready: '视频上传已恢复，可以继续训练。'
   }
 }))
+vi.mock('../../assets/signedAssetManifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../assets/signedAssetManifest')>()
+  const { signedAssetFixture } = await import('../../assets/signedAssetFixtures.test-helper')
+  const fixture = signedAssetFixture()
+  return {
+    ...actual,
+    fetchSignedAssetManifest: async () => ({
+      assetVersion: fixture.asset_version,
+      issuedAt: fixture.issued_at,
+      expiresAt: fixture.expires_at,
+      urls: Object.fromEntries(fixture.assets.map((asset) => [asset.key, asset.url])),
+    }),
+  }
+})
 vi.mock('../../features/motion-training/instructionAudioManifest', () => ({
   getMotionInstructionAudioSrc: motionInstructionAudioHarness.getSrc,
+  hasMotionInstructionAudio: (sourceKey: unknown) => typeof sourceKey === 'string' && sourceKey in motionInstructionAudioCdnSrc,
 }))
 
 const PRESCRIPTION: NonNullable<CurrentPrescription> = {
@@ -735,7 +751,7 @@ beforeEach(async () => {
   motionInstructionAudioHarness.play.mockReset().mockResolvedValue(true)
   motionInstructionAudioHarness.stop.mockReset()
   motionInstructionAudioHarness.dispose.mockReset()
-  motionInstructionAudioHarness.getSrc.mockReset().mockImplementation((sourceKey: unknown) => (
+  motionInstructionAudioHarness.getSrc.mockReset().mockImplementation(async (sourceKey: unknown) => (
     typeof sourceKey === 'string' && sourceKey in motionInstructionAudioCdnSrc
       ? motionInstructionAudioCdnSrc[sourceKey as keyof typeof motionInstructionAudioCdnSrc]
       : undefined
@@ -935,6 +951,7 @@ describe('shoulder press pages', () => {
     await flushPromises()
     page.rerender()
     clickButtonByText(page.element, '重新播放说明')
+    await flushPromises()
 
     expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(2)
     page.rerender()
@@ -942,7 +959,7 @@ describe('shoulder press pages', () => {
   })
 
   it('语音失败后保留文字、恢复重播并允许继续训练', async () => {
-    motionInstructionAudioHarness.play.mockResolvedValueOnce(false)
+    motionInstructionAudioHarness.play.mockResolvedValue(false)
     const page = renderPage(ShoulderPressGuidePage)
     await flushPromises()
     page.rerender()
@@ -958,16 +975,18 @@ describe('shoulder press pages', () => {
     })
   })
 
-  it('进入预览、页面隐藏和卸载都会停止或销毁语音', async () => {
+  it('进入预览停止语音，随后隐藏不重复停止，卸载销毁播放器', async () => {
+    motionInstructionAudioHarness.play.mockReturnValueOnce(new Promise<boolean>(() => {}))
     const page = renderPage(ShoulderPressGuidePage)
     await flushPromises()
     page.rerender()
+    motionInstructionAudioHarness.stop.mockClear()
 
     clickButtonByText(page.element, '动作预览')
     expect(motionInstructionAudioHarness.stop).toHaveBeenCalledTimes(1)
 
     taroHarness.hideCallbacks[0]?.()
-    expect(motionInstructionAudioHarness.stop).toHaveBeenCalledTimes(2)
+    expect(motionInstructionAudioHarness.stop).toHaveBeenCalledTimes(1)
 
     page.unmount()
     expect(motionInstructionAudioHarness.dispose).toHaveBeenCalledTimes(1)
@@ -1049,6 +1068,57 @@ describe('shoulder press pages', () => {
     expect(textContent(page.element)).not.toContain('语音播放失败')
   })
 
+  it.each(['隐藏', '卸载', '开始训练', '切换动作'])('签名等待期间%s会阻止迟到签名发声', async (event) => {
+    const signing = deferred<string>()
+    motionInstructionAudioHarness.getSrc.mockReturnValueOnce(signing.promise)
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+    expect(findButtonByText(page.element, '正在播放说明').props.disabled).toBe(true)
+    expect(motionInstructionAudioHarness.getSrc).toHaveBeenCalledTimes(1)
+    expect(motionInstructionAudioHarness.play).not.toHaveBeenCalled()
+    if (event === '隐藏') taroHarness.hideCallbacks[0]?.()
+    if (event === '卸载') page.unmount()
+    if (event === '开始训练') clickButtonByText(page.element, '开始训练')
+    if (event === '切换动作') {
+      requestMock.mockRejectedValueOnce(new Error('新动作加载失败'))
+      taroHarness.routerParams.actionId = '43'
+      page.rerender()
+    }
+    signing.resolve(motionInstructionAudioCdnSrc['motion-resistance-shoulder-press'])
+    await flushPromises()
+    expect(motionInstructionAudioHarness.play).not.toHaveBeenCalled()
+    expect(motionInstructionAudioHarness.getSrc).toHaveBeenCalledTimes(1)
+    if (event !== '卸载') {
+      page.rerender()
+      expect(textContent(page.element)).not.toContain('语音播放失败')
+    }
+    if (event === '隐藏') {
+      taroHarness.showCallbacks[0]?.()
+      await flushPromises()
+      page.rerender()
+      expect(motionInstructionAudioHarness.getSrc).toHaveBeenCalledTimes(1)
+      clickButtonByText(page.element, '重新播放说明')
+      await flushPromises()
+      expect(motionInstructionAudioHarness.play).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('签名不可用时显示文字说明并允许开始训练', async () => {
+    motionInstructionAudioHarness.getSrc.mockRejectedValue(new SignedAssetManifestError(false))
+    const page = renderPage(ShoulderPressGuidePage)
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('语音播放失败，请阅读文字说明')
+    expect(textContent(page.element)).toContain('保持正面，缓慢推举。')
+    expect(motionInstructionAudioHarness.play).not.toHaveBeenCalled()
+    expect(motionInstructionAudioHarness.getSrc).toHaveBeenCalledTimes(1)
+    clickButtonByText(page.element, '开始训练')
+    expect(taroHarness.taroMock.navigateTo).toHaveBeenCalledWith({
+      url: '/pages/motion-training/camera?actionId=42',
+    })
+  })
+
   it('播放器停止异常不阻断动作预览或开始训练导航', async () => {
     motionInstructionAudioHarness.stop.mockImplementation(() => {
       throw new Error('stop failed')
@@ -1069,7 +1139,10 @@ describe('shoulder press pages', () => {
   })
 
   it('无映射动作不播放也不展示语音按钮', async () => {
-    motionInstructionAudioHarness.getSrc.mockReturnValue(undefined)
+    requestMock.mockResolvedValue({
+      ...PRESCRIPTION,
+      actions: PRESCRIPTION.actions.map((action) => ({ ...action, source_key: 'unknown' })),
+    })
     const page = renderPage(ShoulderPressGuidePage)
     await flushPromises()
     page.rerender()

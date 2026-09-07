@@ -5,10 +5,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
 import { isDemoSession } from '../../demo/session'
 import {
-  createMotionTrainingAudioPlayer,
-  type MotionTrainingAudioPlayer
-} from '../../features/motion-training/alertAudio'
-import { getMotionInstructionAudioSrc } from '../../features/motion-training/instructionAudioManifest'
+  createInstructionPlayback,
+  type InstructionPlayback,
+  type InstructionPlaybackResult
+} from '../../features/motion-training/instructionPlayback'
+import { hasMotionInstructionAudio } from '../../features/motion-training/instructionAudioManifest'
 import {
   reLaunchPendingMotionTrainingUploadIfNeeded,
   resolveMotionTrainingAction,
@@ -29,7 +30,7 @@ export default function MotionTrainingPage() {
   const router = useRouter()
   const actionId = Number(router.params.actionId)
   const demoMode = isDemoSession()
-  const instructionPlayerRef = useRef<MotionTrainingAudioPlayer | null>(null)
+  const instructionPlayerRef = useRef<InstructionPlayback | null>(null)
   const pageVisibleRef = useRef(true)
   const visitGenerationRef = useRef(0)
   const loadedActionRef = useRef<{ generation: number; action: MotionTrainingAction } | null>(null)
@@ -43,7 +44,7 @@ export default function MotionTrainingPage() {
   const [instructionAudioError, setInstructionAudioError] = useState('')
 
   if (!instructionPlayerRef.current) {
-    instructionPlayerRef.current = createMotionTrainingAudioPlayer({ timeoutMs: 90_000 })
+    instructionPlayerRef.current = createInstructionPlayback()
   }
 
   const stopInstruction = useCallback(() => {
@@ -58,24 +59,27 @@ export default function MotionTrainingPage() {
   }, [])
 
   const playInstruction = useCallback(async (sourceKey: unknown) => {
-    const src = getMotionInstructionAudioSrc(sourceKey)
-    if (!src) return
+    if (!pageVisibleRef.current || !hasMotionInstructionAudio(sourceKey)) return
+    const generation = visitGenerationRef.current
 
     const attempt = playbackAttemptRef.current + 1
     playbackAttemptRef.current = attempt
     setInstructionAudioError('')
     setInstructionAudioStatus('playing')
 
-    let played = false
+    let result: InstructionPlaybackResult = 'failed'
     try {
-      played = await instructionPlayerRef.current!.play(src)
+      result = await instructionPlayerRef.current!.play(sourceKey)
     } catch {
-      played = false
+      result = 'failed'
     }
 
-    if (playbackAttemptRef.current !== attempt) return
+    if (!pageVisibleRef.current
+      || visitGenerationRef.current !== generation
+      || currentSourceKeyRef.current !== sourceKey
+      || playbackAttemptRef.current !== attempt) return
     setInstructionAudioStatus('played')
-    if (!played) {
+    if (result === 'failed') {
       setInstructionAudioError('语音播放失败，请阅读文字说明')
     }
   }, [])
@@ -95,7 +99,7 @@ export default function MotionTrainingPage() {
 
     if (
       !sourceKey
-      || !getMotionInstructionAudioSrc(sourceKey)
+      || !hasMotionInstructionAudio(sourceKey)
       || autoPlayedSourceKeyRef.current === sourceKey
     ) {
       return
@@ -213,7 +217,7 @@ export default function MotionTrainingPage() {
         {action?.action_instruction ? (
           <Text className='motion-training-action-instruction'>{action.action_instruction}</Text>
         ) : null}
-        {action && getMotionInstructionAudioSrc(action.source_key) ? (
+        {action && hasMotionInstructionAudio(action.source_key) ? (
           <View className='motion-training-instruction-audio-controls'>
             <Button
               className='secondary-button full-button motion-training-instruction-audio-button'

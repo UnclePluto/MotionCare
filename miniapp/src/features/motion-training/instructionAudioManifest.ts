@@ -1,16 +1,15 @@
-import { staticAssetUrl } from '../../assets/staticAssetUrl'
-import { OFFICIAL_MOTION_SOURCE_KEYS, isOfficialMotionSourceKey, type MotionSourceKey } from './catalog'
-import { MOTION_INSTRUCTION_AUDIO_ASSET_PATHS } from './instructionAudioAssetManifest.generated'
+import { fetchSignedAssetManifest } from '../../assets/signedAssetManifest'
+import { isOfficialMotionSourceKey, type MotionSourceKey } from './catalog'
 
-export const MOTION_INSTRUCTION_AUDIO_SRC = Object.fromEntries(
-  OFFICIAL_MOTION_SOURCE_KEYS.map((sourceKey) => [
-    sourceKey,
-    staticAssetUrl(MOTION_INSTRUCTION_AUDIO_ASSET_PATHS[sourceKey]),
-  ]),
-) as Record<MotionSourceKey, string>
-
-export function getMotionInstructionAudioSrc(sourceKey: unknown): string | undefined {
+export function hasMotionInstructionAudio(sourceKey: unknown): sourceKey is MotionSourceKey {
   return isOfficialMotionSourceKey(sourceKey)
-    ? MOTION_INSTRUCTION_AUDIO_SRC[sourceKey]
-    : undefined
+}
+
+export async function getMotionInstructionAudioSrc(
+  sourceKey: unknown,
+  options?: { forceRefresh?: boolean },
+): Promise<string | undefined> {
+  if (!hasMotionInstructionAudio(sourceKey)) return undefined
+  const manifest = await fetchSignedAssetManifest(options)
+  return manifest.urls[sourceKey]
 }
