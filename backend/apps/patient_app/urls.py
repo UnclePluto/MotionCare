@@ -1,5 +1,7 @@
 from django.urls import path
 
+from .static_asset_views import StaticAssetManifestView
+
 from .views import (
     PatientAppActionHistoryView,
     PatientAppBindView,
@@ -16,6 +18,11 @@ from .views import (
 )
 
 urlpatterns = [
+    path(
+        "static-assets/",
+        StaticAssetManifestView.as_view(),
+        name="patient-app-static-assets",
+    ),
     path(
         "wechat-session/",
         PatientAppWechatSessionView.as_view(),

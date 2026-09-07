@@ -123,6 +123,30 @@ def test_production_control_plane_defaults_auto_enqueue_off_and_requires_token_d
     ) in compose
 
 
+def test_production_compose_passes_static_asset_settings_and_keeps_video_settings():
+    compose = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+
+    assert (
+        "MINIAPP_STATIC_ASSET_BASE_URL: "
+        "${MINIAPP_STATIC_ASSET_BASE_URL:-https://cdn.whestsun.com/motioncare/static-assets}"
+    ) in compose
+    assert (
+        "MINIAPP_STATIC_ASSET_URL_TTL_SECONDS: "
+        "${MINIAPP_STATIC_ASSET_URL_TTL_SECONDS:-600}"
+    ) in compose
+    assert "MINIAPP_STATIC_ASSET_RATE_LIMIT_REDIS_URL: *backend-redis-url" in compose
+    assert (
+        "MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS: "
+        "${MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS:-60}"
+    ) in compose
+    assert (
+        "MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS: "
+        "${MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS:-60}"
+    ) in compose
+    assert "QINIU_DOWNLOAD_DOMAIN: ${QINIU_DOWNLOAD_DOMAIN:-}" in compose
+    assert "MOTION_ACTION_VIDEO_DOWNLOAD_DOMAIN:" in compose
+
+
 def test_control_plane_env_script_atomically_sets_digest_and_keeps_auto_disabled(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(

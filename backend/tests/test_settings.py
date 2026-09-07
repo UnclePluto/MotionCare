@@ -9,7 +9,60 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import dotenv_values
 
-from config.environment import env_bool, validate_wechat_miniapp_settings
+from config.environment import (
+    env_bool,
+    validate_miniapp_static_asset_settings,
+    validate_wechat_miniapp_settings,
+)
+
+
+@pytest.mark.parametrize("ttl", [120, 600, 3600, "120", "600", "3600"])
+def test_static_asset_settings_accept_safe_ttl_bounds(ttl):
+    assert validate_miniapp_static_asset_settings(
+        "https://cdn.example.com/motioncare/static-assets/", ttl
+    ) == ("https://cdn.example.com/motioncare/static-assets", int(ttl))
+
+
+@pytest.mark.parametrize("ttl", [119, 3601, "not-an-integer"])
+def test_static_asset_settings_reject_invalid_ttl(ttl):
+    with pytest.raises(ImproperlyConfigured) as exc_info:
+        validate_miniapp_static_asset_settings("", ttl)
+
+    assert str(exc_info.value) == "MINIAPP_STATIC_ASSET_URL_TTL_SECONDS 配置无效"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://cdn.example.com/motioncare/static-assets",
+        "https://cdn.example.com/wrong-path",
+        "https://user@cdn.example.com/motioncare/static-assets",
+        "https://cdn.example.com:443/motioncare/static-assets",
+        "https://cdn.example.com/motioncare/static-assets?token=secret",
+        "https://cdn.example.com/motioncare/static-assets#fragment",
+        "https:\\cdn.example.com\\motioncare\\static-assets",
+    ],
+)
+def test_static_asset_settings_reject_unsafe_base_url_without_echoing_value(base_url):
+    with pytest.raises(ImproperlyConfigured) as exc_info:
+        validate_miniapp_static_asset_settings(base_url, 600)
+
+    assert str(exc_info.value) == "MINIAPP_STATIC_ASSET_BASE_URL 配置无效"
+    assert base_url not in str(exc_info.value)
+
+
+def test_static_asset_settings_allow_empty_base_for_disabled_service():
+    assert validate_miniapp_static_asset_settings("", 600) == ("", 600)
+
+
+def test_static_asset_runtime_defaults_are_safe_and_rate_limited():
+    assert settings.MINIAPP_STATIC_ASSET_BASE_URL == (
+        "https://cdn.whestsun.com/motioncare/static-assets"
+    )
+    assert settings.MINIAPP_STATIC_ASSET_URL_TTL_SECONDS == 600
+    assert settings.MINIAPP_STATIC_ASSET_RATE_LIMIT_REDIS_URL == settings.REDIS_URL
+    assert settings.MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS == 60
+    assert settings.MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS == 60
 
 
 def test_env_bool_defaults_to_false_when_variable_is_unset(monkeypatch):

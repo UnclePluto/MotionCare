@@ -1,6 +1,41 @@
 import os
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
+
+
+def validate_miniapp_static_asset_settings(
+    base_url: str, ttl: str | int
+) -> tuple[str, int]:
+    try:
+        parsed_ttl = int(ttl)
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured(
+            "MINIAPP_STATIC_ASSET_URL_TTL_SECONDS 配置无效"
+        ) from exc
+    if isinstance(ttl, float) or not 120 <= parsed_ttl <= 3600:
+        raise ImproperlyConfigured("MINIAPP_STATIC_ASSET_URL_TTL_SECONDS 配置无效")
+
+    if not base_url:
+        return "", parsed_ttl
+    try:
+        parsed = urlsplit(base_url)
+        invalid = (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port is not None
+            or parsed.query
+            or parsed.fragment
+            or "\\" in base_url
+            or parsed.path.rstrip("/") != "/motioncare/static-assets"
+        )
+    except ValueError:
+        invalid = True
+    if invalid:
+        raise ImproperlyConfigured("MINIAPP_STATIC_ASSET_BASE_URL 配置无效")
+    return base_url.rstrip("/"), parsed_ttl
 
 def env_bool(name, *, default=False):
     raw_value = os.getenv(name)

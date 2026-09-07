@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from config.environment import (
     env_bool,
+    validate_miniapp_static_asset_settings,
     validate_wechat_miniapp_settings,
 )
 
@@ -197,6 +198,25 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+(
+    MINIAPP_STATIC_ASSET_BASE_URL,
+    MINIAPP_STATIC_ASSET_URL_TTL_SECONDS,
+) = validate_miniapp_static_asset_settings(
+    os.getenv(
+        "MINIAPP_STATIC_ASSET_BASE_URL",
+        "https://cdn.whestsun.com/motioncare/static-assets",
+    ),
+    os.getenv("MINIAPP_STATIC_ASSET_URL_TTL_SECONDS", "600"),
+)
+MINIAPP_STATIC_ASSET_RATE_LIMIT_REDIS_URL = os.getenv(
+    "MINIAPP_STATIC_ASSET_RATE_LIMIT_REDIS_URL", REDIS_URL
+)
+MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS = _positive_int_env(
+    "MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS", 60
+)
+MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS = _positive_int_env(
+    "MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS", 60
+)
 WECHAT_MINIAPP_AUTH_MODE = os.getenv(
     "WECHAT_MINIAPP_AUTH_MODE", "mock" if DEBUG else "wechat"
 )

@@ -19,6 +19,12 @@ class PatientAppAuthRateLimitUnavailable(APIException):
     default_code = "patient_app_auth_rate_limit_unavailable"
 
 
+class MiniappStaticAssetRateLimitUnavailable(APIException):
+    status_code = 503
+    default_detail = "训练素材服务繁忙，请稍后重试"
+    default_code = "miniapp_static_asset_rate_limit_unavailable"
+
+
 class RedisFixedWindowRateThrottle(BaseThrottle):
     """Redis-backed fixed-window throttle shared by every API worker."""
 
@@ -84,6 +90,14 @@ class DemoMotionVideoRateThrottle(RedisFixedWindowRateThrottle):
     requests_setting = "DEMO_MOTION_VIDEO_RATE_LIMIT_REQUESTS"
     window_setting = "DEMO_MOTION_VIDEO_RATE_LIMIT_WINDOW_SECONDS"
     unavailable_exception_class = DemoMotionVideoRateLimitUnavailable
+
+
+class MiniappStaticAssetRateThrottle(RedisFixedWindowRateThrottle):
+    key_namespace = "miniapp-static-assets"
+    redis_url_setting = "MINIAPP_STATIC_ASSET_RATE_LIMIT_REDIS_URL"
+    requests_setting = "MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS"
+    window_setting = "MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS"
+    unavailable_exception_class = MiniappStaticAssetRateLimitUnavailable
 
 
 class PatientAppWechatSessionRateThrottle(RedisFixedWindowRateThrottle):
