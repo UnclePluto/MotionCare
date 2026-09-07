@@ -95,11 +95,27 @@ export async function publicRequest<T>(path: string): Promise<T> {
       }
     })
   } catch (error) {
-    throw new Error(networkRequestErrorMessage(error))
+    const safeError = new Error(networkRequestErrorMessage(error))
+    if (isRequestCanceled(error)) safeError.name = 'AbortError'
+    throw safeError
   }
 
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    throw new Error(safeApiErrorMessage(response.data))
+    throw new PublicRequestError(safeApiErrorMessage(response.data), response.statusCode)
   }
   return response.data
+}
+
+export class PublicRequestError extends Error {
+  constructor(message: string, public readonly statusCode: number) {
+    super(message)
+    this.name = 'PublicRequestError'
+  }
+}
+
+export function isRequestCanceled(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const value = error as { name?: unknown; code?: unknown; errMsg?: unknown }
+  return value.name === 'AbortError' || value.code === 'ERR_CANCELED'
+    || (typeof value.errMsg === 'string' && /^request:fail\s+(?:abort|cancel)(?:\b|$)/i.test(value.errMsg))
 }

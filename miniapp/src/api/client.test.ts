@@ -15,7 +15,7 @@ const prescriptionCacheMocks = vi.hoisted(() => ({
 vi.mock('@tarojs/taro', () => ({ default: taroMocks }))
 vi.mock('../pages/prescription/cache', () => prescriptionCacheMocks)
 
-import { publicRequest, request, safeApiErrorMessage } from './client'
+import { PublicRequestError, publicRequest, request, safeApiErrorMessage } from './client'
 import { resolveApiBaseUrl } from './baseUrl'
 import * as safeError from './safeError'
 import { clearPatientAppToken, setPatientAppToken } from '../auth/token'
@@ -64,6 +64,31 @@ describe('小程序 API 错误', () => {
 })
 
 describe('小程序公开 API', () => {
+  it.each([{ name: 'AbortError' }, { code: 'ERR_CANCELED' },
+    { errMsg: 'request:fail abort https://private?token=secret' }])('保留明确取消标记且脱敏 %j', async (cause) => {
+    taroMocks.request.mockRejectedValueOnce(cause)
+    const error = await publicRequest('/patient-app/static-assets/').catch((value) => value)
+    expect(error).toBeInstanceOf(Error)
+    expect(error.name).toBe('AbortError')
+    expect(error.message).not.toContain('https://private')
+    expect(taroMocks.removeStorageSync).not.toHaveBeenCalled()
+  })
+
+  it.each([400, 401, 403, 404, 405, 429, 500, 503])('HTTP %s 保留状态且脱敏，不读写患者凭据', async (statusCode) => {
+    taroMocks.request.mockResolvedValueOnce({
+      statusCode,
+      data: { detail: 'https://cdn.example.com/image?token=secret' },
+    })
+    const error = await publicRequest('/patient-app/static-assets/').catch((value) => value)
+    expect(error).toBeInstanceOf(PublicRequestError)
+    expect(error.statusCode).toBe(statusCode)
+    expect(error.message).toBe('请求失败')
+    expect(taroMocks.getStorageSync).not.toHaveBeenCalled()
+    expect(taroMocks.setStorageSync).not.toHaveBeenCalled()
+    expect(taroMocks.removeStorageSync).not.toHaveBeenCalled()
+    expect(taroMocks.redirectTo).not.toHaveBeenCalled()
+  })
+
   it('只发送 JSON header，即使存在患者 token 也不附带身份', async () => {
     taroMocks.getStorageSync.mockReturnValue('patient-token')
     taroMocks.request.mockResolvedValueOnce({ statusCode: 200, data: { ok: true } })
