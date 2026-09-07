@@ -39,11 +39,14 @@ docs/superpowers/
 | `specs/2026-09-03-pp-tinypose-algorithm-server-smoke-test-design.md` | PP-TinyPose 独立算法服务器冒烟测试 | approved |
 | `specs/2026-09-03-pp-tinypose-full-frame-streaming-counter-v2-design.md` | PP-TinyPose 全帧流式肩部推举计数 v2 | implemented |
 | `specs/2026-09-05-pp-mcare-independent-compute-service-design.md` | pp-mcare 独立动作分析计算服务 | approved |
+| `specs/2026-09-07-miniapp-private-static-assets-design.md` | 小程序固定素材私有签名访问与 7.0.4 发布 | approved |
 
 ## 实施计划（plans/）当前清单
 
+
 | 文件 | 主题 | 状态 | 关联 spec |
 | --- | --- | --- | --- |
+| `plans/2026-09-07-miniapp-private-static-assets.md` | 固定素材签名、客户端接入、验收与两阶段发布 | implementing | `specs/2026-09-07-miniapp-private-static-assets-design.md` |
 | `plans/2026-05-08-crf-patient-baseline-mapping-phase1.md` | CRF 基线 + mapping 一期 | implementing | `specs/2026-05-08-crf-core-patient-fields-mapping-design.md` |
 | `plans/2026-05-08-frontend-fullscreen-and-create-actions.md` | 前端满屏 + 新增动作 | implementing | `specs/2026-05-08-frontend-fullscreen-and-create-actions-design.md` |
 | `plans/2026-05-11-drop-batch-concept.md` | **删除批次概念**，重构随机/确认/池语义 | ✅ **implemented** (`fa686e5`) | 来自 `2026-05-11-patient-project-admin-and-grouping-board-design.md` |
