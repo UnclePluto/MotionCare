@@ -4,7 +4,11 @@ const taroMock = vi.hoisted(() => ({ getImageInfo: vi.fn() }))
 vi.mock('@tarojs/taro', () => ({ default: taroMock }))
 
 import { PublicRequestError } from '../../api/client'
-import { parseSignedAssetManifest, type SignedAssetManifest } from '../../assets/signedAssetManifest'
+import {
+  parseSignedAssetManifest,
+  SignedAssetManifestError,
+  type SignedAssetManifest,
+} from '../../assets/signedAssetManifest'
 import { signedAssetFixture } from '../../assets/signedAssetFixtures.test-helper'
 import { gameImageRemoteUrl, type GameImageKey } from './gameImageAssets'
 import { GameImagePreloadCancelledError, preloadGameImages, taroGetImageInfo } from './gameImagePreloader'
@@ -87,6 +91,16 @@ describe('preloadGameImages', () => {
     expect(getImageInfo).not.toHaveBeenCalled()
   })
 
+  it('初始已取消时不请求清单或下载', async () => {
+    const loadSignedManifest = vi.fn()
+    const getImageInfo = vi.fn()
+    await expect(preloadGameImages(['pattern_sun'], {
+      getImageInfo, loadSignedManifest, isCurrent: () => false, onProgress: vi.fn(),
+    })).rejects.toBeInstanceOf(GameImagePreloadCancelledError)
+    expect(loadSignedManifest).not.toHaveBeenCalled()
+    expect(getImageInfo).not.toHaveBeenCalled()
+  })
+
   it('下载途中退出时不更新进度', async () => {
     const image = deferred<{ path: string }>()
     const onProgress = vi.fn()
@@ -98,6 +112,52 @@ describe('preloadGameImages', () => {
     await flush(); current = false; image.resolve({ path: '/tmp/sun.webp' })
     await expect(loading).rejects.toBeInstanceOf(GameImagePreloadCancelledError)
     expect(onProgress.mock.calls).toEqual([[{ completed: 0, total: 1, percent: 0 }]])
+  })
+
+  it('取消后的异步下载拒绝归一为取消且不刷新', async () => {
+    const image = deferred<{ path: string }>()
+    const loadSignedManifest = vi.fn().mockResolvedValue(manifest)
+    let current = true
+    const loading = preloadGameImages(['pattern_sun'], {
+      getImageInfo: () => image.promise, loadSignedManifest,
+      isCurrent: () => current, onProgress: vi.fn(),
+    })
+    await flush(); current = false; image.reject(new Error('下载失败'))
+    await expect(loading).rejects.toBeInstanceOf(GameImagePreloadCancelledError)
+    expect(loadSignedManifest).toHaveBeenCalledTimes(1)
+  })
+
+  it('记录下载失败后会话失效时等待旧 worker 并直接取消', async () => {
+    const first = deferred<{ path: string }>()
+    const second = deferred<{ path: string }>()
+    const loadSignedManifest = vi.fn().mockResolvedValue(manifest)
+    const getImageInfo = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    let current = true
+    const loading = preloadGameImages(['pattern_sun', 'pattern_coconut'], {
+      getImageInfo, loadSignedManifest, isCurrent: () => current, onProgress: vi.fn(),
+    })
+    await flush(); first.reject(new Error('下载失败')); await Promise.resolve(); current = false
+    second.resolve({ path: '/tmp/late.webp' })
+    await expect(loading).rejects.toBeInstanceOf(GameImagePreloadCancelledError)
+    expect(loadSignedManifest).toHaveBeenCalledTimes(1)
+  })
+
+  it('undefined rejection 会终止本轮且迟到成功不写进度', async () => {
+    const first = deferred<{ path: string }>()
+    const second = deferred<{ path: string }>()
+    const onProgress = vi.fn()
+    const getImageInfo = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockRejectedValue(new Error('第二轮失败'))
+    const loading = preloadGameImages(['pattern_sun', 'pattern_coconut'], {
+      getImageInfo, loadSignedManifest: vi.fn().mockResolvedValue(manifest),
+      isCurrent: () => true, onProgress,
+    })
+    await flush(); first.reject(undefined); await Promise.resolve()
+    second.resolve({ path: '/tmp/late.webp' })
+    await expect(loading).rejects.toThrow('训练素材暂时不可用，请稍后重试')
+    expect(onProgress.mock.calls).toEqual([[{ completed: 0, total: 2, percent: 0 }]])
   })
 
   it('连续两次下载失败后结束且错误消息脱敏', async () => {
@@ -125,6 +185,18 @@ describe('preloadGameImages', () => {
       isCurrent: () => true, onProgress: vi.fn(),
     })).rejects.toThrow('训练素材暂时不可用，请稍后重试')
     expect(loadSignedManifest.mock.calls).toEqual([[], [{ forceRefresh: true }]])
+  })
+
+  it('清单刷新耗尽共享预算后下载失败不再请求第三份清单', async () => {
+    const loadSignedManifest = vi.fn()
+      .mockRejectedValueOnce(new SignedAssetManifestError(true))
+      .mockResolvedValueOnce(manifest)
+    const getImageInfo = vi.fn().mockRejectedValue(new Error('下载失败'))
+    await expect(preloadGameImages(['pattern_sun'], {
+      getImageInfo, loadSignedManifest, isCurrent: () => true, onProgress: vi.fn(),
+    })).rejects.toThrow('训练素材暂时不可用，请稍后重试')
+    expect(loadSignedManifest.mock.calls).toEqual([[], [{ forceRefresh: true }]])
+    expect(getImageInfo).toHaveBeenCalledTimes(1)
   })
 
   it('旧一轮全部结束后才重试并保持峰值并发三', async () => {
@@ -179,6 +251,18 @@ describe('preloadGameImages', () => {
     await expect(loading).resolves.toHaveProperty('pattern_lighthouse')
     expect(controlled.peak).toBe(3)
     expect(controlled.startedKeys).toHaveLength(4)
+  })
+
+  it('非正并发归一为单 worker', async () => {
+    const controlled = controlledDownloads()
+    const loading = preloadGameImages(['pattern_sun', 'pattern_coconut'], {
+      getImageInfo: controlled.getImageInfo, loadSignedManifest: vi.fn().mockResolvedValue(manifest),
+      isCurrent: () => true, onProgress: vi.fn(), concurrency: 0,
+    })
+    await flush(); expect(controlled.active).toBe(1); resolveAt(controlled); await flush()
+    expect(controlled.active).toBe(1); resolveAt(controlled)
+    await expect(loading).resolves.toHaveProperty('pattern_coconut')
+    expect(controlled.peak).toBe(1)
   })
 })
 

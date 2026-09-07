@@ -99,5 +99,9 @@ describe('staticAssetUrl', () => {
     )).toBe('https://cdn.example.com/motioncare/static-assets/v-a1/file.webp')
     expect(Object.keys(parseSignedAssetManifest(signedAssetFixture())).length).toBeGreaterThan(0)
     expect(Object.keys(parseSignedAssetManifest(signedAssetFixture()).urls)).toHaveLength(23)
+
+    const invalid = signedAssetFixture()
+    invalid.assets[0].url += '&x=%'
+    expect(() => parseSignedAssetManifest(invalid)).toThrow('训练素材暂时不可用，请稍后重试')
   })
 })

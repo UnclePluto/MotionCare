@@ -51,3 +51,16 @@ Taro 兼容根因由主控用真实 `TaroURLProvider` 稳定复现：相对 URL 
 ## 顾虑
 
 - 仓库当前全量 TypeScript 检查存在大量既有失败；本任务按 brief 仅以聚焦 Vitest 作为提交门禁，全套验证留给 Task 7。
+
+## 评审修复（2026-09-07）
+
+- 在真实 `TaroURLProvider` global stub 下加入 `&x=%` 非法 query 拒绝断言。为验证测试有效性，临时移除 `signedUrl` 的 raw-query 防护后运行：该用例按预期失败，并输出 Taro 的 decode 警告；恢复防护后 38/38 通过。
+- 迁移被整体改写遗漏的五类既有边界：初始取消零请求、取消后异步 reject 归一、下载失败后会话失效、`undefined` rejection 阻止迟到进度、非正并发归一为 1。
+- 补充共享预算混合路径：初次清单可刷新失败、强制刷新成功、随后下载失败时，只请求两次清单且不产生第三次请求。
+- 修复未改生产实现，仅增强回归覆盖。
+
+修复验证：
+
+- RED mutation：`npm run test -- src/assets/staticAssetUrl.test.ts -t "使用 Taro URL 实现"`，1 项失败，原因是移除 raw-query 防护后非法 `%` 参数被 Taro 隐藏且 parser 未抛错。
+- GREEN：`npm run test -- src/pages/game-session/gameImagePreloader.test.ts`，18/18 通过。
+- GREEN：`npm run test -- src/assets/staticAssetUrl.test.ts src/assets/signedAssetManifest.test.ts`，100/100 通过。
