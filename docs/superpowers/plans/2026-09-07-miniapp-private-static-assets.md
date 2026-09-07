@@ -6,6 +6,8 @@
 > 日期：2026-09-07
 > 范围：固定素材签名访问、客户端接入、素材验收与微信 7.0.4 上传。
 > 实施基线 commit：480a501c6b390748d09a2d228dbc7caf1e193077
+> 执行记录（2026-09-07, codex）：Tasks 1–6 及最终审查修复已落地至 `0fce037`；Task 7 发布前验证与 23 项私有素材上传已完成，进入两阶段生产发布。
+> 验证记录：后端 1235 项、管理端 317 项、小程序 981 项测试通过；Ruff、迁移检查、管理端 lint/build、小程序三构建与包体检查通过。
 
 **Goal:** 使用现有七牛私有空间及 cdn.whestsun.com 为 23 项固定素材提供受清单约束的临时签名，保留演示体验，完成患者 H5 更新和微信开发版 7.0.4 上传。
 
@@ -72,7 +74,7 @@
 - 新增 STATIC_ASSET_MANIFEST 常量，数据为 { assetVersion, entries }，结构与当前 manifest.json 相同。
 - 新增后端 REGISTERED_STATIC_ASSET_MANIFESTS: dict[str, Path] 和 load_registered_static_assets(version: str) -> dict。未知版本抛 KeyError，已登记内容损坏抛 ValueError，调用方不能传目录。
 
-- [ ] **Step 1：补生成与不可变输出的红测。**
+- [x] **Step 1：补生成与不可变输出的红测。**
 
 测试 fixture 必须传自身临时 backendManifestRoot，防止测试写入真实后端目录。现有 fixtureOptions 增加：
 
@@ -129,7 +131,7 @@ def test_current_manifest_contains_only_product_assets():
     }
 ~~~
 
-- [ ] **Step 2：运行新增测试并确认缺少生成文件/模块导致失败。**
+- [x] **Step 2：运行新增测试并确认缺少生成文件/模块导致失败。**
 
 ~~~sh
 cd miniapp
@@ -138,7 +140,7 @@ cd ../backend
 python -m pytest apps/common/tests/test_miniapp_static_asset_registry.py -q
 ~~~
 
-- [ ] **Step 3：实现生成器与注册表。**
+- [x] **Step 3：实现生成器与注册表。**
 
 生成器使用同一次 buildEntries 的 manifest 字符串写后端 JSON，不重新扫描图片或重复生成哈希。写后端文件之前：
 
@@ -181,7 +183,7 @@ load_registered_static_assets 先在映射中查找，随后 json.loads；利用
 "apps.common" = ["miniapp_static_asset_manifests/*.json"]
 ~~~
 
-- [ ] **Step 4：生成当前真实版本、重跑测试和 check。**
+- [x] **Step 4：生成当前真实版本、重跑测试和 check。**
 
 ~~~sh
 cd miniapp
@@ -194,7 +196,7 @@ python -m pytest apps/common/tests/test_miniapp_static_asset_registry.py -q
 
 预期仍为 v-3aafe09211fd，无图片或语音正文变化；检查新增 JSON 恰为 23 项。
 
-- [ ] **Step 5：提交该任务的代码、生成清单和测试。**
+- [x] **Step 5：提交该任务的代码、生成清单和测试。**
 
 提交说明：feat(素材): 生成并登记前后端固定版本清单。仅暂存本任务 Files，不提交素材输出目录。
 
@@ -225,7 +227,7 @@ python -m pytest apps/common/tests/test_miniapp_static_asset_registry.py -q
   MINIAPP_STATIC_ASSET_RATE_LIMIT_REQUESTS=60；
   MINIAPP_STATIC_ASSET_RATE_LIMIT_WINDOW_SECONDS=60。
 
-- [ ] **Step 1：写接口的固定范围、期限与错误红测。**
+- [x] **Step 1：写接口的固定范围、期限与错误红测。**
 
 在接口测试文件定义以下 autouse fixture（独立限流测试文件不用它），导入 pytest 与 urllib.parse 的 urlsplit、parse_qs：
 
@@ -276,14 +278,14 @@ def test_rejects_noncanonical_queries(client, query):
 
 限流测试复制现有 demo throttle 的 FakeRedis（或抽取纯测试 helper），使用本视图真实 throttle，60 次 200、第 61 次 429；伪造 X-Forwarded-For 不绕过；Redis 异常 503；429 时 signer 调用次数不增加。
 
-- [ ] **Step 2：运行红测。**
+- [x] **Step 2：运行红测。**
 
 ~~~sh
 cd backend
 python -m pytest apps/patient_app/tests/test_static_asset_manifest_api.py apps/patient_app/tests/test_static_asset_manifest_throttle.py -q
 ~~~
 
-- [ ] **Step 3：实现精确签名，不引入任意 Key 签名能力。**
+- [x] **Step 3：实现精确签名，不引入任意 Key 签名能力。**
 
 签名模块消费 Task 1 registry，导入现有 apps.training.qiniu.private_download_url：
 
@@ -315,7 +317,7 @@ def build_signed_static_asset_manifest(version, *, now=None):
 
 视图 authentication_classes=[]、permission_classes=[AllowAny]、http_method_names=["get"]。依次检查 query keys 恰为 {"version"}、getlist 长度为 1、re.fullmatch("v-[a-f0-9]{12}", version)，否则 400；先判断 REGISTERED_STATIC_ASSET_MANIFESTS 成员再构建，未知为 404。签名构建异常整体返回 {"detail":"训练素材暂时不可用，请稍后重试"}、503，不能输出 exc。覆盖 finalize_response 设置全部响应 no-store；DRF APIException 保留规范状态，未知异常脱敏。
 
-- [ ] **Step 4：接入配置与现有 Redis 限流。**
+- [x] **Step 4：接入配置与现有 Redis 限流。**
 
 validate_miniapp_static_asset_settings 使用 urlsplit：空 base 允许启动但接口 503；非空必须 HTTPS、有 hostname、无凭据/query/fragment/backslash，pathname 去尾斜杠后恰为 /motioncare/static-assets，拒绝显式端口；TTL 必须整数 120–3600。异常只写字段名，不回显配置。正数限流参数沿用当前 settings 的 _positive_int_env。
 
@@ -325,7 +327,7 @@ Compose 在 backend-environment 中加入非密钥配置，base 默认现有正�
 
 配置测试参数覆盖 TTL 119/120/600/3600/3601、非整数、HTTP、错误路径、用户名、query、fragment；部署测试验证 Compose 能向后端传入新增配置且仍保留视频变量。
 
-- [ ] **Step 5：跑本任务与现有权限测试后提交。**
+- [x] **Step 5：跑本任务与现有权限测试后提交。**
 
 ~~~sh
 cd backend
@@ -368,7 +370,7 @@ export function mayRefreshSignedAssets(error: unknown): boolean
 
 publicRequest 的返回类型保持不变；仅对 HTTP 错误新增 PublicRequestError(message: string, statusCode: number)，继承 Error。保留 safeApiErrorMessage，不清 token、不跳转登录。普通 request 的 401/403 行为保持原样。
 
-- [ ] **Step 1：写完整有效 fixture 与缓存红测。**
+- [x] **Step 1：写完整有效 fixture 与缓存红测。**
 
 fixture 文件消费 Task 1 的 STATIC_ASSET_MANIFEST，输出完整 23 项，不调用生产 parser：
 
@@ -426,14 +428,14 @@ it('同版本请求合并，540 秒后更新签名', async () => {
 
 参数化变异 fixture：缺项、重复 key、错误版本/sha/size/type/path、HTTP、跨域、路径穿越、userinfo、fragment、缺 token、重复 e/token、未知 query、e 不匹配、非整数时戳、TTL<120 或 >3600。全部必须拒绝且错误不包含 URL。publicRequest 测试覆盖 404/429 有 statusCode、错误脱敏且不读写 token。
 
-- [ ] **Step 2：运行红测。**
+- [x] **Step 2：运行红测。**
 
 ~~~sh
 cd miniapp
 npm run test -- src/assets/signedAssetManifest.test.ts src/api/client.test.ts
 ~~~
 
-- [ ] **Step 3：实现响应 parser 和 HTTP 状态分型。**
+- [x] **Step 3：实现响应 parser 和 HTTP 状态分型。**
 
 parser 先检查普通对象、整数 issued_at/expires_at、120≤差值≤3600，再检查版本和 23 项。以编译清单 key 查找 expected，逐项精确比较；禁止未知或重复 key。使用 staticAssetUrl(expected.relativePath) 构造期望的无签名 URL，仅用于比较 origin/pathname，不拿它下载。
 
@@ -441,7 +443,7 @@ parser 先检查普通对象、整数 issued_at/expires_at、120≤差值≤3600
 
 mayRefreshSignedAssets 对 SignedAssetManifestError 返回其 retryable；HTTP 400/401/403/404/405/429 和 parser 错误不可自动重试，网络错误及 5xx 可重试。图片/播放器自身下载错误由各消费者决定尝试一次刷新；不得把取消当网络错误。
 
-- [ ] **Step 4：实现内存缓存，隔离迟到响应。**
+- [x] **Step 4：实现内存缓存，隔离迟到响应。**
 
 模块状态由 cached（有效已完成清单）和 inflight（generation、startedAt、force、promise）组成。forceRefresh 使旧普通请求失效；已有同代强制刷新则复用。每次新请求递增 generation；旧请求成功或失败都不能修改新代状态。
 
@@ -466,7 +468,7 @@ publicRequest<unknown>(
 
 catch 只在本次仍为当前 generation 时清理自己的 inflight；返回新的脱敏 SignedAssetManifestError，禁止向页面传播原始下载 URL。不改动存储或登录态。
 
-- [ ] **Step 5：测试通过后提交。**
+- [x] **Step 5：测试通过后提交。**
 
 ~~~sh
 cd miniapp
@@ -493,7 +495,7 @@ npm run test -- src/assets/signedAssetManifest.test.ts src/api/client.test.ts
 - gameImageRemoteUrl(key: GameImageKey, manifest: SignedAssetManifest): string，从 manifest.urls 取已校验地址。
 - preloadGameImages 的返回类型、取消错误、进度、临时路径和页面门禁不变。
 
-- [ ] **Step 1：加入有界刷新红测，替换原匿名地址 fixture。**
+- [x] **Step 1：加入有界刷新红测，替换原匿名地址 fixture。**
 
 现有测试的 beforeEach 将基础地址设为 https://cdn.example.com/motioncare/static-assets，并使用 Task 3 的完整 fixture 经 parser 生成 manifest。原受控下载 helper 的 sourceToKey 用 gameImageRemoteUrl(key, manifest) 建表。核心新增测试：
 
@@ -528,14 +530,14 @@ it('没有图片时不获取清单', async () => {
 
 补受控 Promise 用例：清单未返回就退出时不下载；下载途中退出时不更新进度；连续两次下载失败后结束；429/404 不刷新；多个下载同时失败仍只一次刷新；旧一轮下载全部结束前不开新一轮，峰值并发保持 3；已成功图片不重复下载。页面测试保留失败重试/返回、开始按钮门禁，并加入图片就绪后推进 600 秒不重新预取、不重新出题。
 
-- [ ] **Step 2：运行红测。**
+- [x] **Step 2：运行红测。**
 
 ~~~sh
 cd miniapp
 npm run test -- src/pages/game-session/gameImagePreloader.test.ts src/pages/game-session/gameImageAssets.test.ts src/pages/game-session/index.integration.test.tsx
 ~~~
 
-- [ ] **Step 3：改为受控签名地址和两次尝试。**
+- [x] **Step 3：改为受控签名地址和两次尝试。**
 
 ~~~ts
 export function gameImageRemoteUrl(
@@ -551,11 +553,17 @@ export function gameImageRemoteUrl(
 
 清单请求 catch 使用 mayRefreshSignedAssets；下载失败允许刷新一次；取消始终直接抛 GameImagePreloadCancelledError。外层尝试次数同时限制清单与下载重试，不能各自刷新一次。全部成功后再次 assertCurrent 返回；终局错误只传脱敏消息。继续由现有页面 generation 控制重试按钮及游戏计时，签名缓存到期不订阅、不清空 loadedPaths。
 
-- [ ] **Step 4：运行本任务测试，确认旧游戏行为通过后提交。**
+- [x] **Step 4：运行本任务测试，确认旧游戏行为通过后提交。**
 
 执行 Step 2 的同一组命令。仅暂存本任务 Files，提交说明：feat(小游戏): 使用签名预取图片并限制刷新次数。
 
 ---
+
+
+
+### Task 4 执行期兼容补充（主控已复现并裁定）
+
+新增修改范围：miniapp/src/assets/staticAssetUrl.ts、staticAssetUrl.test.ts（或新增独立运行时测试）、signedAssetManifest.ts 和其相关测试。当前 Taro 4.2 URLProvider 解析相对 URL 时丢弃 base.pathname，而 webpack 会自动注入该实现；Node 测试不暴露此差异。将已严格校验的相对路径显式拼成完整绝对 URL 后解析，继续保留来源和目录边界检查。回归使用真实 @tarojs/runtime/dist/bom/URL.js 中 TaroURLProvider，stub全局URL，证明目录保留、完整23项签名清单在微信运行时可通过。Taro URLSearchParams 对非法百分号查询片段会忽略，原始query键和值必须先严格解码验证，证明 &x=% 被拒绝。保留现有相对路径和签名安全规则，不加依赖，不扩大任意URL输入能力。运行新增runtime测试与现有staticAssetUrl、signedAssetManifest及Task4图片相关测试。
 
 ## Task 5：动作说明异步取签名，统一播放生命周期
 
@@ -587,7 +595,7 @@ export type InstructionPlaybackOptions = {
 }
 ~~~
 
-- [ ] **Step 1：写异步取地址和取消/总超时红测。**
+- [x] **Step 1：写异步取地址和取消/总超时红测。**
 
 manifest 测试 mock 签名客户端：五个正式动作返回对应签名；未知动作返回 undefined 且不发请求；仅导入模块不发请求；hasMotionInstructionAudio 不触发 Promise 或网络。
 
@@ -621,14 +629,14 @@ it('90 秒包含等待签名时间，超时后不重试', async () => {
 
 再覆盖首播 false 后 forceRefresh 一次成功；两次 false 返回 failed；签名 429/404 直接失败；60 秒取签名后播放只能再用 30 秒；连续 play 取消前次；dispose 后迟到结果无副作用。页面现有测试调整原同步 mock，覆盖自动一次、重播、隐藏/切动作、签名失败显示文字且仍可开始训练。
 
-- [ ] **Step 2：运行红测。**
+- [x] **Step 2：运行红测。**
 
 ~~~sh
 cd miniapp
 npm run test -- src/features/motion-training/instructionAudioManifest.test.ts src/features/motion-training/instructionPlayback.test.ts src/pages/shoulder-press/pages.test.tsx
 ~~~
 
-- [ ] **Step 3：实现异步 manifest。**
+- [x] **Step 3：实现异步 manifest。**
 
 ~~~ts
 export function hasMotionInstructionAudio(sourceKey: unknown): sourceKey is MotionSourceKey {
@@ -646,7 +654,7 @@ export async function getMotionInstructionAudioSrc(
 
 删除模块级 MOTION_INSTRUCTION_AUDIO_SRC，不在渲染或条件判断中调用异步 getter；全部引用点改用 hasMotionInstructionAudio。生成的相对路径表仍可保留供一致性检查。
 
-- [ ] **Step 4：实现控制器和页面接入。**
+- [x] **Step 4：实现控制器和页面接入。**
 
 控制器默认创建独立 createMotionTrainingAudioPlayer({ timeoutMs: 90_000 })。每次 play 先 stop 前次，再新建 operation（settled、timer、resolve），active 指向该 operation；启动时即创建唯一总计时器。finish(result) 仅一次执行，先标 settled 并清 timer，只有 active 仍为本次才清空 active，然后停止播放器并 resolve。stop 调 finish('cancelled')；总超时调 finish('failed')。dispose 先 stop 再 player.dispose，之后的 play 返回 cancelled。
 
@@ -674,7 +682,7 @@ finish('failed')
 
 页面 ref 改为 InstructionPlayback，playInstruction 在 await 控制器前记录 page/source/play generation，返回后仍校验可见性及代次；仅 failed 显示“语音播放失败，请阅读文字说明”。原自动一次标记在取签名前设置；隐藏、动作切换、开始训练和卸载均 stop/dispose，沿用现有跳转与按钮排版。
 
-- [ ] **Step 5：测试通过后提交。**
+- [x] **Step 5：测试通过后提交。**
 
 执行 Step 2，并运行 src/features/motion-training/alertAudio.test.ts 保证网络告警不回归。仅暂存本任务 Files，提交说明：feat(语音): 播放前获取签名并隔离离页回调。
 
@@ -718,7 +726,7 @@ def verify_signed_static_assets(
     """固定 23 项正文验收及同对象无签名、篡改、过期拒绝检查。"""
 ~~~
 
-- [ ] **Step 1：编写不联网的验收红测。**
+- [x] **Step 1：编写不联网的验收红测。**
 
 测试复用现有纯函数 static_asset_fixture，转换为格式合法的测试版本；不读取真实生产凭据。测试模块导入 json、time、pytest、Path、urlsplit、urlencode、private_download_url，以及本任务的函数和数据类。fixture 不调用生产签名清单构建函数，独立组装预期响应：
 
@@ -791,14 +799,14 @@ def test_verifies_content_and_rejects_unsigned_access(verification_fixture):
 
 参数化模拟：任一正文损坏、字节数错误、类型不符、302、签名指向其他来源、少一项、异常版本、匿名200、篡改200、过期200均抛 SignedAssetVerificationError。用 capsys/caplog 检查异常和命令输出不包含完整 URL 或 token。Expired 测试由真实测试签名函数生成过期URL，不以“乱造一个 token”替代过期检查。
 
-- [ ] **Step 2：运行红测。**
+- [x] **Step 2：运行红测。**
 
 ~~~sh
 cd backend
 python -m pytest apps/common/tests/test_miniapp_signed_asset_verification.py -q
 ~~~
 
-- [ ] **Step 3：实现本地校验、受控下载与拒绝验收。**
+- [x] **Step 3：实现本地校验、受控下载与拒绝验收。**
 
 先调用 validate_miniapp_static_assets(source_root)，读取并核对本地版本与 load_registered_static_assets。api_base_url 必须绝对 HTTPS、无 userinfo/query/fragment、路径以 /api 结束。请求地址：
 
@@ -828,7 +836,7 @@ if hashlib.sha256(response.body).hexdigest() != asset.sha256:
 
 命令参数 --source-root（Path，required）和 --api-base-url（required）；捕获 SignedAssetVerificationError 转 CommandError(str(error)) from None。成功逐行输出 key、字节数、SHA-256 已校验及三种拒绝检查通过。不要要求 public/immutable 缓存头，不修改 CDN 或空间配置。
 
-- [ ] **Step 4：测试通过后提交。**
+- [x] **Step 4：测试通过后提交。**
 
 执行 Step 2，连同 apps/common/tests/test_miniapp_static_assets.py 回归上传不可覆盖。仅暂存本任务 Files，提交说明：test(素材): 增加私有下载完整性和过期验收命令。
 
@@ -846,7 +854,7 @@ if hashlib.sha256(response.body).hexdigest() != asset.sha256:
 - 输入正式 API=https://mcare-wx.whestsun.com/api；素材 base=https://cdn.whestsun.com/motioncare/static-assets；微信版本=7.0.4。
 - 输出分别记录后端部署、23 项素材验收、H5 更新、开发版上传、合法域名与真机结果。
 
-- [ ] **Step 1：核对工作区与全量验证基线。**
+- [x] **Step 1：核对工作区与全量验证基线。**
 
 在当前隔离工作区检查差异、最新远端和本任务提交，保留其他会话内容及两个 node_modules symlink。读取 verification-before-completion 与 requesting-code-review，按其要求审查已完成实现，处理实际问题后再验证。以下命令分目录执行，每次记录实际退出码和结果；任一步失败先诊断，不继续发布客户端。
 
@@ -884,7 +892,7 @@ TARO_APP_CONFIG_ENV=production TARO_APP_API_BASE_URL=https://mcare-wx.whestsun.c
 
 保留独立 TypeScript 检查的既有问题记录；若新增相关类型错误则修复，不能把构建通过写成独立类型检查通过。CI 本身仍跑既有完整校验。开发和 H5 构建顺序执行，最终待上传目录由 Step 5 的生产微信构建生成。
 
-- [ ] **Step 2：生成并上传 23 项固定对象。**
+- [x] **Step 2：生成并上传 23 项固定对象。**
 
 先本地 check-only，再使用已配置的真实七牛凭据上传；不打印环境文件。source-root 固定为实际生成版本目录：
 

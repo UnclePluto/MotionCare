@@ -1,11 +1,12 @@
 # 小程序固定素材私有签名访问设计
 
-> 状态：approved（用户已确认书面设计，尚未实施）
+> 状态：implementing（代码与素材已完成，正在执行两阶段生产发布）
 > 日期：2026-09-07
 > 范围：18 张游戏图片及 5 段动作说明语音改用现有七牛私有空间的临时签名地址，保留未登录演示访问，恢复患者 H5 与小程序 7.0.4 发布。
 > 关联：`2026-09-02-wechat-miniapp-package-size-and-game-assets-cdn-design.md`、`2026-08-12-wechat-miniapp-demo-mode-design.md`、`2026-09-01-motion-instruction-voice-design.md`
 > 实施基线 commit：`480a501c6b390748d09a2d228dbc7caf1e193077`
-> 后续计划：[私有签名访问实施计划](../plans/2026-09-07-miniapp-private-static-assets.md)，已编制，待选择执行方式；当前尚未实施。
+> 后续计划：[私有签名访问实施计划](../plans/2026-09-07-miniapp-private-static-assets.md)，按子代理逐任务实施；Tasks 1–6 及最终审查修复已落地至 `0fce037`，Task 7 正在发布。
+> 执行记录（2026-09-07, codex）：23 项固定素材已上传至既有私有空间并通过幂等复验；后端 1235 项、管理端 317 项、小程序 981 项测试通过，三端构建与发布门禁通过。
 
 ## 1. 背景与已确认范围
 
