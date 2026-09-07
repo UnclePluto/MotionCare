@@ -267,7 +267,8 @@ def test_command_failure_does_not_leak_network_exception(
     )
     with pytest.raises(CommandError) as error:
         call_command("verify_miniapp_signed_assets", source_root=root, api_base_url=API_BASE)
-    output = str(error.value) + capsys.readouterr().out + capsys.readouterr().err + caplog.text
+    captured = capsys.readouterr()
+    output = str(error.value) + captured.out + captured.err + caplog.text
     assert "https://" not in output and "token=" not in output and "secret" not in output
     assert error.value.__suppress_context__
 

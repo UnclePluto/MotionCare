@@ -453,6 +453,93 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     page.unmount()
   })
 
+  it('隐藏期间签名返回不应启动图片下载', async () => {
+    const manifest = await signedAssetHarness.fetchSignedAssetManifest()
+    signedAssetHarness.fetchSignedAssetManifest.mockClear()
+    const pendingManifest = deferred<typeof manifest>()
+    signedAssetHarness.fetchSignedAssetManifest.mockReturnValueOnce(pendingManifest.promise)
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    expect(taroHarness.taroMock.getImageInfo).not.toHaveBeenCalled()
+
+    await hidePage(page)
+    pendingManifest.resolve(manifest)
+    await flushPromises(20)
+    page.rerender()
+
+    expect(taroHarness.taroMock.getImageInfo).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('0/5')
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(true)
+    page.unmount()
+  })
+
+  it('下载中隐藏后丢弃迟到结果且不继续下载或更新进度', async () => {
+    const pendingImages = Array.from({ length: 3 }, () => deferred<{ path: string }>())
+    pendingImages.forEach((image) => taroHarness.taroMock.getImageInfo.mockReturnValueOnce(image.promise))
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    expect(taroHarness.taroMock.getImageInfo).toHaveBeenCalledTimes(3)
+
+    await hidePage(page)
+    pendingImages.forEach((image) => image.resolve({ path: 'wxfile://stale.webp' }))
+    await flushPromises(20)
+    page.rerender()
+
+    expect(taroHarness.taroMock.getImageInfo).toHaveBeenCalledTimes(3)
+    expect(textContent(page.element)).toContain('0/5')
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(true)
+    expect(signedAssetHarness.fetchSignedAssetManifest).toHaveBeenCalledTimes(1)
+    page.unmount()
+  })
+
+  it('重新显示后开启新代准备且旧下载不能覆盖新图片', async () => {
+    const staleImages = Array.from({ length: 3 }, () => deferred<{ path: string }>())
+    staleImages.forEach((image) => taroHarness.taroMock.getImageInfo.mockReturnValueOnce(image.promise))
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    await hidePage(page)
+    await showPage(page)
+    await flushPromises(20)
+    page.rerender()
+
+    expect(textContent(page.element)).toContain('训练图片已准备完成')
+    expect(textContent(page.element)).toContain('5/5')
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(false)
+    expect(signedAssetHarness.fetchSignedAssetManifest).toHaveBeenCalledTimes(2)
+    const downloads = taroHarness.taroMock.getImageInfo.mock.calls.length
+    staleImages.forEach((image) => image.resolve({ path: 'wxfile://stale.webp' }))
+    await flushPromises(20)
+    page.rerender()
+    expect(taroHarness.taroMock.getImageInfo).toHaveBeenCalledTimes(downloads)
+    await enterPlaying(page)
+    const images = findAll(page.element, (item) => hasClass(item, 'sequence-memory-image'))
+    expect(images.length).toBeGreaterThan(0)
+    expect(images.every((item) => String(item.props.src).startsWith('wxfile://game-images/'))).toBe(true)
+    page.unmount()
+  })
+
+  it('就绪后隐藏再显示保留图片与本轮训练且不重新预取', async () => {
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    const downloads = taroHarness.taroMock.getImageInfo.mock.calls.length
+    const manifests = signedAssetHarness.fetchSignedAssetManifest.mock.calls.length
+    await hidePage(page)
+    await showPage(page)
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(false)
+    expect(findAll(page.element, (item) => hasClass(item, 'sequence-memory-image'))).toHaveLength(0)
+    await enterPlaying(page)
+    const roundImages = findAll(page.element, (item) => hasClass(item, 'sequence-memory-image'))
+      .map((item) => item.props.src)
+    const randomCalls = vi.mocked(Math.random).mock.calls.length
+    await hidePage(page)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await showPage(page)
+
+    expect(findButtonByText(page.element, '提前结束')).toBeTruthy()
+    expect(findAll(page.element, (item) => hasClass(item, 'sequence-memory-image'))
+      .map((item) => item.props.src)).toEqual(roundImages)
+    expect(Math.random).toHaveBeenCalledTimes(randomCalls)
+    expect(taroHarness.taroMock.getImageInfo).toHaveBeenCalledTimes(downloads)
+    expect(signedAssetHarness.fetchSignedAssetManifest).toHaveBeenCalledTimes(manifests)
+    page.unmount()
+  })
+
   it('两次图片下载失败后显示重试和返回，手动重试使用新 generation', async () => {
     taroHarness.taroMock.getImageInfo.mockRejectedValue(new Error('CDN unavailable'))
     const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')

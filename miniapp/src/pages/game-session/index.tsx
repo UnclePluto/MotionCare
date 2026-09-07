@@ -252,6 +252,7 @@ export default function GameSessionPage() {
   const loadedRef = useRef(false)
   const introRunIdRef = useRef(0)
   const imageAssetGenerationRef = useRef(0)
+  const pageVisibleRef = useRef(true)
   const readyGameImageAssetsRef = useRef<ReadyGameImageAssets | null>(null)
   const currentRenderedActionIdRef = useRef<number | null>(null)
 
@@ -408,6 +409,7 @@ export default function GameSessionPage() {
   }
 
   async function prepareGameImages(gameCodeValue: GameCode, actionIdValue: number): Promise<void> {
+    if (!pageVisibleRef.current) return
     const generation = imageAssetGenerationRef.current + 1
     imageAssetGenerationRef.current = generation
     const token: ImageAssetToken = { actionId: actionIdValue, generation }
@@ -415,7 +417,7 @@ export default function GameSessionPage() {
     setReadyGameImageAssets(null)
     setImageAssetToken(token)
     const requiredKeys = requiredGameImageKeys(gameCodeValue)
-    const isCurrent = () => imageAssetGenerationRef.current === generation
+    const isCurrent = () => pageVisibleRef.current && imageAssetGenerationRef.current === generation
 
     if (requiredKeys.length === 0) {
       const readyAssets: ReadyGameImageAssets = { ...token, paths: {} }
@@ -476,6 +478,11 @@ export default function GameSessionPage() {
   }
 
   useDidShow(() => {
+    const wasHidden = !pageVisibleRef.current
+    pageVisibleRef.current = true
+    if (wasHidden && !readyGameImageAssetsRef.current && actionRef.current && gameCodeRef.current) {
+      void prepareGameImages(gameCodeRef.current, actionRef.current.id)
+    }
     setMuted(isGameAudioMuted())
     if (backgroundSuspendedRef.current && phaseRef.current === 'paused') {
       backgroundSuspendedRef.current = false
@@ -537,6 +544,8 @@ export default function GameSessionPage() {
   })
 
   useDidHide(() => {
+    pageVisibleRef.current = false
+    if (!readyGameImageAssetsRef.current) imageAssetGenerationRef.current += 1
     if (suspendPlayingSession(true)) return
     invalidateSoundPreviewRun()
     setSoundPreviewingCard(null)
