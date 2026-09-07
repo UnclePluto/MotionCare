@@ -104,6 +104,13 @@ def test_signing_failure_is_redacted_from_response_and_logs(client, monkeypatch,
     assert response.json() == {"detail": "训练素材暂时不可用，请稍后重试"}
     assert secret not in response.content.decode()
     assert secret not in caplog.text
+    failure_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "miniapp_static_asset_manifest_build_failed"
+    ]
+    assert len(failure_records) == 1
+    assert failure_records[0].asset_version == "v-3aafe09211fd"
 
 
 @pytest.mark.django_db

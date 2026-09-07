@@ -1,3 +1,4 @@
+import logging
 import re
 
 from rest_framework import status
@@ -10,6 +11,14 @@ from apps.common.miniapp_signed_assets import build_signed_static_asset_manifest
 from apps.common.miniapp_static_asset_registry import REGISTERED_STATIC_ASSET_MANIFESTS
 
 from .throttles import MiniappStaticAssetRateThrottle
+
+
+logger = logging.getLogger(__name__)
+
+
+def log_manifest_failure(version=None):
+    extra = {"asset_version": version} if version is not None else None
+    logger.error("miniapp_static_asset_manifest_build_failed", extra=extra)
 
 
 class StaticAssetManifestView(APIView):
@@ -26,6 +35,7 @@ class StaticAssetManifestView(APIView):
     def handle_exception(self, exc):
         if isinstance(exc, APIException):
             return super().handle_exception(exc)
+        log_manifest_failure(getattr(self, "_verified_asset_version", None))
         return Response(
             {"detail": "训练素材暂时不可用，请稍后重试"},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -42,10 +52,12 @@ class StaticAssetManifestView(APIView):
         version = versions[0]
         if version not in REGISTERED_STATIC_ASSET_MANIFESTS:
             return Response({"detail": "素材版本不存在"}, status=status.HTTP_404_NOT_FOUND)
+        self._verified_asset_version = version
 
         try:
             manifest = build_signed_static_asset_manifest(version)
         except Exception:
+            log_manifest_failure(version)
             return Response(
                 {"detail": "训练素材暂时不可用，请稍后重试"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
