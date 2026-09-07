@@ -50,7 +50,8 @@ export function staticAssetUrl(
     throw new Error('固定素材路径无效')
   }
   const base = new URL(`${normalizedBaseUrl}/`)
-  const resolved = new URL(normalizedPath, base)
+  // Taro 4.2 的 URL polyfill 会忽略第二个参数中的 pathname，因此先拼成绝对地址。
+  const resolved = new URL(`${normalizedBaseUrl}/${normalizedPath}`)
   if (
     resolved.origin !== base.origin
     || !resolved.pathname.startsWith(base.pathname)

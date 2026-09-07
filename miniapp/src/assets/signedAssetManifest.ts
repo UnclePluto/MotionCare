@@ -25,6 +25,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function signedUrl(value: unknown, relativePath: string, expiresAt: number): string {
   if (typeof value !== 'string' || /[\\#\s]/.test(value)) throw new SignedAssetManifestError(false)
+  const rawQuery = value.split('?')[1]
+  if (!rawQuery) throw new SignedAssetManifestError(false)
+  const rawPairs = rawQuery.split('&').map((part) => {
+    const separator = part.indexOf('=')
+    if (separator < 0) throw new SignedAssetManifestError(false)
+    try {
+      return [decodeURIComponent(part.slice(0, separator)), decodeURIComponent(part.slice(separator + 1))]
+    } catch {
+      throw new SignedAssetManifestError(false)
+    }
+  })
+  const rawKeys = rawPairs.map(([key]) => key)
+  if (rawPairs.length !== 2 || rawKeys.filter((key) => key === 'e').length !== 1
+    || rawKeys.filter((key) => key === 'token').length !== 1) {
+    throw new SignedAssetManifestError(false)
+  }
   const expected = new URL(staticAssetUrl(relativePath))
   const url = new URL(value)
   // URL 会折叠点路径；先检查原始路径，不能让穿越路径通过归一化比较。

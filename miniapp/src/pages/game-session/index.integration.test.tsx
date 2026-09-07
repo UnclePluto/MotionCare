@@ -132,6 +132,12 @@ const audioHarness = vi.hoisted(() => ({
   playGameAudio: vi.fn(async () => undefined),
   stopActiveGameAudio: vi.fn(),
 }))
+const signedAssetHarness = vi.hoisted(() => ({
+  fetchSignedAssetManifest: vi.fn(async () => ({
+    assetVersion: 'test', issuedAt: 0, expiresAt: 600,
+    urls: new Proxy({}, { get: (_, key) => `https://cdn.example.com/signed/${String(key)}.webp?e=600&token=test` }),
+  })),
+}))
 
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>()
@@ -190,6 +196,11 @@ vi.mock('./gameAudio', async (importOriginal) => {
     stopActiveGameAudio: audioHarness.stopActiveGameAudio,
   }
 })
+
+vi.mock('../../assets/signedAssetManifest', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../assets/signedAssetManifest')>(),
+  fetchSignedAssetManifest: signedAssetHarness.fetchSignedAssetManifest,
+}))
 
 function prescriptionFor(sourceKey: string, actionName: string) {
   return {
@@ -370,6 +381,7 @@ beforeEach(() => {
   audioHarness.playAudioSrc.mockResolvedValue(true)
   audioHarness.playGameAudio.mockClear()
   audioHarness.stopActiveGameAudio.mockClear()
+  signedAssetHarness.fetchSignedAssetManifest.mockClear()
 })
 
 afterEach(async () => {
@@ -425,15 +437,24 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     page.unmount()
   })
 
-  it('任一图片失败后只显示可执行错误状态，重试使用新 generation 并忽略旧回调', async () => {
-    const firstImage = deferred<{ path: string }>()
-    const secondImage = deferred<{ path: string }>()
-    taroHarness.taroMock.getImageInfo
-      .mockImplementationOnce(() => firstImage.promise)
-      .mockImplementationOnce(() => secondImage.promise)
-      .mockImplementationOnce(async () => {
-        throw new Error('CDN unavailable')
-      })
+  it('图片就绪后等待 600 秒不重新预取也不提前出题', async () => {
+    const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    const downloads = taroHarness.taroMock.getImageInfo.mock.calls.length
+    const manifests = signedAssetHarness.fetchSignedAssetManifest.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(600_000)
+    await flushPromises()
+    page.rerender()
+
+    expect(taroHarness.taroMock.getImageInfo).toHaveBeenCalledTimes(downloads)
+    expect(signedAssetHarness.fetchSignedAssetManifest).toHaveBeenCalledTimes(manifests)
+    expect(findButtonByText(page.element, '开始游戏').props.disabled).toBe(false)
+    expect(findAll(page.element, (item) => hasClass(item, 'sequence-memory-image'))).toHaveLength(0)
+    page.unmount()
+  })
+
+  it('两次图片下载失败后显示重试和返回，手动重试使用新 generation', async () => {
+    taroHarness.taroMock.getImageInfo.mockRejectedValue(new Error('CDN unavailable'))
     const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
 
     await flushPromises()
@@ -443,18 +464,15 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     expect(findButtonByText(page.element, '返回当前运动计划')).toBeTruthy()
     expect(findAll(page.element, (item) => item.type === 'Button')).toHaveLength(2)
 
+    taroHarness.taroMock.getImageInfo.mockImplementation(async ({ src }) => ({
+      path: `wxfile://game-images/${src.split('/').at(-1)}`,
+    }))
     click(findButtonByText(page.element, '重新加载'))
     await flushPromises(20)
     page.rerender()
     expect(textContent(page.element)).toContain('训练图片已准备完成')
     expect(textContent(page.element)).toContain('5/5')
 
-    firstImage.resolve({ path: 'wxfile://game-images/stale-first.webp' })
-    secondImage.resolve({ path: 'wxfile://game-images/stale-second.webp' })
-    await flushPromises(20)
-    page.rerender()
-    expect(textContent(page.element)).toContain('训练图片已准备完成')
-    expect(textContent(page.element)).not.toContain('训练图片加载失败')
     page.unmount()
   })
 
@@ -480,6 +498,8 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     await flushPromises()
     page.rerender()
     page.rerender()
+    await flushPromises(20)
+    expect(taroHarness.taroMock.getImageInfo).toHaveBeenCalledTimes(3)
 
     taroHarness.routerParams.actionId = '102'
     page.rerender()

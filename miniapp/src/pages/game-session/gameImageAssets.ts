@@ -1,9 +1,6 @@
-import { staticAssetUrl } from '../../assets/staticAssetUrl'
+import type { SignedAssetManifest } from '../../assets/signedAssetManifest'
 import type { GameCode } from './gameTypes'
-import {
-  GAME_IMAGE_ASSET_PATHS,
-  type GeneratedGameImageKey,
-} from './gameImageAssetManifest.generated'
+import { type GeneratedGameImageKey } from './gameImageAssetManifest.generated'
 
 export type GameImageKey = GeneratedGameImageKey
 
@@ -45,8 +42,8 @@ export function requiredGameImageKeys(gameCode: GameCode | null): readonly GameI
   return REQUIRED_IMAGE_KEYS[gameCode] ?? EMPTY_IMAGE_KEYS
 }
 
-export function gameImageRemoteUrl(key: GameImageKey): string {
-  return staticAssetUrl(GAME_IMAGE_ASSET_PATHS[key])
+export function gameImageRemoteUrl(key: GameImageKey, manifest: SignedAssetManifest): string {
+  return manifest.urls[key]
 }
 
 export function loadedGameImagePath(paths: LoadedGameImagePathMap, key: GameImageKey): string {

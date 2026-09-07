@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@tarojs/taro', () => ({ default: {} }))
+
+import { parseSignedAssetManifest } from '../../assets/signedAssetManifest'
+import { signedAssetFixture } from '../../assets/signedAssetFixtures.test-helper'
 import { GAME_IMAGE_ASSET_PATHS } from './gameImageAssetManifest.generated'
 import {
   gameImageRemoteUrl,
@@ -83,12 +87,11 @@ describe('requiredGameImageKeys', () => {
 })
 
 describe('game image paths', () => {
-  it('builds the remote URL through the generated manifest path', () => {
-    vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/assets/')
+  it('从已校验清单读取签名地址', () => {
+    vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/motioncare/static-assets')
+    const manifest = parseSignedAssetManifest(signedAssetFixture())
 
-    expect(gameImageRemoteUrl('pattern_sun')).toBe(
-      'https://cdn.example.com/assets/v-3aafe09211fd/pattern_sun.e27f9237d484.webp'
-    )
+    expect(gameImageRemoteUrl('pattern_sun', manifest)).toBe(manifest.urls.pattern_sun)
   })
 
   it('reads one prepared game subset without requiring all 18 keys', () => {

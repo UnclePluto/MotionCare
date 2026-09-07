@@ -48,6 +48,7 @@ const mutations: [string, (fixture: Fixture) => unknown][] = [
   ['重复 e', (f) => { f.assets[0].url += '&e=' + f.expires_at }],
   ['重复 token', (f) => { f.assets[0].url += '&token=fixture%3Asignature' }],
   ['未知 query', (f) => { f.assets[0].url += '&other=1' }],
+  ['非法 query 编码', (f) => { f.assets[0].url += '&x=%' }],
   ['e 不匹配', (f) => { f.assets[0].url = f.assets[0].url.replace('e=1800000600', 'e=1800000601') }],
   ['非整数 issued_at', (f) => { f.issued_at += 0.5 }],
   ['非整数 expires_at', (f) => { f.expires_at += 0.5 }],

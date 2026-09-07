@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { TaroURLProvider } from '../../node_modules/@tarojs/runtime/dist/bom/URL.js'
 
+vi.hoisted(() => Object.assign(globalThis, {
+  ENABLE_INNER_HTML: false,
+  ENABLE_ADJACENT_HTML: false,
+  ENABLE_CLONE_NODE: false,
+  ENABLE_CONTAINS: false,
+  ENABLE_SIZE_APIS: false,
+  ENABLE_TEMPLATE_CONTENT: false,
+}))
+
+import { parseSignedAssetManifest } from './signedAssetManifest'
+import { signedAssetFixture } from './signedAssetFixtures.test-helper'
 import { staticAssetUrl } from './staticAssetUrl'
+
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 describe('staticAssetUrl', () => {
   it('规范化基础地址尾斜杠和素材路径首尾斜杠', () => {
@@ -73,5 +87,17 @@ describe('staticAssetUrl', () => {
       'v-a1/file%20name.webp',
       'https://cdn.example.com/assets',
     )).toBe('https://cdn.example.com/assets/v-a1/file%20name.webp')
+  })
+
+  it('使用 Taro URL 实现时仍保留基础地址目录并解析完整签名清单', () => {
+    vi.stubGlobal('URL', TaroURLProvider)
+    vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/motioncare/static-assets')
+
+    expect(staticAssetUrl(
+      'v-a1/file.webp',
+      'https://cdn.example.com/motioncare/static-assets',
+    )).toBe('https://cdn.example.com/motioncare/static-assets/v-a1/file.webp')
+    expect(Object.keys(parseSignedAssetManifest(signedAssetFixture())).length).toBeGreaterThan(0)
+    expect(Object.keys(parseSignedAssetManifest(signedAssetFixture()).urls)).toHaveLength(23)
   })
 })

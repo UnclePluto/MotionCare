@@ -1,21 +1,17 @@
 import Taro from '@tarojs/taro'
 
 import {
-  gameImageRemoteUrl,
-  type GameImageKey,
-  type LoadedGameImagePathMap,
-} from './gameImageAssets'
+  fetchSignedAssetManifest,
+  mayRefreshSignedAssets,
+  SignedAssetManifestError,
+} from '../../assets/signedAssetManifest'
+import { gameImageRemoteUrl, type GameImageKey, type LoadedGameImagePathMap } from './gameImageAssets'
 
-export type GameImageLoadProgress = {
-  completed: number
-  total: number
-  percent: number
-}
-
+export type GameImageLoadProgress = { completed: number; total: number; percent: number }
 export type GameImageInfoGetter = (options: { src: string }) => Promise<{ path: string }>
-
 export type GameImagePreloadOptions = {
   getImageInfo: GameImageInfoGetter
+  loadSignedManifest?: typeof fetchSignedAssetManifest
   isCurrent: () => boolean
   onProgress: (progress: GameImageLoadProgress) => void
   concurrency?: number
@@ -36,71 +32,85 @@ function assertCurrent(isCurrent: () => boolean) {
   if (!isCurrent()) throw new GameImagePreloadCancelledError()
 }
 
-function uniqueKeys(keys: readonly GameImageKey[]): GameImageKey[] {
-  return [...new Set(keys)]
-}
-
 function progressFor(completed: number, total: number): GameImageLoadProgress {
-  return {
-    completed,
-    total,
-    percent: total === 0 ? 100 : Math.round((completed / total) * 100),
-  }
+  return { completed, total, percent: total === 0 ? 100 : Math.round((completed / total) * 100) }
 }
 
 export async function preloadGameImages(
   keys: readonly GameImageKey[],
-  { getImageInfo, isCurrent, onProgress, concurrency = 3 }: GameImagePreloadOptions
+  {
+    getImageInfo,
+    loadSignedManifest = fetchSignedAssetManifest,
+    isCurrent,
+    onProgress,
+    concurrency = 3,
+  }: GameImagePreloadOptions,
 ): Promise<LoadedGameImagePathMap> {
-  const requestedKeys = uniqueKeys(keys)
+  const requestedKeys = [...new Set(keys)]
   const total = requestedKeys.length
   const loadedPaths: Partial<Record<GameImageKey, string>> = {}
   const workerCount = Math.max(1, Math.floor(concurrency))
-  let completed = 0
-  let nextIndex = 0
-  let terminal = false
-  let terminalError: unknown
 
   assertCurrent(isCurrent)
   onProgress(progressFor(0, total))
+  if (total === 0) return loadedPaths
 
-  async function worker() {
-    while (!terminal) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assertCurrent(isCurrent)
+    let manifest
+    try {
+      manifest = attempt === 0
+        ? await loadSignedManifest()
+        : await loadSignedManifest({ forceRefresh: true })
       assertCurrent(isCurrent)
-      const key = requestedKeys[nextIndex]
-      nextIndex += 1
-      if (!key) return
+    } catch (error) {
+      if (!isCurrent() || error instanceof GameImagePreloadCancelledError) {
+        throw new GameImagePreloadCancelledError()
+      }
+      if (attempt === 0 && mayRefreshSignedAssets(error)) continue
+      throw new SignedAssetManifestError(false)
+    }
 
-      try {
-        const { path } = await getImageInfo({ src: gameImageRemoteUrl(key) })
+    const remaining = requestedKeys.filter((key) => loadedPaths[key] === undefined)
+    let nextIndex = 0
+    let terminal = false
+    let terminalError: unknown
+
+    async function worker() {
+      while (!terminal) {
         assertCurrent(isCurrent)
-        if (terminal) return
-
-        loadedPaths[key] = path
-        completed += 1
-        onProgress(progressFor(completed, total))
-      } catch (error) {
-        if (!terminal) {
-          terminal = true
-          terminalError = isCurrent() ? error : new GameImagePreloadCancelledError()
+        const key = remaining[nextIndex]
+        nextIndex += 1
+        if (!key) return
+        try {
+          const { path } = await getImageInfo({ src: gameImageRemoteUrl(key, manifest) })
+          assertCurrent(isCurrent)
+          if (terminal) return
+          loadedPaths[key] = path
+          onProgress(progressFor(Object.keys(loadedPaths).length, total))
+        } catch (error) {
+          if (!terminal) {
+            terminal = true
+            terminalError = isCurrent() ? error : new GameImagePreloadCancelledError()
+          }
         }
-        throw terminalError
       }
     }
-  }
 
-  try {
-    await Promise.all(Array.from({ length: Math.min(workerCount, total) }, () => worker()))
-  } catch (error) {
-    terminal = true
-    if (!isCurrent()) {
-      terminalError = new GameImagePreloadCancelledError()
-      throw terminalError
+    await Promise.allSettled(Array.from(
+      { length: Math.min(workerCount, remaining.length) },
+      () => worker(),
+    ))
+    if (!isCurrent() || terminalError instanceof GameImagePreloadCancelledError) {
+      throw new GameImagePreloadCancelledError()
     }
-    if (terminalError === undefined) terminalError = error
-    throw terminalError
+    if (terminal) {
+      if (attempt === 0) continue
+      throw new SignedAssetManifestError(false)
+    }
+    assertCurrent(isCurrent)
+    return loadedPaths
   }
 
-  assertCurrent(isCurrent)
-  return loadedPaths
+  throw new SignedAssetManifestError(false)
 }
