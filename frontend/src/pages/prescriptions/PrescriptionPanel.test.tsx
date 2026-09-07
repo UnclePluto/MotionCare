@@ -368,6 +368,65 @@ describe("PrescriptionPanel", () => {
     expect(payload.actions[0]).not.toHaveProperty("repetitions");
   });
 
+  it("opens new games at simple difficulty and saves the doctor's selected level", async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
+    fireEvent.click(await screen.findByLabelText("颜色顺序记忆"));
+    const difficulty = await screen.findByRole("combobox", { name: "颜色顺序记忆难度" });
+    expect(screen.getByText("记住 3 个颜色的顺序，每项展示 2 秒")).toBeInTheDocument();
+    fireEvent.mouseDown(difficulty);
+    fireEvent.click(await screen.findByText("困难", { selector: ".ant-select-item-option-content" }));
+    expect(screen.getByText("记住 5 个颜色的顺序，每项展示 2 秒")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(
+      "/studies/project-patients/9001/prescriptions/activate-now/",
+      expect.objectContaining({ actions: [expect.objectContaining({ action_library_item: 201, difficulty: "困难" })] }),
+    ));
+  });
+
+  it("starts a newly prescribed game at simple even if the library default is difficult", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/prescriptions/current/") return Promise.resolve({ data: null });
+      if (url === "/prescriptions/") return Promise.resolve({ data: [] });
+      if (url === "/prescriptions/actions/") return Promise.resolve({ data: [{ ...gameAction, default_difficulty: "困难" }] });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
+    fireEvent.click(await screen.findByLabelText("颜色顺序记忆"));
+    expect(screen.getByText("记住 3 个颜色的顺序，每项展示 2 秒")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(
+      "/studies/project-patients/9001/prescriptions/activate-now/",
+      expect.objectContaining({ actions: [expect.objectContaining({ difficulty: "简单" })] }),
+    ));
+  });
+
+  it("preserves the prescribed game difficulty when reopening and saving a prescription", async () => {
+    const prescription = {
+      ...activePrescription,
+      actions: [{
+        ...activePrescription.actions[0], action_library_item: 201,
+        action_name_snapshot: "颜色顺序记忆", internal_type_snapshot: "game", difficulty: "中等",
+      }],
+    };
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/prescriptions/current/") return Promise.resolve({ data: prescription });
+      if (url === "/prescriptions/") return Promise.resolve({ data: [prescription] });
+      if (url === "/prescriptions/actions/") return Promise.resolve({ data: [gameAction] });
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "调整处方" }));
+    expect(await screen.findByRole("combobox", { name: "颜色顺序记忆难度" })).toBeInTheDocument();
+    expect(screen.getByText("记住 4 个颜色的顺序，每项展示 2 秒")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(
+      "/studies/project-patients/9001/prescriptions/activate-now/",
+      expect.objectContaining({ actions: [expect.objectContaining({ difficulty: "中等" })] }),
+    ));
+  });
+
   it("groups actions by action type and submits edited duration parameters", async () => {
     renderPanel();
 

@@ -76,7 +76,7 @@ export const CATEGORY_ITEMS: CategoryItem[] = [
 ]
 
 const RULE_LABEL: Record<CategoryRule, string> = {
-  kind: '按物体类别选择',
+  kind: '请判断彩图中的物体属于哪个类别，并选出正确的选项',
   color: '按主要颜色选择',
   scene: '按使用场景选择',
 }
@@ -89,8 +89,8 @@ const OPTIONS: Record<CategoryRule, string[]> = {
 
 const CONFIG = {
   简单: { rules: ['kind'], optionLimit: 3, timeoutMs: 7000 },
-  中等: { rules: ['kind', 'color'], optionLimit: 4, timeoutMs: 5500 },
-  困难: { rules: ['kind', 'color'], optionLimit: 4, timeoutMs: 4200 },
+  中等: { rules: ['kind'], optionLimit: 4, timeoutMs: 5500 },
+  困难: { rules: ['kind'], optionLimit: 5, timeoutMs: 4200 },
 } satisfies Record<GameDifficulty, { rules: CategoryRule[]; optionLimit: number; timeoutMs: number }>
 
 function pickIndex(length: number, random: () => number): number {

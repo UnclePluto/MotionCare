@@ -70,7 +70,7 @@ export const GAME_AUDIO_TEXT: Record<GameAudioKey, string> = {
   color_intro: '颜色顺序记忆训练开始。请记住方块亮起的顺序，随后按相同顺序点击。',
   pattern_intro: '图案顺序记忆训练开始。请记住图案出现的顺序，随后按相同顺序点击。',
   inhibition_intro: '反应抑制训练开始。请从数字中找出不一样的那个，并点击它。',
-  category_intro: '分类切换训练开始。请根据当前提示，在不同分类规则之间切换并选择正确目标。',
+  category_intro: '分类训练开始。请判断彩图中的物体属于哪个类别，并选出正确的选项。',
   sound_intro: '声音辨别训练开始。请仔细听声音，并选择与声音相匹配的图片。',
   puzzle_intro: '拼图训练开始。请观察完整图像，将拼图块移动到正确位置。',
   count_3: '3',

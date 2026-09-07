@@ -8,17 +8,26 @@ describe('createColorSequenceRound', () => {
 
     expect(round.colors).toEqual(['blue', 'green', 'yellow'])
     expect(round.sequence).toEqual(['blue', 'blue', 'blue'])
-    expect(round.revealMs).toBe(900)
+    expect(round.revealMs).toBe(2000)
     expect(round.inputTimeoutMs).toBe(8000)
   })
 
-  it('creates a difficult sequence with more colors and shorter timing', () => {
+  it('creates a difficult five-step sequence with full two-second observation time', () => {
     const round = createColorSequenceRound('困难', () => 0.99)
 
     expect(round.colors).toEqual(['blue', 'green', 'yellow', 'red', 'teal'])
-    expect(round.sequence.length).toBe(7)
-    expect(round.revealMs).toBe(560)
+    expect(round.sequence.length).toBe(5)
+    expect(round.revealMs).toBe(2000)
     expect(round.inputTimeoutMs).toBe(5000)
+  })
+
+  it('always uses four steps for medium difficulty, including the upper random boundary', () => {
+    for (const value of [0, 0.5, 0.99999]) {
+      const round = createColorSequenceRound('中等', () => value)
+      expect(round.colors).toHaveLength(4)
+      expect(round.sequence).toHaveLength(4)
+      expect(round.revealMs).toBe(2000)
+    }
   })
 
   it('keeps sequence tokens valid when random returns a negative value', () => {

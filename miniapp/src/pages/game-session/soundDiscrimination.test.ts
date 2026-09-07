@@ -105,15 +105,15 @@ function deferred<T>() {
 }
 
 describe('createSoundDiscriminationRound', () => {
-  it('creates a simple paired-confusion round with four cards and hidden preview state', () => {
+  it('creates a simple three-card round with a same-category distractor and hidden preview state', () => {
     const round = createSoundDiscriminationRound('简单', SOURCES, () => 0)
     const categoryCounts = round.cards.reduce<Record<string, number>>((counts, card) => {
       counts[card.category] = (counts[card.category] ?? 0) + 1
       return counts
     }, {})
 
-    expect(round.cards).toHaveLength(4)
-    expect(Object.values(categoryCounts)).toEqual([2, 2])
+    expect(round.cards).toHaveLength(3)
+    expect(Object.values(categoryCounts).sort()).toEqual([1, 2])
     expect(round.cards.map((card) => card.soundId)).toContain(round.target.soundId)
     expect(round.cards.every((card) => card.previewed === false)).toBe(true)
     expect(round.previewComplete).toBe(false)
@@ -121,7 +121,7 @@ describe('createSoundDiscriminationRound', () => {
   })
 
   it('keeps same-category variants on the same image key while preserving distinct sound ids', () => {
-    const round = createSoundDiscriminationRound('简单', SOURCES.slice(0, 4), () => 0)
+    const round = createSoundDiscriminationRound('中等', SOURCES.slice(0, 4), () => 0)
     const birds = round.cards.filter((card) => card.category === 'bird')
 
     expect(new Set(birds.map((card) => card.imageKey))).toEqual(new Set(['sound_bird']))
@@ -137,7 +137,7 @@ describe('createSoundDiscriminationRound', () => {
 
   it('creates paired categories from shuffled source input', () => {
     const shuffledSources = [SOURCES[4], SOURCES[0], SOURCES[2], SOURCES[5], SOURCES[1], SOURCES[3]]
-    const round = createSoundDiscriminationRound('简单', shuffledSources, randomSequence([0.7, 0.1, 0.9, 0.2, 0.4]))
+    const round = createSoundDiscriminationRound('中等', shuffledSources, randomSequence([0.7, 0.1, 0.9, 0.2, 0.4]))
     const selectedCategories = [...new Set(round.cards.map((card) => card.category))]
 
     expect(selectedCategories).toHaveLength(2)
@@ -147,7 +147,7 @@ describe('createSoundDiscriminationRound', () => {
   })
 
   it('can select the third variant from a category instead of always taking the first two', () => {
-    const round = createSoundDiscriminationRound('简单', THREE_VARIANT_SOURCES, () => 0)
+    const round = createSoundDiscriminationRound('中等', THREE_VARIANT_SOURCES, () => 0)
 
     expect(round.cards.map((card) => card.soundId)).toContain('bird_3')
     expect(round.cards.map((card) => card.soundId)).toContain('phone_3')
@@ -160,30 +160,31 @@ describe('createSoundDiscriminationRound', () => {
     expect(firstRound.cards.map((card) => card.soundId)).not.toEqual(secondRound.cards.map((card) => card.soundId))
   })
 
-  it('creates a medium round with three paired groups and six cards', () => {
+  it('creates a medium round with two paired groups and four cards', () => {
     const round = createSoundDiscriminationRound('中等', SOURCES, () => 0)
     const categoryCounts = round.cards.reduce<Record<string, number>>((counts, card) => {
       counts[card.category] = (counts[card.category] ?? 0) + 1
       return counts
     }, {})
 
-    expect(round.cards).toHaveLength(6)
-    expect(Object.values(categoryCounts)).toHaveLength(3)
+    expect(round.cards).toHaveLength(4)
+    expect(Object.values(categoryCounts)).toHaveLength(2)
     expect(Object.values(categoryCounts).every((count) => count === 2)).toBe(true)
     expect(round.timeoutMs).toBe(6500)
     expect(round.cards.map((card) => card.soundId)).toContain(round.target.soundId)
   })
 
-  it('creates a difficult round with at least eight cards and target from cards', () => {
+  it('creates a difficult round with five distinct choices and exactly one target', () => {
     const round = createSoundDiscriminationRound('困难', SOURCES, () => 0.4)
 
-    expect(round.cards.length).toBeGreaterThanOrEqual(8)
-    expect(round.cards.map((card) => card.soundId)).toContain(round.target.soundId)
+    expect(round.cards).toHaveLength(5)
+    expect(new Set(round.cards.map((card) => card.soundId)).size).toBe(5)
+    expect(round.cards.filter((card) => card.soundId === round.target.soundId)).toHaveLength(1)
     expect(round.timeoutMs).toBe(5000)
   })
 
   it('throws when there are not enough valid groups for the difficulty', () => {
-    expect(() => createSoundDiscriminationRound('困难', SOURCES.slice(0, 6), () => 0)).toThrow(
+    expect(() => createSoundDiscriminationRound('困难', SOURCES.slice(0, 4), () => 0)).toThrow(
       '声音辨别资源不足，无法生成当前难度题目'
     )
   })
@@ -232,7 +233,7 @@ describe('nextSoundPreviewCard', () => {
 })
 
 describe('evaluateSoundDiscriminationAttempt', () => {
-  const baseRound = createSoundDiscriminationRound('简单', SOURCES.slice(0, 4), () => 0)
+  const baseRound = createSoundDiscriminationRound('中等', SOURCES, () => 0.99)
   const birdTarget = baseRound.cards.find((card) => card.soundId === 'bird_2')
   const round = {
     ...baseRound,

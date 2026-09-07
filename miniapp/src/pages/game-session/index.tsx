@@ -1,4 +1,4 @@
-import { Button, Image, Input, Picker, Text, View } from '@tarojs/components'
+import { Button, Image, Input, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -15,6 +15,7 @@ import {
 import { createCategorySwitchRound, evaluateCategorySwitchAttempt, type CategoryRule, type CategorySwitchRound } from './categorySwitch'
 import { choiceFeedbackState, type ChoiceOutcome } from './choiceFeedback'
 import { createGameIntroSteps } from './gameIntro'
+import { DIFFICULTY_OPTIONS, DIFFICULTY_REASONS, gameDifficultyDescription, normalizeDifficulty } from './gameDifficulty'
 import { GAME_CATALOG, gameCodeForActionSource } from '../../game/catalog'
 import {
   GAME_AUDIO_TEXT,
@@ -111,7 +112,6 @@ type UploadState =
   | 'blocked_by_existing_pending'
   | 'upload_save_failed'
 
-const DIFFICULTY_OPTIONS: GameDifficulty[] = ['简单', '中等', '困难']
 
 const COLOR_LABEL: Record<ColorToken, string> = {
   blue: '蓝',
@@ -122,10 +122,6 @@ const COLOR_LABEL: Record<ColorToken, string> = {
 }
 
 const ROUND_FEEDBACK_MS = 1000
-
-function normalizeDifficulty(value: string): GameDifficulty {
-  return DIFFICULTY_OPTIONS.includes(value as GameDifficulty) ? (value as GameDifficulty) : '简单'
-}
 
 function suggestedDurationMinutes(action: GameActionSummary): number {
   return action.duration_minutes && action.duration_minutes > 0 ? action.duration_minutes : 10
@@ -176,6 +172,8 @@ export default function GameSessionPage() {
   const [loaded, setLoaded] = useState(false)
   const [difficultyIndex, setDifficultyIndex] = useState(0)
   const [difficultyReason, setDifficultyReason] = useState('')
+  const [otherDifficultyReason, setOtherDifficultyReason] = useState('')
+  const [showDifficultyChoices, setShowDifficultyChoices] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [unitResults, setUnitResults] = useState<UnitResult[]>([])
   const [feedback, setFeedback] = useState('')
@@ -284,6 +282,11 @@ export default function GameSessionPage() {
   const difficulty = DIFFICULTY_OPTIONS[difficultyIndex] ?? '简单'
   const prescribedDifficulty = normalizeDifficulty(action?.difficulty ?? '')
   const adjustedDifficulty = difficulty !== prescribedDifficulty
+  const prescribedDifficultyIndex = DIFFICULTY_OPTIONS.indexOf(prescribedDifficulty)
+  const lowerDifficulties = DIFFICULTY_OPTIONS.slice(0, prescribedDifficultyIndex)
+  const recordedDifficultyReason = !adjustedDifficulty ? '' : difficultyReason === '其他' && otherDifficultyReason.trim()
+    ? `其他：${otherDifficultyReason.trim()}`
+    : difficultyReason
   const remainingSeconds = Math.max(0, targetSecondsRef.current - elapsedSeconds)
 
   function setSessionPhase(nextPhase: SessionPhase) {
@@ -504,6 +507,8 @@ export default function GameSessionPage() {
     setSessionPhase('loading')
     setError('')
     setDifficultyReason('')
+    setOtherDifficultyReason('')
+    setShowDifficultyChoices(false)
     resetSessionState()
 
     fetchCurrentPrescriptionData()
@@ -578,8 +583,8 @@ export default function GameSessionPage() {
   }, [difficulty])
 
   useEffect(() => {
-    difficultyReasonRef.current = difficultyReason
-  }, [difficultyReason])
+    difficultyReasonRef.current = recordedDifficultyReason
+  }, [recordedDifficultyReason])
 
   useEffect(() => {
     if (phase !== 'playing') return undefined
@@ -1027,11 +1032,17 @@ export default function GameSessionPage() {
       setError('该游戏暂未上线，请返回当前运动计划选择已上线游戏')
       return
     }
-    if (adjustedDifficulty && !difficultyReason.trim()) {
-      setError('调整难度后需要填写原因')
+    if (difficultyIndex > prescribedDifficultyIndex) {
+      setError('本次训练难度不能高于指导老师设定')
+      return
+    }
+    if (adjustedDifficulty && !DIFFICULTY_REASONS.some((reason) => reason === difficultyReason)) {
+      setError('请选择降低难度的原因')
       return
     }
 
+    difficultyRef.current = difficulty
+    difficultyReasonRef.current = recordedDifficultyReason
     resetSessionState()
     const runId = introRunIdRef.current + 1
     introRunIdRef.current = runId
@@ -1806,7 +1817,7 @@ export default function GameSessionPage() {
       <View className='page game-session-page hainan-game-page game-play-page'>
         {renderGameTopBar()}
         {phase === 'paused' ? <Text className='pending-upload-banner'>已暂停，点击继续后恢复训练</Text> : null}
-        <Text className='section-title'>{phase === 'paused' ? '训练已暂停' : activeCategoryRound.ruleLabel}</Text>
+        <Text className='section-title category-question'>{phase === 'paused' ? '训练已暂停' : activeCategoryRound.ruleLabel}</Text>
         <View className='game-stage category-card'>
           <Image
             className='category-image'
@@ -2035,33 +2046,87 @@ export default function GameSessionPage() {
             <Text className='value'>{formatNumber(suggestedDurationMinutes(action), '10')} 分钟</Text>
           </View>
           <View className='row'>
-            <Text className='label'>运动计划默认难度</Text>
+            <Text className='label'>指导老师设定难度</Text>
             <Text className='value'>{prescribedDifficulty}</Text>
           </View>
         </View>
 
-        <View className='field-card'>
-          <Text className='label'>本次训练难度</Text>
-          <Picker
-            mode='selector'
-            range={DIFFICULTY_OPTIONS}
-            value={difficultyIndex}
-            onChange={(event) => setDifficultyIndex(Number(event.detail.value))}
-          >
+        <View className='field-card game-difficulty-panel'>
+          <View className='row'>
+            <Text className='label'>本次训练难度</Text>
             <Text className='value'>{difficulty}</Text>
-          </Picker>
+          </View>
+          <Text className='difficulty-description'>{gameCode ? gameDifficultyDescription(gameCode, difficulty) : ''}</Text>
+          {prescribedDifficultyIndex > 0 ? (
+            <Button
+              className='secondary-button difficulty-toggle'
+              onClick={() => setShowDifficultyChoices(!showDifficultyChoices)}
+            >
+              {showDifficultyChoices ? '收起难度选项' : '降低难度'}
+            </Button>
+          ) : <Text className='muted'>当前已是最低难度</Text>}
+          {showDifficultyChoices ? (
+            <View className='difficulty-level-options'>
+              {lowerDifficulties.map((level) => (
+                <Button
+                  key={level}
+                  className={`difficulty-level-option ${difficulty === level ? 'is-selected' : ''}`}
+                  aria-pressed={difficulty === level}
+                  onClick={() => {
+                    setDifficultyIndex(DIFFICULTY_OPTIONS.indexOf(level))
+                    setError('')
+                  }}
+                >
+                  {level}
+                </Button>
+              ))}
+            </View>
+          ) : null}
+          {adjustedDifficulty ? (
+            <Button
+              className='secondary-button difficulty-toggle'
+              onClick={() => {
+                setDifficultyIndex(prescribedDifficultyIndex)
+                setDifficultyReason('')
+                setOtherDifficultyReason('')
+                setShowDifficultyChoices(false)
+                setError('')
+              }}
+            >
+              恢复指导老师设定
+            </Button>
+          ) : null}
         </View>
 
         {adjustedDifficulty ? (
-          <View className='field-card'>
-            <Text className='label'>调整难度原因</Text>
-            <Text className='muted'>请填写原因，指导老师端可见</Text>
-            <Input
-              className='input'
-              value={difficultyReason}
-              placeholder='例如：今天状态较好，想提高难度'
-              onInput={(event) => setDifficultyReason(event.detail.value)}
-            />
+          <View className='field-card game-difficulty-panel'>
+            <Text className='label'>降低难度的原因（单选）</Text>
+            <Text className='muted'>本次调整仅用于这次训练，指导老师可以查看原因。</Text>
+            <View className='difficulty-reason-options'>
+              {DIFFICULTY_REASONS.map((reason) => (
+                <Button
+                  key={reason}
+                  className={`difficulty-reason-option ${difficultyReason === reason ? 'is-selected' : ''}`}
+                  aria-pressed={difficultyReason === reason}
+                  onClick={() => {
+                    setDifficultyReason(reason)
+                    if (reason !== '其他') setOtherDifficultyReason('')
+                    setError('')
+                  }}
+                >
+                  {reason}
+                </Button>
+              ))}
+            </View>
+            {difficultyReason === '其他' ? (
+              <Input
+                className='input'
+                value={otherDifficultyReason}
+                maxlength={200}
+                placeholder='可补充说明（选填）'
+                onInput={(event) => setOtherDifficultyReason(event.detail.value)}
+              />
+            ) : null}
           </View>
         ) : null}
 

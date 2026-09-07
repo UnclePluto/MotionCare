@@ -985,6 +985,8 @@ button:active {
   }
 
   .game-control-bar .compact-button {
+    margin: 0;
+    min-width: 0;
     min-height: 82px;
     padding: 0 12px;
     font-size: 24px;
@@ -1170,6 +1172,93 @@ button:active {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 18px;
+  }
+
+  .game-difficulty-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .difficulty-description {
+    display: block;
+    color: $mc-ink;
+    line-height: 1.6;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .difficulty-level-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .difficulty-reason-options {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .difficulty-level-option,
+  .difficulty-reason-option {
+    margin: 0;
+    min-width: 0;
+    min-height: 88px;
+    padding: 18px 24px;
+    box-sizing: border-box;
+    border: 2px solid #52727d;
+    border-radius: 16px;
+    background: #fff;
+    color: $mc-ink;
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: anywhere;
+
+    &::after { border: 0; }
+
+    &.is-selected {
+      border-color: #056271;
+      background: #d9f3f6;
+      box-shadow: inset 0 0 0 2px #056271;
+    }
+  }
+
+  .difficulty-level-option {
+    flex: 0 1 180px;
+  }
+
+  .difficulty-reason-option,
+  .difficulty-toggle {
+    width: 100%;
+    margin: 0;
+  }
+
+  .category-question {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .category-option {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .color-grid .color-tile,
+  .pattern-grid .image-tile,
+  .number-grid .number-tile,
+  .category-options .category-option,
+  .sound-card-grid .sound-card,
+  .puzzle-grid .puzzle-tile {
+    margin: 0;
+    min-width: 0;
   }
 
   .color-tile,

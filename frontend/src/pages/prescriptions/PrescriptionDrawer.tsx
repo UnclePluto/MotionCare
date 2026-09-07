@@ -6,6 +6,7 @@ import {
   Empty,
   Form,
   InputNumber,
+  Select,
   Space,
   Table,
   Tag,
@@ -20,6 +21,7 @@ import {
   weeklyFrequencyLabel,
 } from "./prescriptionUtils";
 import type { ActionLibraryItem, ActivateNowActionPayload, Prescription, PrescriptionAction } from "./types";
+import { GAME_DIFFICULTIES, gameDifficultyDescription, normalizeGameDifficulty } from "./gameDifficulty";
 
 type Props = {
   open: boolean;
@@ -56,7 +58,9 @@ function defaultParamsForAction(action: ActionLibraryItem, currentAction?: Presc
       parseWeeklyFrequencyTimes(currentAction?.weekly_frequency ?? action.suggested_frequency) ??
       1,
     duration_minutes: currentAction?.duration_minutes ?? action.suggested_duration_minutes,
-    difficulty: currentAction?.difficulty ?? action.default_difficulty,
+    difficulty: action.internal_type === "game"
+      ? normalizeGameDifficulty(currentAction?.difficulty ?? "简单")
+      : currentAction?.difficulty ?? action.default_difficulty,
     notes: currentAction?.notes ?? "",
   };
 }
@@ -72,7 +76,9 @@ function buildActionPayload(
     weekly_frequency: formatWeeklyFrequency(weeklyTargetCount),
     weekly_target_count: weeklyTargetCount,
     duration_minutes: params.duration_minutes ?? action.suggested_duration_minutes ?? 1,
-    difficulty: params.difficulty ?? action.default_difficulty,
+    difficulty: action.internal_type === "game"
+      ? normalizeGameDifficulty(params.difficulty ?? "简单")
+      : params.difficulty ?? action.default_difficulty,
     notes: params.notes ?? "",
     sort_order: sortOrder,
   };
@@ -232,6 +238,7 @@ export function PrescriptionDrawer({
             rowKey="id"
             size="small"
             pagination={false}
+            scroll={{ x: 620 }}
             dataSource={selectedActions}
             columns={[
               {
@@ -307,7 +314,28 @@ export function PrescriptionDrawer({
                   </Form.Item>
                 ),
               },
-              { title: "难度", dataIndex: "default_difficulty", render: (value: string) => value || "—" },
+              {
+                title: "难度",
+                width: 184,
+                render: (_: unknown, action) => action.internal_type === "game" ? (
+                  <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                    <Form.Item
+                      name={["actionParams", String(action.id), "difficulty"]}
+                      rules={[{ required: true, message: "请选择难度" }]}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <Select
+                        aria-label={`${action.name}难度`}
+                        options={GAME_DIFFICULTIES.map((value) => ({ value, label: value }))}
+                        style={{ width: "100%", minWidth: 96 }}
+                      />
+                    </Form.Item>
+                    <Typography.Text type="secondary" style={{ display: "block", whiteSpace: "normal", lineHeight: 1.5 }}>
+                      {gameDifficultyDescription(action.source_key, watchedActionParams[String(action.id)]?.difficulty ?? initialActionParams[String(action.id)]?.difficulty ?? "简单")}
+                    </Typography.Text>
+                  </Space>
+                ) : (watchedActionParams[String(action.id)]?.difficulty ?? action.default_difficulty) || "—",
+              },
             ]}
           />
         )}

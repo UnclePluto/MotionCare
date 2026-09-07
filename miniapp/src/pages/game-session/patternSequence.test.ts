@@ -13,17 +13,26 @@ describe('createPatternSequenceRound', () => {
       label: '太阳',
     })
     expect(round.patterns.every((pattern) => !('imageSrc' in pattern))).toBe(true)
-    expect(round.revealMs).toBe(900)
+    expect(round.revealMs).toBe(2000)
     expect(round.inputTimeoutMs).toBe(8000)
   })
 
-  it('creates a difficult sequence with 5 patterns, 7 steps, and shorter timing', () => {
+  it('creates a difficult sequence with five patterns and five two-second steps', () => {
     const round = createPatternSequenceRound('困难', () => 0.99)
 
     expect(round.patterns.map((pattern) => pattern.id)).toEqual(['sun', 'coconut', 'boat', 'lighthouse', 'shell'])
-    expect(round.sequence).toHaveLength(7)
-    expect(round.revealMs).toBe(560)
+    expect(round.sequence).toHaveLength(5)
+    expect(round.revealMs).toBe(2000)
     expect(round.inputTimeoutMs).toBe(5000)
+  })
+
+  it('always uses four steps for medium difficulty', () => {
+    for (const value of [0, 0.5, 0.99999]) {
+      const round = createPatternSequenceRound('中等', () => value)
+      expect(round.patterns).toHaveLength(4)
+      expect(round.sequence).toHaveLength(4)
+      expect(round.revealMs).toBe(2000)
+    }
   })
 })
 

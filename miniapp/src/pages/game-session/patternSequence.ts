@@ -29,9 +29,9 @@ const CONFIG: Record<
   GameDifficulty,
   { patternCount: number; minLength: number; maxLength: number; revealMs: number; inputTimeoutMs: number }
 > = {
-  简单: { patternCount: 3, minLength: 3, maxLength: 3, revealMs: 900, inputTimeoutMs: 8000 },
-  中等: { patternCount: 4, minLength: 4, maxLength: 5, revealMs: 720, inputTimeoutMs: 6500 },
-  困难: { patternCount: 5, minLength: 5, maxLength: 7, revealMs: 560, inputTimeoutMs: 5000 },
+  简单: { patternCount: 3, minLength: 3, maxLength: 3, revealMs: 2000, inputTimeoutMs: 8000 },
+  中等: { patternCount: 4, minLength: 4, maxLength: 4, revealMs: 2000, inputTimeoutMs: 6500 },
+  困难: { patternCount: 5, minLength: 5, maxLength: 5, revealMs: 2000, inputTimeoutMs: 5000 },
 }
 
 function pickIndex(length: number, random: () => number): number {

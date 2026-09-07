@@ -121,7 +121,7 @@ const taroHarness = vi.hoisted(() => {
   }
 })
 
-const prescriptionHarness = vi.hoisted(() => ({ current: null as unknown }))
+const prescriptionHarness = vi.hoisted(() => ({ current: null as unknown, demo: true }))
 const retryUploadHarness = vi.hoisted(() => ({
   postGameTrainingRecord: vi.fn(),
   savePendingGameUploadAfterActiveRetry: vi.fn(),
@@ -165,7 +165,7 @@ vi.mock('../../demo/patientAppData', () => ({
 }))
 
 vi.mock('../../demo/session', () => ({
-  isDemoSession: () => true,
+  isDemoSession: () => prescriptionHarness.demo,
 }))
 
 vi.mock('./retryUpload', () => ({
@@ -295,8 +295,10 @@ async function flushPromises(times = 8): Promise<void> {
   for (let index = 0; index < times; index += 1) await Promise.resolve()
 }
 
-async function renderGame(sourceKey: string, actionName: string): Promise<RenderedPage> {
-  prescriptionHarness.current = prescriptionFor(sourceKey, actionName)
+async function renderGame(sourceKey: string, actionName: string, difficulty = '简单'): Promise<RenderedPage> {
+  const prescription = prescriptionFor(sourceKey, actionName)
+  prescription.actions[0].difficulty = difficulty
+  prescriptionHarness.current = prescription
   const page = renderPage()
   taroHarness.showCallbacks.at(-1)?.()
   await flushPromises()
@@ -352,6 +354,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  prescriptionHarness.demo = true
   vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/assets')
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-08-31T08:00:00+08:00'))
@@ -695,6 +698,127 @@ describe('GameSessionPage 训练图片准备门禁', () => {
   })
 })
 
+describe('GameSessionPage 开始前降低难度', () => {
+  it('shows the prescribed rule and has no lower level when already simple', async () => {
+    const page = await renderGame('game-memory-color-sequence', '颜色顺序记忆')
+    expect(textContent(page.element)).toContain('记住 3 个颜色的顺序，每项展示 2 秒')
+    expect(textContent(page.element)).toContain('当前已是最低难度')
+    expect(findAll(page.element, (item) => item.type === 'Picker')).toHaveLength(0)
+    expect(findAll(page.element, (item) => item.type === 'Button' && textContent(item) === '降低难度')).toHaveLength(0)
+    page.unmount()
+  })
+
+  it('requires one reason before playing and uploads the actual level and selected reason', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制', '困难')
+    expect(textContent(page.element)).toContain('从 9 个数字中选出不同的一个')
+    click(findButtonByText(page.element, '降低难度'))
+    page.rerender()
+    const choices = findAll(page.element, (item) => item.type === 'Button' && hasClass(item, 'difficulty-level-option'))
+    expect(choices.map(textContent)).toEqual(['简单', '中等'])
+    click(choices[1])
+    page.rerender()
+    expect(textContent(page.element)).toContain('从 6 个数字中选出不同的一个')
+    click(findButtonByText(page.element, '开始游戏'))
+    page.rerender()
+    expect(textContent(page.element)).toContain('请选择降低难度的原因')
+    const reasons = findAll(page.element, (item) => item.type === 'Button' && hasClass(item, 'difficulty-reason-option'))
+    expect(reasons.map(textContent)).toEqual(['切换速度问题', '选项个数问题', '思考时间问题', '其他'])
+    click(reasons[0])
+    page.rerender()
+    click(findButtonByText(page.element, '思考时间问题'))
+    page.rerender()
+    expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option') && hasClass(item, 'is-selected'))).toHaveLength(1)
+    await enterPlaying(page)
+    expect(numberTiles(page.element)).toHaveLength(6)
+    click(findButtonByText(page.element, '提前结束'))
+    await flushPromises()
+    page.rerender()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: expect.objectContaining({
+        difficulty: '中等',
+        raw_detail: expect.objectContaining({ prescribed_difficulty: '困难', difficulty_adjusted: true, difficulty_adjust_reason: '思考时间问题' }),
+      }),
+    }))
+    page.unmount()
+  })
+
+  it('restores the prescribed level and clears the adjustment reason', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-category-switch', '分类转换', '中等')
+    click(findButtonByText(page.element, '降低难度'))
+    page.rerender()
+    const choices = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
+    expect(choices.map(textContent)).toEqual(['简单'])
+    click(choices[0])
+    page.rerender()
+    click(findButtonByText(page.element, '选项个数问题'))
+    page.rerender()
+    click(findButtonByText(page.element, '恢复指导老师设定'))
+    page.rerender()
+    expect(textContent(page.element)).toContain('判断物品类别，从 4 个选项中选择')
+    expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option'))).toHaveLength(0)
+    await enterPlaying(page)
+    expect(findAll(page.element, (item) => hasClass(item, 'category-option'))).toHaveLength(4)
+    expect(textContent(page.element)).toContain('请判断彩图中的物体属于哪个类别，并选出正确的选项')
+    click(findButtonByText(page.element, '提前结束'))
+    await flushPromises()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: expect.objectContaining({ difficulty: '中等', raw_detail: expect.objectContaining({ difficulty_adjusted: false, difficulty_adjust_reason: '' }) }),
+    }))
+    page.unmount()
+  })
+
+  it.each([
+    ['keep', '其他：今天比较疲劳'],
+    ['switch', '思考时间问题'],
+    ['switch-back', '其他'],
+    ['restore', '其他'],
+  ])('records optional other details and clears stale text: %s', async (change, expectedReason) => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制', '中等')
+    click(findButtonByText(page.element, '降低难度'))
+    page.rerender()
+    click(findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))[0])
+    page.rerender()
+    click(findButtonByText(page.element, '其他'))
+    page.rerender()
+    const input = findAll(page.element, (item) => item.type === 'Input')[0]
+    const onInput = input.props.onInput as (event: { detail: { value: string } }) => void
+    onInput({ detail: { value: '今天比较疲劳' } })
+    page.rerender()
+    if (change === 'switch' || change === 'switch-back') {
+      click(findButtonByText(page.element, '思考时间问题'))
+      page.rerender()
+      expect(findAll(page.element, (item) => item.type === 'Input')).toHaveLength(0)
+      if (change === 'switch-back') {
+        click(findButtonByText(page.element, '其他'))
+        page.rerender()
+        expect(findAll(page.element, (item) => item.type === 'Input')[0].props.value).toBe('')
+      }
+    }
+    if (change === 'restore') {
+      click(findButtonByText(page.element, '恢复指导老师设定'))
+      page.rerender()
+      click(findButtonByText(page.element, '降低难度'))
+      page.rerender()
+      click(findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))[0])
+      page.rerender()
+      expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option') && hasClass(item, 'is-selected'))).toHaveLength(0)
+      click(findButtonByText(page.element, '其他'))
+      page.rerender()
+      expect(findAll(page.element, (item) => item.type === 'Input')[0].props.value).toBe('')
+    }
+    await enterPlaying(page)
+    click(findButtonByText(page.element, '提前结束'))
+    await flushPromises()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: expect.objectContaining({ raw_detail: expect.objectContaining({ difficulty_adjust_reason: expectedReason }) }),
+    }))
+    page.unmount()
+  })
+})
+
 describe('GameSessionPage 生命周期与反馈接线', () => {
   it.each([
     ['game-memory-pattern-sequence', '图案顺序记忆', 'sequence-memory-image', '/pattern_sun.'],
@@ -732,7 +856,7 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     expect(textContent(findByClass(page.element, 'game-timer-value'))).toBe('00:01:00')
 
     await showPage(page)
-    await vi.advanceTimersByTimeAsync(499)
+    await vi.advanceTimersByTimeAsync(1599)
     page.rerender()
     expect(textContent(findByClass(page.element, 'sequence-memory-progress'))).toContain('第 1 / 3 项')
     expect(textContent(page.element)).not.toContain('下一项')
@@ -740,18 +864,18 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     await vi.advanceTimersByTimeAsync(1)
     page.rerender()
     expect(textContent(page.element)).toContain('下一项')
-    expect(textContent(findByClass(page.element, 'game-timer-value'))).toBe('00:01:00')
+    expect(textContent(findByClass(page.element, 'game-timer-value'))).toBe('00:00:58')
 
     await vi.advanceTimersByTimeAsync(100)
     page.rerender()
-    expect(textContent(findByClass(page.element, 'game-timer-value'))).toBe('00:00:59')
+    expect(textContent(findByClass(page.element, 'game-timer-value'))).toBe('00:00:58')
     page.unmount()
   })
 
   it('后台挂起 sequence transition 并只恢复剩余的 300ms', async () => {
     const page = await renderGame('game-memory-color-sequence', '颜色顺序记忆')
     await enterPlaying(page)
-    await vi.advanceTimersByTimeAsync(900)
+    await vi.advanceTimersByTimeAsync(2000)
     await vi.advanceTimersByTimeAsync(200)
     page.rerender()
     expect(textContent(page.element)).toContain('下一项')
@@ -843,7 +967,7 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
   it('顺序题在 settling 暂停时保留已填写槽位与对错标记', async () => {
     const page = await renderGame('game-memory-color-sequence', '颜色顺序记忆')
     await enterPlaying(page)
-    await vi.advanceTimersByTimeAsync(3700)
+    await vi.advanceTimersByTimeAsync(7000)
     page.rerender()
     const blueTile = findButtonByText(page.element, '蓝')
     click(blueTile)
@@ -889,7 +1013,7 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     page.rerender()
 
     const cards = soundCards(page.element)
-    expect(cards).toHaveLength(4)
+    expect(cards).toHaveLength(3)
     expect(hasClass(cards[0], 'sound-card-preview')).toBe(true)
     expect(findAll(cards[0], (item) => item.type === 'Image')).toHaveLength(1)
     cards.slice(1).forEach((card, index) => {
