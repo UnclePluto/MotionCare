@@ -207,7 +207,7 @@ describe("VisitFormPage", () => {
 
     const r = renderAt(21);
 
-    expect(await screen.findByText("项目已完结，访视表单只读。")).toBeInTheDocument();
+    expect(await screen.findByText("当前表单只读")).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "SPPB 总分" })).toBeDisabled();
     expect(screen.getByLabelText("平台账号/编号")).toBeDisabled();
 

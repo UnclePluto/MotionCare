@@ -68,7 +68,8 @@ describe("PrescriptionEntryPage", () => {
     expect(screen.getByText("138****0201")).toBeInTheDocument();
     expect(screen.queryByText("13800000201")).not.toBeInTheDocument();
     expect(screen.getByText("研究项目 A")).toBeInTheDocument();
-    expect(screen.getByText("进行中")).toBeInTheDocument();
+    expect(screen.queryByText("项目状态")).not.toBeInTheDocument();
+    expect(screen.queryByText("进行中")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "处方" })).toHaveAttribute(
       "href",
       "/prescriptions/project-patients/9001",

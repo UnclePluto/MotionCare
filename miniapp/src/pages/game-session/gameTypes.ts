@@ -1,3 +1,4 @@
+import type { GameQuestionPayload } from './questionCapture'
 import type { GameCode } from '../../game/catalog'
 
 export type { GameCode } from '../../game/catalog'
@@ -10,6 +11,8 @@ export type TrainingStatus = 'completed' | 'partial' | 'missed'
 export const GAME_DIFFICULTIES: GameDifficulty[] = ['简单', '中等', '困难']
 
 export type GameTrainingPayload = {
+  client_session_id?: string
+  question_results?: GameQuestionPayload[]
   prescription_action: number
   training_date: string
   status: TrainingStatus
@@ -31,6 +34,7 @@ export type GameTrainingPayload = {
       total_retry_count: number
       session_duration_seconds: number
       suggested_duration_minutes: number
+      recorded_question_count?: number
       completed_units: number
       correct_units: number
       rounds?: Array<Record<string, unknown>>

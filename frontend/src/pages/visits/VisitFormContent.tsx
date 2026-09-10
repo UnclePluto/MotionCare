@@ -360,7 +360,7 @@ export function VisitFormContent({
             <Alert
               type="warning"
               showIcon
-              message="项目已完结，访视表单只读。"
+              message="当前表单只读"
             />
           )}
 

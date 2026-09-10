@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Drawer, Space, Tag, message } from "antd";
+import { Alert, Button, Card, Drawer, Space, message } from "antd";
 import { useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
@@ -80,7 +80,6 @@ export function ProjectDetailPage() {
       title={project ? project.name : "项目详情"}
       extra={
         <Space>
-          {isCompleted ? <Tag>已完结</Tag> : null}
           <Button
             type="default"
             disabled={isCompleted || !boardState.hasEligibleSelection || !boardState.hasActiveGroups}

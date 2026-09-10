@@ -100,6 +100,15 @@ class PatientAppTrainingRecordCreateSerializer(serializers.Serializer):
     )
     form_data = serializers.JSONField(required=False)
     note = serializers.CharField(required=False, allow_blank=True)
+    client_session_id = serializers.UUIDField(required=False)
+    question_results = serializers.ListField(
+        child=serializers.JSONField(), required=False, allow_empty=True, max_length=2000,
+    )
+
+    def validate(self, attrs):
+        if ("client_session_id" in attrs) != ("question_results" in attrs):
+            raise serializers.ValidationError("游戏会话 ID 和逐题结果必须同时提交")
+        return attrs
 
 
 class PatientAppTrainingVideoSessionSerializer(serializers.Serializer):

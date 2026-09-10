@@ -502,7 +502,8 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确认完结" }));
 
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith("/studies/projects/1/complete/"));
-    await waitFor(() => expect(screen.getByText("已完结")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "项目完结" })).toBeDisabled());
+    expect(screen.queryByText("已完结")).not.toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: "随机分组" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "确认分组" })).toBeDisabled();

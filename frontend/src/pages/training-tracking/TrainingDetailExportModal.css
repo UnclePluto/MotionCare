@@ -1,0 +1,58 @@
+.training-detail-export-modal .ant-modal {
+  max-width: calc(100vw - 32px);
+}
+
+.training-detail-export-patient {
+  margin-bottom: 16px;
+  font-weight: 500;
+}
+
+.training-detail-export-error {
+  margin-bottom: 16px;
+}
+
+.training-detail-export-help {
+  width: 100%;
+  font-size: 14px;
+}
+
+.training-detail-export-help .ant-typography {
+  color: #595959;
+}
+
+@media (max-width: 575px) {
+  .training-detail-export-modal .ant-modal {
+    top: 16px;
+    max-width: calc(100vw - 16px);
+    margin: 0 8px;
+    padding-bottom: 16px;
+  }
+
+  .training-detail-export-modal .ant-radio-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .training-detail-export-modal .ant-radio-button-wrapper {
+    text-align: center;
+  }
+
+  .training-detail-export-date-popup {
+    position: fixed !important;
+    top: 8px !important;
+    right: 8px !important;
+    bottom: auto !important;
+    left: 8px !important;
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .training-detail-export-date-popup .ant-picker-panels {
+    flex-direction: column;
+    align-items: center;
+  }
+}

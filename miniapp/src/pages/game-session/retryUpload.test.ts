@@ -88,6 +88,39 @@ afterEach(() => {
 })
 
 describe('pending game upload retry state', () => {
+  it.each([false, true])('补传只改变三个传输字段，兼容旧缓存=%s', async legacy => {
+    const original: GameTrainingPayload = payload()
+    if (!legacy) {
+      original.client_session_id = '00000000-0000-4000-8000-000000000001'
+      original.question_results = [{question_index: 1, game_code: 'game-memory-color-sequence', difficulty: '中等', response_duration_ms: 2500, is_correct: true, result_type: 'answered', swap_count: null}]
+    }
+    const storage = memoryStorage()
+    savePendingGameUpload(storage, original, 1000)
+    markRetryFailure(storage, '断网', 1000)
+    const uploader = vi.fn().mockResolvedValue(undefined)
+    await expect(tryUploadPendingGameRecord(storage, 6000, uploader)).resolves.toBe('uploaded')
+    expect(uploader.mock.calls[0][0]).toEqual({
+      ...original,
+      form_data: {...original.form_data, raw_detail: {...original.form_data.raw_detail, upload_mode: 'retry', retry_count: 1, total_retry_count: 1}},
+    })
+    expect(original.form_data.raw_detail.upload_mode).toBe('direct')
+    expect(loadPendingGameUpload(storage)).toBeNull()
+  })
+
+  it('409身份冲突停止自动补传循环', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1000)
+    const storage = memoryStorage()
+    savePendingGameUpload(storage, payload(), 1000)
+    vi.mocked(Taro.request).mockResolvedValueOnce({statusCode: 409, data: {detail: '会话载荷冲突'}} as never)
+    const uploader = vi.fn(postGameTrainingRecord)
+    startPendingGameUploadRetryLoop(storage, {uploader})
+    await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(1000000)
+    expect(uploader).toHaveBeenCalledTimes(1)
+    expect(loadPendingGameUpload(storage)).toBeNull()
+  })
+
   it.each([
     ['detail', 'Authorization: Bearer patient-token'],
     ['message', 'token=patient-token secret=server-secret access_key=key credential_id=id AK=ak SK=sk'],
@@ -125,7 +158,7 @@ describe('pending game upload retry state', () => {
     expect(loadPendingGameUpload(storage)).toBeNull()
   })
 
-  it('does not overwrite an existing valid pending upload', () => {
+  it('旧单对象缓存转为队列，追加不同记录且不覆盖旧数据', () => {
     const storage = memoryStorage()
     const firstPayload = payload()
     const secondPayload = { ...payload(), prescription_action: 200 }
@@ -133,9 +166,10 @@ describe('pending game upload retry state', () => {
     savePendingGameUpload(storage, firstPayload, 1000)
     const saved = savePendingGameUpload(storage, secondPayload, 2000)
 
-    expect(saved.payload.prescription_action).toBe(100)
+    expect(saved.payload.prescription_action).toBe(200)
     expect(loadPendingGameUpload(storage)?.payload.prescription_action).toBe(100)
-    expect(storage.setStorageSync).toHaveBeenCalledTimes(1)
+    clearPendingGameUpload(storage, firstPayload)
+    expect(loadPendingGameUpload(storage)?.payload.prescription_action).toBe(200)
   })
 
   it('pauses after ten failures in one launch window', () => {
@@ -341,6 +375,28 @@ describe('pending game upload retry state', () => {
     expect(uploader.mock.calls[0][0].form_data.raw_detail.upload_mode).toBe('retry')
     expect(uploader.mock.calls[0][0].form_data.raw_detail.retry_count).toBe(3)
     expect(uploader.mock.calls[0][0].form_data.raw_detail.total_retry_count).toBe(8)
+    expect(loadPendingGameUpload(storage)).toBeNull()
+  })
+
+  it.each(['', '今天状态不佳'])('补传保留困难档与原始原因：%s', async (reason) => {
+    const storage = memoryStorage()
+    const record = payload()
+    record.form_data.difficulty = '困难'
+    record.form_data.raw_detail.prescribed_difficulty = '简单'
+    record.form_data.raw_detail.difficulty_adjusted = true
+    record.form_data.raw_detail.difficulty_adjust_reason = reason
+    savePendingGameUpload(storage, record, 1000)
+    const uploader = vi.fn().mockResolvedValue(undefined)
+
+    await expect(tryUploadPendingGameRecord(storage, 1_000_000, uploader)).resolves.toBe('uploaded')
+    expect(uploader).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: expect.objectContaining({
+        difficulty: '困难',
+        raw_detail: expect.objectContaining({
+          prescribed_difficulty: '简单', difficulty_adjusted: true, difficulty_adjust_reason: reason,
+        }),
+      }),
+    }))
     expect(loadPendingGameUpload(storage)).toBeNull()
   })
 
@@ -573,4 +629,146 @@ describe('pending game upload retry state', () => {
 
     expect(secondUploader).toHaveBeenCalledTimes(1)
   })
+})
+
+it('v2缓存与入参、读取结果及上传器的嵌套步骤互不污染', async () => {
+  const storage = memoryStorage()
+  const original = payload()
+  original.client_session_id = '00000000-0000-4000-8000-000000000001'
+  original.question_results = [{capture_version: 'active_response_v2', question_index: 1, game_code: 'game-memory-color-sequence', difficulty: '简单', response_duration_ms: 100, is_correct: false, result_type: 'interrupted', swap_count: null, click_count: null, expected_step_count: 3, selection_steps: [{step_index: 1, selected_value: 'blue', expected_value: 'green', response_duration_ms: 100, is_correct: false}]}]
+  const saved = savePendingGameUpload(storage, original, 1000)
+  original.question_results[0].selection_steps![0].selected_value = 'red'
+  saved.payload.question_results![0].selection_steps![0].selected_value = 'yellow'
+  loadPendingGameUpload(storage)!.payload.question_results![0].selection_steps![0].selected_value = 'teal'
+  const uploader = vi.fn(async (uploaded: GameTrainingPayload) => {
+    expect(uploaded.question_results![0].selection_steps![0].selected_value).toBe('blue')
+    uploaded.question_results![0].selection_steps![0].selected_value = 'red'
+    throw new Error('网络中断')
+  })
+  expect(await tryUploadPendingGameRecord(storage, 1000, uploader)).toBe('failed')
+  expect(loadPendingGameUpload(storage)!.payload.question_results![0].selection_steps![0].selected_value).toBe('blue')
+})
+
+it('等待旧记录补传期间冻结新记录快照', async () => {
+  const storage = memoryStorage()
+  savePendingGameUpload(storage, payload(), 1000)
+  let release!: () => void
+  const active = tryUploadPendingGameRecord(storage, 1000, () => new Promise<void>(resolve => { release = resolve }))
+  const next = payload()
+  next.client_session_id = '00000000-0000-4000-8000-000000000002'
+  const saving = savePendingGameUploadAfterActiveRetry(storage, next, 1000)
+  next.form_data.raw_detail.completed_units = 999
+  release()
+  await active
+  await saving
+  expect(loadPendingGameUpload(storage)?.payload.form_data.raw_detail.completed_units).toBe(10)
+})
+
+it('已有旧UUID待补传时，新半题卸载保存后两条都能恢复', async () => {
+  const storage = memoryStorage()
+  const old = {...payload(), client_session_id: '00000000-0000-4000-8000-000000000001'}
+  const fresh = {...payload(), client_session_id: '00000000-0000-4000-8000-000000000002', question_results: [{capture_version: 'active_response_v2' as const, question_index: 1, game_code: 'game-memory-color-sequence' as const, difficulty: '简单' as const, response_duration_ms: 100, is_correct: false, result_type: 'interrupted' as const, swap_count: null, click_count: null, expected_step_count: 3, selection_steps: [{step_index: 1, selected_value: 'blue', expected_value: 'green', response_duration_ms: 100, is_correct: false}]}]}
+  savePendingGameUpload(storage, old, 1000)
+  const saved = savePendingGameUpload(storage, fresh, 1000)
+  expect(saved.payload.client_session_id).toBe(fresh.client_session_id)
+  const uploader = vi.fn().mockResolvedValue(undefined)
+  await tryUploadPendingGameRecord(storage, 1000, uploader)
+  expect(loadPendingGameUpload(storage)?.payload).toEqual(fresh)
+  await tryUploadPendingGameRecord(storage, 1000, uploader)
+  expect(uploader.mock.calls.map(([p]) => p.client_session_id)).toEqual([old.client_session_id, fresh.client_session_id])
+})
+
+it.each(['成功', '失败'])('上传旧UUID期间追加新UUID，旧请求%s只操作旧项', async outcome => {
+  const storage = memoryStorage()
+  const old = {...payload(), client_session_id: 'old'}
+  const fresh = {...payload(), client_session_id: 'new'}
+  savePendingGameUpload(storage, old, 1000)
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const running = tryUploadPendingGameRecord(storage, 1000, () => new Promise<void>((ok, no) => { resolve = ok; reject = no }))
+  const saved = await savePendingGameUploadAfterActiveRetry(storage, fresh, 1000)
+  expect(saved.payload.client_session_id).toBe('new')
+  fresh.form_data.raw_detail.completed_units = 999
+  saved.payload.form_data.raw_detail.completed_units = 888
+  if (outcome === '成功') resolve()
+  else reject(new Error('断网'))
+  await running
+  if (outcome === '失败') {
+    expect(loadPendingGameUpload(storage)).toMatchObject({retry_count: 1, payload: {client_session_id: 'old'}})
+    clearPendingGameUpload(storage, old)
+  }
+  expect(loadPendingGameUpload(storage)).toMatchObject({retry_count: 0, payload: {client_session_id: 'new', form_data: {raw_detail: {completed_units: 10}}}})
+})
+
+it('重复保存UUID不改变原始内容，指定清理另一UUID不清除队首', () => {
+  const storage = memoryStorage()
+  const old = {...payload(), client_session_id: 'old'}
+  const fresh = {...payload(), client_session_id: 'new'}
+  savePendingGameUpload(storage, old, 1000)
+  savePendingGameUpload(storage, fresh, 1000)
+  savePendingGameUpload(storage, {...fresh, score: 0}, 2000)
+  clearPendingGameUpload(storage, old)
+  expect(loadPendingGameUpload(storage)?.payload.score).toBe(90)
+  clearPendingGameUpload(storage, old)
+  expect(loadPendingGameUpload(storage)?.payload.client_session_id).toBe('new')
+})
+
+it('队列循环连续补传两UUID并最终清空', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(1000)
+  const storage = memoryStorage()
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'old'}, 1000)
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'new'}, 1000)
+  const uploader = vi.fn().mockResolvedValue(undefined)
+  startPendingGameUploadRetryLoop(storage, {uploader})
+  await vi.advanceTimersByTimeAsync(10)
+  expect(uploader.mock.calls.map(([p]) => p.client_session_id)).toEqual(['old', 'new'])
+  expect(loadPendingGameUpload(storage)).toBeNull()
+})
+
+it.each([401, 403])('%s清理鉴权并停止循环，不上传或删除队列后续UUID', async status => {
+  vi.useFakeTimers(); vi.setSystemTime(1000)
+  const storage = memoryStorage()
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'old'}, 1000)
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'new'}, 1000)
+  vi.mocked(Taro.request).mockClear().mockResolvedValueOnce({statusCode: status, data: {}} as never)
+  vi.mocked(Taro.removeStorageSync).mockClear()
+  vi.mocked(Taro.redirectTo).mockClear()
+  startPendingGameUploadRetryLoop(storage)
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(Taro.request).toHaveBeenCalledTimes(1)
+  expect(Taro.removeStorageSync).toHaveBeenCalledWith('motioncare_patient_app_token')
+  expect(Taro.redirectTo).toHaveBeenCalledWith({url: '/pages/bind/index'})
+  expect(loadPendingGameUpload(storage)?.payload.client_session_id).toBe('new')
+})
+
+it.each([400, 409])('旧项%s业务拒绝通知后继续本轮上传有效新项', async status => {
+  vi.useFakeTimers(); vi.setSystemTime(1000)
+  const storage = memoryStorage()
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'old'}, 1000)
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'new'}, 1000)
+  const uploader = vi.fn().mockRejectedValueOnce(Object.assign(new Error('业务拒绝'), {statusCode: status, retryable: false})).mockResolvedValueOnce(undefined)
+  const listener = vi.fn()
+  const unsubscribe = subscribePendingGameUploadRetryLoop(listener)
+  try {
+    startPendingGameUploadRetryLoop(storage, {uploader})
+    await vi.advanceTimersByTimeAsync(10)
+    expect(uploader.mock.calls.map(([p]) => p.client_session_id)).toEqual(['old', 'new'])
+    expect(listener.mock.calls.map(([result]) => result)).toEqual(['rejected', 'uploaded'])
+    expect(loadPendingGameUpload(storage)).toBeNull()
+  } finally { unsubscribe() }
+})
+
+it('清理已成功队首时存储失败则停止循环且两项仍保留', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(1000)
+  const storage = memoryStorage()
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'old'}, 1000)
+  savePendingGameUpload(storage, {...payload(), client_session_id: 'new'}, 1000)
+  storage.setStorageSync.mockImplementationOnce(() => { throw new Error('存储失败') })
+  const uploader = vi.fn().mockResolvedValue(undefined)
+  startPendingGameUploadRetryLoop(storage, {uploader})
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(uploader).toHaveBeenCalledTimes(1)
+  expect(loadPendingGameUpload(storage)?.payload.client_session_id).toBe('old')
+  clearPendingGameUpload(storage)
+  expect(loadPendingGameUpload(storage)?.payload.client_session_id).toBe('new')
 })

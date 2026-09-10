@@ -165,6 +165,37 @@ def test_training_create_accepts_real_game_raw_detail(active_prescription):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("prescribed,actual", [("简单", "困难"), ("困难", "简单")])
+def test_game_difficulty_change_accepts_empty_reason(active_prescription, prescribed, actual):
+    game = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    action = active_prescription.add_action_snapshot(game)
+    record = create_training_record(
+        project_patient=active_prescription.project_patient,
+        training_date="2026-09-08",
+        prescription_action=action,
+        status=TrainingRecord.Status.COMPLETED,
+        actual_duration_minutes=10,
+        score=90,
+        form_data={
+            "accuracy_rate": 90,
+            "error_count": 1,
+            "difficulty": actual,
+            "raw_detail": {
+                "game_code": "game-memory-color-sequence",
+                "prescribed_difficulty": prescribed,
+                "difficulty_adjusted": True,
+                "difficulty_adjust_reason": "",
+            },
+        },
+    )
+    record.refresh_from_db()
+    assert record.form_data["difficulty"] == actual
+    assert record.form_data["raw_detail"]["prescribed_difficulty"] == prescribed
+    assert record.form_data["raw_detail"]["difficulty_adjusted"] is True
+    assert record.form_data["raw_detail"]["difficulty_adjust_reason"] == ""
+
+
+@pytest.mark.django_db
 @pytest.mark.parametrize(
     "source_key",
     [
@@ -363,3 +394,50 @@ def test_training_record_update_methods_are_not_allowed(
     assert record.project_patient == active_prescription.project_patient
     assert record.prescription == active_prescription
     assert record.prescription_action == prescription_action
+
+
+@pytest.mark.django_db
+def test_legacy_game_service_writes_questions_and_preserves_original_rounds(active_prescription):
+    game = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    action = active_prescription.add_action_snapshot(game, difficulty="简单")
+    rounds = [
+        {"round_index": 3, "response_ms": 0, "correct": False},
+        {"round_index": 4, "response_ms": "invalid", "correct": True},
+    ]
+    record = create_training_record(
+        project_patient=active_prescription.project_patient,
+        prescription_action=action, training_date="2026-09-09", status="completed",
+        form_data={"difficulty": "困难", "raw_detail": {"rounds": rounds}},
+    )
+    assert record.form_data["raw_detail"]["rounds"] == rounds
+    result = record.question_results.get()
+    assert result.question_index == 3
+    assert result.response_duration_ms == 0
+    assert result.is_correct is False
+    assert result.capture_version == "legacy_wall_clock_v0"
+    assert record.client_session_id is None
+
+
+@pytest.mark.django_db
+def test_legacy_question_failure_rolls_back_record_and_children(active_prescription, monkeypatch):
+    from django.db import IntegrityError
+    from apps.training.models import GameQuestionResult
+
+    game = ActionLibraryItem.objects.get(source_key="game-memory-color-sequence")
+    action = active_prescription.add_action_snapshot(game, difficulty="简单")
+    original_bulk_create = GameQuestionResult.objects.bulk_create
+
+    def fail_after_insert(rows, **kwargs):
+        original_bulk_create(rows, **kwargs)
+        raise IntegrityError("模拟历史题目存储故障")
+
+    monkeypatch.setattr(GameQuestionResult.objects, "bulk_create", fail_after_insert)
+    with pytest.raises(IntegrityError, match="模拟历史题目存储故障"):
+        create_training_record(
+            project_patient=active_prescription.project_patient,
+            prescription_action=action, training_date="2026-09-09", status="completed",
+            form_data={"difficulty": "困难", "raw_detail": {"rounds": [
+                {"round_index": 3, "response_ms": 0, "correct": False},
+            ]}},
+        )
+    assert TrainingRecord.objects.count() == GameQuestionResult.objects.count() == 0

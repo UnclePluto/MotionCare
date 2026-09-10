@@ -1,10 +1,12 @@
 from django.core.exceptions import ValidationError
+from django.db import transaction
 
-from apps.prescriptions.models import Prescription
+from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.project_status import ensure_project_open
 
+from .game_question_legacy import parse_legacy_rounds
 from .game_results import validate_game_result_fields
-from .models import TrainingRecord
+from .models import GameQuestionResult, TrainingRecord
 
 TRAINING_RECORD_FIELD_NAMES = {
     "status",
@@ -15,6 +17,7 @@ TRAINING_RECORD_FIELD_NAMES = {
 }
 
 
+@transaction.atomic
 def create_training_record(*, project_patient, training_date, prescription_action=None, **fields):
     ensure_project_open(project_patient.project)
     active = (
@@ -38,10 +41,20 @@ def create_training_record(*, project_patient, training_date, prescription_actio
         prescription_action,
         form_data=training_fields.get("form_data"),
     )
-    return TrainingRecord.objects.create(
+    record = TrainingRecord.objects.create(
         project_patient=project_patient,
         prescription=active,
         prescription_action=prescription_action,
         training_date=training_date,
         **training_fields,
     )
+    if prescription_action.internal_type_snapshot == ActionLibraryItem.InternalType.GAME:
+        legacy = parse_legacy_rounds(
+            form_data=record.form_data,
+            source_key=prescription_action.action_library_item.source_key,
+            prescribed_difficulty=prescription_action.difficulty,
+        )
+        GameQuestionResult.objects.bulk_create([
+            GameQuestionResult(training_record=record, **row) for row in legacy.rows
+        ])
+    return record

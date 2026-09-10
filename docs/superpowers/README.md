@@ -40,13 +40,19 @@ docs/superpowers/
 | `specs/2026-09-03-pp-tinypose-full-frame-streaming-counter-v2-design.md` | PP-TinyPose 全帧流式肩部推举计数 v2 | implemented |
 | `specs/2026-09-05-pp-mcare-independent-compute-service-design.md` | pp-mcare 独立动作分析计算服务 | approved |
 | `specs/2026-09-07-miniapp-private-static-assets-design.md` | 小程序固定素材私有签名访问与 7.0.4 发布 | implementing |
+| `specs/2026-09-08-patient-game-difficulty-free-selection-design.md` | 患者游戏难度自由选择与取消反馈原因 | implementing |
+| `specs/2026-09-09-game-selection-detail-design.md` | 顺序每步选择、未完成保留与拼图点击 | implemented（未发布） |
+| `specs/2026-09-09-patient-training-detail-export-design.md` | 单患者训练明细 Excel 导出与规范逐题采集 | implemented（八任务及最终审查通过，未发布） |
 
 ## 实施计划（plans/）当前清单
 
 
 | 文件 | 主题 | 状态 | 关联 spec |
 | --- | --- | --- | --- |
+| `plans/2026-09-09-game-selection-detail.md` | 逐步采集、v2兼容及六表导出 | implemented（未发布） | `specs/2026-09-09-game-selection-detail-design.md` |
+| `plans/2026-09-09-patient-training-detail-export.md` | 单患者五表导出、规范逐题计时与历史兼容 | implementing | `specs/2026-09-09-patient-training-detail-export-design.md` |
 | `plans/2026-09-07-miniapp-private-static-assets.md` | 固定素材签名、客户端接入、验收与两阶段发布 | implementing | `specs/2026-09-07-miniapp-private-static-assets-design.md` |
+| `plans/2026-09-08-patient-game-difficulty-free-selection.md` | 患者游戏三档难度自由选择、视觉与验收 | implementing | `specs/2026-09-08-patient-game-difficulty-free-selection-design.md` |
 | `plans/2026-05-08-crf-patient-baseline-mapping-phase1.md` | CRF 基线 + mapping 一期 | implementing | `specs/2026-05-08-crf-core-patient-fields-mapping-design.md` |
 | `plans/2026-05-08-frontend-fullscreen-and-create-actions.md` | 前端满屏 + 新增动作 | implementing | `specs/2026-05-08-frontend-fullscreen-and-create-actions-design.md` |
 | `plans/2026-05-11-drop-batch-concept.md` | **删除批次概念**，重构随机/确认/池语义 | ✅ **implemented** (`fa686e5`) | 来自 `2026-05-11-patient-project-admin-and-grouping-board-design.md` |
