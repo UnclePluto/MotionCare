@@ -1,3 +1,6 @@
+import { reportTrainingDiagnostic } from './diagnostics'
+vi.mock('./diagnostics', () => ({ captureTrainingDiagnosticScope: () => 'test-scope', reportTrainingDiagnostic: vi.fn() }))
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -467,4 +470,27 @@ describe('shoulder press segmented upload api', () => {
     expect(taroMock.removeStorageSync).not.toHaveBeenCalled()
     expect(taroMock.redirectTo).not.toHaveBeenCalled()
   })
+  it('captures the original native upload timeout before replacing the user message', async () => {
+    const native = { errMsg: 'uploadFile:fail timeout', errCode: 1001 }
+    taroMock.uploadFile.mockImplementation(options => { options.fail(native); return {} })
+    await expect(uploadVideoSegment({ videoId: 9, index: 2, filePath: 'private.mp4', durationMs: 5000, sizeBytes: 100 })).rejects.toThrow('视频分段上传失败')
+    expect(reportTrainingDiagnostic).toHaveBeenCalledWith('upload', native, expect.objectContaining({ videoId: 9, segmentIndex: 2 }))
+    expect(reportTrainingDiagnostic).toHaveBeenCalledTimes(1)
+  })
+  it('captures upload HTTP failures without retaining the response body', async () => {
+    taroMock.uploadFile.mockImplementation(options => { options.success({ statusCode: 500, data: 'PRIVATE_RESPONSE' }); return {} })
+    await expect(uploadVideoSegment({ videoId: 9, index: 2, filePath: 'private.mp4', durationMs: 5000, sizeBytes: 100 })).rejects.toThrow()
+    expect(reportTrainingDiagnostic).toHaveBeenCalledWith('upload', undefined, expect.objectContaining({ videoId: 9, segmentIndex: 2, httpStatus: 500 }))
+  })
+  it('captures malformed upload responses and native file-read failures', async () => {
+    taroMock.uploadFile.mockImplementation(options => { options.success({ statusCode: 200, data: '{}' }); return {} })
+    await expect(uploadVideoSegment({ videoId: 9, index: 2, filePath: 'private.mp4', durationMs: 5000, sizeBytes: 100 })).rejects.toThrow('格式无效')
+    expect(reportTrainingDiagnostic).toHaveBeenCalledWith('upload', expect.any(Error), expect.objectContaining({ videoId: 9, segmentIndex: 2 }))
+    vi.mocked(reportTrainingDiagnostic).mockClear()
+    const native = { errMsg: 'getFileInfo:fail no such file' }
+    taroMock.getFileInfo.mockRejectedValueOnce(native)
+    await expect(uploadVideoSegment({ videoId: 9, index: 2, filePath: 'private.mp4', durationMs: 5000, sizeBytes: 100 })).rejects.toThrow('无法读取')
+    expect(reportTrainingDiagnostic).toHaveBeenCalledWith('file_read', native, expect.objectContaining({ videoId: 9, segmentIndex: 2 }))
+  })
+
 })

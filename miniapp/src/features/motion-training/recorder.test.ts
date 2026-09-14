@@ -542,3 +542,24 @@ describe('MotionTrainingRecorder', () => {
     expect(onSegment).toHaveBeenCalledTimes(4)
   })
 })
+
+
+describe('recording native diagnostics', () => {
+  it('preserves native start and stop errors at the recorder boundary', async () => {
+    const onNativeError = vi.fn()
+    const startError = { errMsg: 'startRecord:fail permission denied', errCode: 1001 }
+    const stopError = { errMsg: 'stopRecord:fail timeout' }
+    const camera = {
+      startRecord: vi.fn((options: any) => options.fail(startError)),
+      stopRecord: vi.fn((options: any) => options.fail(stopError))
+    }
+    const recorder = new MotionTrainingRecorder({ camera, now: () => 1000, onSegment: vi.fn(), onNativeError })
+    await expect(recorder.start()).rejects.toThrow('启动失败')
+    expect(onNativeError).toHaveBeenCalledWith(startError)
+    camera.startRecord.mockImplementation(options => options.success())
+    const next = new MotionTrainingRecorder({ camera, now: () => 1000, onSegment: vi.fn(), onNativeError })
+    await next.start()
+    await expect(next.pause()).rejects.toThrow('停止失败')
+    expect(onNativeError).toHaveBeenCalledWith(stopError)
+  })
+})

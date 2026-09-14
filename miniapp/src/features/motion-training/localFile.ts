@@ -4,6 +4,7 @@ export async function saveTemporaryMotionTrainingSegmentForRetry(
   input: {
     filePath: string
     localFileState: MotionTrainingLocalFileState
+    onError?: (error: unknown) => void
   },
   saveFile: (options: { tempFilePath: string }) => Promise<{ savedFilePath?: string }>
 ): Promise<{
@@ -20,7 +21,9 @@ export async function saveTemporaryMotionTrainingSegmentForRetry(
         localFileState: 'saved'
       }
     }
-  } catch {
+    throw new Error('invalid saved file response')
+  } catch (error) {
+    try { input.onError?.(error) } catch { /* isolated */ }
     // 上传错误仍是主错误；持久化失败只改变本地恢复能力。
   }
 

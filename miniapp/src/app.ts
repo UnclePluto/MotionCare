@@ -1,5 +1,6 @@
+import { startTrainingDiagnostics, stopTrainingDiagnostics } from './features/motion-training/diagnostics'
 import { PropsWithChildren } from 'react'
-import Taro, { useDidShow } from '@tarojs/taro'
+import Taro, { useDidShow, useDidHide } from '@tarojs/taro'
 
 import './app.scss'
 import { getPatientAppToken } from './auth/token'
@@ -12,7 +13,9 @@ import {
 import { handlePendingShoulderPressUploadOnAppShow } from './pages/shoulder-press/pageState'
 
 function App({ children }: PropsWithChildren<any>) {
+  useDidHide(stopTrainingDiagnostics)
   useDidShow(() => {
+    startTrainingDiagnostics()
     if (isDemoSession()) {
       stopPendingGameUploadRetryLoop()
       return

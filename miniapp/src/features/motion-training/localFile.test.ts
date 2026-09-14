@@ -42,3 +42,11 @@ describe('shoulder press failed segment persistence', () => {
     })
   })
 })
+
+
+it('reports native local save failure without replacing the temporary segment', async () => {
+  const native = { errMsg: 'saveFile:fail storage full' }
+  const onError = vi.fn()
+  await expect(saveTemporaryMotionTrainingSegmentForRetry({ filePath: 'private.mp4', localFileState: 'temporary', onError }, () => Promise.reject(native))).resolves.toMatchObject({ localFileState: 'save_failed' })
+  expect(onError).toHaveBeenCalledWith(native)
+})

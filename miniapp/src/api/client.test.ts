@@ -125,7 +125,7 @@ describe('患者凭据与处方缓存生命周期', () => {
     expect(prescriptionCacheMocks.clearCurrentPrescriptionCache).toHaveBeenCalledTimes(2)
     expect(taroMocks.setStorageSync).toHaveBeenCalledWith(
       'motioncare_patient_app_token',
-      'new-token'
+      expect.objectContaining({ token: 'new-token', diagnosticScope: expect.any(String) })
     )
     expect(taroMocks.removeStorageSync).toHaveBeenCalledWith('motioncare_patient_app_token')
   })

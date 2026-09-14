@@ -1,13 +1,13 @@
 type RecordStartOptions = {
   success?: () => void
-  fail?: () => void
+  fail?: (error?: unknown) => void
   timeout?: number
   timeoutCallback?: (result: { tempVideoPath: string }) => void
 }
 
 type RecordStopOptions = {
   success?: (result: { tempVideoPath: string }) => void
-  fail?: () => void
+  fail?: (error?: unknown) => void
 }
 
 type CameraContext = {
@@ -38,6 +38,7 @@ export class MotionTrainingRecorder {
   private readonly camera: CameraContext
   private readonly now: () => number
   private readonly onSegment: (path: string, durationMs: number) => Promise<void> | void
+  private readonly onNativeError?: (error: unknown) => void
   private readonly onPause?: () => void
   private readonly onMaxDuration?: (cutoffMs: number) => void
   private readonly maxDurationMs: number
@@ -57,10 +58,12 @@ export class MotionTrainingRecorder {
     camera: CameraContext
     now: () => number
     onSegment: (path: string, durationMs: number) => Promise<void> | void
+    onNativeError?: (error: unknown) => void
     onPause?: () => void
     onMaxDuration?: (cutoffMs: number) => void
     maxDurationMs?: number
   }) {
+    this.onNativeError = input.onNativeError
     this.camera = input.camera
     this.now = input.now
     this.onSegment = input.onSegment
@@ -163,7 +166,7 @@ export class MotionTrainingRecorder {
     this.currentGeneration = generation
 
     return new Promise((resolve, reject) => {
-      this.camera.startRecord({
+      const startOptions: RecordStartOptions = {
         timeout: timeoutSeconds,
         success: () => {
           if (!this.isStartingGeneration(generation)) {
@@ -173,11 +176,12 @@ export class MotionTrainingRecorder {
           generation.state = 'recording'
           resolve()
         },
-        fail: () => {
+        fail: (nativeError) => {
           if (!this.isStartingGeneration(generation)) {
             resolve()
             return
           }
+          this.diagnose(nativeError)
           generation.state = 'failed'
           this.mode = 'idle'
           this.currentGeneration = null
@@ -188,7 +192,8 @@ export class MotionTrainingRecorder {
         timeoutCallback: (result) => {
           this.handleTimeout(generation.id, result.tempVideoPath)
         }
-      })
+      }
+      try { this.camera.startRecord(startOptions) } catch (error) { startOptions.fail?.(error) }
     })
   }
 
@@ -239,7 +244,7 @@ export class MotionTrainingRecorder {
     targetGeneration.state = 'stopping'
 
     return new Promise((resolve, reject) => {
-      this.camera.stopRecord({
+      const stopOptions: RecordStopOptions = {
         success: (result) => {
           if (!this.isCurrentGeneration(generation)) {
             resolve(null)
@@ -260,17 +265,23 @@ export class MotionTrainingRecorder {
             .then((segment) => resolve(segment))
             .catch((error: unknown) => reject(error instanceof Error ? error : new Error('录像分段保存失败')))
         },
-        fail: () => {
+        fail: (nativeError) => {
           if (!this.isCurrentGeneration(generation)) {
             resolve(null)
             return
           }
+          this.diagnose(nativeError)
           targetGeneration.state = 'recording'
           const error = new Error('录像停止失败，请稍后重试')
           reject(error)
         }
-      })
+      }
+      try { this.camera.stopRecord(stopOptions) } catch (error) { stopOptions.fail?.(error) }
     })
+  }
+
+  private diagnose(error: unknown): void {
+    try { this.onNativeError?.(error) } catch { /* isolated from recording */ }
   }
 
   private durationSinceStart(

@@ -1,3 +1,4 @@
+import { captureTrainingDiagnosticScope, reportTrainingDiagnostic } from '../../features/motion-training/diagnostics'
 import { Button, Camera, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
@@ -305,6 +306,7 @@ async function ensureRemoteSession(
 }
 
 async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
+  const diagnosticScope = captureTrainingDiagnosticScope()
   let session = loadPendingMotionTrainingSession(Taro)
   if (!session || session.finalized || session.segments.length === 0) return
   if (session.segments.some((segment) => !isCompressedMotionTrainingSegment(segment))) return
@@ -344,6 +346,7 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
 
     try {
       const uploaded = await uploadVideoSegment({
+        clientSessionId,
         videoId: session.videoId,
         index: segment.index,
         filePath: segment.savedFilePath,
@@ -363,7 +366,8 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
       if (!session) return
       const retained = await saveTemporaryMotionTrainingSegmentForRetry({
         filePath: segment.savedFilePath,
-        localFileState: segment.localFileState ?? 'saved'
+        localFileState: segment.localFileState ?? 'saved',
+        onError: (error) => reportTrainingDiagnostic('file_read', error, { diagnosticScope, clientSessionId, videoId: session?.videoId, segmentIndex: segment.index })
       }, (options) => Taro.saveFile(options))
       session = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
       if (!session) return
@@ -421,6 +425,7 @@ export function MotionTrainingRecordingCameraPage() {
   const [error, setError] = useState('')
   const [trainingTopLayout] = useState(resolveTrainingTopLayout)
   const [, setLiveTick] = useState(Date.now())
+  const pageDiagnosticScope = useRef(captureTrainingDiagnosticScope())
   const cameraContextRef = useRef<CameraContext | null>(null)
   const recorderRef = useRef<MotionTrainingRecorder | null>(null)
   const sessionRef = useRef<PendingMotionTrainingSession | null>(null)
@@ -612,6 +617,7 @@ export function MotionTrainingRecordingCameraPage() {
     tempFilePath: string,
     recordedDurationMs: number
   ): Promise<void> {
+    const diagnosticScope = pageDiagnosticScope.current
     const discardSegment = discardRecorderSegmentsRef.current
     const write = segmentSaveChainRef.current.then(async () => {
       if (discardSegment) {
@@ -639,6 +645,7 @@ export function MotionTrainingRecordingCameraPage() {
           throw new Error('无法读取录像分段实际大小，请重试')
         }
       } catch (fileInfoError) {
+        reportTrainingDiagnostic('file_read', fileInfoError, { diagnosticScope, clientSessionId: expectedClientSessionId, videoId: currentSession.videoId, segmentIndex: currentSession.segments.length })
         const writeBase = resolveOwnedSegmentWriteBase(expectedClientSessionId)
         if (!writeBase) {
           deleteOrphanedSavedFile(tempFilePath)
@@ -708,7 +715,10 @@ export function MotionTrainingRecordingCameraPage() {
     if (recorderRef.current) return recorderRef.current
     const context = cameraContextRef.current ?? Taro.createCameraContext()
     cameraContextRef.current = context
+    const diagnosticScope = pageDiagnosticScope.current
+    const diagnosticOwner = sessionRef.current
     recorderRef.current = new MotionTrainingRecorder({
+      onNativeError: (error) => reportTrainingDiagnostic('recording', error, { diagnosticScope, clientSessionId: diagnosticOwner?.clientSessionId, videoId: diagnosticOwner?.videoId }),
       camera: context,
       now: () => Date.now(),
       maxDurationMs: MOTION_TRAINING_RECORDING_STOP_MS,
@@ -1231,7 +1241,8 @@ export function MotionTrainingRecordingCameraPage() {
         onInitDone={() => {
           setCameraReady(true)
         }}
-        onError={() => {
+        onError={(event) => {
+          reportTrainingDiagnostic('recording', event?.detail, { diagnosticScope: pageDiagnosticScope.current, clientSessionId: sessionRef.current?.clientSessionId, videoId: sessionRef.current?.videoId })
           setCameraReady(false)
           setError('请开启摄像头权限，摄像头可用后才能开始录像')
         }}

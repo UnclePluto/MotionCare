@@ -294,7 +294,15 @@ PP_MCARE_MONITOR_INTERVAL_SECONDS = _positive_int_env(
 )
 MOTION_ANALYSIS_STALE_RECOVERY_INTERVAL_SECONDS = PP_MCARE_MONITOR_INTERVAL_SECONDS
 PP_MCARE_PENDING_WARNING_SECONDS = _positive_int_env("PP_MCARE_PENDING_WARNING_SECONDS", 1200)
+TRAINING_UPLOAD_DIAGNOSTIC_MAX_BODY_BYTES = 4096
+TRAINING_UPLOAD_DIAGNOSTIC_RATE_LIMIT_REDIS_URL = REDIS_URL
+TRAINING_UPLOAD_DIAGNOSTIC_RATE_LIMIT_REQUESTS = 60
+TRAINING_UPLOAD_DIAGNOSTIC_RATE_LIMIT_WINDOW_SECONDS = 60
 CELERY_BEAT_SCHEDULE = {
+    "cleanup-training-upload-diagnostics": {
+        "task": "apps.training.tasks.cleanup_training_upload_diagnostics",
+        "schedule": 3600,
+    },
     "recover-stale-motion-analysis-jobs": {
         "task": "apps.training.tasks.recover_stale_motion_analysis_jobs",
         "schedule": PP_MCARE_MONITOR_INTERVAL_SECONDS,

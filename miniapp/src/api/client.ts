@@ -23,6 +23,7 @@ type Method = 'GET' | 'POST' | 'PUT'
 type RequestOptions = {
   method?: Method
   data?: unknown
+  onError?: (error: unknown, httpStatus?: number) => void
 }
 
 function resolveErrorMessage(data: unknown): string {
@@ -72,7 +73,12 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       }
     })
   } catch (error) {
+    try { options.onError?.(error) } catch { /* diagnostics cannot affect requests */ }
     throw new Error(networkRequestErrorMessage(error))
+  }
+
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    try { options.onError?.(undefined, response.statusCode) } catch { /* isolated */ }
   }
 
   if (response.statusCode === 401 || response.statusCode === 403) {

@@ -1,3 +1,4 @@
+import { captureTrainingDiagnosticScope, reportTrainingDiagnostic, TrainingDiagnosticContext, TrainingDiagnosticStage } from './diagnostics'
 import Taro from '@tarojs/taro'
 
 import {
@@ -120,6 +121,25 @@ function parseVideoSessionStatus(value: unknown, options: ParseVideoSessionStatu
   return parsed
 }
 
+
+async function trainingRequest(
+  path: string,
+  options: Parameters<typeof request>[1],
+  stage: TrainingDiagnosticStage,
+  context: TrainingDiagnosticContext,
+  parse: (value: unknown) => VideoSessionStatus
+): Promise<VideoSessionStatus> {
+  const ownedContext = { ...context, diagnosticScope: captureTrainingDiagnosticScope() }
+  const response = await request<unknown>(path, {
+    ...options,
+    onError: (error, httpStatus) => reportTrainingDiagnostic(stage, error, { ...ownedContext, httpStatus })
+  })
+  try { return parse(response) } catch (error) {
+    reportTrainingDiagnostic(stage, error, ownedContext)
+    throw error
+  }
+}
+
 export async function createVideoSession(input: {
   actionId: number
   clientSessionId: string
@@ -127,7 +147,7 @@ export async function createVideoSession(input: {
   expectedDurationSeconds: number
   trainingStartedAt: string
 }): Promise<VideoSessionStatus> {
-  const response = await request<unknown>('/patient-app/training-video-sessions/', {
+  return trainingRequest('/patient-app/training-video-sessions/', {
     method: 'POST',
     data: {
       prescription_action: input.actionId,
@@ -138,11 +158,12 @@ export async function createVideoSession(input: {
       ),
       training_started_at: input.trainingStartedAt
     }
-  })
-  return parseVideoSessionStatus(response, { requireUploadedSegments: true })
+  }, 'session', { clientSessionId: input.clientSessionId },
+    response => parseVideoSessionStatus(response, { requireUploadedSegments: true }))
 }
 
 export async function uploadVideoSegment(input: {
+  clientSessionId?: string
   videoId: number
   index: number
   filePath: string
@@ -150,6 +171,7 @@ export async function uploadVideoSegment(input: {
   sizeBytes: number
   onProgress?: (progress: number) => void
 }): Promise<UploadedVideoSegment> {
+  const diagnosticContext = { diagnosticScope: captureTrainingDiagnosticScope(), clientSessionId: input.clientSessionId, videoId: input.videoId, segmentIndex: input.index }
   let exactSizeBytes: number
   try {
     const fileInfo = await Taro.getFileInfo({ filePath: input.filePath })
@@ -157,7 +179,8 @@ export async function uploadVideoSegment(input: {
       throw new Error('invalid file info')
     }
     exactSizeBytes = fileInfo.size
-  } catch {
+  } catch (error) {
+    reportTrainingDiagnostic('file_read', error, diagnosticContext)
     throw new Error('无法读取录像分段实际大小，请重试')
   }
 
@@ -186,6 +209,9 @@ export async function uploadVideoSegment(input: {
         },
         success(response: UploadFileSuccess) {
           if (settled) return
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            reportTrainingDiagnostic('upload', undefined, { ...diagnosticContext, httpStatus: response.statusCode })
+          }
           if (response.statusCode === 401 || response.statusCode === 403) {
             try {
               handlePatientUnauthorized()
@@ -201,10 +227,13 @@ export async function uploadVideoSegment(input: {
           try {
             settleResolve(parseUploadedSegment(response.data, input.index))
           } catch (error) {
+            reportTrainingDiagnostic('upload', error, diagnosticContext)
             settleReject(error instanceof Error ? error : new Error('视频分段上传响应格式无效'))
           }
         },
-        fail() {
+        fail(error) {
+          if (settled) return
+          reportTrainingDiagnostic('upload', error, diagnosticContext)
           settleReject(new Error('视频分段上传失败，请检查网络后重试'))
         }
       })
@@ -215,20 +244,23 @@ export async function uploadVideoSegment(input: {
           input.onProgress?.(Math.max(0, Math.min(100, Math.round(event.progress))))
         })
       }
-    } catch {
+    } catch (error) {
+      if (settled) return
+      reportTrainingDiagnostic('upload', error, diagnosticContext)
       settleReject(new Error('视频分段上传失败，请检查网络后重试'))
     }
   })
 }
 
 export async function finalizeVideoSession(input: {
+  clientSessionId?: string
   videoId: number
   segmentCount: number
   actualDurationSeconds: number
   note: string
   trainingEndedAt?: string
 }): Promise<VideoSessionStatus> {
-  const response = await request<unknown>(`/patient-app/training-video-sessions/${input.videoId}/finalize/`, {
+  return trainingRequest(`/patient-app/training-video-sessions/${input.videoId}/finalize/`, {
     method: 'POST',
     data: {
       segment_count: input.segmentCount,
@@ -238,19 +270,18 @@ export async function finalizeVideoSession(input: {
         ? { training_ended_at: input.trainingEndedAt }
         : {})
     }
-  })
-  return parseVideoSessionStatus(response, {
+  }, 'finalize', { clientSessionId: input.clientSessionId, videoId: input.videoId }, response => parseVideoSessionStatus(response, {
     requireAssemblyJobId: true,
     expectedVideoId: input.videoId
-  })
+  }))
 }
 
 export async function getVideoSessionStatus(videoId: number): Promise<VideoSessionStatus> {
-  const response = await request<unknown>(`/patient-app/training-video-sessions/${videoId}/status/`)
-  return parseVideoSessionStatus(response, {
-    requireUploadedSegments: true,
-    expectedVideoId: videoId
-  })
+  return trainingRequest(`/patient-app/training-video-sessions/${videoId}/status/`, {},
+    'status', { videoId }, response => parseVideoSessionStatus(response, {
+      requireUploadedSegments: true,
+      expectedVideoId: videoId
+    }))
 }
 
 export async function createMotionTrainingUploadIntent(input: {

@@ -1,5 +1,7 @@
 from django.urls import path
 
+from .diagnostic_views import TrainingUploadDiagnosticView
+
 from .static_asset_views import StaticAssetManifestView
 
 from .views import (
@@ -18,6 +20,11 @@ from .views import (
 )
 
 urlpatterns = [
+    path(
+        "training-upload-diagnostics/",
+        TrainingUploadDiagnosticView.as_view(),
+        name="patient-app-training-upload-diagnostics",
+    ),
     path(
         "static-assets/",
         StaticAssetManifestView.as_view(),

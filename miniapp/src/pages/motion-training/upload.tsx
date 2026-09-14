@@ -1,3 +1,4 @@
+import { captureTrainingDiagnosticScope, reportTrainingDiagnostic } from '../../features/motion-training/diagnostics'
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useRef, useState } from 'react'
@@ -138,6 +139,7 @@ export default function MotionTrainingUploadPage() {
   const [running, setRunning] = useState(false)
   const [missing, setMissing] = useState(pending === null)
   const [error, setError] = useState('')
+  const pageDiagnosticScope = useRef(captureTrainingDiagnosticScope())
   const runningRef = useRef(false)
 
   function persist(session: PendingMotionTrainingSession): PendingMotionTrainingSession | null {
@@ -220,6 +222,7 @@ export default function MotionTrainingUploadPage() {
         if (!current) return null
         setSegmentProgress(100)
       } catch (preparationError) {
+        reportTrainingDiagnostic('file_read', preparationError, { diagnosticScope: pageDiagnosticScope.current, clientSessionId, videoId: current.videoId, segmentIndex: segment.index })
         const detail = mediaErrorDetail(preparationError)
         throw new Error(detail
           ? `录像文件已失效，请重新训练：${detail}`
@@ -278,6 +281,7 @@ export default function MotionTrainingUploadPage() {
 
       try {
         const uploaded = await uploadVideoSegment({
+          clientSessionId,
           videoId: current.videoId,
           index: segment.index,
           filePath: segment.savedFilePath,
@@ -298,7 +302,8 @@ export default function MotionTrainingUploadPage() {
         if (!current) return null
         const retained = await saveTemporaryMotionTrainingSegmentForRetry({
           filePath: segment.savedFilePath,
-          localFileState: segment.localFileState ?? 'saved'
+          localFileState: segment.localFileState ?? 'saved',
+          onError: (error) => reportTrainingDiagnostic('file_read', error, { diagnosticScope: pageDiagnosticScope.current, clientSessionId, videoId: current?.videoId, segmentIndex: segment.index })
         }, (options) => Taro.saveFile(options))
         current = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
         if (!current) return null
@@ -323,6 +328,7 @@ export default function MotionTrainingUploadPage() {
     if (!session.videoId) throw new Error('上传会话缺失，请重试')
     setPhase('finalize')
     return finalizeVideoSession({
+      clientSessionId: session.clientSessionId,
       videoId: session.videoId,
       segmentCount: session.segments.length,
       actualDurationSeconds: Math.ceil(session.actualDurationMs / 1000),

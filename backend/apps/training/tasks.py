@@ -85,3 +85,14 @@ from .video_tasks import (  # noqa: E402,F401
     recover_stale_video_assembly_jobs,
     run_video_assembly_job,
 )
+
+
+@shared_task(ignore_result=True)
+def cleanup_training_upload_diagnostics():
+    from .models import TrainingUploadDiagnostic
+    from .upload_diagnostics import diagnostic_cutoff
+
+    deleted, _ = TrainingUploadDiagnostic.objects.filter(
+        received_at__lte=diagnostic_cutoff(),
+    ).delete()
+    return deleted

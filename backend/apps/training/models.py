@@ -93,3 +93,5 @@ from .video_models import (  # noqa: E402,F401
     TrainingVideoSegment,
     VideoAssemblyJob,
 )
+
+from .diagnostic_models import TrainingUploadDiagnostic  # noqa: E402,F401
