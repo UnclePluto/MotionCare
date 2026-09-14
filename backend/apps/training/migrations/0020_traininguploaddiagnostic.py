@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('studies', '0004_studyproject_completed_at'),
-        ('training', '0015_motion_analysis_current_stage'),
+        ('training', '0019_game_selection_steps'),
     ]
 
     operations = [

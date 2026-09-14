@@ -13,7 +13,7 @@
 
 ## Task 1：服务端接收、查询和清理
 
-Files: `backend/apps/patient_app/diagnostic_views.py`、`urls.py`；`backend/apps/training/diagnostic_models.py`、`upload_diagnostics.py`、`models.py`、`tasks.py`、`migrations/0016_traininguploaddiagnostic.py`；`backend/config/settings.py`；`backend/apps/training/management/commands/training_upload_diagnostics.py`；`backend/apps/patient_app/tests/test_training_upload_diagnostics.py`。
+Files: `backend/apps/patient_app/diagnostic_views.py`、`urls.py`；`backend/apps/training/diagnostic_models.py`、`upload_diagnostics.py`、`models.py`、`tasks.py`、`migrations/0020_traininguploaddiagnostic.py`；`backend/config/settings.py`；`backend/apps/training/management/commands/training_upload_diagnostics.py`；`backend/apps/patient_app/tests/test_training_upload_diagnostics.py`。
 
 - [x] 编写 API 集成测试，构造设计中的事件负载，验证成功、重复、未登录、其他患者 video_id、无 video_id、恶意摘要、超长和未知字段；调用 `client.post('/api/patient-app/training-upload-diagnostics/', payload, format='json')`。
 - [x] 运行新增测试确认缺少路由时失败。
