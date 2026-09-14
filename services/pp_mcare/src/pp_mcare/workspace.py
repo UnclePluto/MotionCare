@@ -301,7 +301,8 @@ class TaskWorkspace:
 
     def secure_tool_path(self, name: str) -> Path:
         self._validate_leaf(name)
-        candidate = Path(f"/proc/self/fd/{self._directory_fd}")
+        # External tools must address our pinned directory, not their own fd table.
+        candidate = Path(f"/proc/{os.getpid()}/fd/{self._directory_fd}")
         if not candidate.is_dir():
             raise OSError("当前平台不支持安全外部工具路径")
         return candidate / name
