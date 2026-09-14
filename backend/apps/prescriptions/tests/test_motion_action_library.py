@@ -103,6 +103,9 @@ def test_motion_actions_are_seeded_by_migration():
         "motion-resistance-shoulder-press",
     ]
 
+    high_knee = ActionLibraryItem.objects.get(source_key="motion-aerobic-high-knee")
+    assert high_knee.has_ai_supervision is False
+
     sit_stand = ActionLibraryItem.objects.get(source_key="motion-balance-sit-stand")
     assert sit_stand.name == "坐站转移训练"
     assert sit_stand.internal_type == ActionLibraryItem.InternalType.MOTION
@@ -307,3 +310,57 @@ def test_prescription_action_endpoint_uses_motion_snapshot_fields(
     assert "repetitions" not in row
     assert "execution_description_snapshot" not in row
     assert "frequency" not in row
+
+
+@pytest.mark.django_db
+def test_high_knee_ai_correction_updates_old_snapshots_and_preserves_training(
+    project_patient, doctor, client
+):
+    from types import SimpleNamespace
+
+    from django.db import connection
+
+    high_knee = ActionLibraryItem.objects.get(source_key="motion-aerobic-high-knee")
+    high_knee.has_ai_supervision = True
+    high_knee.save(update_fields=["has_ai_supervision"])
+    other = ActionLibraryItem.objects.get(source_key="motion-balance-sit-stand")
+    snapshots = []
+    for version, status in [(31, "active"), (32, "archived")]:
+        prescription = project_patient.prescriptions.create(
+            version=version, status=status, opened_by=doctor
+        )
+        snapshots.append(prescription.add_action_snapshot(high_knee, duration_minutes=20))
+    other_snapshot = prescription.add_action_snapshot(other, duration_minutes=15)
+    original = {
+        snapshot.id: (snapshot.action_instruction_snapshot, snapshot.video_object_key_snapshot)
+        for snapshot in snapshots
+    }
+    migration = importlib.import_module(
+        "apps.prescriptions.migrations.0013_disable_high_knee_ai_supervision"
+    )
+    for _ in range(2):
+        migration.disable_high_knee_ai_supervision(
+            django_apps, SimpleNamespace(connection=connection)
+        )
+
+    high_knee.refresh_from_db()
+    other.refresh_from_db()
+    other_snapshot.refresh_from_db()
+    assert high_knee.has_ai_supervision is False
+    assert high_knee.is_active is True
+    assert other.has_ai_supervision is True
+    assert other_snapshot.has_ai_supervision_snapshot is True
+    for snapshot in snapshots:
+        snapshot.refresh_from_db()
+        assert snapshot.has_ai_supervision_snapshot is False
+        assert snapshot.duration_minutes == 20
+        assert (snapshot.action_instruction_snapshot, snapshot.video_object_key_snapshot) == original[snapshot.id]
+    new_snapshot = prescription.add_action_snapshot(high_knee, duration_minutes=20)
+    assert new_snapshot.has_ai_supervision_snapshot is False
+
+    client.force_login(doctor)
+    response = client.get("/api/prescriptions/actions/")
+    assert response.status_code == 200
+    row = next(item for item in response.json() if item["source_key"] == high_knee.source_key)
+    assert row["has_ai_supervision"] is False
+    assert row["video_configured"] is True

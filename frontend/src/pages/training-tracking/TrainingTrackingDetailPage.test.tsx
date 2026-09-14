@@ -9,11 +9,12 @@ import type {
   TrainingVideoWearableWindowResponse,
 } from "./types";
 
-const { mockGet, mockPatch, mockPost, mockDualAxesProps } = vi.hoisted(() => ({
+const { mockGet, mockPatch, mockPost, mockDualAxesProps, mockDownloadTrainingDetail } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPatch: vi.fn(),
   mockPost: vi.fn(),
   mockDualAxesProps: [] as Array<Record<string, unknown>>,
+  mockDownloadTrainingDetail: vi.fn(),
 }));
 
 type TooltipConfig = {
@@ -28,6 +29,10 @@ vi.mock("../../api/client", () => ({
     patch: (...args: unknown[]) => mockPatch(...args),
     post: (...args: unknown[]) => mockPost(...args),
   },
+}));
+
+vi.mock("./trainingDetailExport", () => ({
+  downloadTrainingDetail: (...args: unknown[]) => mockDownloadTrainingDetail(...args),
 }));
 
 vi.mock("@ant-design/charts", () => ({
@@ -442,6 +447,8 @@ describe("TrainingTrackingDetailPage", () => {
     mockGet.mockReset();
     mockPatch.mockReset();
     mockPost.mockReset();
+    mockDownloadTrainingDetail.mockReset();
+    mockDownloadTrainingDetail.mockResolvedValue(undefined);
     vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     vi.spyOn(window.HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
     vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -1360,6 +1367,80 @@ describe("TrainingTrackingDetailPage", () => {
     renderAt("/training-tracking/patients/201");
 
     expect(await screen.findByText("暂无可追踪项目")).toBeInTheDocument();
+  });
+
+  it("详情顶部可打开当前患者导出弹窗且空训练记录也可导出", async () => {
+    const detailWithoutRecords = cloneTrackingDetail();
+    detailWithoutRecords.recent_records = [];
+    mockGet.mockResolvedValue({ data: detailWithoutRecords });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("训练患者甲")).toBeInTheDocument();
+    const exportEntry = screen.getByRole("button", { name: "导出训练明细" });
+    expect(exportEntry).toBeEnabled();
+    fireEvent.click(exportEntry);
+
+    expect(await screen.findByRole("dialog", { name: "导出训练明细" })).toBeInTheDocument();
+    expect(screen.getByText("训练患者甲（138****0201）")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "近30天" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "导出 Excel" }));
+
+    await waitFor(() => {
+      expect(mockDownloadTrainingDetail).toHaveBeenCalledWith(201, { project_patient: 9001, range: "30d" });
+    });
+  });
+
+  it("无可访问项目时保留禁用导出入口并说明原因", async () => {
+    mockGet.mockResolvedValue({ data: { ...trackingDetail, project_patients: [], selected_project_patient: null } });
+
+    renderAt("/training-tracking/patients/201");
+
+    expect(await screen.findByText("暂无可导出的项目")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导出训练明细" })).toBeDisabled();
+  });
+
+  it("项目切换加载期间禁用导出入口，避免旧默认项目错配", async () => {
+    let resolveProjectSwitch: ((value: { data: TrackingDetail }) => void) | undefined;
+    mockGet.mockImplementation((_url: string, config?: { params?: { project_patient?: number } }) => {
+      if (config?.params?.project_patient === 9002) {
+        return new Promise((resolve) => { resolveProjectSwitch = resolve; });
+      }
+      return Promise.resolve({ data: trackingDetail });
+    });
+    renderAt("/training-tracking/patients/201");
+    await screen.findByText("训练患者甲");
+
+    fireEvent.mouseDown(screen.getByRole("combobox", { name: "切换项目" }));
+    fireEvent.click(await screen.findByTitle("研究项目 B"));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "导出训练明细" })).toBeDisabled());
+    const switched = cloneTrackingDetail();
+    switched.selected_project_patient = switched.project_patients[1];
+    resolveProjectSwitch?.({ data: switched });
+    await waitFor(() => expect(screen.getByRole("button", { name: "导出训练明细" })).toBeEnabled());
+  });
+
+  it("切换患者路由时关闭已打开的导出弹窗", async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/training/tracking/patients/201/") return Promise.resolve({ data: trackingDetail });
+      if (url === "/training/tracking/patients/202/") {
+        const next = cloneTrackingDetail();
+        next.patient = { id: 202, name: "训练患者乙", phone_masked: "138****0202" };
+        return Promise.resolve({ data: next });
+      }
+      return Promise.reject(new Error(`unmocked GET ${url}`));
+    });
+    renderWithRouteSwitcher("/training-tracking/patients/201");
+
+    await screen.findByText("训练患者甲");
+    fireEvent.click(screen.getByRole("button", { name: "导出训练明细" }));
+    expect(await screen.findByRole("dialog", { name: "导出训练明细" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "切换患者" }));
+
+    expect(await screen.findByText("训练患者乙")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "导出训练明细" })).not.toBeInTheDocument());
   });
 
   it("请求失败时展示后端错误而不是空态", async () => {

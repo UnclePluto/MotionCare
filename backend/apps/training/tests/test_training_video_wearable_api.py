@@ -546,3 +546,12 @@ def test_wearable_window_orders_same_timestamp_points_by_id(
         80,
         81,
     ]
+
+
+def test_public_health_window_is_pure_and_compatible():
+    from types import SimpleNamespace
+    from apps.wearables.services.training_windows import _health_window, training_video_health_window
+    start = datetime(2026, 9, 9, tzinfo=UTC)
+    video = SimpleNamespace(training_started_at=start, expected_duration_seconds=180)
+    assert training_video_health_window(video) == (start, start + timedelta(seconds=480))
+    assert _health_window(video) == training_video_health_window(video)

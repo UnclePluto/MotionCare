@@ -1,4 +1,4 @@
-import { Button, Image, Input, Text, View } from '@tarojs/components'
+import { Button, Image, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -15,7 +15,7 @@ import {
 import { createCategorySwitchRound, evaluateCategorySwitchAttempt, type CategoryRule, type CategorySwitchRound } from './categorySwitch'
 import { choiceFeedbackState, type ChoiceOutcome } from './choiceFeedback'
 import { createGameIntroSteps } from './gameIntro'
-import { DIFFICULTY_OPTIONS, DIFFICULTY_REASONS, gameDifficultyDescription, normalizeDifficulty } from './gameDifficulty'
+import { DIFFICULTY_OPTIONS, gameDifficultyDescription, normalizeDifficulty } from './gameDifficulty'
 import { GAME_CATALOG, gameCodeForActionSource } from '../../game/catalog'
 import {
   GAME_AUDIO_TEXT,
@@ -64,11 +64,15 @@ import {
 } from './puzzle'
 import {
   postGameTrainingRecord,
+  clearPendingGameUpload,
   savePendingGameUploadAfterActiveRetry,
+  savePendingGameUpload,
   startPendingGameUploadRetryLoop,
   type TrainingRecordUploadError,
 } from './retryUpload'
 import { buildGameTrainingResult } from './scoring'
+import { createCaptureNow, createGameClientSessionId } from './capturePlatform'
+import { createQuestionCapture, type QuestionCapture, type GameQuestionPayload } from './questionCapture'
 import {
   createSoundDiscriminationRound,
   evaluateSoundDiscriminationAttempt,
@@ -99,7 +103,6 @@ type ReadyGameImageAssets = ImageAssetToken & Readonly<{
 
 type UnitResult = {
   correct: boolean
-  detail?: Record<string, unknown>
 }
 
 type UploadState =
@@ -109,7 +112,6 @@ type UploadState =
   | 'uploaded'
   | 'upload_rejected'
   | 'pending_retry'
-  | 'blocked_by_existing_pending'
   | 'upload_save_failed'
 
 
@@ -122,6 +124,7 @@ const COLOR_LABEL: Record<ColorToken, string> = {
 }
 
 const ROUND_FEEDBACK_MS = 1000
+const MAX_QUESTION_DURATION_MS = 3_600_000
 
 function suggestedDurationMinutes(action: GameActionSummary): number {
   return action.duration_minutes && action.duration_minutes > 0 ? action.duration_minutes : 10
@@ -150,7 +153,6 @@ function uploadStateText(uploadState: UploadState): string {
   if (uploadState === 'uploaded') return '已上传'
   if (uploadState === 'upload_rejected') return '上传失败'
   if (uploadState === 'pending_retry') return '待补传'
-  if (uploadState === 'blocked_by_existing_pending') return '未保存，已有旧记录待补传'
   if (uploadState === 'upload_save_failed') return '未保存'
   return '等待上传'
 }
@@ -171,9 +173,6 @@ export default function GameSessionPage() {
   const [prescription, setPrescription] = useState<CurrentPrescription>(null)
   const [loaded, setLoaded] = useState(false)
   const [difficultyIndex, setDifficultyIndex] = useState(0)
-  const [difficultyReason, setDifficultyReason] = useState('')
-  const [otherDifficultyReason, setOtherDifficultyReason] = useState('')
-  const [showDifficultyChoices, setShowDifficultyChoices] = useState(false)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [unitResults, setUnitResults] = useState<UnitResult[]>([])
   const [feedback, setFeedback] = useState('')
@@ -198,6 +197,7 @@ export default function GameSessionPage() {
   const [soundPreviewingCardId, setSoundPreviewingCardId] = useState<string | null>(null)
   const [soundAttemptOutcome, setSoundAttemptOutcome] = useState<SoundAttemptOutcome | null>(null)
   const [soundPlaybackError, setSoundPlaybackError] = useState('')
+  const [soundTargetPlaying, setSoundTargetPlaying] = useState(false)
   const [activePuzzleRound, setActivePuzzleRound] = useState<PuzzleRound | null>(null)
   const [selectedPuzzleTileId, setSelectedPuzzleTileId] = useState<string | null>(null)
   const [puzzlePreviewing, setPuzzlePreviewing] = useState(false)
@@ -228,8 +228,9 @@ export default function GameSessionPage() {
   const actionRef = useRef<GameActionSummary | null>(null)
   const gameCodeRef = useRef<GameCode | null>(null)
   const difficultyRef = useRef<GameDifficulty>('简单')
-  const difficultyReasonRef = useRef('')
   const endStartedRef = useRef(false)
+  const unmountedRef = useRef(false)
+  const uploadingPayloadRef = useRef<GameTrainingPayload | null>(null)
   const unitLockedRef = useRef(false)
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const revealTimerDeadlineRef = useRef<number | null>(null)
@@ -246,7 +247,14 @@ export default function GameSessionPage() {
   const sessionTimerRemainingMsRef = useRef(1000)
   const backgroundSuspendedRef = useRef(false)
   const previousCategoryRuleRef = useRef<CategoryRule | undefined>(undefined)
-  const roundStartedAtRef = useRef(Date.now())
+  const captureRef = useRef<QuestionCapture | null>(null)
+  const clientSessionIdRef = useRef<string | null>(null)
+  const captureNowRef = useRef<(() => number) | null>(null)
+  const questionReadyRef = useRef(false)
+  const sessionActiveStartedAtRef = useRef<number | null>(null)
+  const sessionElapsedMsRef = useRef(0)
+  const soundTargetReadyRef = useRef(false)
+  const soundTargetPlayingRef = useRef(false)
   const initializedRef = useRef(false)
   const loadingPrescriptionRef = useRef(false)
   const loadedRef = useRef(false)
@@ -282,17 +290,31 @@ export default function GameSessionPage() {
     : null
   const difficulty = DIFFICULTY_OPTIONS[difficultyIndex] ?? '简单'
   const prescribedDifficulty = normalizeDifficulty(action?.difficulty ?? '')
-  const adjustedDifficulty = difficulty !== prescribedDifficulty
-  const prescribedDifficultyIndex = DIFFICULTY_OPTIONS.indexOf(prescribedDifficulty)
-  const lowerDifficulties = DIFFICULTY_OPTIONS.slice(0, prescribedDifficultyIndex)
-  const recordedDifficultyReason = !adjustedDifficulty ? '' : difficultyReason === '其他' && otherDifficultyReason.trim()
-    ? `其他：${otherDifficultyReason.trim()}`
-    : difficultyReason
   const remainingSeconds = Math.max(0, targetSecondsRef.current - elapsedSeconds)
 
   function setSessionPhase(nextPhase: SessionPhase) {
     phaseRef.current = nextPhase
     setPhase(nextPhase)
+  }
+
+  function selectDifficulty(level: GameDifficulty) {
+    if (phaseRef.current !== 'setup') return
+    difficultyRef.current = level
+    setDifficultyIndex(DIFFICULTY_OPTIONS.indexOf(level))
+    setError('')
+  }
+
+  function h5DifficultyKeyboardProps(level: GameDifficulty) {
+    if (process.env.TARO_ENV !== 'h5') return {}
+    return {
+      role: 'button',
+      tabIndex: 0,
+      onKeyDown: (event: { key: string; preventDefault: () => void }) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        if (event.key === ' ') event.preventDefault()
+        selectDifficulty(level)
+      },
+    }
   }
 
   function setSoundRoundPhase(nextPhase: 'preview' | 'choose') {
@@ -321,6 +343,7 @@ export default function GameSessionPage() {
   function invalidateSoundPreviewRun() {
     soundRoundRunIdRef.current += 1
     soundPreviewInFlightRef.current = false
+    soundTargetPlayingRef.current = false
     stopActiveGameAudio()
   }
 
@@ -362,6 +385,15 @@ export default function GameSessionPage() {
   function resetSessionState() {
     clearRoundTimers()
     clearSessionTimer()
+    captureRef.current?.discard()
+    captureRef.current = null
+    clientSessionIdRef.current = null
+    captureNowRef.current = null
+    questionReadyRef.current = false
+    sessionActiveStartedAtRef.current = null
+    sessionElapsedMsRef.current = 0
+    soundTargetReadyRef.current = false
+    setSoundTargetPlaying(false)
     sessionTimerRemainingMsRef.current = 1000
     backgroundSuspendedRef.current = false
     elapsedSecondsRef.current = 0
@@ -379,7 +411,6 @@ export default function GameSessionPage() {
     soundPhaseRef.current = 'preview'
     invalidateSoundPreviewRun()
     previousCategoryRuleRef.current = undefined
-    roundStartedAtRef.current = Date.now()
     introRunIdRef.current += 1
     setElapsedSeconds(0)
     setUnitResults([])
@@ -513,9 +544,6 @@ export default function GameSessionPage() {
     setPrescription(null)
     setSessionPhase('loading')
     setError('')
-    setDifficultyReason('')
-    setOtherDifficultyReason('')
-    setShowDifficultyChoices(false)
     resetSessionState()
 
     fetchCurrentPrescriptionData()
@@ -524,6 +552,7 @@ export default function GameSessionPage() {
         setPrescription(body)
         if (nextAction?.internal_type === 'game') {
           const defaultDifficulty = normalizeDifficulty(nextAction.difficulty)
+          difficultyRef.current = defaultDifficulty
           setDifficultyIndex(DIFFICULTY_OPTIONS.indexOf(defaultDifficulty))
           targetSecondsRef.current = suggestedDurationMinutes(nextAction) * 60
         }
@@ -588,14 +617,6 @@ export default function GameSessionPage() {
   }, [action, actionIsGame, gameCode, loaded])
 
   useEffect(() => {
-    difficultyRef.current = difficulty
-  }, [difficulty])
-
-  useEffect(() => {
-    difficultyReasonRef.current = recordedDifficultyReason
-  }, [recordedDifficultyReason])
-
-  useEffect(() => {
     if (phase !== 'playing') return undefined
     startSessionTimer(sessionTimerRemainingMsRef.current)
     return pauseSessionTimer
@@ -626,6 +647,15 @@ export default function GameSessionPage() {
 
   useEffect(() => {
     return () => {
+      unmountedRef.current = true
+      if (clientSessionIdRef.current && !endStartedRef.current) {
+        endSession('manual', undefined, true)
+      } else if (!demoMode && uploadingPayloadRef.current) {
+        try { savePendingGameUpload(Taro, uploadingPayloadRef.current, Date.now()) } catch { /* 同步存储失败时保留原退出行为。 */ }
+      }
+      captureRef.current?.discard()
+      questionReadyRef.current = false
+      pageVisibleRef.current = false
       introRunIdRef.current += 1
       imageAssetGenerationRef.current += 1
       readyGameImageAssetsRef.current = null
@@ -643,12 +673,42 @@ export default function GameSessionPage() {
     sessionTimerDeadlineRef.current = null
   }
 
+  function sessionElapsedMs(): number {
+    const startedAt = sessionActiveStartedAtRef.current
+    return sessionElapsedMsRef.current + (startedAt === null ? 0 : captureNowRef.current!() - startedAt)
+  }
+
+  function pauseSessionClock(suppressStateUpdates = false) {
+    sessionElapsedMsRef.current = sessionElapsedMs()
+    sessionActiveStartedAtRef.current = null
+    elapsedSecondsRef.current = Math.floor(sessionElapsedMsRef.current / 1000)
+    if (!suppressStateUpdates) setElapsedSeconds(elapsedSecondsRef.current)
+  }
+
+  function canAnswerCurrentQuestion(): boolean {
+    return questionReadyRef.current && pageVisibleRef.current && phaseRef.current === 'playing'
+      && !endStartedRef.current && !unitLockedRef.current && !soundTargetPlayingRef.current
+      && (gameCodeRef.current !== 'game-audiovisual-sound-discrimination' || soundTargetReadyRef.current)
+  }
+
+  function beginQuestion() {
+    const currentGameCode = gameCodeRef.current
+    if (!currentGameCode || !canContinueRoundTimers() || !pageVisibleRef.current) return
+    captureRef.current?.begin(currentGameCode, difficultyRef.current)
+    questionReadyRef.current = true
+    if (currentGameCode === 'game-audiovisual-puzzle') startRoundTimeout(MAX_QUESTION_DURATION_MS)
+  }
+
+  function resumeQuestion() {
+    if (canAnswerCurrentQuestion()) captureRef.current?.resume()
+  }
+
   function pauseSessionTimer() {
     if (!sessionTimerRef.current) return
     const deadline = sessionTimerDeadlineRef.current
     clearSessionTimer()
     if (deadline !== null) {
-      sessionTimerRemainingMsRef.current = Math.max(0, deadline - Date.now())
+      sessionTimerRemainingMsRef.current = Math.max(0, deadline - captureNowRef.current!())
     }
   }
 
@@ -657,17 +717,17 @@ export default function GameSessionPage() {
     if (!canContinueRoundTimers()) return
     const normalizedDurationMs = Math.max(0, durationMs)
     sessionTimerRemainingMsRef.current = normalizedDurationMs
-    sessionTimerDeadlineRef.current = Date.now() + normalizedDurationMs
+    sessionTimerDeadlineRef.current = captureNowRef.current!() + normalizedDurationMs
     sessionTimerRef.current = setTimeout(() => {
       sessionTimerRef.current = null
       sessionTimerDeadlineRef.current = null
       sessionTimerRemainingMsRef.current = 1000
       if (!canContinueRoundTimers()) return
-      const nextElapsedSeconds = elapsedSecondsRef.current + 1
+      const nextElapsedSeconds = Math.floor(sessionElapsedMs() / 1000)
       elapsedSecondsRef.current = nextElapsedSeconds
       setElapsedSeconds(nextElapsedSeconds)
       if (nextElapsedSeconds >= targetSecondsRef.current) {
-        endSession('timer', targetSecondsRef.current)
+        endSession('timer')
         return
       }
       startSessionTimer(1000)
@@ -684,6 +744,10 @@ export default function GameSessionPage() {
     roundTimeoutRemainingMsRef.current = null
     if (!canContinueRoundTimers()) return
 
+    if (gameCodeRef.current === 'game-audiovisual-puzzle') {
+      endSession('timer', 'question_duration')
+      return
+    }
     unitLockedRef.current = true
     appendUnitResult(false, buildTimeoutRoundDetail())
     showAttemptFeedback(false)
@@ -698,7 +762,7 @@ export default function GameSessionPage() {
     if (!canContinueRoundTimers()) return
 
     const normalizedTimeoutMs = Math.max(0, timeoutMs)
-    roundTimeoutDeadlineRef.current = Date.now() + normalizedTimeoutMs
+    roundTimeoutDeadlineRef.current = captureNowRef.current!() + normalizedTimeoutMs
     roundTimeoutRemainingMsRef.current = normalizedTimeoutMs
     roundTimeoutTimerRef.current = setTimeout(handleRoundTimeout, normalizedTimeoutMs)
   }
@@ -709,7 +773,7 @@ export default function GameSessionPage() {
     roundTimeoutTimerRef.current = null
     const deadline = roundTimeoutDeadlineRef.current
     if (deadline !== null) {
-      roundTimeoutRemainingMsRef.current = Math.max(0, deadline - Date.now())
+      roundTimeoutRemainingMsRef.current = Math.max(0, deadline - captureNowRef.current!())
     }
     roundTimeoutDeadlineRef.current = null
   }
@@ -734,7 +798,7 @@ export default function GameSessionPage() {
         setSequenceCursor(null)
         if (kind === 'color') setColorRevealing(false)
         if (kind === 'pattern') setPatternRevealing(false)
-        roundStartedAtRef.current = Date.now()
+        beginQuestion()
         const timeoutMs = kind === 'color'
           ? activeColorRoundRef.current?.inputTimeoutMs
           : activePatternRoundRef.current?.inputTimeoutMs
@@ -751,7 +815,7 @@ export default function GameSessionPage() {
       clearTimeout(revealTimerRef.current)
     }
     const normalizedDurationMs = Math.max(0, durationMs)
-    revealTimerDeadlineRef.current = Date.now() + normalizedDurationMs
+    revealTimerDeadlineRef.current = captureNowRef.current!() + normalizedDurationMs
     revealTimerRemainingMsRef.current = normalizedDurationMs
     revealTimerRef.current = setTimeout(() => {
       revealTimerRef.current = null
@@ -759,7 +823,7 @@ export default function GameSessionPage() {
       revealTimerRemainingMsRef.current = null
       if (phaseRef.current === 'playing') {
         setPuzzlePreviewing(false)
-        roundStartedAtRef.current = Date.now()
+        beginQuestion()
       }
     }, normalizedDurationMs)
   }
@@ -770,7 +834,7 @@ export default function GameSessionPage() {
     revealTimerRef.current = null
     const deadline = revealTimerDeadlineRef.current
     if (deadline !== null) {
-      revealTimerRemainingMsRef.current = Math.max(0, deadline - Date.now())
+      revealTimerRemainingMsRef.current = Math.max(0, deadline - captureNowRef.current!())
     }
     revealTimerDeadlineRef.current = null
   }
@@ -817,7 +881,6 @@ export default function GameSessionPage() {
     unitLockedRef.current = false
     activeColorInputRef.current = []
     const round = createInhibitionRound(difficultyRef.current)
-    roundStartedAtRef.current = Date.now()
     activeColorRoundRef.current = null
     activePatternRoundRef.current = null
     activeCategoryRoundRef.current = null
@@ -839,6 +902,7 @@ export default function GameSessionPage() {
     setSoundAttemptOutcome(null)
     setPuzzlePreviewing(false)
     setFeedback('')
+    beginQuestion()
     startRoundTimeout(round.timeoutMs)
   }
 
@@ -889,7 +953,6 @@ export default function GameSessionPage() {
       previousRule: previousCategoryRuleRef.current,
     })
     previousCategoryRuleRef.current = round.rule
-    roundStartedAtRef.current = Date.now()
     activeColorRoundRef.current = null
     activePatternRoundRef.current = null
     activeCategoryRoundRef.current = round
@@ -911,6 +974,7 @@ export default function GameSessionPage() {
     setSoundAttemptOutcome(null)
     setPuzzlePreviewing(false)
     setFeedback('')
+    beginQuestion()
     startRoundTimeout(round.timeoutMs)
   }
 
@@ -923,7 +987,8 @@ export default function GameSessionPage() {
     unitLockedRef.current = false
     activeColorInputRef.current = []
     activePatternInputRef.current = []
-    roundStartedAtRef.current = Date.now()
+    soundTargetReadyRef.current = false
+    setSoundTargetPlaying(false)
     const round = createSoundDiscriminationRound(difficultyRef.current, SOUND_DISCRIMINATION_AUDIO)
     activeColorRoundRef.current = null
     activePatternRoundRef.current = null
@@ -963,7 +1028,6 @@ export default function GameSessionPage() {
     activeColorInputRef.current = []
     activePatternInputRef.current = []
     const round = createPuzzleRound(difficultyRef.current)
-    roundStartedAtRef.current = Date.now()
     activeColorRoundRef.current = null
     activePatternRoundRef.current = null
     activeCategoryRoundRef.current = null
@@ -1010,6 +1074,13 @@ export default function GameSessionPage() {
 
   function beginPlaying() {
     if (!actionRef.current || !gameCodeRef.current || endStartedRef.current) return
+    const now = createCaptureNow()
+    captureNowRef.current = now
+    captureRef.current = createQuestionCapture(now)
+    clientSessionIdRef.current = createGameClientSessionId()
+    sessionElapsedMsRef.current = 0
+    sessionActiveStartedAtRef.current = now()
+    questionReadyRef.current = false
     targetSecondsRef.current = suggestedDurationMinutes(actionRef.current) * 60
     elapsedSecondsRef.current = 0
     unitResultsRef.current = []
@@ -1041,17 +1112,6 @@ export default function GameSessionPage() {
       setError('该游戏暂未上线，请返回当前运动计划选择已上线游戏')
       return
     }
-    if (difficultyIndex > prescribedDifficultyIndex) {
-      setError('本次训练难度不能高于指导老师设定')
-      return
-    }
-    if (adjustedDifficulty && !DIFFICULTY_REASONS.some((reason) => reason === difficultyReason)) {
-      setError('请选择降低难度的原因')
-      return
-    }
-
-    difficultyRef.current = difficulty
-    difficultyReasonRef.current = recordedDifficultyReason
     resetSessionState()
     const runId = introRunIdRef.current + 1
     introRunIdRef.current = runId
@@ -1068,15 +1128,10 @@ export default function GameSessionPage() {
     beginPlaying()
   }
 
-  function responseMs(): number {
-    return Math.max(0, Date.now() - roundStartedAtRef.current)
-  }
-
   function withBaseRoundDetail(detail: Record<string, unknown>): Record<string, unknown> {
     return {
       game_code: gameCodeRef.current,
       difficulty: difficultyRef.current,
-      response_ms: responseMs(),
       ...detail,
     }
   }
@@ -1130,17 +1185,25 @@ export default function GameSessionPage() {
   }
 
   function appendUnitResult(correct: boolean, detail?: Record<string, unknown>) {
-    const nextResults = [...unitResultsRef.current, { correct, detail }]
+    const row = captureRef.current?.finish(correct, detail?.result === 'timeout' ? 'timeout' : 'answered')
+    if (!row) return
+    questionReadyRef.current = false
+    const nextResults = [...unitResultsRef.current, { correct: row.is_correct }]
     unitResultsRef.current = nextResults
     setUnitResults(nextResults)
   }
 
   function scheduleNextRound(durationMs = nextRoundTimerRemainingMsRef.current ?? ROUND_FEEDBACK_MS) {
+    if (endStartedRef.current) return
+    if (unitResultsRef.current.length >= 2000) {
+      endSession('timer', 'question_count')
+      return
+    }
     const normalizedDurationMs = Math.max(0, durationMs)
     clearRoundTimers()
     pendingNextRoundRef.current = true
     nextRoundTimerRemainingMsRef.current = normalizedDurationMs
-    nextRoundTimerDeadlineRef.current = Date.now() + normalizedDurationMs
+    nextRoundTimerDeadlineRef.current = captureNowRef.current!() + normalizedDurationMs
     nextRoundTimerRef.current = setTimeout(() => {
       nextRoundTimerRef.current = null
       nextRoundTimerDeadlineRef.current = null
@@ -1157,7 +1220,7 @@ export default function GameSessionPage() {
     nextRoundTimerRef.current = null
     nextRoundTimerDeadlineRef.current = null
     if (deadline !== null) {
-      nextRoundTimerRemainingMsRef.current = Math.max(0, deadline - Date.now())
+      nextRoundTimerRemainingMsRef.current = Math.max(0, deadline - captureNowRef.current!())
     }
   }
 
@@ -1176,6 +1239,8 @@ export default function GameSessionPage() {
 
   function suspendPlayingSession(forBackground: boolean): boolean {
     if (phaseRef.current !== 'playing') return false
+    captureRef.current?.pause()
+    pauseSessionClock()
     backgroundSuspendedRef.current = forBackground
     requeueInterruptedSoundPreview()
     invalidateSoundPreviewRun()
@@ -1206,7 +1271,9 @@ export default function GameSessionPage() {
   function resumeGame() {
     if (phaseRef.current !== 'paused') return
     backgroundSuspendedRef.current = false
+    sessionActiveStartedAtRef.current = captureNowRef.current!()
     setSessionPhase('playing')
+    resumeQuestion()
     if (pendingNextRoundRef.current || unitLockedRef.current) {
       scheduleNextRound(nextRoundTimerRemainingMsRef.current ?? ROUND_FEEDBACK_MS)
       return
@@ -1224,6 +1291,10 @@ export default function GameSessionPage() {
     if (gameCodeRef.current === 'game-audiovisual-puzzle' && puzzlePreviewing && activePuzzleRound) {
       setPuzzlePreviewing(true)
       startPuzzlePreviewTimer(activePuzzleRound, revealTimerRemainingMsRef.current ?? activePuzzleRound.previewMs)
+      return
+    }
+    if (gameCodeRef.current === 'game-audiovisual-puzzle' && activePuzzleRound) {
+      resumeRoundTimeout(MAX_QUESTION_DURATION_MS)
       return
     }
     if (gameCodeRef.current === 'game-memory-color-sequence' && activeColorRound) {
@@ -1248,18 +1319,25 @@ export default function GameSessionPage() {
       return
     }
     if (gameCodeRef.current === 'game-audiovisual-sound-discrimination' && activeSoundRound && soundPhase === 'choose') {
-      resumeRoundTimeout(activeSoundRound.timeoutMs)
+      if (!soundTargetReadyRef.current) {
+        void replayTargetSound()
+      } else {
+        resumeRoundTimeout(activeSoundRound.timeoutMs)
+      }
     }
   }
 
   function selectColor(color: ColorToken) {
-    if (phaseRef.current !== 'playing' || colorRevealing || unitLockedRef.current || !activeColorRound) return
-    void playGameAudio('tap')
+    if (!canAnswerCurrentQuestion() || colorRevealing || !activeColorRound) return
+    captureRef.current?.recordSelection(color, activeColorRound.sequence[activeColorInputRef.current.length])
     const nextInput = [...activeColorInputRef.current, color]
     activeColorInputRef.current = nextInput
     setActiveColorInput(nextInput)
 
-    if (nextInput.length < activeColorRound.sequence.length) return
+    if (nextInput.length < activeColorRound.sequence.length) {
+      void playGameAudio('tap')
+      return
+    }
 
     unitLockedRef.current = true
     const attempt = evaluateColorSequenceAttempt(activeColorRound.sequence, nextInput)
@@ -1271,14 +1349,14 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
+    void playGameAudio('tap')
     showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
   function selectInhibition(index: number) {
-    if (phaseRef.current !== 'playing' || unitLockedRef.current || !activeInhibitionRound) return
+    if (!canAnswerCurrentQuestion() || !activeInhibitionRound) return
     unitLockedRef.current = true
-    void playGameAudio('tap')
     const attempt = evaluateInhibitionAttempt(activeInhibitionRound, index)
     setInhibitionOutcome({ selected: index, correct: attempt.correct })
     appendUnitResult(
@@ -1290,18 +1368,22 @@ export default function GameSessionPage() {
         options: activeInhibitionRound.options,
       })
     )
+    void playGameAudio('tap')
     showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
   function selectPattern(pattern: PatternToken) {
-    if (phaseRef.current !== 'playing' || patternRevealing || unitLockedRef.current || !activePatternRound) return
-    void playGameAudio('tap')
+    if (!canAnswerCurrentQuestion() || patternRevealing || !activePatternRound) return
+    captureRef.current?.recordSelection(pattern.id, activePatternRound.sequence[activePatternInputRef.current.length].id)
     const nextInput = [...activePatternInputRef.current, pattern.id]
     activePatternInputRef.current = nextInput
     setActivePatternInput(nextInput)
 
-    if (nextInput.length < activePatternRound.sequence.length) return
+    if (nextInput.length < activePatternRound.sequence.length) {
+      void playGameAudio('tap')
+      return
+    }
 
     unitLockedRef.current = true
     const expected = activePatternRound.sequence.map((item) => item.id)
@@ -1314,14 +1396,14 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
+    void playGameAudio('tap')
     showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
   function selectCategory(option: string) {
-    if (phaseRef.current !== 'playing' || unitLockedRef.current || !activeCategoryRound) return
+    if (!canAnswerCurrentQuestion() || !activeCategoryRound) return
     unitLockedRef.current = true
-    void playGameAudio('tap')
     const attempt = evaluateCategorySwitchAttempt(activeCategoryRound, option)
     setCategoryOutcome({ selected: option, correct: attempt.correct })
     appendUnitResult(
@@ -1334,6 +1416,7 @@ export default function GameSessionPage() {
         correct: attempt.correct,
       })
     )
+    void playGameAudio('tap')
     showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
@@ -1379,22 +1462,7 @@ export default function GameSessionPage() {
       setSoundRoundPhase('choose')
       setSoundPreviewingCard(null)
       soundPreviewInFlightRef.current = false
-      roundStartedAtRef.current = Date.now()
-      const targetPlayed = await playAudioSrc(latestRound.target.audioSrc)
-      if (
-        soundRoundRunIdRef.current !== runId ||
-        activeSoundRoundRef.current !== latestRound ||
-        currentSoundRoundPhase() !== 'choose' ||
-        phaseRef.current !== 'playing' ||
-        unitLockedRef.current ||
-        endStartedRef.current
-      ) {
-        return
-      }
-      if (!targetPlayed) {
-        setSoundPlaybackError('目标声音播放异常，请点击重播目标声音')
-      }
-      startRoundTimeout(latestRound.timeoutMs)
+      await playTargetSound(runId, latestRound)
     } finally {
       if (soundRoundRunIdRef.current === runId) {
         soundPreviewInFlightRef.current = false
@@ -1403,31 +1471,47 @@ export default function GameSessionPage() {
     }
   }
 
-  async function replayTargetSound() {
-    const runId = soundRoundRunIdRef.current
-    const currentRound = activeSoundRoundRef.current
-    if (phaseRef.current !== 'playing' || !currentRound || soundPhaseRef.current !== 'choose') return
+  function isCurrentSoundTarget(runId: number, round: SoundDiscriminationRound): boolean {
+    return soundRoundRunIdRef.current === runId && activeSoundRoundRef.current === round
+      && currentSoundRoundPhase() === 'choose' && pageVisibleRef.current
+      && phaseRef.current === 'playing' && !unitLockedRef.current && !endStartedRef.current
+  }
+
+  async function playTargetSound(runId: number, round: SoundDiscriminationRound) {
+    if (!isCurrentSoundTarget(runId, round) || soundTargetPlayingRef.current) return
+    captureRef.current?.pause()
+    pauseRoundTimeout()
+    soundTargetReadyRef.current = false
+    soundTargetPlayingRef.current = true
+    setSoundTargetPlaying(true)
     setSoundPlaybackError('')
-    const played = await playAudioSrc(currentRound.target.audioSrc)
-    if (
-      soundRoundRunIdRef.current !== runId ||
-      activeSoundRoundRef.current !== currentRound ||
-      currentSoundRoundPhase() !== 'choose' ||
-      phaseRef.current !== 'playing' ||
-      unitLockedRef.current ||
-      endStartedRef.current
-    ) {
+    let played = false
+    try {
+      played = await playAudioSrc(round.target.audioSrc)
+    } catch {
+      played = false
+    }
+    if (!isCurrentSoundTarget(runId, round)) return
+    soundTargetPlayingRef.current = false
+    setSoundTargetPlaying(false)
+    if (!played) {
+      setSoundPlaybackError('目标声音播放异常，请点击重播目标声音')
       return
     }
-    if (!played) {
-      setSoundPlaybackError('目标声音播放异常，请再次点击重播')
-    }
+    soundTargetReadyRef.current = true
+    if (!questionReadyRef.current) beginQuestion()
+    else resumeQuestion()
+    if (canAnswerCurrentQuestion()) resumeRoundTimeout(round.timeoutMs)
+  }
+
+  async function replayTargetSound() {
+    const round = activeSoundRoundRef.current
+    if (round) await playTargetSound(soundRoundRunIdRef.current, round)
   }
 
   function selectSoundCard(card: SoundCard) {
-    if (phaseRef.current !== 'playing' || soundPhaseRef.current !== 'choose' || unitLockedRef.current || !activeSoundRound) return
+    if (!canAnswerCurrentQuestion() || soundPhaseRef.current !== 'choose' || !activeSoundRound) return
     unitLockedRef.current = true
-    void playGameAudio('tap')
     const attempt = evaluateSoundDiscriminationAttempt(activeSoundRound, card.soundId)
     appendUnitResult(
       attempt.correct,
@@ -1437,19 +1521,27 @@ export default function GameSessionPage() {
       })
     )
     setSoundAttemptOutcome({ selectedCardId: card.id, correct: attempt.correct })
+    void playGameAudio('tap')
     showAttemptFeedback(attempt.correct)
     scheduleNextRound()
   }
 
   function selectPuzzleTile(tile: PuzzleTile) {
-    if (phaseRef.current !== 'playing' || puzzlePreviewing || unitLockedRef.current || !activePuzzleRound) return
-    void playGameAudio('tap')
+    if (!canAnswerCurrentQuestion() || puzzlePreviewing || !activePuzzleRound) return
+    const deadline = roundTimeoutDeadlineRef.current
+    if (deadline !== null && captureNowRef.current!() >= deadline) {
+      endSession('timer', 'question_duration')
+      return
+    }
+    captureRef.current?.recordClick()
     if (!selectedPuzzleTileId) {
+      void playGameAudio('tap')
       setSelectedPuzzleTileId(tile.id)
       return
     }
 
     const nextTiles = swapPuzzleTiles(activePuzzleRound.tiles, selectedPuzzleTileId, tile.id)
+    if (nextTiles !== activePuzzleRound.tiles) captureRef.current?.recordSwap()
     const nextRound = { ...activePuzzleRound, tiles: nextTiles }
     activePuzzleRoundRef.current = nextRound
     setActivePuzzleRound(nextRound)
@@ -1466,89 +1558,111 @@ export default function GameSessionPage() {
           correct: true,
         })
       )
+      void playGameAudio('tap')
       showAttemptFeedback(true)
       scheduleNextRound()
+    } else {
+      void playGameAudio('tap')
     }
   }
 
   async function uploadResult(payload: GameTrainingPayload) {
+    uploadingPayloadRef.current = payload
     setUploadState('uploading')
     try {
       await postGameTrainingRecord(payload)
+      clearPendingGameUpload(Taro, payload)
+      uploadingPayloadRef.current = null
+      if (unmountedRef.current) return
       setUploadState('uploaded')
     } catch (err) {
       const uploadError = err as Partial<TrainingRecordUploadError>
+      if (uploadError.retryable === false) {
+        clearPendingGameUpload(Taro, payload)
+        uploadingPayloadRef.current = null
+      }
+      if (unmountedRef.current) return
       const message = err instanceof Error ? err.message : '上传失败'
       if (!uploadError.retryable) {
+        uploadingPayloadRef.current = null
         setUploadState('upload_rejected')
         setError(message)
         return
       }
 
       try {
-        const pending = await savePendingGameUploadAfterActiveRetry(Taro, payload)
-        if (pending.payload === payload) {
-          setUploadState('pending_retry')
-          setError(`上传失败，已保存待补传记录：${message}`)
-          startPendingGameUploadRetryLoop(Taro)
-        } else {
-          setUploadState('blocked_by_existing_pending')
-          setError('已有待上传记录，本次结果未覆盖旧记录，请先返回后等待或处理旧记录')
-        }
+        await savePendingGameUploadAfterActiveRetry(Taro, payload)
+        uploadingPayloadRef.current = null
+        if (unmountedRef.current) return
+        setUploadState('pending_retry')
+        setError(`上传失败，已保存待补传记录：${message}`)
+        startPendingGameUploadRetryLoop(Taro)
       } catch {
+        if (unmountedRef.current) return
         setUploadState('upload_save_failed')
         setError('上传失败，且本地待补传保存失败，请联系指导老师确认记录')
       }
     }
   }
 
-  function endSession(reason: GameEndReason, durationSeconds = elapsedSecondsRef.current) {
+  function endSession(reason: GameEndReason, safetyLimit?: 'question_count' | 'question_duration', unloading = false) {
     if (endStartedRef.current) return
     const currentAction = actionRef.current
     const currentGameCode = gameCodeRef.current
     if (!currentAction || !currentGameCode) return
 
+    captureRef.current?.finish(false, 'interrupted')
+    questionReadyRef.current = false
+    pauseSessionClock(unloading)
+    clearSessionTimer()
     endStartedRef.current = true
     introRunIdRef.current += 1
     invalidateSoundPreviewRun()
-    clearRoundTimers()
-    setSequenceCursor(null)
-    setSoundPreviewingCard(null)
-    const finalDurationSeconds =
-      reason === 'timer'
-        ? targetSecondsRef.current
-        : Math.max(0, Math.min(durationSeconds, targetSecondsRef.current))
-    const results = unitResultsRef.current
+    clearRoundTimers({ suppressStateUpdates: unloading })
+    if (!unloading) {
+      setSequenceCursor(null)
+      setSoundPreviewingCard(null)
+    }
+    const finalDurationSeconds = Math.floor(sessionElapsedMsRef.current / 1000)
+    const safetyEndedEarly = Boolean(safetyLimit) && finalDurationSeconds < targetSecondsRef.current
+    const safetyNote = safetyLimit === 'question_count'
+      ? '达到题数上限，训练自动结束'
+      : safetyLimit === 'question_duration' ? '达到单题时长上限，训练自动结束' : ''
+    const results = captureRef.current?.results() ?? []
+    const sessionId = clientSessionIdRef.current
+    if (!sessionId) throw new Error('游戏会话尚未开始')
     const base = buildGameTrainingResult({
       gameCode: currentGameCode,
       prescribedDifficulty: normalizeDifficulty(currentAction.difficulty),
       actualDifficulty: difficultyRef.current,
-      difficultyAdjustReason: difficultyReasonRef.current.trim(),
+      difficultyAdjustReason: '',
       endedBy: reason,
       durationSeconds: finalDurationSeconds,
       suggestedDurationMinutes: suggestedDurationMinutes(currentAction),
-      completedUnits: results.length,
-      correctUnits: results.filter((item) => item.correct).length,
+      completedUnits: results.filter((item) => item.result_type !== 'interrupted').length,
+      correctUnits: results.filter((item) => item.result_type !== 'interrupted' && item.is_correct).length,
       uploadMode: 'direct',
       retryCount: 0,
       totalRetryCount: 0,
     })
-    const payload: GameTrainingPayload = {
+    const payload: GameTrainingPayload & { client_session_id: string; question_results: GameQuestionPayload[] } = {
       ...base,
+      status: safetyEndedEarly ? 'partial' : base.status,
       form_data: {
         ...base.form_data,
-        raw_detail: {
-          ...base.form_data.raw_detail,
-          rounds: results.map((item, index) => ({
-            round_index: index + 1,
-            correct: item.correct,
-            ...(item.detail ?? {}),
-          })),
-        },
+        raw_detail: { ...base.form_data.raw_detail, recorded_question_count: results.length, ended_early: safetyEndedEarly || base.form_data.raw_detail.ended_early },
       },
+      client_session_id: sessionId,
+      question_results: results,
       prescription_action: currentAction.id,
       training_date: todayLocalDate(),
-      note: reason === 'manual' ? '用户提前结束本次游戏训练' : '',
+      note: safetyNote || (reason === 'manual' ? '用户提前结束本次游戏训练' : ''),
+    }
+    if (unloading) {
+      if (!demoMode) {
+        try { savePendingGameUpload(Taro, payload, Date.now()) } catch { /* 不在卸载页面更新状态。 */ }
+      }
+      return
     }
     elapsedSecondsRef.current = finalDurationSeconds
     setElapsedSeconds(finalDurationSeconds)
@@ -1559,7 +1673,7 @@ export default function GameSessionPage() {
     setSoundAttemptOutcome(null)
     setSessionPhase('result')
     if (!demoMode || reason !== 'manual') {
-      void playGameAudio(reason === 'manual' ? 'manual_end' : 'complete')
+      void playGameAudio(reason === 'manual' || safetyEndedEarly ? 'manual_end' : 'complete')
     }
     if (demoMode) {
       setUploadState('demo_local')
@@ -1875,7 +1989,7 @@ export default function GameSessionPage() {
               : '请听目标声音，选择对应卡片'}
         </Text>
         {soundPhase === 'choose' ? (
-          <Button className='secondary-button replay-button' disabled={phase !== 'playing'} onClick={replayTargetSound}>
+          <Button className='secondary-button replay-button' disabled={phase !== 'playing' || unitLockedRef.current || soundTargetPlaying} onClick={replayTargetSound}>
             重播目标声音
           </Button>
         ) : null}
@@ -1891,7 +2005,7 @@ export default function GameSessionPage() {
               <Button
                 key={card.id}
                 className={`sound-card sound-card-${visualState}${returnedFromPreview ? ' sound-card-returned' : ''}`}
-                disabled={phase !== 'playing' || unitLockedRef.current || soundPhase === 'preview'}
+                disabled={!canAnswerCurrentQuestion() || soundPhase === 'preview' || soundTargetPlaying}
                 onClick={() => {
                   if (soundPhase === 'choose') {
                     selectSoundCard(card)
@@ -2066,78 +2180,25 @@ export default function GameSessionPage() {
             <Text className='value'>{difficulty}</Text>
           </View>
           <Text className='difficulty-description'>{gameCode ? gameDifficultyDescription(gameCode, difficulty) : ''}</Text>
-          {prescribedDifficultyIndex > 0 ? (
-            <Button
-              className='secondary-button difficulty-toggle'
-              onClick={() => setShowDifficultyChoices(!showDifficultyChoices)}
-            >
-              {showDifficultyChoices ? '收起难度选项' : '降低难度'}
-            </Button>
-          ) : <Text className='muted'>当前已是最低难度</Text>}
-          {showDifficultyChoices ? (
-            <View className='difficulty-level-options'>
-              {lowerDifficulties.map((level) => (
-                <Button
-                  key={level}
-                  className={`difficulty-level-option ${difficulty === level ? 'is-selected' : ''}`}
-                  aria-pressed={difficulty === level}
-                  onClick={() => {
-                    setDifficultyIndex(DIFFICULTY_OPTIONS.indexOf(level))
-                    setError('')
-                  }}
-                >
-                  {level}
-                </Button>
-              ))}
-            </View>
-          ) : null}
-          {adjustedDifficulty ? (
-            <Button
-              className='secondary-button difficulty-toggle'
-              onClick={() => {
-                setDifficultyIndex(prescribedDifficultyIndex)
-                setDifficultyReason('')
-                setOtherDifficultyReason('')
-                setShowDifficultyChoices(false)
-                setError('')
-              }}
-            >
-              恢复指导老师设定
-            </Button>
-          ) : null}
-        </View>
-
-        {adjustedDifficulty ? (
-          <View className='field-card game-difficulty-panel'>
-            <Text className='label'>降低难度的原因（单选）</Text>
-            <Text className='muted'>本次调整仅用于这次训练，指导老师可以查看原因。</Text>
-            <View className='difficulty-reason-options'>
-              {DIFFICULTY_REASONS.map((reason) => (
-                <Button
-                  key={reason}
-                  className={`difficulty-reason-option ${difficultyReason === reason ? 'is-selected' : ''}`}
-                  aria-pressed={difficultyReason === reason}
-                  onClick={() => {
-                    setDifficultyReason(reason)
-                    if (reason !== '其他') setOtherDifficultyReason('')
-                    setError('')
-                  }}
-                >
-                  {reason}
-                </Button>
-              ))}
-            </View>
-            {difficultyReason === '其他' ? (
-              <Input
-                className='input'
-                value={otherDifficultyReason}
-                maxlength={200}
-                placeholder='可补充说明（选填）'
-                onInput={(event) => setOtherDifficultyReason(event.detail.value)}
-              />
-            ) : null}
+          <View className='difficulty-level-options'>
+            {DIFFICULTY_OPTIONS.map((level, index) => (
+              <Button
+                key={level}
+                className={`difficulty-level-option difficulty-level-${index}${difficulty === level ? ' is-selected' : ''}`}
+                aria-label={level}
+                aria-pressed={difficulty === level}
+                onClick={() => selectDifficulty(level)}
+                {...h5DifficultyKeyboardProps(level)}
+              >
+                <Text className='difficulty-level-check' aria-hidden='true'>
+                  {difficulty === level ? '✓' : ''}
+                </Text>
+                <Text className='difficulty-level-label'>{level}</Text>
+              </Button>
+            ))}
           </View>
-        ) : null}
+          <Text className='muted'>仅用于本次训练</Text>
+        </View>
 
         {requiredImageKeys.length > 0 ? (
           <View className={`image-asset-progress-panel image-asset-progress-${effectiveImageAssetStatus}`}>
@@ -2213,12 +2274,15 @@ export default function GameSessionPage() {
 
   if (phase === 'result') {
     const rawDetail = resultPayload?.form_data.raw_detail
+    const endReasonText = rawDetail?.ended_by === 'timer' && resultPayload?.note
+      ? resultPayload.note
+      : textForEndReason(rawDetail?.ended_by ?? 'manual', demoMode)
     return (
       <View className='page game-session-page hainan-game-page game-result-page'>
         <View className='game-hero'>
           <Text className='eyebrow'>训练结果</Text>
           <Text className='title'>{resultPayload?.status === 'completed' ? '本次训练已完成' : '本次训练已提前结束'}</Text>
-          <Text className='paragraph'>{textForEndReason(rawDetail?.ended_by ?? 'manual', demoMode)}</Text>
+          <Text className='paragraph'>{endReasonText}</Text>
         </View>
 
         {uploadState === 'pending_retry' ? (
@@ -2249,7 +2313,7 @@ export default function GameSessionPage() {
           </View>
           <View className='row'>
             <Text className='label'>结束方式</Text>
-            <Text className='value'>{textForEndReason(rawDetail?.ended_by ?? 'manual', demoMode)}</Text>
+            <Text className='value'>{endReasonText}</Text>
           </View>
           <View className='row'>
             <Text className='label'>完成题数</Text>

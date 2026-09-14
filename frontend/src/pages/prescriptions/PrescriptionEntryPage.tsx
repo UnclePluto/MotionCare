@@ -22,12 +22,6 @@ type ProjectPatientRow = {
   updated_at: string;
 };
 
-const PROJECT_STATUS_LABEL: Record<ProjectPatientRow["project_status"], string> = {
-  draft: "草稿",
-  active: "进行中",
-  archived: "已完结",
-};
-
 function patientSearchParams(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return {};
@@ -125,12 +119,6 @@ export function PrescriptionEntryPage() {
             dataIndex: "group_name",
             width: 90,
             render: (v: string | null) => v ?? "—",
-          },
-          {
-            title: "项目状态",
-            dataIndex: "project_status",
-            width: 90,
-            render: (v: ProjectPatientRow["project_status"]) => PROJECT_STATUS_LABEL[v] ?? v,
           },
           {
             title: "入组时间",

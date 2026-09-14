@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import TYPE_CHECKING
 
@@ -13,15 +13,18 @@ ONE_DECIMAL = Decimal("0.1")
 TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS = 300
 
 
-def _health_window(video: "TrainingVideo"):
+def training_video_health_window(video: "TrainingVideo") -> tuple[datetime, datetime] | None:
     duration = video.expected_duration_seconds
     if video.training_started_at is None or duration is None or duration <= 0:
         return None
     started_at = video.training_started_at
-    ended_at = started_at + timedelta(
-        seconds=duration + TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS
-    )
+    ended_at = started_at + timedelta(seconds=duration + TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS)
     return started_at, ended_at
+
+
+def _health_window(video: "TrainingVideo"):
+    """兼容已有私有调用，窗口计算以公开函数为准。"""
+    return training_video_health_window(video)
 
 
 def _average(values):
@@ -44,7 +47,7 @@ def _scalar_statistics(values):
 
 
 def training_video_wearable_window(video: "TrainingVideo") -> dict:
-    health_window = _health_window(video)
+    health_window = training_video_health_window(video)
     if health_window is None:
         return {"available": False}
     window_started_at, window_ended_at = health_window
@@ -99,9 +102,7 @@ def training_video_wearable_window(video: "TrainingVideo") -> dict:
                 }
             )
         else:
-            blood_oxygen_points.append(
-                {"measured_at": measured_at, "value": point["blood_oxygen"]}
-            )
+            blood_oxygen_points.append({"measured_at": measured_at, "value": point["blood_oxygen"]})
 
     metrics = {}
     if heart_rate_points:

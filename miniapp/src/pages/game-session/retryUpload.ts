@@ -51,10 +51,19 @@ export type PendingGameUploadRetryLoopOptions = {
   onResult?: PendingGameUploadRetryLoopListener
 }
 
-let pendingRetryPromise: Promise<PendingGameUploadRetryResult> | null = null
+type PendingRetryOutcome = { result: PendingGameUploadRetryResult; stopLoop: boolean }
+let pendingRetryPromise: Promise<PendingRetryOutcome> | null = null
 let pendingRetryLoopTimer: ReturnType<typeof setTimeout> | null = null
 let pendingRetryLoopActive = false
 const pendingRetryLoopListeners = new Set<PendingGameUploadRetryLoopListener>()
+
+function copyStoredValue<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => copyStoredValue(item)) as T
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copyStoredValue(item)])) as T
+  }
+  return value
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -112,21 +121,35 @@ function isPendingGameUpload(value: unknown): value is PendingGameUpload {
   )
 }
 
+// 单条仍写旧对象格式；多条写同一key下的数组，一次同步写入避免双key迁移丢失。
+function readPendingQueue(storage: StorageLike): PendingGameUpload[] {
+  const value = storage.getStorageSync(PENDING_GAME_UPLOAD_KEY)
+  if (isPendingGameUpload(value)) return [copyStoredValue(value)]
+  if (Array.isArray(value) && value.every(isPendingGameUpload)) return copyStoredValue(value)
+  return []
+}
+
+function writePendingQueue(storage: StorageLike, queue: PendingGameUpload[]): void {
+  if (queue.length === 0) storage.removeStorageSync(PENDING_GAME_UPLOAD_KEY)
+  else storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, copyStoredValue(queue.length === 1 ? queue[0] : queue))
+}
+
+function sameSession(left: GameTrainingPayload, right: GameTrainingPayload): boolean {
+  if (left.client_session_id || right.client_session_id) return left.client_session_id === right.client_session_id
+  // 旧缓存没有UUID，完整原始载荷作为本地身份，不给旧载荷补字段。
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
 export function loadPendingGameUpload(storage: StorageLike): PendingGameUpload | null {
-  try {
-    const value = storage.getStorageSync(PENDING_GAME_UPLOAD_KEY)
-    return isPendingGameUpload(value) ? value : null
-  } catch {
-    return null
-  }
+  try { return readPendingQueue(storage)[0] ?? null } catch { return null }
 }
 
 export function savePendingGameUpload(storage: StorageLike, payload: GameTrainingPayload, now: number): PendingGameUpload {
-  const existing = loadPendingGameUpload(storage)
+  const queue = readPendingQueue(storage)
+  const existing = queue.find(item => sameSession(item.payload, payload))
   if (existing) return existing
-
   const pending: PendingGameUpload = {
-    payload,
+    payload: copyStoredValue(payload),
     retry_count: 0,
     total_retry_count: 0,
     next_retry_at: now,
@@ -134,7 +157,7 @@ export function savePendingGameUpload(storage: StorageLike, payload: GameTrainin
     created_at: now,
     retry_paused_until_next_launch: false,
   }
-  storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, pending)
+  writePendingQueue(storage, [...queue, pending])
   return pending
 }
 
@@ -143,25 +166,22 @@ export async function savePendingGameUploadAfterActiveRetry(
   payload: GameTrainingPayload,
   now = Date.now()
 ): Promise<PendingGameUpload> {
-  const existing = loadPendingGameUpload(storage)
-  if (!existing) return savePendingGameUpload(storage, payload, now)
-  if (!pendingRetryPromise) return existing
-
-  await pendingRetryPromise
-  const afterRetry = loadPendingGameUpload(storage)
-  if (afterRetry) return afterRetry
-  return savePendingGameUpload(storage, payload, Date.now())
+  // 立即入队，正在补传旧记录也不推迟新记录持久化。
+  return savePendingGameUpload(storage, payload, now)
 }
 
-export function clearPendingGameUpload(storage: StorageLike): void {
-  storage.removeStorageSync(PENDING_GAME_UPLOAD_KEY)
+export function clearPendingGameUpload(storage: StorageLike, payload?: GameTrainingPayload): void {
+  const queue = readPendingQueue(storage)
+  const target = payload ?? queue[0]?.payload
+  if (!target) return
+  writePendingQueue(storage, queue.filter(item => !sameSession(item.payload, target)))
 }
 
-export function markRetryFailure(storage: StorageLike, error: string, now: number): PendingGameUpload | null {
-  const pending = loadPendingGameUpload(storage)
+export function markRetryFailure(storage: StorageLike, error: string, now: number, payload?: GameTrainingPayload): PendingGameUpload | null {
+  const queue = readPendingQueue(storage)
+  const pending = payload ? queue.find(item => sameSession(item.payload, payload)) : queue[0]
   if (!pending) return null
   if (pending.retry_paused_until_next_launch) return pending
-
   const retryCount = Math.min(MAX_RETRY_PER_LAUNCH, pending.retry_count + 1)
   const delayIndex = Math.min(retryCount - 1, RETRY_DELAYS_SECONDS.length - 1)
   const updated: PendingGameUpload = {
@@ -172,23 +192,18 @@ export function markRetryFailure(storage: StorageLike, error: string, now: numbe
     last_error: safeGameUploadErrorMessage(error, '上传失败，稍后自动补传'),
     retry_paused_until_next_launch: retryCount >= MAX_RETRY_PER_LAUNCH,
   }
-  storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, updated)
+  writePendingQueue(storage, queue.map(item => sameSession(item.payload, pending.payload) ? updated : item))
   return updated
 }
 
 export function resetRetryWindowForLaunch(storage: StorageLike): PendingGameUpload | null {
-  const pending = loadPendingGameUpload(storage)
-  if (!pending) return null
-  if (!pending.retry_paused_until_next_launch) return pending
-
-  const updated: PendingGameUpload = {
-    ...pending,
-    retry_count: 0,
-    next_retry_at: Date.now(),
-    retry_paused_until_next_launch: false,
-  }
-  storage.setStorageSync(PENDING_GAME_UPLOAD_KEY, updated)
-  return updated
+  const queue = readPendingQueue(storage)
+  if (!queue.some(item => item.retry_paused_until_next_launch)) return queue[0] ?? null
+  const updated = queue.map(item => item.retry_paused_until_next_launch ? {
+    ...item, retry_count: 0, next_retry_at: Date.now(), retry_paused_until_next_launch: false,
+  } : item)
+  writePendingQueue(storage, updated)
+  return updated[0] ?? null
 }
 
 export async function postGameTrainingRecord(payload: GameTrainingPayload): Promise<void> {
@@ -264,30 +279,38 @@ export async function tryUploadPendingGameRecord(
   now = Date.now(),
   uploader: GameRecordUploader = postGameTrainingRecord
 ): Promise<PendingGameUploadRetryResult> {
+  return (await retryPendingGameRecord(storage, now, uploader)).result
+}
+
+async function retryPendingGameRecord(
+  storage: StorageLike,
+  now = Date.now(),
+  uploader: GameRecordUploader = postGameTrainingRecord
+): Promise<PendingRetryOutcome> {
   if (pendingRetryPromise) return pendingRetryPromise
 
-  const runRetry = async (): Promise<PendingGameUploadRetryResult> => {
+  const runRetry = async (): Promise<PendingRetryOutcome> => {
     const pending = loadPendingGameUpload(storage)
-    if (!pending) return 'none'
-    if (pending.retry_paused_until_next_launch || pending.next_retry_at > now) return 'waiting'
+    if (!pending) return { result: 'none', stopLoop: true }
+    if (pending.retry_paused_until_next_launch || pending.next_retry_at > now) return { result: 'waiting', stopLoop: false }
 
     try {
       await uploader(payloadForRetry(pending))
     } catch (err) {
       if (!retryableFromUploadError(err)) {
-        clearPendingGameUpload(storage)
-        return 'rejected'
+        clearPendingGameUpload(storage, pending.payload)
+        return { result: 'rejected', stopLoop: isRecord(err) && (err.statusCode === 401 || err.statusCode === 403) }
       }
-      markRetryFailure(storage, messageFromUploadError(err), Date.now())
-      return 'failed'
+      markRetryFailure(storage, messageFromUploadError(err), Date.now(), pending.payload)
+      return { result: 'failed', stopLoop: false }
     }
 
     try {
-      clearPendingGameUpload(storage)
+      clearPendingGameUpload(storage, pending.payload)
     } catch {
-      return 'rejected'
+      return { result: 'rejected', stopLoop: true }
     }
-    return 'uploaded'
+    return { result: 'uploaded', stopLoop: false }
   }
 
   pendingRetryPromise = runRetry().finally(() => {
@@ -349,10 +372,10 @@ export function startPendingGameUploadRetryLoop(
     pendingRetryLoopTimer = setTimeout(runRetry, delayMs)
   }
 
-  const handleRetryResult = (result: PendingGameUploadRetryResult) => {
+  const handleRetryResult = ({ result, stopLoop }: PendingRetryOutcome) => {
     if (!pendingRetryLoopActive) return
     notifyPendingGameUploadRetryLoop(result)
-    if (result === 'uploaded' || result === 'none' || result === 'rejected') {
+    if (stopLoop) {
       stopPendingGameUploadRetryLoop()
       return
     }
@@ -362,7 +385,7 @@ export function startPendingGameUploadRetryLoop(
   const runRetry = () => {
     if (!pendingRetryLoopActive) return
     pendingRetryLoopTimer = null
-    void tryUploadPendingGameRecord(storage, now(), uploader)
+    void retryPendingGameRecord(storage, now(), uploader)
       .then(handleRetryResult)
       .catch(() => {
         stopPendingGameUploadRetryLoop()

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import GameSessionPage from './index'
+import type { GameTrainingPayload } from './gameTypes'
 
 type ReactElement = {
   type: string | ((props?: Record<string, unknown>) => ReactElement)
@@ -9,6 +10,7 @@ type ReactElement = {
     className?: string
     disabled?: boolean
     onClick?: () => unknown
+    onKeyDown?: (event: { key: string; preventDefault: () => void }) => unknown
     onError?: () => unknown
   }
 }
@@ -102,6 +104,7 @@ const taroHarness = vi.hoisted(() => {
   const taroMock = {
     getStorageSync: vi.fn(),
     setStorageSync: vi.fn(),
+    removeStorageSync: vi.fn(),
     getImageInfo: vi.fn<(options: { src: string }) => Promise<{ path: string }>>(),
     redirectTo: vi.fn(),
     navigateBack: vi.fn(),
@@ -121,10 +124,18 @@ const taroHarness = vi.hoisted(() => {
   }
 })
 
+const clockHarness = vi.hoisted(() => ({ offset: 0 }))
+vi.mock('./capturePlatform', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./capturePlatform')>(),
+  createCaptureNow: () => () => Date.now() + clockHarness.offset,
+}))
+
 const prescriptionHarness = vi.hoisted(() => ({ current: null as unknown, demo: true }))
 const retryUploadHarness = vi.hoisted(() => ({
   postGameTrainingRecord: vi.fn(),
+  clearPendingGameUpload: vi.fn(),
   savePendingGameUploadAfterActiveRetry: vi.fn(),
+  savePendingGameUpload: vi.fn(),
   startPendingGameUploadRetryLoop: vi.fn(),
 }))
 const audioHarness = vi.hoisted(() => ({
@@ -176,7 +187,9 @@ vi.mock('../../demo/session', () => ({
 
 vi.mock('./retryUpload', () => ({
   postGameTrainingRecord: retryUploadHarness.postGameTrainingRecord,
+  clearPendingGameUpload: retryUploadHarness.clearPendingGameUpload,
   savePendingGameUploadAfterActiveRetry: retryUploadHarness.savePendingGameUploadAfterActiveRetry,
+  savePendingGameUpload: retryUploadHarness.savePendingGameUpload,
   startPendingGameUploadRetryLoop: retryUploadHarness.startPendingGameUploadRetryLoop,
 }))
 
@@ -319,6 +332,15 @@ async function renderGame(sourceKey: string, actionName: string, difficulty = '�
   return page
 }
 
+function chooseDifficulty(page: RenderedPage, level: string) {
+  const option = findAll(page.element, (item) =>
+    item.type === 'Button' && item.props['aria-label'] === level
+  )[0]
+  expect(option).toBeTruthy()
+  click(option)
+  page.rerender()
+}
+
 async function enterPlaying(page: RenderedPage): Promise<void> {
   click(findButtonByText(page.element, '开始游戏'))
   page.rerender()
@@ -365,6 +387,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  clockHarness.offset = 0
   prescriptionHarness.demo = true
   vi.stubEnv('TARO_APP_ASSET_BASE_URL', 'https://cdn.example.com/assets')
   vi.useFakeTimers()
@@ -397,6 +420,7 @@ describe('GameSessionPage 训练图片准备门禁', () => {
     const pendingImage = deferred<{ path: string }>()
     taroHarness.taroMock.getImageInfo.mockReturnValue(pendingImage.promise)
     const page = await renderGame('game-memory-pattern-sequence', '图案顺序记忆')
+    chooseDifficulty(page, '困难')
 
     expect(textContent(page.element)).toContain('正在准备训练图片')
     const startButton = findButtonByText(page.element, '开始游戏')
@@ -805,123 +829,119 @@ describe('GameSessionPage 训练图片准备门禁', () => {
   })
 })
 
-describe('GameSessionPage 开始前降低难度', () => {
-  it('shows the prescribed rule and has no lower level when already simple', async () => {
-    const page = await renderGame('game-memory-color-sequence', '颜色顺序记忆')
-    expect(textContent(page.element)).toContain('记住 3 个颜色的顺序，每项展示 2 秒')
-    expect(textContent(page.element)).toContain('当前已是最低难度')
-    expect(findAll(page.element, (item) => item.type === 'Picker')).toHaveLength(0)
-    expect(findAll(page.element, (item) => item.type === 'Button' && textContent(item) === '降低难度')).toHaveLength(0)
+describe('GameSessionPage 开始前自由选择难度', () => {
+  const difficultyGames = [
+    ['game-memory-color-sequence', '颜色顺序记忆'],
+    ['game-memory-pattern-sequence', '图案顺序记忆'],
+    ['game-executive-inhibition', '反应抑制'],
+    ['game-executive-category-switch', '分类转换'],
+    ['game-audiovisual-sound-discrimination', '声音辨别'],
+    ['game-audiovisual-puzzle', '拼图'],
+  ] as const
+  const preparationCases = difficultyGames.flatMap(([code, name]) =>
+    ['简单', '中等', '困难'].map((level) => [code, name, level] as const)
+  )
+
+  it('H5 三档支持 Tab，并用 Enter 或 Space 选择且阻止 Space 滚屏', async () => {
+    vi.stubEnv('TARO_ENV', 'h5')
+    const page = await renderGame('game-executive-inhibition', '反应抑制', '简单')
+    let options = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
+    expect(options.map((item) => item.props.tabIndex)).toEqual([0, 0, 0])
+    expect(options.map((item) => item.props.role)).toEqual(['button', 'button', 'button'])
+
+    const enterPreventDefault = vi.fn()
+    options[1].props.onKeyDown?.({ key: 'Enter', preventDefault: enterPreventDefault })
+    page.rerender()
+    options = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
+    expect(options.find((item) => item.props['aria-pressed'])?.props['aria-label']).toBe('中等')
+    expect(enterPreventDefault).not.toHaveBeenCalled()
+
+    const spacePreventDefault = vi.fn()
+    options[2].props.onKeyDown?.({ key: ' ', preventDefault: spacePreventDefault })
+    page.rerender()
+    options = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
+    expect(options.find((item) => item.props['aria-pressed'])?.props['aria-label']).toBe('困难')
+    expect(spacePreventDefault).toHaveBeenCalledOnce()
+    page.unmount()
+    vi.unstubAllEnvs()
+  })
+
+  it.each(preparationCases)('%s默认%s相关准备状态：%s', async (code, name, level) => {
+    const page = await renderGame(code, name, level)
+    const options = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
+    expect(options.map((item) => item.props['aria-label'])).toEqual(['简单', '中等', '困难'])
+    expect(options.filter((item) => item.props['aria-pressed']).map((item) => item.props['aria-label'])).toEqual([level])
+    expect(textContent(page.element)).toContain('仅用于本次训练')
+    expect(textContent(page.element)).not.toContain('降低难度')
     page.unmount()
   })
 
-  it('requires one reason before playing and uploads the actual level and selected reason', async () => {
+  it.each([
+    ['简单', '困难', 9],
+    ['困难', '简单', 4],
+    ['中等', '中等', 6],
+  ])('处方%s可直接开始%s，记录空原因', async (prescribed, actual, count) => {
     prescriptionHarness.demo = false
-    const page = await renderGame('game-executive-inhibition', '反应抑制', '困难')
-    expect(textContent(page.element)).toContain('从 9 个数字中选出不同的一个')
-    click(findButtonByText(page.element, '降低难度'))
-    page.rerender()
-    const choices = findAll(page.element, (item) => item.type === 'Button' && hasClass(item, 'difficulty-level-option'))
-    expect(choices.map(textContent)).toEqual(['简单', '中等'])
-    click(choices[1])
-    page.rerender()
-    expect(textContent(page.element)).toContain('从 6 个数字中选出不同的一个')
-    click(findButtonByText(page.element, '开始游戏'))
-    page.rerender()
-    expect(textContent(page.element)).toContain('请选择降低难度的原因')
-    const reasons = findAll(page.element, (item) => item.type === 'Button' && hasClass(item, 'difficulty-reason-option'))
-    expect(reasons.map(textContent)).toEqual(['切换速度问题', '选项个数问题', '思考时间问题', '其他'])
-    click(reasons[0])
-    page.rerender()
-    click(findButtonByText(page.element, '思考时间问题'))
-    page.rerender()
-    expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option') && hasClass(item, 'is-selected'))).toHaveLength(1)
+    const page = await renderGame('game-executive-inhibition', '反应抑制', prescribed)
+    const options = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
+    expect(options.map((item) => item.props['aria-label'])).toEqual(['简单', '中等', '困难'])
+    chooseDifficulty(page, actual)
+    expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option'))).toHaveLength(0)
+    expect(findAll(page.element, (item) => item.type === 'Input')).toHaveLength(0)
     await enterPlaying(page)
-    expect(numberTiles(page.element)).toHaveLength(6)
+    expect(numberTiles(page.element)).toHaveLength(count)
+    expect(findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))).toHaveLength(0)
     click(findButtonByText(page.element, '提前结束'))
     await flushPromises()
     page.rerender()
     expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledWith(expect.objectContaining({
       form_data: expect.objectContaining({
-        difficulty: '中等',
-        raw_detail: expect.objectContaining({ prescribed_difficulty: '困难', difficulty_adjusted: true, difficulty_adjust_reason: '思考时间问题' }),
+        difficulty: actual,
+        raw_detail: expect.objectContaining({
+          prescribed_difficulty: prescribed,
+          difficulty_adjusted: actual !== prescribed,
+          difficulty_adjust_reason: '',
+        }),
       }),
     }))
     page.unmount()
   })
 
-  it('restores the prescribed level and clears the adjustment reason', async () => {
+  it('连续切换与重复点击使用最后档位，切回处方后不记调整', async () => {
     prescriptionHarness.demo = false
-    const page = await renderGame('game-executive-category-switch', '分类转换', '中等')
-    click(findButtonByText(page.element, '降低难度'))
-    page.rerender()
-    const choices = findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))
-    expect(choices.map(textContent)).toEqual(['简单'])
-    click(choices[0])
-    page.rerender()
-    click(findButtonByText(page.element, '选项个数问题'))
-    page.rerender()
-    click(findButtonByText(page.element, '恢复指导老师设定'))
-    page.rerender()
-    expect(textContent(page.element)).toContain('判断物品类别，从 4 个选项中选择')
-    expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option'))).toHaveLength(0)
+    const page = await renderGame('game-executive-inhibition', '反应抑制', '中等')
+    for (const level of ['困难', '简单', '中等', '中等']) chooseDifficulty(page, level)
     await enterPlaying(page)
-    expect(findAll(page.element, (item) => hasClass(item, 'category-option'))).toHaveLength(4)
-    expect(textContent(page.element)).toContain('请判断彩图中的物体属于哪个类别，并选出正确的选项')
+    expect(numberTiles(page.element)).toHaveLength(6)
     click(findButtonByText(page.element, '提前结束'))
     await flushPromises()
     expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledWith(expect.objectContaining({
-      form_data: expect.objectContaining({ difficulty: '中等', raw_detail: expect.objectContaining({ difficulty_adjusted: false, difficulty_adjust_reason: '' }) }),
+      form_data: expect.objectContaining({
+        difficulty: '中等',
+        raw_detail: expect.objectContaining({ difficulty_adjusted: false, difficulty_adjust_reason: '' }),
+      }),
     }))
     page.unmount()
   })
 
-  it.each([
-    ['keep', '其他：今天比较疲劳'],
-    ['switch', '思考时间问题'],
-    ['switch-back', '其他'],
-    ['restore', '其他'],
-  ])('records optional other details and clears stale text: %s', async (change, expectedReason) => {
-    prescriptionHarness.demo = false
-    const page = await renderGame('game-executive-inhibition', '反应抑制', '中等')
-    click(findButtonByText(page.element, '降低难度'))
-    page.rerender()
-    click(findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))[0])
-    page.rerender()
-    click(findButtonByText(page.element, '其他'))
-    page.rerender()
-    const input = findAll(page.element, (item) => item.type === 'Input')[0]
-    const onInput = input.props.onInput as (event: { detail: { value: string } }) => void
-    onInput({ detail: { value: '今天比较疲劳' } })
-    page.rerender()
-    if (change === 'switch' || change === 'switch-back') {
-      click(findButtonByText(page.element, '思考时间问题'))
-      page.rerender()
-      expect(findAll(page.element, (item) => item.type === 'Input')).toHaveLength(0)
-      if (change === 'switch-back') {
-        click(findButtonByText(page.element, '其他'))
-        page.rerender()
-        expect(findAll(page.element, (item) => item.type === 'Input')[0].props.value).toBe('')
-      }
-    }
-    if (change === 'restore') {
-      click(findButtonByText(page.element, '恢复指导老师设定'))
-      page.rerender()
-      click(findButtonByText(page.element, '降低难度'))
-      page.rerender()
-      click(findAll(page.element, (item) => hasClass(item, 'difficulty-level-option'))[0])
-      page.rerender()
-      expect(findAll(page.element, (item) => hasClass(item, 'difficulty-reason-option') && hasClass(item, 'is-selected'))).toHaveLength(0)
-      click(findButtonByText(page.element, '其他'))
-      page.rerender()
-      expect(findAll(page.element, (item) => item.type === 'Input')[0].props.value).toBe('')
-    }
+  it('退出重进恢复处方默认档位', async () => {
+    const first = await renderGame('game-executive-inhibition', '反应抑制', '中等')
+    chooseDifficulty(first, '困难')
+    first.unmount()
+    reactHarness.reset()
+    taroHarness.reset()
+    const second = await renderGame('game-executive-inhibition', '反应抑制', '中等')
+    expect(findAll(second.element, (item) => hasClass(item, 'difficulty-level-option') && item.props['aria-pressed'])
+      .map((item) => item.props['aria-label'])).toEqual(['中等'])
+    second.unmount()
+  })
+
+  it('分类转换选择中等后保留题目文案与四个选项', async () => {
+    const page = await renderGame('game-executive-category-switch', '分类转换', '困难')
+    chooseDifficulty(page, '中等')
     await enterPlaying(page)
-    click(findButtonByText(page.element, '提前结束'))
-    await flushPromises()
-    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledWith(expect.objectContaining({
-      form_data: expect.objectContaining({ raw_detail: expect.objectContaining({ difficulty_adjust_reason: expectedReason }) }),
-    }))
+    expect(findAll(page.element, (item) => hasClass(item, 'category-option'))).toHaveLength(4)
+    expect(textContent(page.element)).toContain('请判断彩图中的物体属于哪个类别，并选出正确的选项')
     page.unmount()
   })
 })
@@ -1196,6 +1216,476 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     expect(soundCards(page.element).slice(1).every((card) => !hasClass(card, 'sound-card-preview'))).toBe(true)
     firstAudio.resolve(true)
     resumedAudio.resolve(true)
+    page.unmount()
+  })
+
+})
+
+describe('GameSessionPage 规范逐题采集', () => {
+  async function endAndRead(page: RenderedPage): Promise<GameTrainingPayload> {
+    click(findButtonByText(page.element, '提前结束'))
+    await flushPromises()
+    page.rerender()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+    return retryUploadHarness.postGameTrainingRecord.mock.calls[0][0]
+  }
+
+  const cases = [
+    ['game-memory-color-sequence', '颜色顺序记忆', 7000],
+    ['game-memory-pattern-sequence', '图案顺序记忆', 7000],
+    ['game-executive-inhibition', '反应抑制', 0],
+    ['game-executive-category-switch', '分类转换', 0],
+    ['game-audiovisual-sound-discrimination', '声音辨别', 540],
+    ['game-audiovisual-puzzle', '拼图', 3500],
+  ] as const
+
+  function answer(page: RenderedPage, code: string) {
+    if (code === 'game-memory-color-sequence' || code === 'game-memory-pattern-sequence') {
+      const button = findButtonByText(page.element, code === 'game-memory-color-sequence' ? '蓝' : '太阳')
+      click(button); click(button); click(button)
+    } else if (code === 'game-executive-inhibition') {
+      click(numberTiles(page.element)[0])
+    } else if (code === 'game-executive-category-switch') {
+      click(findButtonByText(page.element, '水果'))
+    } else if (code === 'game-audiovisual-sound-discrimination') {
+      click(soundCards(page.element)[0])
+    } else {
+      // 固定随机数0产生 [1,2,3,0]；同块点击不计交换，三次有效交换复原。
+      click(puzzleTiles(page.element)[0]); page.rerender()
+      click(puzzleTiles(page.element)[0]); page.rerender()
+      for (const [left, right] of [[0, 3], [1, 3], [2, 3]]) {
+        click(puzzleTiles(page.element)[left]); page.rerender()
+        click(puzzleTiles(page.element)[right]); page.rerender()
+      }
+    }
+    page.rerender()
+  }
+
+  it.each(cases)('%s 排除展示和8000ms暂停，记录1200+1300ms并在反馈中结束', async (code, name, previewMs) => {
+    prescriptionHarness.demo = false
+    const page = await renderGame(code, name)
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(previewMs)
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(1200)
+    click(findButtonByText(page.element, '暂停')); page.rerender()
+    await vi.advanceTimersByTimeAsync(8000)
+    click(findButtonByText(page.element, '继续')); page.rerender()
+    await vi.advanceTimersByTimeAsync(1300)
+    answer(page, code)
+    await vi.advanceTimersByTimeAsync(400)
+    const payload = await endAndRead(page)
+    expect(payload.client_session_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(payload.question_results).toEqual([{
+      capture_version: 'active_response_v2',
+      expected_step_count: code.includes('sequence') ? 3 : null,
+      selection_steps: code.includes('sequence') ? [2500, 0, 0].map((ms, i) => ({step_index: i + 1, selected_value: code.includes('color') ? 'blue' : 'sun', expected_value: code.includes('color') ? 'blue' : 'sun', response_duration_ms: ms, is_correct: true})) : [],
+      click_count: code === 'game-audiovisual-puzzle' ? 8 : null,
+      question_index: 1, game_code: code, difficulty: '简单', response_duration_ms: 2500,
+      is_correct: true, result_type: 'answered', swap_count: code === 'game-audiovisual-puzzle' ? 3 : null,
+    }])
+    expect(payload.form_data.raw_detail).toMatchObject({ completed_units: 1, correct_units: 1, difficulty_adjust_reason: '' })
+    expect(payload.form_data.raw_detail.rounds).toBeUndefined()
+    page.unmount()
+  })
+
+  it('隐藏8000ms后按剩余时间超时，只输出一次7000ms错误判定', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(1200)
+    await hidePage(page)
+    await vi.advanceTimersByTimeAsync(8000)
+    await showPage(page)
+    await vi.advanceTimersByTimeAsync(5800)
+    page.rerender()
+    click(numberTiles(page.element)[0])
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 7000, is_correct: false, result_type: 'timeout'})])
+    page.unmount()
+  })
+
+  it('整场使用单调时间补偿事件循环延迟，结束丢弃未判定题', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    await enterPlaying(page)
+    // 时钟前进2500ms但定时器尚未获调度，模拟事件循环堵塞。
+    clockHarness.offset += 2500
+    answer(page, 'game-executive-inhibition')
+    await vi.advanceTimersByTimeAsync(1000)
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(100)
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 2500})])
+    expect(payload.form_data.raw_detail.session_duration_seconds).toBe(3)
+    page.unmount()
+  })
+
+  it('目标首次播放和重播禁选并排除音频耗时，重播不消耗剩余作答时间', async () => {
+    prescriptionHarness.demo = false
+    const initialTarget = deferred<boolean>()
+    audioHarness.playAudioSrc.mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockReturnValueOnce(initialTarget.promise)
+    const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(540)
+    page.rerender()
+    expect(soundCards(page.element).every(card => card.props.disabled)).toBe(true)
+    click(soundCards(page.element)[0])
+    await vi.advanceTimersByTimeAsync(5000)
+    initialTarget.resolve(true); await flushPromises(); page.rerender()
+    await vi.advanceTimersByTimeAsync(1200)
+    const replay = deferred<boolean>()
+    audioHarness.playAudioSrc.mockReturnValueOnce(replay.promise)
+    click(findButtonByText(page.element, '重播目标声音')); page.rerender()
+    expect(soundCards(page.element).every(card => card.props.disabled)).toBe(true)
+    click(soundCards(page.element)[0])
+    await vi.advanceTimersByTimeAsync(9000)
+    replay.resolve(true); await flushPromises(); page.rerender()
+    await vi.advanceTimersByTimeAsync(1300)
+    answer(page, 'game-audiovisual-sound-discrimination')
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 2500, result_type: 'answered'})])
+    page.unmount()
+  })
+
+  it('重播失败保持禁选且不静默计时，成功重试保留剩余6800ms超时', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(540)
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(1200)
+    audioHarness.playAudioSrc.mockRejectedValueOnce(new Error('播放失败'))
+    click(findButtonByText(page.element, '重播目标声音'))
+    await flushPromises(); page.rerender()
+    expect(textContent(page.element)).toContain('目标声音播放异常')
+    expect(soundCards(page.element).every(card => card.props.disabled)).toBe(true)
+    await vi.advanceTimersByTimeAsync(9000)
+    click(findButtonByText(page.element, '重播目标声音'))
+    await flushPromises(); page.rerender()
+    await vi.advanceTimersByTimeAsync(6799)
+    page.rerender()
+    expect(findAll(page.element, item => hasClass(item, 'game-feedback'))).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(1)
+    page.rerender()
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 8000, result_type: 'timeout', is_correct: false})])
+    page.unmount()
+  })
+
+  it('隐藏重播后旧音频完成不能恢复新播放，且手动暂停优先于show', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(540)
+    page.rerender()
+    await vi.advanceTimersByTimeAsync(1200)
+    const oldReplay = deferred<boolean>()
+    const newReplay = deferred<boolean>()
+    audioHarness.playAudioSrc.mockReturnValueOnce(oldReplay.promise).mockReturnValueOnce(newReplay.promise)
+    click(findButtonByText(page.element, '重播目标声音')); page.rerender()
+    click(findButtonByText(page.element, '暂停')); page.rerender()
+    await hidePage(page)
+    await vi.advanceTimersByTimeAsync(8000)
+    await showPage(page)
+    expect(textContent(page.element)).toContain('训练已暂停')
+    click(findButtonByText(page.element, '继续')); page.rerender()
+    oldReplay.resolve(true); await flushPromises(); page.rerender()
+    expect(soundCards(page.element).every(card => card.props.disabled)).toBe(true)
+    click(soundCards(page.element)[0])
+    await vi.advanceTimersByTimeAsync(3000)
+    newReplay.resolve(true); await flushPromises(); page.rerender()
+    await vi.advanceTimersByTimeAsync(1300)
+    answer(page, 'game-audiovisual-sound-discrimination')
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 2500})])
+    page.unmount()
+  })
+
+  it.each(['结束', '卸载'])('目标音频迟到%s不新增判定或写页面状态', async operation => {
+    prescriptionHarness.demo = false
+    const audio = deferred<boolean>()
+    audioHarness.playAudioSrc.mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockReturnValueOnce(audio.promise)
+    const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(540)
+    page.rerender()
+    if (operation === '结束') {
+      const payload = await endAndRead(page)
+      expect(payload.question_results).toEqual([])
+    }
+    page.unmount()
+    audio.resolve(true); await flushPromises()
+    expect(reactHarness.stateWritesAfterCleanup()).toBe(0)
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(operation === '结束' ? 1 : 0)
+  })
+
+  it('第2000题判定后自动保存一次，不进入第2001题', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    const prescription = prescriptionHarness.current as ReturnType<typeof prescriptionFor>
+    prescription.actions[0].duration_minutes = 60
+    page.rerender()
+    await enterPlaying(page)
+    for (let index = 0; index < 2000; index += 1) {
+      click(numberTiles(page.element)[0]); page.rerender()
+      if (index < 1999) {
+        await vi.advanceTimersByTimeAsync(1000)
+        page.rerender()
+      }
+    }
+    await flushPromises(); page.rerender()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+    const payload = retryUploadHarness.postGameTrainingRecord.mock.calls[0][0] as GameTrainingPayload
+    expect(payload.question_results).toHaveLength(2000)
+    expect(payload.question_results?.at(-1)).toMatchObject({question_index: 2000, response_duration_ms: 0})
+    expect(payload.form_data.raw_detail).toMatchObject({ended_by: 'timer', ended_early: true, completed_units: 2000, session_duration_seconds: 1999})
+    expect(payload.status).toBe('partial')
+    expect(payload.note).toBe('达到题数上限，训练自动结束')
+    expect(textContent(page.element)).toContain('达到题数上限，训练自动结束')
+    expect(textContent(page.element)).not.toContain('本次训练已完成')
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+    expect(numberTiles(page.element)).toHaveLength(0)
+    page.unmount()
+  })
+
+
+  it('最终点击在tap音触发前结算题目毫秒', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(2500)
+    audioHarness.playGameAudio.mockImplementationOnce(async () => { clockHarness.offset += 500 })
+    answer(page, 'game-executive-inhibition')
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 2500})])
+    page.unmount()
+  })
+
+  it('页面卸载后保留的点击回调不能写入反馈或触发媒体', async () => {
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    await enterPlaying(page)
+    const oldButton = numberTiles(page.element)[0]
+    page.unmount()
+    audioHarness.playGameAudio.mockClear()
+    click(oldButton)
+    expect(reactHarness.stateWritesAfterCleanup()).toBe(0)
+    expect(audioHarness.playGameAudio).not.toHaveBeenCalled()
+  })
+
+
+  it('1999道亚毫秒题的舍入累计不超过整场秒数加1000ms容差', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    const prescription = prescriptionHarness.current as ReturnType<typeof prescriptionFor>
+    prescription.actions[0].duration_minutes = 60
+    page.rerender()
+    await enterPlaying(page)
+    for (let index = 0; index < 1999; index += 1) {
+      clockHarness.offset += 0.5001
+      click(numberTiles(page.element)[0]); page.rerender()
+      if (index < 1998) {
+        await vi.advanceTimersByTimeAsync(1000)
+        page.rerender()
+      }
+    }
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toHaveLength(1999)
+    const sum = payload.question_results!.reduce((total, question) => total + question.response_duration_ms, 0)
+    expect(sum).toBe(1999)
+    expect(sum).toBeLessThanOrEqual(payload.form_data.raw_detail.session_duration_seconds * 1000 + 1000)
+    page.unmount()
+  })
+
+  it('拼图有效作答达到一小时安全结束，暂停不消耗剩余时间且不补造timeout行', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-audiovisual-puzzle', '拼图')
+    const prescription = prescriptionHarness.current as ReturnType<typeof prescriptionFor>
+    prescription.actions[0].duration_minutes = 120
+    page.rerender()
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(3500)
+    await vi.advanceTimersByTimeAsync(3599000)
+    page.rerender()
+    await hidePage(page)
+    await vi.advanceTimersByTimeAsync(8000)
+    await showPage(page)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(retryUploadHarness.postGameTrainingRecord).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises(); page.rerender()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+    const payload = retryUploadHarness.postGameTrainingRecord.mock.calls[0][0] as GameTrainingPayload
+    expect(payload.question_results).toEqual([])
+    expect(payload.form_data.raw_detail).toMatchObject({ended_by: 'timer', ended_early: true})
+    expect(payload.status).toBe('partial')
+    expect(payload.note).toBe('达到单题时长上限，训练自动结束')
+    expect(textContent(page.element)).toContain('达到单题时长上限，训练自动结束')
+    expect(textContent(page.element)).not.toContain('本次训练已完成')
+    expect(puzzleTiles(page.element)).toHaveLength(0)
+    page.unmount()
+  })
+
+
+  it('拼图一小时后延迟定时器未执行时，点击也先安全结束', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-audiovisual-puzzle', '拼图')
+    const prescription = prescriptionHarness.current as ReturnType<typeof prescriptionFor>
+    prescription.actions[0].duration_minutes = 120
+    page.rerender()
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(3500)
+    page.rerender()
+    clockHarness.offset += 3_600_001
+    click(puzzleTiles(page.element)[0])
+    await flushPromises(); page.rerender()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+    expect(retryUploadHarness.postGameTrainingRecord.mock.calls[0][0].question_results).toEqual([])
+    expect(puzzleTiles(page.element)).toHaveLength(0)
+    page.unmount()
+  })
+
+  it.each(['game-memory-color-sequence', 'game-memory-pattern-sequence'])('%s 逐步耗时排除后台暂停，错选后手动结束保留未完成', async code => {
+    prescriptionHarness.demo = false
+    const page = await renderGame(code, '顺序记忆')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(7000); page.rerender()
+    await vi.advanceTimersByTimeAsync(1200)
+    click(findButtonByText(page.element, code.includes('color') ? '绿' : '小船')); page.rerender()
+    await hidePage(page)
+    await vi.advanceTimersByTimeAsync(8000)
+    expect(retryUploadHarness.savePendingGameUpload).not.toHaveBeenCalled()
+    await showPage(page)
+    await vi.advanceTimersByTimeAsync(1300)
+    click(findButtonByText(page.element, code.includes('color') ? '蓝' : '太阳')); page.rerender()
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({
+      result_type: 'interrupted', response_duration_ms: 2500, expected_step_count: 3,
+      selection_steps: [expect.objectContaining({step_index: 1, response_duration_ms: 1200, is_correct: false}),
+        expect.objectContaining({step_index: 2, response_duration_ms: 1300, is_correct: true})],
+    })])
+    expect(payload.form_data).toMatchObject({error_count: 0, accuracy_rate: 0, raw_detail: {completed_units: 0, correct_units: 0, recorded_question_count: 1}})
+    page.unmount()
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+  })
+
+  it('离页同步缓存半题，卸载后不发请求不写状态，零步不补造题', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-memory-color-sequence', '顺序记忆')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(7000); page.rerender()
+    await vi.advanceTimersByTimeAsync(250)
+    click(findButtonByText(page.element, '蓝')); page.rerender()
+    page.unmount()
+    expect(retryUploadHarness.savePendingGameUpload).toHaveBeenCalledTimes(1)
+    const payload = retryUploadHarness.savePendingGameUpload.mock.calls[0][1]
+    expect(payload.question_results).toEqual([expect.objectContaining({result_type: 'interrupted', selection_steps: [expect.objectContaining({response_duration_ms: 250})]})])
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(retryUploadHarness.postGameTrainingRecord).not.toHaveBeenCalled()
+    expect(reactHarness.stateWritesAfterCleanup()).toBe(0)
+  })
+
+  it.each(['game-memory-color-sequence', 'game-memory-pattern-sequence'])('%s 超时保留错选，不与结束重复追加', async code => {
+    prescriptionHarness.demo = false
+    const page = await renderGame(code, '顺序记忆')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(7000); page.rerender()
+    await vi.advanceTimersByTimeAsync(500)
+    click(findButtonByText(page.element, code.includes('color') ? '绿' : '小船')); page.rerender()
+    await vi.advanceTimersByTimeAsync(7500); page.rerender()
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({result_type: 'timeout', is_correct: false, response_duration_ms: 8000, selection_steps: [expect.objectContaining({is_correct: false, response_duration_ms: 500})]})])
+    expect(payload.form_data).toMatchObject({error_count: 1, raw_detail: {completed_units: 1, recorded_question_count: 1}})
+    page.unmount()
+  })
+
+  it.each([0, 1])('整场定时结束保留%s步半题，零步无行，重复结束无效', async steps => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-memory-color-sequence', '顺序记忆')
+    const prescription = prescriptionHarness.current as ReturnType<typeof prescriptionFor>
+    prescription.actions[0].duration_minutes = 0.2
+    page.rerender()
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(7000); page.rerender()
+    const staleEnd = findButtonByText(page.element, '提前结束')
+    if (steps) { click(findButtonByText(page.element, '蓝')); page.rerender() }
+    await vi.advanceTimersByTimeAsync(5000); page.rerender()
+    click(staleEnd)
+    expect(retryUploadHarness.postGameTrainingRecord).toHaveBeenCalledTimes(1)
+    const payload = retryUploadHarness.postGameTrainingRecord.mock.calls[0][0]
+    expect(payload.question_results).toHaveLength(steps)
+    if (steps) expect(payload.question_results[0]).toMatchObject({result_type: 'interrupted', response_duration_ms: 5000})
+    expect(payload.form_data.raw_detail).toMatchObject({ended_by: 'timer', completed_units: 0, recorded_question_count: steps})
+    page.unmount()
+  })
+
+  it('卸载时直接上传尚未完成同步缓存同UUID且迟到失败不写状态', async () => {
+    prescriptionHarness.demo = false
+    const pending = deferred<void>()
+    retryUploadHarness.postGameTrainingRecord.mockReturnValue(pending.promise)
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    await enterPlaying(page)
+    click(numberTiles(page.element)[0]); page.rerender()
+    click(findButtonByText(page.element, '提前结束')); page.rerender()
+    const payload = retryUploadHarness.postGameTrainingRecord.mock.calls[0][0]
+    page.unmount()
+    expect(retryUploadHarness.savePendingGameUpload).toHaveBeenCalledWith(taroHarness.taroMock, payload, expect.any(Number))
+    pending.reject(Object.assign(new Error('断网'), {retryable: true}))
+    await flushPromises()
+    expect(reactHarness.stateWritesAfterCleanup()).toBe(0)
+    expect(retryUploadHarness.savePendingGameUploadAfterActiveRetry).not.toHaveBeenCalled()
+  })
+
+  it('拼图预览无可点块，暂停/后台的旧点击不计数，取消同块仍计数', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-audiovisual-puzzle', '拼图')
+    await enterPlaying(page)
+    expect(puzzleTiles(page.element)).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(3500); page.rerender()
+    const staleTile = puzzleTiles(page.element)[0]
+    click(findButtonByText(page.element, '暂停')); page.rerender()
+    click(staleTile)
+    click(findButtonByText(page.element, '继续')); page.rerender()
+    await hidePage(page); click(staleTile); await showPage(page)
+    answer(page, 'game-audiovisual-puzzle')
+    const payload = await endAndRead(page)
+    expect(payload.question_results).toEqual([expect.objectContaining({click_count: 8, swap_count: 3})])
+    page.unmount()
+  })
+
+  it('旧UUID待补传时新顺序半题卸载，两条都经真实缓存恢复且不弹提示', async () => {
+    prescriptionHarness.demo = false
+    const actual = await vi.importActual<typeof import('./retryUpload')>('./retryUpload')
+    const store = new Map<string, unknown>()
+    const storage = {
+      getStorageSync: (key: string) => store.get(key),
+      setStorageSync: (key: string, value: unknown) => { store.set(key, value) },
+      removeStorageSync: (key: string) => { store.delete(key) },
+    }
+    const old: GameTrainingPayload = {client_session_id: 'old', prescription_action: 100, training_date: '2026-08-31', status: 'partial', actual_duration_minutes: 1, score: 0, note: '', form_data: {accuracy_rate: 0, error_count: 0, difficulty: '简单', raw_detail: {game_code: 'game-memory-color-sequence', ended_by: 'manual', ended_early: true, prescribed_difficulty: '简单', difficulty_adjusted: false, difficulty_adjust_reason: '', upload_mode: 'direct', retry_count: 0, total_retry_count: 0, session_duration_seconds: 1, suggested_duration_minutes: 1, completed_units: 0, correct_units: 0}}}
+    actual.savePendingGameUpload(storage, old, Date.now())
+    retryUploadHarness.savePendingGameUpload.mockImplementation((_taro, p, now) => actual.savePendingGameUpload(storage, p, now))
+    const page = await renderGame('game-memory-color-sequence', '顺序记忆')
+    await enterPlaying(page)
+    await vi.advanceTimersByTimeAsync(7000); page.rerender()
+    click(findButtonByText(page.element, '蓝')); page.rerender()
+    page.unmount()
+    expect(actual.loadPendingGameUpload(storage)?.payload).toEqual(old)
+    actual.clearPendingGameUpload(storage, old)
+    expect(actual.loadPendingGameUpload(storage)?.payload.question_results).toEqual([expect.objectContaining({result_type: 'interrupted', selection_steps: [expect.objectContaining({selected_value: 'blue'})]})])
+    expect(actual.loadPendingGameUpload(storage)?.payload.client_session_id).not.toBe('old')
+    await flushPromises()
+    expect(reactHarness.stateWritesAfterCleanup()).toBe(0)
+    expect(retryUploadHarness.postGameTrainingRecord).not.toHaveBeenCalled()
+  })
+
+  it('直接上传成功按本次UUID清理缓存', async () => {
+    prescriptionHarness.demo = false
+    const page = await renderGame('game-executive-inhibition', '反应抑制')
+    await enterPlaying(page)
+    const payload = await endAndRead(page)
+    expect(retryUploadHarness.clearPendingGameUpload).toHaveBeenCalledWith(taroHarness.taroMock, payload)
     page.unmount()
   })
 

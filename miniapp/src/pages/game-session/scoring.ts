@@ -35,7 +35,7 @@ function expectedUnits(suggestedDurationMinutes: number): number {
 
 export function buildGameTrainingResult(
   input: BuildGameTrainingResultInput
-): Omit<GameTrainingPayload, 'prescription_action' | 'training_date' | 'note'> {
+): Omit<GameTrainingPayload, 'prescription_action' | 'training_date' | 'note' | 'client_session_id' | 'question_results'> {
   const durationSeconds = nonNegativeInteger(input.durationSeconds)
   const suggestedDurationMinutes = nonNegativeInteger(input.suggestedDurationMinutes)
   const completedUnits = nonNegativeInteger(input.completedUnits)

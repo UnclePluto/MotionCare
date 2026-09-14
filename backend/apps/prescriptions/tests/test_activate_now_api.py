@@ -39,7 +39,7 @@ def _action(**overrides):
         "suggested_duration_minutes": 20,
         "default_difficulty": "中",
         "video_url": "https://example.com/high-knee.mp4",
-        "has_ai_supervision": True,
+        "has_ai_supervision": False,
         "is_active": True,
     }
     data.update(overrides)
@@ -115,7 +115,7 @@ def test_activate_now_creates_active_prescription_and_snapshots(
     )
     assert persisted_snapshot.video_url_snapshot == ""
     assert snapshot["video_url_snapshot"] == signed_video_url
-    assert snapshot["has_ai_supervision_snapshot"] is True
+    assert snapshot["has_ai_supervision_snapshot"] is False
     assert snapshot["weekly_frequency"] == "3 次/周"
     assert snapshot["weekly_target_count"] == 3
     assert snapshot["duration_minutes"] == 20

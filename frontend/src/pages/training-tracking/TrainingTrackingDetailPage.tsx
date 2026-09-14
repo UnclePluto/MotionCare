@@ -26,6 +26,7 @@ import { apiClient } from "../../api/client";
 import { formatShanghaiDate } from "../../utils/shanghaiTime";
 import { WearableHealthTab } from "../wearables/WearableHealthTab";
 import { MotionAnalysisPanel } from "./MotionAnalysisPanel";
+import { TrainingDetailExportModal } from "./TrainingDetailExportModal";
 import { TrainingVideoSwitcher, type TrainingVideoSource } from "./TrainingVideoSwitcher";
 import { TrainingVideoWearablePanel } from "./TrainingVideoWearablePanel";
 import type {
@@ -267,6 +268,7 @@ export function TrainingTrackingDetailPage() {
   } | null>(null);
   const [videoDrawerRecordId, setVideoDrawerRecordId] = useState<number | null>(null);
   const [activeVideoSource, setActiveVideoSource] = useState<TrainingVideoSource>("original");
+  const [exportOpen, setExportOpen] = useState(false);
   const selectedProjectPatientId =
     selectedProjectPatient?.patientId === numericPatientId ? selectedProjectPatient.projectPatientId : undefined;
 
@@ -275,6 +277,7 @@ export function TrainingTrackingDetailPage() {
     setActiveTab("training");
     setVideoDrawerRecordId(null);
     setActiveVideoSource("original");
+    setExportOpen(false);
   }, [numericPatientId]);
 
   const queryParams = useMemo(() => {
@@ -440,7 +443,15 @@ export function TrainingTrackingDetailPage() {
 
   if (data.project_patients.length === 0 || !data.selected_project_patient) {
     return (
-      <Card title="患者训练追踪">
+      <Card
+        title="患者训练追踪"
+        extra={(
+          <Space size={8} wrap>
+            <Typography.Text type="secondary">暂无可导出的项目</Typography.Text>
+            <Button disabled>导出训练明细</Button>
+          </Space>
+        )}
+      >
         <Empty description="暂无可追踪项目" />
       </Card>
     );
@@ -487,6 +498,11 @@ export function TrainingTrackingDetailPage() {
 
           <Descriptions
             title="患者训练与健康"
+            extra={(
+              <Button onClick={() => setExportOpen(true)} disabled={!currentProjectDataReady}>
+                导出训练明细
+              </Button>
+            )}
             bordered
             size="small"
             column={{ xs: 1, sm: 2, lg: 3 }}
@@ -849,6 +865,14 @@ export function TrainingTrackingDetailPage() {
             ),
           },
         ]}
+      />
+
+      <TrainingDetailExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        patient={data.patient}
+        projects={data.project_patients}
+        defaultProjectPatientId={currentProjectDataReady ? currentProjectPatientId : undefined}
       />
     </Space>
   );

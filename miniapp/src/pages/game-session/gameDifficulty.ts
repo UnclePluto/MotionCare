@@ -1,8 +1,6 @@
 import type { GameCode, GameDifficulty } from './gameTypes'
 
 export const DIFFICULTY_OPTIONS: GameDifficulty[] = ['简单', '中等', '困难']
-export const DIFFICULTY_REASONS = ['切换速度问题', '选项个数问题', '思考时间问题', '其他'] as const
-
 export function normalizeDifficulty(value: string): GameDifficulty {
   return DIFFICULTY_OPTIONS.includes(value as GameDifficulty) ? value as GameDifficulty : '简单'
 }

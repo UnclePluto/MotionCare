@@ -53,7 +53,7 @@ const action = {
   default_difficulty: "低",
   video_url: "",
   video_configured: true,
-  has_ai_supervision: true,
+  has_ai_supervision: false,
   is_active: true,
 };
 
@@ -164,7 +164,7 @@ const activePrescription = {
       action_type_snapshot: "有氧训练",
       action_instruction_snapshot: "动作说明",
       video_url_snapshot: "https://example.com/video.mp4",
-      has_ai_supervision_snapshot: true,
+      has_ai_supervision_snapshot: false,
       weekly_frequency: "3 次/周",
       weekly_target_count: 5,
       duration_minutes: 20,

@@ -14,12 +14,6 @@ type ProjectRow = {
   patient_count?: number;
 };
 
-const statusLabel: Record<ProjectRow["status"], string> = {
-  draft: "草稿",
-  active: "进行中",
-  archived: "已完结",
-};
-
 function backendDetail(err: unknown): string | null {
   if (!isAxiosError(err)) return null;
   const data = err.response?.data;
@@ -109,11 +103,6 @@ export function ProjectListPage() {
             title: "项目名称",
             dataIndex: "name",
             render: (text: string) => text,
-          },
-          {
-            title: "状态",
-            dataIndex: "status",
-            render: (v: ProjectRow["status"]) => statusLabel[v] ?? v,
           },
           {
             title: "患者数",

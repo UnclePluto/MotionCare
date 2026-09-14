@@ -13,12 +13,13 @@ from rest_framework.views import APIView
 
 from apps.common.permissions import IsAuthenticatedAndPasswordChanged
 from apps.prescriptions.action_library import is_official_motion_action
-from apps.prescriptions.models import Prescription, PrescriptionAction
+from apps.prescriptions.models import ActionLibraryItem, Prescription, PrescriptionAction
 from apps.prescriptions.motion_videos import (
     MotionVideoResolution,
     build_demo_motion_video_manifest,
     resolve_motion_video_url,
 )
+from apps.training.game_record_service import create_game_training_record
 from apps.training.models import TrainingRecord
 from apps.training.serializers import TrainingRecordSerializer
 from apps.training.services import create_training_record
@@ -345,7 +346,26 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
         data = serializer.validated_data
         project_patient = self.project_patient()
         try:
-            action = PrescriptionAction.objects.get(pk=data.pop("prescription_action"))
+            action = PrescriptionAction.objects.select_related(
+                "prescription", "action_library_item",
+            ).get(
+                pk=data.pop("prescription_action"),
+                prescription__project_patient=project_patient,
+            )
+            if "client_session_id" in data:
+                if is_official_motion_action(action.action_library_item.source_key):
+                    raise DjangoValidationError("运动动作必须完成录像上传")
+                if action.internal_type_snapshot != ActionLibraryItem.InternalType.GAME:
+                    raise DjangoValidationError("规范逐题结果只支持游戏动作")
+                result = create_game_training_record(
+                    project_patient=project_patient,
+                    prescription_action=action,
+                    **data,
+                )
+                return Response(
+                    TrainingRecordSerializer(result.record).data,
+                    status=status.HTTP_201_CREATED if result.created else status.HTTP_200_OK,
+                )
             active_prescription = current_prescription_for(project_patient)
             if active_prescription is None or action.prescription_id != active_prescription.id:
                 return Response(
