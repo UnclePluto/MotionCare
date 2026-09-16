@@ -4868,6 +4868,14 @@ describe('计数组真实录像', () => {
     await flushPromises(40); restored.rerender()
     expect(textContent(restored.element)).toContain('第 2/2 组')
     expect(findButtonByText(restored.element, '开始下一组').props.disabled).toBe(true)
+    await vi.advanceTimersByTimeAsync(180000)
+    initializeCamera(restored.element); restored.rerender()
+    requestMock.mockRejectedValue(new Error('计划检查失败，请重试'))
+    clickButtonByText(restored.element, '开始下一组')
+    await flushPromises(30); restored.rerender()
+    expect(recorderHarness.instances).toHaveLength(1)
+    expect(textContent(restored.element)).toContain('计划检查失败，请重试')
+    expect(textContent(restored.element)).toContain('第 2/2 组')
     restored.unmount()
   })
 })
@@ -4942,14 +4950,14 @@ describe('计数组录像恢复与上传边界', () => {
     await vi.advanceTimersByTimeAsync(5000)
     clickButtonByText(page.element, '完成本组'); await flushPromises(50); page.rerender()
   }
-  it('分片收齐或排队不清理本地录像，过期重建上传仍沿用原组尝试，绑定后才清理', async () => {
+  it.each(['expired', 'failed'])('分片收齐或排队不清理本地录像，%s 重建上传仍沿用原组尝试，绑定后才清理', async (status) => {
     const page = await open(); await firstGroup(page)
     expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
     const original = apiMocks.createVideoSession.mock.calls[0][0]
     expect(original).toMatchObject({ expectedDurationSeconds: 1800, trainingDate: expect.any(String), motionAttemptId: expect.any(String) })
     expect(apiMocks.finalizeVideoSession).toHaveBeenCalledTimes(1)
     expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
-    apiMocks.getVideoSessionStatus.mockResolvedValueOnce({ video_id: 9, status: 'expired', uploaded_segments: [] })
+    apiMocks.getVideoSessionStatus.mockResolvedValueOnce({ video_id: 9, status, uploaded_segments: [] })
     clickButtonByText(page.element, '重试上传'); await flushPromises(50); page.rerender()
     expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(2)
     const renewed = apiMocks.createVideoSession.mock.calls[1][0]

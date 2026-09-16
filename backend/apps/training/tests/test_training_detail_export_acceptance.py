@@ -531,6 +531,7 @@ def test_upgrade_from_pre_feature_leaf_preserves_legacy_json(
     latest = executor.loader.graph.leaf_nodes()
     # 由迁移图定位本功能前实际叶节点，避免误把0016当成旧版。
     before = [
+        ("prescriptions", "0013_disable_high_knee_ai_supervision"),
         (
             "training",
             next(
@@ -538,7 +539,7 @@ def test_upgrade_from_pre_feature_leaf_preserves_legacy_json(
                 for app, name in executor.loader.graph.nodes
                 if app == "training" and name.startswith("0015_")
             ),
-        )
+        ),
     ]
     try:
         executor.migrate(before)
@@ -546,11 +547,9 @@ def test_upgrade_from_pre_feature_leaf_preserves_legacy_json(
         Item = old_apps.get_model("prescriptions", "ActionLibraryItem")
         Action = old_apps.get_model("prescriptions", "PrescriptionAction")
         Record = old_apps.get_model("training", "TrainingRecord")
-        item = Item.objects.create(
+        item, _ = Item.objects.get_or_create(
             source_key=GAME_CODES[0],
-            name="合成颜色顺序",
-            internal_type="game",
-            training_type="认知训练",
+            defaults={"name": "合成颜色顺序", "internal_type": "game", "training_type": "认知训练"},
         )
         action = Action.objects.create(
             prescription_id=active_prescription.pk,

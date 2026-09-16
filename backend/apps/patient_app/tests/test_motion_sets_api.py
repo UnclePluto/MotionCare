@@ -90,7 +90,7 @@ def test_three_uploaded_groups_count_as_one_weekly_completion(
     for index in range(1, 4):
         attempt = str(uuid.uuid4())
         began_at = start + timezone.timedelta(minutes=4 * (index - 1))
-        end = began_at + timezone.timedelta(seconds=40)
+        end = began_at + timezone.timedelta(seconds=42)
         path = f"/api/patient-app/motion-sessions/{motion_id}/sets/{index}/"
         assert (
             client.post(
@@ -139,6 +139,7 @@ def test_three_uploaded_groups_count_as_one_weekly_completion(
     detail = staff.get(f"/api/training/tracking/patients/{project_patient.patient_id}/").json()
     assert detail["prescription_completion"][0]["completed_count"] == 1
     assert detail["motion_sessions"][0]["uploaded_sets"] == 3
+    assert detail["motion_sessions"][0]["actual_duration_seconds"] == 120
     assert sum(day["completed_count"] for day in detail["trend"]["daily"]) == 1
     assert sum(day["duration_minutes"] for day in detail["trend"]["daily"]) == 2
 
@@ -236,7 +237,9 @@ def test_completed_old_prescription_can_recover_but_cannot_start_after_change(
 
 
 @pytest.mark.django_db
-def test_short_rest_and_abandoned_attempt_cannot_be_completed(project_patient, active_prescription):
+def test_short_rest_and_abandoned_attempt_cannot_be_completed(
+    project_patient, active_prescription, settings, tmp_path, monkeypatch
+):
     client, action = counted_client(project_patient, active_prescription, sets=3)
     start = timezone.now() - timezone.timedelta(minutes=10)
     response = client.post(
@@ -252,6 +255,22 @@ def test_short_rest_and_abandoned_attempt_cannot_be_completed(project_patient, a
     attempt = str(uuid.uuid4())
     first = {"operation": "start", "attempt_id": attempt, "started_at": start.isoformat()}
     assert client.post(prefix + "1/", first, format="json").status_code == 200
+    from apps.training.models import TrainingVideo
+    from apps.training.video_staging import session_root
+    from apps.training.video_tasks import cleanup_unbound_training_video, cleanup_qiniu_tombstone
+
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    settings.QINIU_BUCKET = "test-only"
+    monkeypatch.setattr(cleanup_qiniu_tombstone, "delay", lambda *args: None)
+    abandoned_video = TrainingVideo.objects.create(
+        project_patient=project_patient,
+        prescription=active_prescription,
+        prescription_action=action,
+        motion_attempt_id=attempt,
+    )
+    root = session_root(abandoned_video)
+    root.mkdir(parents=True)
+    (root / "incomplete.mp4").write_bytes(b"incomplete")
     assert (
         client.post(
             prefix + "1/", {"operation": "abandon", "attempt_id": attempt}, format="json"
@@ -270,6 +289,9 @@ def test_short_rest_and_abandoned_attempt_cannot_be_completed(project_patient, a
         ).status_code
         == 400
     )
+    assert cleanup_unbound_training_video.run(abandoned_video.id) is True
+    assert not root.exists()
+    assert not TrainingVideo.objects.filter(pk=abandoned_video.id).exists()
     first["attempt_id"] = str(uuid.uuid4())
     assert client.post(prefix + "1/", first, format="json").status_code == 200
     assert (

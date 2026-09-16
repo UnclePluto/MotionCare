@@ -15,6 +15,7 @@ it("shows one motion with separate completion and upload progress and per-side g
   expect(screen.getByText("部分完成")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Expand row" }));
   expect(screen.getAllByText("2/3 组", { selector: ".ant-table-cell" })[0]).toBeInTheDocument();
-  expect(screen.getByText("待上传")).toBeInTheDocument();
+  expect(screen.getAllByText("待上传").length).toBeGreaterThan(0);
+  expect(screen.getByText("待分析")).toBeInTheDocument();
   expect(screen.getByText("目标为左右每侧个数，分析结果为双侧合计。")).toBeInTheDocument();
 });

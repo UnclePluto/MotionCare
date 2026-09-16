@@ -1,16 +1,16 @@
-> 状态：approved
+> 状态：implementing
 > 日期：2026-09-15
-> 最近修订：2026-09-16，Codex；用户已整体批准，按 to-spec 整理正式规格，尚未实施。
+> 最近修订：2026-09-16，Codex；已按 implement 实施并本机验证；真机验收与发布待执行。
 > 正式规格：`specs/patient-rehab-system/motion-set-prescription-prd.md`
 > 范围：非行走运动的计数组处方、逐组运动与休息、逐组录像及后台分析展示。
 > 关联：`2026-08-20-motion-action-official-video-recording-design.md`、`2026-09-05-pp-mcare-independent-compute-service-design.md`、`2026-08-07-training-video-fixed-health-window-design.md`
-> 调研基线：已获取远端主线 `d5b22cd`；尚未实施。
+> 实施基线：合并后主线 `d5b22cd`；本地实现提交 `5d4ea04`，审查修复见后续提交。
 
 # 运动计数组处方与逐组录像设计
 
 ## 访谈状态
 
-本文件保留逐项访谈确认记录 D1–D18 及完整实现方案。用户已于 2026-09-16 明确回复“通过”，整体批准本设计及其中实现边界，并要求使用 to-spec 整理正式需求规格。功能尚未实施；后续工作遵守本设计，不重新开放已确认需求。
+本文件保留逐项访谈确认记录 D1–D18 及完整实现方案。用户已于 2026-09-16 明确回复“通过”，整体批准本设计及其中实现边界，并要求使用 to-spec 整理正式需求规格。功能已在本地分支实施，保留以下批准记录；真机验收与发布尚未执行。
 
 2026-09-15，用户确认保留原工作区所有改动，并要求基于合并后的代码修改。已获取远端主线，在独立工作目录建立 `codex/motion-set-prescription` 分支；原工作区内容保持原样。
 

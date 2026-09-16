@@ -83,22 +83,17 @@ export function syncCountedQueue(owner: number): Promise<void> {
       let session = countedSessions(owner).find(s => s.id === initial.id)!
       const pending = completedAttempts(session).filter(a => !a.uploaded)
       if (!pending.length) continue
-      try {
-        const response = await request<{ id: number }>('/patient-app/motion-sessions/recover/', { method: 'POST', data: {
-          client_session_id: session.id, prescription_action: session.actionId, started_at: session.startedAt,
-          completed_sets: completedAttempts(session).map(a => ({ index: a.index, attempt_id: a.id, started_at: a.startedAt, ended_at: a.endedAt }))
-        } })
-        if (!active()) return
-        if (!Number.isInteger(response.id)) throw new Error('运动进度响应无效，请稍后重试')
-        session = updateCountedSession(owner, session.id, s => { s.serverId = response.id })
-      } catch (error) {
-        if (!active()) return
-        updateCountedSession(owner, session.id, s => { for (const a of s.attempts) if (a.completed && !a.uploaded) a.error = error instanceof Error ? error.message : '视频待补传' })
-        continue
-      }
       for (const original of pending) {
         if (!active()) return
         try {
+          // A later invalid group must not prevent earlier valid groups from uploading.
+          const response = await request<{ id: number }>('/patient-app/motion-sessions/recover/', { method: 'POST', data: {
+            client_session_id: session.id, prescription_action: session.actionId, started_at: session.startedAt,
+            completed_sets: completedAttempts(session).filter(a => a.index <= original.index).map(a => ({ index: a.index, attempt_id: a.id, started_at: a.startedAt, ended_at: a.endedAt }))
+          } })
+          if (!active()) return
+          if (!Number.isInteger(response.id)) throw new Error('运动进度响应无效，请稍后重试')
+          session = updateCountedSession(owner, session.id, s => { s.serverId = response.id })
           let attempt = countedSessions(owner).find(s => s.id === session.id)!.attempts.find(a => a.id === original.id)!
           const patch = (change: (a: CountedAttempt) => void) => {
             const latest = updateCountedSession(owner, session.id, s => change(s.attempts.find(a => a.id === original.id)!))
@@ -106,7 +101,7 @@ export function syncCountedQueue(owner: number): Promise<void> {
           }
           let status = attempt.videoId ? await getVideoSessionStatus(attempt.videoId) : undefined
           if (!active()) return
-          if (status?.status === 'expired') { patch(a => { a.videoId = undefined; a.uploadId = createClientSessionId() }); status = undefined }
+          if (status && ['expired', 'failed'].includes(status.status)) { patch(a => { a.videoId = undefined; a.uploadId = createClientSessionId() }); status = undefined }
           if (!status) {
             status = await createVideoSession({ actionId: session.actionId, clientSessionId: attempt.uploadId,
               trainingDate: session.trainingDate, trainingStartedAt: attempt.startedAt, expectedDurationSeconds: 1800,

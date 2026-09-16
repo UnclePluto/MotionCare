@@ -274,9 +274,7 @@ def test_activate_now_rejects_stale_active_version(project_patient, doctor):
         {"weekly_target_count": 0},
     ],
 )
-def test_activate_now_rejects_invalid_action_parameters(
-    project_patient, doctor, action_overrides
-):
+def test_activate_now_rejects_invalid_action_parameters(project_patient, doctor, action_overrides):
     action = _action()
 
     response = _client(doctor).post(
@@ -354,7 +352,7 @@ def test_activate_now_rejects_legacy_set_or_repetition_payload(project_patient, 
     )
 
     assert response.status_code == 400
-    assert "不支持组数或次数" in str(response.data)
+    assert "不支持组数或个数" in str(response.data)
     assert not Prescription.objects.filter(project_patient=project_patient).exists()
 
 

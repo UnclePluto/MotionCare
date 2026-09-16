@@ -89,7 +89,10 @@ def test_legacy_pending_prescription_cannot_be_activated_after_cutover(
     from apps.prescriptions.services import activate_prescription
 
     legacy = Prescription.objects.create(
-        project_patient=project_patient, version=2, status="pending"
+        project_patient=project_patient,
+        opened_by=active_prescription.opened_by,
+        version=2,
+        status="pending",
     )
     legacy.add_action_snapshot(
         ActionLibraryItem.objects.get(source_key="motion-resistance-row"), duration_minutes=10
@@ -99,3 +102,51 @@ def test_legacy_pending_prescription_cannot_be_activated_after_cutover(
         activate_prescription(legacy)
     legacy.refresh_from_db()
     assert legacy.status == "pending"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_cutover_rolls_back_failure_and_serializes_concurrent_retries(
+    project_patient, active_prescription, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from django.db import close_old_connections
+    from apps.prescriptions import cutover
+    from apps.prescriptions.models import MotionPrescriptionCutover, Prescription
+
+    item, _ = ActionLibraryItem.objects.get_or_create(
+        source_key="motion-resistance-row",
+        defaults={"name": "坐姿划船", "internal_type": "motion", "training_type": "运动训练"},
+    )
+    active_prescription.add_action_snapshot(item, duration_minutes=10, weekly_target_count=4)
+    invalidate = cutover.invalidate_legacy_training
+
+    def unavailable(_):
+        raise RuntimeError("模拟切换事务中途失败")
+
+    monkeypatch.setattr(cutover, "invalidate_legacy_training", unavailable)
+    with pytest.raises(RuntimeError, match="中途失败"):
+        cutover.cutover_patient(project_patient.pk)
+    active_prescription.refresh_from_db()
+    assert active_prescription.status == "active"
+    assert Prescription.objects.filter(project_patient=project_patient).count() == 1
+    assert not MotionPrescriptionCutover.objects.filter(project_patient=project_patient).exists()
+    monkeypatch.setattr(cutover, "invalidate_legacy_training", invalidate)
+    barrier = Barrier(2)
+
+    def retry():
+        close_old_connections()
+        try:
+            barrier.wait(timeout=5)
+            return cutover.cutover_patient(project_patient.pk)
+        finally:
+            close_old_connections()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(retry) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+    assert sum(bool(result["new_prescription_version"]) for result in results) == 1
+    active = Prescription.objects.get(project_patient=project_patient, status="active")
+    assert active.version == 2
+    assert active.actions.get().weekly_target_count == 4
+    assert MotionPrescriptionCutover.objects.filter(project_patient=project_patient).count() == 1

@@ -1,6 +1,8 @@
 import { Button, Table, Tag, Typography } from "antd";
 import type { MotionSessionSummary, TrackingRecentRecord } from "./types";
 
+const analysisLabels: Record<string, string> = { pending: "等待分析", running: "分析中", succeeded: "分析成功", failed: "分析失败" };
+
 const labels = { partial: "部分完成", awaiting_upload: "运动已做完，视频待上传", completed: "已完成" };
 
 export function MotionSessionsPanel({ sessions, records, onOpen }: {
@@ -25,6 +27,10 @@ export function MotionSessionsPanel({ sessions, records, onOpen }: {
         { title: "组序号", render: (_, group) => `${group.index}/${session.planned_sets} 组` },
         { title: "完成情况", render: (_, group) => group.completed ? "本组已做完" : "未完成" },
         { title: "录像", render: (_, group) => group.uploaded ? "已上传" : group.completed ? "待上传" : "无正式录像" },
+        { title: "分析状态", render: (_, group) => {
+          const record = records.find(r => group.video_id != null && r.video_id === group.video_id);
+          return group.uploaded ? analysisLabels[record?.analysis_status ?? ""] ?? "待分析" : group.completed ? "待上传" : "—";
+        } },
         { title: "分析个数", render: (_, group) => records.find(r => r.video_id === group.video_id && group.video_id != null)?.motion_total_count ?? "—" },
         { title: "查看", render: (_, group) => {
           const record = records.find(r => group.video_id != null && r.video_id === group.video_id);

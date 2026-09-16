@@ -111,6 +111,7 @@ def _ensure_session_payload_matches(
         raise SessionConflict("客户端会话训练开始时间与已创建会话冲突")
 
 
+@transaction.atomic
 def create_training_video_session(
     *,
     project_patient,
@@ -121,6 +122,7 @@ def create_training_video_session(
     training_started_at,
     motion_attempt_id=None,
 ):
+    project_patient = ProjectPatient.objects.select_for_update().get(pk=project_patient.pk)
     lookup = {
         "project_patient": project_patient,
         "client_session_id": client_session_id,

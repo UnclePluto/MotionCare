@@ -12,6 +12,7 @@ from apps.prescriptions.models import ActionLibraryItem, Prescription
 from apps.studies.models import ProjectPatient
 
 from .motion_analysis_support import get_analysis_profile
+from .sets import group_duration_seconds
 from .models import MotionAnalysisJob, TrainingRecord, TrainingVideo
 from .video_serializers import ANALYSIS_FAILURE_MESSAGE, skeleton_metadata_is_complete
 
@@ -324,13 +325,7 @@ def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> d
         project_patient=project_patient, training_date__gte=start, training_date__lte=today
     ).prefetch_related("groups__video"):
         seconds = sum(
-            (
-                group.video.actual_duration_seconds
-                if group.video_id
-                else (group.ended_at - group.started_at).total_seconds()
-            )
-            for group in session.groups.all()
-            if group.completed
+            group_duration_seconds(group) for group in session.groups.all() if group.completed
         )
         day_bucket = buckets[session.training_date]
         weekly_bucket = weekly_buckets[
@@ -677,9 +672,6 @@ def get_patient_tracking_detail(
     ):
         item = serialize_session(session)
         item["action_name"] = session.prescription_action.action_name_snapshot
-        item["actual_duration_seconds"] = sum(
-            (g.ended_at - g.started_at).total_seconds() for g in session.groups.all() if g.completed
-        )
         motion_sessions.append(item)
 
     return {

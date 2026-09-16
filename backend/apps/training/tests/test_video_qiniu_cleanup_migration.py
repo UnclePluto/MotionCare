@@ -26,7 +26,10 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     active_prescription,
     prescription_action,
 ):
-    migrate_from = [("training", "0009_current_training_pipeline")]
+    migrate_from = [
+        ("training", "0009_current_training_pipeline"),
+        ("prescriptions", "0013_disable_high_knee_ai_supervision"),
+    ]
     migrate_to = [("training", "0013_trainingvideo_training_window")]
     executor = MigrationExecutor(connection)
     executor.migrate(migrate_from)
@@ -144,8 +147,7 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
 
     repaired_pending = VideoAssemblyJob.objects.get(pk=pending_job.pk)
     pending_canonical = (
-        f"training-videos/{project_patient.id}/{training_date:%Y/%m/%d}/"
-        f"{pending_session}.mp4"
+        f"training-videos/{project_patient.id}/{training_date:%Y/%m/%d}/{pending_session}.mp4"
     )
     assert repaired_pending.qiniu_attempt_object_key == pending_attempt
     assert repaired_pending.qiniu_object_key == pending_canonical
@@ -183,9 +185,7 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
     assert attached_cleanup_tombstone.canonical_key == attached_cleanup_key
     assert attached_cleanup_tombstone.retain_canonical is False
 
-    repaired_detached_canonical = VideoAssemblyJob.objects.get(
-        pk=detached_canonical_job.pk
-    )
+    repaired_detached_canonical = VideoAssemblyJob.objects.get(pk=detached_canonical_job.pk)
     assert repaired_detached_canonical.qiniu_object_key == detached_canonical_key
     detached_canonical_tombstone = QiniuCleanupTombstone.objects.get(
         attempt_key_prefix=(
@@ -223,19 +223,25 @@ def test_qiniu_cleanup_upgrade_repairs_attempt_and_canonical_keys(
         "apps.training.migrations.0012_repair_unbound_qiniu_canonical_keys"
     )
     migration.repair_unbound_qiniu_canonical_keys(new_apps, None)
-    assert list(
-        VideoAssemblyJob.objects.order_by("id").values_list(
-            "id",
-            "qiniu_object_key",
-            "qiniu_attempt_object_key",
+    assert (
+        list(
+            VideoAssemblyJob.objects.order_by("id").values_list(
+                "id",
+                "qiniu_object_key",
+                "qiniu_attempt_object_key",
+            )
         )
-    ) == job_state
-    assert list(
-        QiniuCleanupTombstone.objects.order_by("id").values_list(
-            "id",
-            "canonical_key",
-            "retain_canonical",
-            "max_attempt_number",
-            "updated_at",
+        == job_state
+    )
+    assert (
+        list(
+            QiniuCleanupTombstone.objects.order_by("id").values_list(
+                "id",
+                "canonical_key",
+                "retain_canonical",
+                "max_attempt_number",
+                "updated_at",
+            )
         )
-    ) == tombstone_state
+        == tombstone_state
+    )

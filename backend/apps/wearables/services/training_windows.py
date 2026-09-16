@@ -14,7 +14,7 @@ TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS = 300
 
 
 def training_video_health_window(video: "TrainingVideo") -> tuple[datetime, datetime] | None:
-    if video.prescription_action.dose_mode == "sets":
+    if getattr(getattr(video, "prescription_action", None), "dose_mode", None) == "sets":
         if video.training_started_at is None or video.training_ended_at is None:
             return None
         return video.training_started_at, video.training_ended_at + timedelta(

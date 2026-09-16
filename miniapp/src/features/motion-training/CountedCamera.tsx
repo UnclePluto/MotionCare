@@ -114,12 +114,8 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     try {
       if (!demo) {
         await checkCountedStorage()
-        // A successful refresh must still contain this immutable action snapshot.
-        // A temporary network failure does not erase safely stored completed sets.
-        const fresh = await fetchCurrentPrescriptionData().catch(error => {
-          if (!latest || !done.length) throw error
-          return undefined
-        })
+        // New groups require a successful current-prescription check.
+        const fresh = await fetchCurrentPrescriptionData()
         if (fresh !== undefined && !fresh?.actions.some(a => a.id === action.id && a.dose_mode === 'sets')) {
           throw new Error('运动计划已更新，请返回运动计划开始新一次运动。已完成组会继续补传。')
         }

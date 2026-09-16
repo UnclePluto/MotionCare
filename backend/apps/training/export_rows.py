@@ -194,6 +194,7 @@ def _records_query(project_patient, filters):
             "prescription_action",
             "prescription_action__action_library_item",
             "video",
+            "video__prescription_action",
             "video__motion_attempt__group",
             "motion_result_updated_by",
         )

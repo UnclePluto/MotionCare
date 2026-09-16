@@ -188,7 +188,7 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
         else EXPECTED_ASSET_KEYS
     )
     if not isinstance(entries, list) or len(entries) != len(expected_keys):
-        raise CommandError("固定素材清单必须包含 23 项")
+        raise CommandError(f"固定素材清单必须包含 {len(expected_keys)} 项")
     if any(not isinstance(entry, dict) for entry in entries):
         raise CommandError("固定素材清单项格式无效")
     if any(REQUIRED_ENTRY_FIELDS.difference(entry) for entry in entries):
@@ -198,7 +198,7 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
     if any(not isinstance(key, str) or not key for key in manifest_keys):
         raise CommandError("固定素材清单 key 无效")
     if len(set(manifest_keys)) != len(manifest_keys) or set(manifest_keys) != expected_keys:
-        raise CommandError("固定素材清单必须包含 23 项规范素材")
+        raise CommandError(f"固定素材清单必须包含 {len(expected_keys)} 项规范素材")
 
     prepared: list[PreparedStaticAsset] = []
     seen_paths: set[str] = set()

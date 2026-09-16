@@ -390,19 +390,16 @@ class TrainingVideoPostgresConcurrencyTests(
         finally:
             second_done.set()
 
-    def test_two_connections_losing_session_create_checks_winner_payload(self):
+    def test_two_connections_serialized_session_create_checks_winner_payload(self):
         create_barrier = threading.Barrier(2)
         results = {}
         errors = {}
         backend_pids = {}
-        original_create = TrainingVideo.objects.create
         session_id = uuid.UUID("8cf99c30-9b03-4bda-b4d3-b492f3a2db13")
 
-        def synchronized_create(**kwargs):
-            create_barrier.wait(10)
-            return original_create(**kwargs)
-
         def create_session(expected_duration_seconds):
+            # 在公共服务入口前并发；服务内部已由患者锁串行，不在持锁插入处互等。
+            create_barrier.wait(10)
             return create_training_video_session(
                 project_patient=ProjectPatient.objects.get(pk=self.project_patient.pk),
                 client_session_id=session_id,
@@ -427,10 +424,9 @@ class TrainingVideoPostgresConcurrencyTests(
             backend_pids,
         )
 
-        with patch.object(TrainingVideo.objects, "create", side_effect=synchronized_create):
-            first.start()
-            second.start()
-            _join_threads(self, first, second)
+        first.start()
+        second.start()
+        _join_threads(self, first, second)
 
         self.assertEqual(len(set(backend_pids.values())), 2)
         self.assertEqual(len(results), 1)

@@ -28,6 +28,12 @@ def current_action(pp, action_id):
     return action
 
 
+def group_duration_seconds(group):
+    if group.video_id and group.video.actual_duration_seconds is not None:
+        return group.video.actual_duration_seconds
+    return (group.ended_at - group.started_at).total_seconds() if group.completed else 0
+
+
 def serialize_session(session):
     groups = list(session.groups.select_related("video"))
     done = sum(g.completed for g in groups)
@@ -46,6 +52,7 @@ def serialize_session(session):
         "planned_sets": session.planned_sets,
         "repetitions": session.repetitions,
         "count_unit": session.count_unit,
+        "actual_duration_seconds": sum(group_duration_seconds(g) for g in groups if g.completed),
         "completed_sets": done,
         "uploaded_sets": uploaded,
         "status": status,
@@ -171,7 +178,9 @@ def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None,
 
             for video in attempt.videos.filter(training_record__isnull=True):
                 video.cleanup_requested_at = timezone.now()
-                video.save(update_fields=["cleanup_requested_at"])
+                # 未完成尝试不属于正式研究记录，移交既有解绑清理流程。
+                video.project_patient = None
+                video.save(update_fields=["cleanup_requested_at", "project_patient"])
                 transaction.on_commit(
                     lambda vid=video.id: cleanup_unbound_training_video.delay(vid)
                 )
@@ -215,7 +224,7 @@ def recover_session(pp, *, client_session_id, prescription_action, started_at, c
         )
         .first()
     )
-    if not action or action.prescription.status not in {"active", "archived"}:
+    if not action or action.prescription.status not in {"active", "archived", "terminated"}:
         raise ValidationError("原运动计划不可恢复")
     session = MotionTrainingSession.objects.filter(client_session_id=client_session_id).first()
     if session and session.project_patient_id != pp.pk:
@@ -263,6 +272,8 @@ def recover_session(pp, *, client_session_id, prescription_action, started_at, c
         attempt = MotionSetAttempt.objects.filter(pk=attempt_id).first()
         if attempt and (attempt.group_id != group.id or attempt.abandoned_at):
             raise ValidationError("录像尝试已放弃或归属不符")
+        if group.started_at and group.attempt_id == attempt_id and group.started_at != start:
+            raise ValidationError("录像尝试开始时间与原始快照冲突")
         if group.attempt_id and group.attempt_id != attempt_id:
             raise ValidationError("请先放弃旧录像尝试")
         if not attempt:
