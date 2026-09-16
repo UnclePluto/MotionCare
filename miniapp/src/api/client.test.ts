@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const taroMocks = vi.hoisted(() => ({
@@ -68,7 +69,7 @@ describe('小程序公开 API', () => {
     { errMsg: 'request:fail abort https://private?token=secret' }])('保留明确取消标记且脱敏 %j', async (cause) => {
     taroMocks.request.mockRejectedValueOnce(cause)
     const error = await publicRequest('/patient-app/static-assets/').catch((value) => value)
-    expect(error).toBeInstanceOf(Error)
+    assert(error instanceof Error)
     expect(error.name).toBe('AbortError')
     expect(error.message).not.toContain('https://private')
     expect(taroMocks.removeStorageSync).not.toHaveBeenCalled()
@@ -80,7 +81,7 @@ describe('小程序公开 API', () => {
       data: { detail: 'https://cdn.example.com/image?token=secret' },
     })
     const error = await publicRequest('/patient-app/static-assets/').catch((value) => value)
-    expect(error).toBeInstanceOf(PublicRequestError)
+    assert(error instanceof PublicRequestError)
     expect(error.statusCode).toBe(statusCode)
     expect(error.message).toBe('请求失败')
     expect(taroMocks.getStorageSync).not.toHaveBeenCalled()

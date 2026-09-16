@@ -15,7 +15,7 @@ export const NEUTRAL_TERM_REPLACEMENTS = [
 
 export function neutralizeMiniappMessage(message: string): string {
   return NEUTRAL_TERM_REPLACEMENTS.reduce(
-    (result, [source, target]) => result.replaceAll(source, target),
+    (result, [source, target]) => result.split(source).join(target),
     message,
   )
 }

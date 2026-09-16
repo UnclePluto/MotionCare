@@ -6,7 +6,7 @@ export async function saveTemporaryMotionTrainingSegmentForRetry(
     localFileState: MotionTrainingLocalFileState
     onError?: (error: unknown) => void
   },
-  saveFile: (options: { tempFilePath: string }) => Promise<{ savedFilePath?: string }>
+  saveFile: (options: { tempFilePath: string }) => Promise<unknown>
 ): Promise<{
   filePath: string
   localFileState: MotionTrainingLocalFileState
@@ -15,7 +15,8 @@ export async function saveTemporaryMotionTrainingSegmentForRetry(
 
   try {
     const saved = await saveFile({ tempFilePath: input.filePath })
-    if (typeof saved.savedFilePath === 'string' && saved.savedFilePath.trim()) {
+    if (saved && typeof saved === 'object' && 'savedFilePath' in saved
+      && typeof saved.savedFilePath === 'string' && saved.savedFilePath.trim()) {
       return {
         filePath: saved.savedFilePath,
         localFileState: 'saved'

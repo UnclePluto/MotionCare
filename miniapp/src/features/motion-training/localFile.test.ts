@@ -17,6 +17,18 @@ describe('shoulder press failed segment persistence', () => {
     })
   })
 
+  it.each([null, undefined, { errMsg: 'saveFile:fail' }, { savedFilePath: '' }, { savedFilePath: 42 }])(
+    'keeps the temporary recording when save returns an unusable response %j', async (response) => {
+      await expect(saveTemporaryMotionTrainingSegmentForRetry({
+        filePath: 'wxfile://temp/segment-0.mp4',
+        localFileState: 'temporary'
+      }, vi.fn().mockResolvedValue(response))).resolves.toEqual({
+        filePath: 'wxfile://temp/segment-0.mp4',
+        localFileState: 'save_failed'
+      })
+    }
+  )
+
   it('does not retry persistent save after an earlier save failure', async () => {
     const saveFile = vi.fn()
 

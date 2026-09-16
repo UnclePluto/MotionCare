@@ -1,7 +1,9 @@
+import assert from 'node:assert/strict'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
   appendPendingSegment,
+  isCompressedMotionTrainingSegment,
   createPendingMotionTrainingSession,
   type PendingMotionTrainingSession
 } from './session'
@@ -39,8 +41,8 @@ function dependencies() {
   const deleted: string[] = []
   const eventLog: string[] = []
   const deps = {
-    createVideoSession: vi.fn().mockResolvedValue({ video_id: 9, status: 'created' }),
-    getVideoSessionStatus: vi.fn().mockResolvedValue({ video_id: 9, status: 'created', uploaded_segments: [] }),
+    createVideoSession: vi.fn().mockResolvedValue({ video_id: 9, status: 'recording' }),
+    getVideoSessionStatus: vi.fn().mockResolvedValue({ video_id: 9, status: 'recording', uploaded_segments: [] }),
     uploadVideoSegment: vi.fn().mockImplementation(async ({ index }) => ({
       index,
       sha256: `sha-${index}`
@@ -53,7 +55,7 @@ function dependencies() {
     saveSession: vi.fn((session: PendingMotionTrainingSession) => {
       saved.push(JSON.parse(JSON.stringify(session)) as PendingMotionTrainingSession)
       for (const segment of session.segments) {
-        if (segment.uploadState === 'uploaded' && segment.sha256) {
+        if (isCompressedMotionTrainingSegment(segment) && segment.uploadState === 'uploaded' && segment.sha256) {
           eventLog.push(`save:uploaded:${segment.index}:${segment.sha256}`)
         }
       }
@@ -116,12 +118,26 @@ describe('motion training pending segment upload workflow', () => {
     expect(events).toContainEqual({ phase: 'upload', index: 0, state: 'uploaded', progress: 100 })
 
     const firstDeleteIndex = saved.findIndex((session) => (
-      session.segments[0].uploadState === 'uploaded' && session.segments[0].sha256 === 'sha-0'
+      isCompressedMotionTrainingSegment(session.segments[0]) && session.segments[0].uploadState === 'uploaded' && session.segments[0].sha256 === 'sha-0'
     ))
     expect(firstDeleteIndex).toBeGreaterThanOrEqual(0)
     expect(deleted[0]).toBe('wxfile://store/segment-0.mp4')
     expect(eventLog.indexOf('save:uploaded:0:sha-0'))
       .toBeLessThan(eventLog.indexOf('delete:wxfile://store/segment-0.mp4'))
+  })
+
+  it.each([undefined, null, 0, -1, 1.5, '9'])('rejects invalid server video id %j before uploading or deleting local files', async (videoId) => {
+    const { deps, saved, deleted } = dependencies()
+    deps.createVideoSession.mockResolvedValueOnce({ video_id: videoId, status: 'recording' })
+
+    await expect(runPendingSegmentUploads(baseSession(), deps, vi.fn()))
+      .rejects.toThrow('上传会话缺失，请重试')
+
+    expect(deps.getVideoSessionStatus).not.toHaveBeenCalled()
+    expect(deps.uploadVideoSegment).not.toHaveBeenCalled()
+    expect(deps.finalizeVideoSession).not.toHaveBeenCalled()
+    expect(deleted).toEqual([])
+    expect(saved.at(-1)?.segments).toEqual(baseSession().segments)
   })
 
   it('stops before every network call when the training start is missing', async () => {
@@ -178,7 +194,7 @@ describe('motion training pending segment upload workflow', () => {
     const { deps } = dependencies()
     deps.getVideoSessionStatus.mockResolvedValueOnce({
       video_id: 9,
-      status: 'created',
+      status: 'recording',
       uploaded_segments: [0]
     })
 
@@ -196,7 +212,7 @@ describe('motion training pending segment upload workflow', () => {
     const { deps, saved } = dependencies()
     deps.getVideoSessionStatus.mockResolvedValueOnce({
       video_id: 9,
-      status: 'created',
+      status: 'recording',
       uploaded_segments: uploadedSegments
     })
 
@@ -241,7 +257,7 @@ describe('motion training pending segment upload workflow', () => {
     await expect(runPendingSegmentUploads(baseSession(), deps, vi.fn())).rejects.toThrow('网络不可用')
 
     expect(deps.uploadVideoSegment.mock.calls.map(([input]) => input.index)).toEqual([0, 1])
-    expect(saved.at(-1)?.segments.map((segment) => segment.uploadState)).toEqual(['uploaded', 'pending', 'pending'])
+    expect(saved.at(-1)?.segments.map((segment) => isCompressedMotionTrainingSegment(segment) ? segment.uploadState : undefined)).toEqual(['uploaded', 'pending', 'pending'])
     expect(saved.at(-1)?.lastError).toBe('网络不可用')
     expect(deps.finalizeVideoSession).not.toHaveBeenCalled()
   })
@@ -257,12 +273,13 @@ describe('motion training pending segment upload workflow', () => {
       sha256: 'sha-0'
     })
     expect(saved.find((session) => (
-      session.segments[0].uploadState === 'pending' && session.segments[0].sha256 === 'sha-0'
+      isCompressedMotionTrainingSegment(session.segments[0]) && session.segments[0].uploadState === 'pending' && session.segments[0].sha256 === 'sha-0'
     ))).toBeUndefined()
   })
 
   it('bridges the legacy upload page through a single-segment pending session with real metadata', async () => {
     const initial = baseSession()
+    assert(isCompressedMotionTrainingSegment(initial.segments[0]))
     const singleSegmentPending = {
       ...initial,
       actualDurationMs: initial.segments[0].durationMs,
@@ -273,8 +290,8 @@ describe('motion training pending segment upload workflow', () => {
     }
     const saved: PendingMotionTrainingSession[] = []
     const deps = {
-      createIntent: vi.fn().mockResolvedValue({ video_id: 77, status: 'created' }),
-      getVideoSessionStatus: vi.fn().mockResolvedValue({ video_id: 77, status: 'created', uploaded_segments: [] }),
+      createIntent: vi.fn().mockResolvedValue({ video_id: 77, status: 'recording' }),
+      getVideoSessionStatus: vi.fn().mockResolvedValue({ video_id: 77, status: 'recording', uploaded_segments: [] }),
       uploadVideoSegment: vi.fn().mockResolvedValue({ index: 0, sha256: 'sha-real' }),
       finalizeVideoSession: vi.fn().mockResolvedValue({ video_id: 77, status: 'assembling' }),
       savePending: vi.fn((session: PendingMotionTrainingSession) => {

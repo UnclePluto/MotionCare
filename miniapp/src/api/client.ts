@@ -18,6 +18,9 @@ export function runtimeApiBaseUrl(): string {
   }
 }
 
+// 网络边界允许 JSON null；外部数据先保持 unknown，再由调用方声明响应契约。
+type ApiResponse = Omit<Taro.request.SuccessCallbackResult, 'data'> & { data: unknown }
+
 type Method = 'GET' | 'POST' | 'PUT'
 
 type RequestOptions = {
@@ -61,9 +64,9 @@ export function safeApiErrorMessage(data: unknown): string {
 
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  let response: Taro.request.SuccessCallbackResult<T>
+  let response: ApiResponse
   try {
-    response = await Taro.request<T>({
+    response = await Taro.request({
       url: apiUrl(path),
       method: options.method ?? 'GET',
       data: options.data,
@@ -87,13 +90,13 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (response.statusCode < 200 || response.statusCode >= 300) {
     throw new Error(safeApiErrorMessage(response.data))
   }
-  return response.data
+  return response.data as T
 }
 
 export async function publicRequest<T>(path: string): Promise<T> {
-  let response: Taro.request.SuccessCallbackResult<T>
+  let response: ApiResponse
   try {
-    response = await Taro.request<T>({
+    response = await Taro.request({
       url: apiUrl(path),
       method: 'GET',
       header: {
@@ -109,7 +112,7 @@ export async function publicRequest<T>(path: string): Promise<T> {
   if (response.statusCode < 200 || response.statusCode >= 300) {
     throw new PublicRequestError(safeApiErrorMessage(response.data), response.statusCode)
   }
-  return response.data
+  return response.data as T
 }
 
 export class PublicRequestError extends Error {

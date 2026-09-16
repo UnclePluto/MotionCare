@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -641,7 +642,7 @@ describe('shoulder press segmented session helpers', () => {
           sha256: 'same-sha'
         }
       ]
-    }))?.segments.map((segment) => segment.sha256)).toEqual(['same-sha', 'same-sha'])
+    }))?.segments.map((segment) => isCompressedMotionTrainingSegment(segment) ? segment.sha256 : undefined)).toEqual(['same-sha', 'same-sha'])
   })
 
   it('validates the RFC4122 v4 client session id shape', () => {
@@ -667,6 +668,7 @@ describe('shoulder press segmented session helpers', () => {
     }))
 
     const recovered = markServerUploadedSegments(session, [0])
+    assert(isCompressedMotionTrainingSegment(recovered.segments[0]))
 
     expect(recovered.segments[0].uploadState).toBe('uploaded')
     expect(recovered.segments[0].sha256).toBeUndefined()

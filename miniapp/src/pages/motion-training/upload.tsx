@@ -20,7 +20,6 @@ import {
   promoteLegacyMotionTrainingSegment,
   requireMotionTrainingStartedAt,
   type CompressedMotionTrainingSegment,
-  type PendingMotionTrainingSegment,
   type PendingMotionTrainingSession
 } from '../../features/motion-training/session'
 import {
@@ -188,7 +187,7 @@ export default function MotionTrainingUploadPage() {
   ): Promise<PendingMotionTrainingSession | null> {
     setPhase('preparing')
     const clientSessionId = initialSession.clientSessionId
-    let current = initialSession
+    let current: PendingMotionTrainingSession | null = initialSession
 
     for (;;) {
       const latest = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
@@ -201,7 +200,7 @@ export default function MotionTrainingUploadPage() {
 
       try {
         const fileInfo = await Taro.getFileInfo({ filePath: segment.rawSavedFilePath })
-        const sizeBytes = Number(fileInfo.size)
+        const sizeBytes = 'size' in fileInfo ? Number(fileInfo.size) : NaN
         if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
           throw new Error('录像文件大小无效')
         }
@@ -222,7 +221,7 @@ export default function MotionTrainingUploadPage() {
         if (!current) return null
         setSegmentProgress(100)
       } catch (preparationError) {
-        reportTrainingDiagnostic('file_read', preparationError, { diagnosticScope: pageDiagnosticScope.current, clientSessionId, videoId: current.videoId, segmentIndex: segment.index })
+        reportTrainingDiagnostic('file_read', preparationError, { diagnosticScope: pageDiagnosticScope.current, clientSessionId, videoId: current?.videoId, segmentIndex: segment.index })
         const detail = mediaErrorDetail(preparationError)
         throw new Error(detail
           ? `录像文件已失效，请重新训练：${detail}`
@@ -256,7 +255,7 @@ export default function MotionTrainingUploadPage() {
     if (!session.videoId) return session
     setPhase('segments')
     const clientSessionId = session.clientSessionId
-    let current = session
+    let current: PendingMotionTrainingSession | null = session
 
     for (;;) {
       const latest = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)

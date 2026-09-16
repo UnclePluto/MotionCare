@@ -90,7 +90,7 @@ const reactHarness = vi.hoisted(() => {
       queuedEffects.push(() => {
         effectCleanups[index]?.()
         const cleanup = callback()
-        effectCleanups[index] = typeof cleanup === 'function' ? cleanup : undefined
+        effectCleanups[index] = typeof cleanup === 'function' ? () => cleanup() : undefined
       })
       hookEntries[index] = deps ?? []
     },
@@ -931,7 +931,7 @@ describe('GameSessionPage 开始前自由选择难度', () => {
     reactHarness.reset()
     taroHarness.reset()
     const second = await renderGame('game-executive-inhibition', '反应抑制', '中等')
-    expect(findAll(second.element, (item) => hasClass(item, 'difficulty-level-option') && item.props['aria-pressed'])
+    expect(findAll(second.element, (item) => hasClass(item, 'difficulty-level-option') && item.props['aria-pressed'] === true)
       .map((item) => item.props['aria-label'])).toEqual(['中等'])
     second.unmount()
   })

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "es2017",
-    "module": "commonjs",
+    "module": "esnext",
     "removeComments": false,
     "preserveConstEnums": true,
     "moduleResolution": "node",
@@ -12,6 +12,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "strictNullChecks": true,
+    // 检查项目源码与库调用契约，不重复检查 Taro 多平台依赖内部的声明。
+    "skipLibCheck": true,
     "sourceMap": true,
     "rootDir": ".",
     "jsx": "react-jsx",

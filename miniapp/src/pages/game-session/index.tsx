@@ -282,7 +282,8 @@ export default function GameSessionPage() {
     : { completed: 0, total: requiredImageKeys.length, percent: 0 }
   const currentReadyGameImageAssets = (
     effectiveImageAssetStatus === 'ready'
-    && readyGameImageAssets?.actionId === action?.id
+    && readyGameImageAssets !== null
+    && readyGameImageAssets.actionId === action?.id
     && readyGameImageAssets.generation === imageAssetToken?.generation
     && readyGameImageAssets.generation === imageAssetGenerationRef.current
   )

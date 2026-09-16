@@ -344,7 +344,7 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
       uploadState: 'uploading',
       sha256: undefined
     }), onSession)
-    if (!session) return
+    if (!session || !session.videoId) return
 
     try {
       const uploaded = await uploadVideoSegment({

@@ -283,7 +283,7 @@ describe('finishSoundCardPreview', () => {
       previewPlayed: true,
       isRunCurrent: () => false,
       clearPreviewingCard: () => events.push('back'),
-      waitForReturn: async (ms) => events.push(`wait:${ms}`),
+      waitForReturn: async (ms) => { events.push(`wait:${ms}`) },
       onPreviewPlaybackFailure: () => events.push('playback-failed'),
     })
 
@@ -339,7 +339,7 @@ describe('finishSoundCardPreview', () => {
         previewPlayed,
         isRunCurrent: () => true,
         clearPreviewingCard: () => events.push('back'),
-        waitForReturn: async (ms) => events.push(`wait:${ms}`),
+        waitForReturn: async (ms) => { events.push(`wait:${ms}`) },
         onPreviewPlaybackFailure: () => events.push('playback-failed'),
       })
       return { canContinue, events }

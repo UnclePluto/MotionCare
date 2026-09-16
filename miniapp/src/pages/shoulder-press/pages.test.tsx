@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../../app'
@@ -31,6 +32,7 @@ type ReactElement = {
   type: string | ((props?: Record<string, unknown>) => ReactElement)
   props: Record<string, unknown> & {
     children?: unknown
+    onInitDone?: () => unknown
     onError?: () => unknown
     onVideoError?: () => Promise<void> | void
     onClick?: () => unknown
@@ -115,7 +117,7 @@ const reactHarness = vi.hoisted(() => {
         effectCleanups[index]?.()
         queuedEffects.push(() => {
           const cleanup = callback()
-          effectCleanups[index] = typeof cleanup === 'function' ? cleanup : undefined
+          effectCleanups[index] = typeof cleanup === 'function' ? () => cleanup() : undefined
         })
         hookEntries[index] = deps ?? []
       }
@@ -1728,8 +1730,10 @@ describe('shoulder press pages', () => {
       segments: []
     })
     expect(recorderHarness.instances[0].start).toHaveBeenCalledTimes(1)
+    const lastSaveOrder = taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1)
+    assert(lastSaveOrder !== undefined)
     expect(apiMocks.createVideoSession.mock.invocationCallOrder[0])
-      .toBeLessThan(taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(lastSaveOrder)
     expect(taroHarness.taroMock.setStorageSync.mock.invocationCallOrder.at(-1))
       .toBeLessThan(recorderHarness.instances[0].start.mock.invocationCallOrder[0])
   })

@@ -7,7 +7,6 @@ import {
   markServerUploadedSegments,
   requireMotionTrainingStartedAt,
   type CompressedMotionTrainingSegment,
-  type PendingMotionTrainingSegment,
   type PendingMotionTrainingSession,
   type PendingMotionTrainingUpload
 } from './session'
@@ -160,7 +159,11 @@ export async function runPendingSegmentUploads(
       session = persist({ ...session, videoId: created.video_id }, dependencies)
     }
 
-    const status = await dependencies.getVideoSessionStatus(session.videoId)
+    const videoId = session.videoId
+    if (typeof videoId !== 'number' || !Number.isInteger(videoId) || videoId <= 0) {
+      throw new Error('上传会话缺失，请重试')
+    }
+    const status = await dependencies.getVideoSessionStatus(videoId)
     const recovered = markServerUploadedSegments(session, uploadedIndexes(status, session.segments.length))
     if (JSON.stringify(recovered.segments) !== JSON.stringify(session.segments)) {
       session = persist(recovered, dependencies)
@@ -181,7 +184,7 @@ export async function runPendingSegmentUploads(
       onProgress({ phase: 'upload', index: segment.index, state: 'uploading', progress: 0 })
 
       const uploaded = await dependencies.uploadVideoSegment({
-        videoId: session.videoId,
+        videoId,
         index: segment.index,
         filePath: segment.savedFilePath,
         durationMs: segment.durationMs,
@@ -207,7 +210,7 @@ export async function runPendingSegmentUploads(
 
     if (!session.finalized) {
       await dependencies.finalizeVideoSession({
-        videoId: session.videoId,
+        videoId,
         segmentCount: session.segments.length,
         actualDurationSeconds: Math.ceil(session.actualDurationMs / 1000),
         note: '',
@@ -308,11 +311,15 @@ export async function runMotionTrainingUploadWorkflow(
     dependencies.uploadVideoSegment &&
     dependencies.finalizeVideoSession
   )
-    ? null
+    ? {
+      getVideoSessionStatus: dependencies.getVideoSessionStatus,
+      uploadVideoSegment: dependencies.uploadVideoSegment,
+      finalizeVideoSession: dependencies.finalizeVideoSession
+    }
     : await import('./api')
 
   const completedSession = await runPendingSegmentUploads(pendingSession, {
-    createVideoSession: async () => ({ video_id: videoId, status: 'created' }),
+    createVideoSession: async () => ({ video_id: videoId, status: 'recording' }),
     getVideoSessionStatus: dependencies.getVideoSessionStatus ?? apiDependencies.getVideoSessionStatus,
     uploadVideoSegment: dependencies.uploadVideoSegment ?? apiDependencies.uploadVideoSegment,
     finalizeVideoSession: dependencies.finalizeVideoSession ?? apiDependencies.finalizeVideoSession,
