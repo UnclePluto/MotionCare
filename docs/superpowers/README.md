@@ -18,6 +18,7 @@ docs/superpowers/
 
 | 文件 | 主题 | 状态 |
 | --- | --- | --- |
+| `specs/2026-09-15-motion-set-prescription-design.md` | 四动作计数组处方、休息语音与逐组录像；[正式需求规格](../../specs/patient-rehab-system/motion-set-prescription-prd.md) | approved（2026-09-16 用户整体批准，尚未实施） |
 | `specs/2026-05-08-crf-core-patient-fields-mapping-design.md` | CRF 核心患者字段映射（一期） | draft-approved |
 | `specs/2026-05-08-visit-assessments-and-baseline-flow-design.md` | 访视评估录入 + 基线机能闭环 | draft-approved |
 | `specs/2026-05-08-frontend-fullscreen-and-create-actions-design.md` | 前端满屏 + 新增动作（患者档案/项目） | draft-approved |

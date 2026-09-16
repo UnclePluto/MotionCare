@@ -10,12 +10,16 @@ build/
 .superpowers/
 .worktrees/
 .runtime/
+.scratch/
 docs/
 
 # Track design/spec docs under docs/superpowers/specs/
 !docs/
 docs/*
 !docs/development.md
+!docs/adr/
+docs/adr/*
+!docs/adr/*.md
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/README.md
