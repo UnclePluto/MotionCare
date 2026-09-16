@@ -1,3 +1,7 @@
+export function isCountedMotion(sourceKey: string | null): boolean {
+  return ["motion-balance-sit-stand", "motion-resistance-row", "motion-resistance-leg-kickback", "motion-resistance-shoulder-press"].includes(sourceKey ?? "");
+}
+
 export function parseWeeklyFrequencyTimes(value: string | null | undefined): number | null {
   if (!value) return null;
   const match = value.match(/(\d+)\s*次\s*(?:\/|每)?\s*周|每周\s*(\d+)\s*次/);

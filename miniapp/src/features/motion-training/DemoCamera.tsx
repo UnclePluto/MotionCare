@@ -1,3 +1,4 @@
+import CountedCamera from './CountedCamera'
 import { Button, Camera, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -126,6 +127,8 @@ export default function DemoCamera() {
     }
     setAction(refreshedAction)
   }
+
+  if (action?.dose_mode === 'sets') return <CountedCamera action={action} demo />
 
   return (
     <View className='training-camera-page'>

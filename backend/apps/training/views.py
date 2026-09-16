@@ -49,7 +49,10 @@ class TrainingRecordViewSet(
         return (
             super()
             .get_queryset()
-            .filter(project_patient__in=accessible_project_patients(self.request.user))
+            .filter(
+                project_patient__in=accessible_project_patients(self.request.user),
+                invalidated_at__isnull=True,
+            )
         )
 
     def create(self, request, *args, **kwargs):

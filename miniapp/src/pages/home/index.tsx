@@ -1,3 +1,4 @@
+import CountedUploads from '../../features/motion-training/CountedUploads'
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -128,6 +129,7 @@ export default function HomePage() {
       {!demoMode && pendingUploadBanner ? (
         <Text className='pending-upload-banner'>{pendingUploadBanner}</Text>
       ) : null}
+      {!demoMode ? <CountedUploads /> : null}
       {error ? <Text className='error'>{error}</Text> : null}
       {data ? (
         <View className='home-content'>

@@ -18,6 +18,10 @@ export type ActionLibraryItem = {
 };
 
 export type PrescriptionAction = {
+  dose_mode?: "duration" | "sets";
+  repetitions?: number | null;
+  sets?: number | null;
+  count_unit?: "total" | "per_side";
   id: number;
   prescription: number;
   action_library_item: number;
@@ -51,6 +55,8 @@ export type Prescription = {
 };
 
 export type ActivateNowActionPayload = {
+  repetitions?: number;
+  sets?: number;
   action_library_item: number;
   weekly_frequency?: string;
   weekly_target_count?: number;

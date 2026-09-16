@@ -1,3 +1,4 @@
+import { protectedCountedPaths } from '../../features/motion-training/countedSession'
 import { captureTrainingDiagnosticScope, reportTrainingDiagnostic } from '../../features/motion-training/diagnostics'
 import { Button, Camera, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
@@ -7,6 +8,7 @@ import { containsSensitiveCredentialText } from '../../api/safeError'
 import { fetchCurrentPrescriptionData } from '../../demo/patientAppData'
 import { isDemoSession } from '../../demo/session'
 import DemoCamera from '../../features/motion-training/DemoCamera'
+import CountedCamera from '../../features/motion-training/CountedCamera'
 import {
   createMotionTrainingAlertPlayer,
   MOTION_TRAINING_ALERT_TEXT,
@@ -858,6 +860,7 @@ export function MotionTrainingRecordingCameraPage() {
         return
       }
       const result = await cleanupAndCheckMotionTrainingStorage({
+        protectedPaths: protectedCountedPaths(),
         hasPendingSession: () => Boolean(loadPendingMotionTrainingSession(Taro)),
         listSavedFiles: listSavedMotionTrainingFiles,
         removeSavedFile: removeSavedMotionTrainingFile,
@@ -1229,6 +1232,8 @@ export function MotionTrainingRecordingCameraPage() {
       : ''
   const bufferPaused = bufferState === 'buffer_paused'
   const bufferReady = bufferState === 'buffer_ready'
+
+  if (action?.dose_mode === 'sets') return <CountedCamera action={action} demo={false} />
 
   return (
     <View className='training-camera-page'>

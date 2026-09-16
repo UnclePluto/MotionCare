@@ -49,6 +49,7 @@ beforeAll(async () => {
   fixtureRoot = await mkdtemp(join(tmpdir(), 'motioncare-static-assets-'))
   await Promise.all([
     cp(join(repositoryRoot, 'resources', 'game-images'), join(fixtureRoot, 'resources', 'game-images'), { recursive: true }),
+    cp(join(repositoryRoot, 'resources', 'motion-rest-audio'), join(fixtureRoot, 'resources', 'motion-rest-audio'), { recursive: true }),
     cp(join(repositoryRoot, 'resources', 'motion-instruction-audio'), join(fixtureRoot, 'resources', 'motion-instruction-audio'), { recursive: true }),
   ])
 })

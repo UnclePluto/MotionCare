@@ -2358,3 +2358,14 @@ button:active {
     transform: scale(1);
   }
 }
+
+.counted-training-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  .counted-dose { font-size: 36px; font-weight: 600; }
+  .counted-camera { width: 100%; height: 480px; border-radius: 20px; overflow: hidden; }
+  .counted-preview { width: 220px; height: 150px; align-self: flex-end; }
+  .counted-rest { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 36px 0; }
+  .counted-timer { font-size: 88px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+}

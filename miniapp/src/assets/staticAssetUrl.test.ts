@@ -98,7 +98,7 @@ describe('staticAssetUrl', () => {
       'https://cdn.example.com/motioncare/static-assets',
     )).toBe('https://cdn.example.com/motioncare/static-assets/v-a1/file.webp')
     expect(Object.keys(parseSignedAssetManifest(signedAssetFixture())).length).toBeGreaterThan(0)
-    expect(Object.keys(parseSignedAssetManifest(signedAssetFixture()).urls)).toHaveLength(23)
+    expect(Object.keys(parseSignedAssetManifest(signedAssetFixture()).urls)).toHaveLength(43)
 
     const invalid = signedAssetFixture()
     invalid.assets[0].url += '&x=%'

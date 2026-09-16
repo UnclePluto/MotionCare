@@ -41,9 +41,11 @@ function PrescriptionActionTable({ actions }: { actions: PrescriptionAction[] })
         { title: "类型", dataIndex: "action_type_snapshot" },
         { title: "频次", dataIndex: "weekly_frequency", render: (value: string) => weeklyFrequencyLabel(value) },
         {
-          title: "时长",
+          title: "每次运动量",
           dataIndex: "duration_minutes",
-          render: (value: number | null) => (value ? `${value} 分钟` : "—"),
+          render: (value: number | null, action) => action.dose_mode === "sets"
+            ? `${action.count_unit === "per_side" ? "每侧" : "每组"} ${action.repetitions} 个 × ${action.sets} 组`
+            : (value ? `${value} 分钟` : "—"),
         },
       ]}
     />

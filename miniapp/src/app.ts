@@ -1,3 +1,4 @@
+import { startCountedRetry, stopCountedRetry } from './features/motion-training/countedSession'
 import { startTrainingDiagnostics, stopTrainingDiagnostics } from './features/motion-training/diagnostics'
 import { PropsWithChildren } from 'react'
 import Taro, { useDidShow, useDidHide } from '@tarojs/taro'
@@ -13,9 +14,10 @@ import {
 import { handlePendingShoulderPressUploadOnAppShow } from './pages/shoulder-press/pageState'
 
 function App({ children }: PropsWithChildren<any>) {
-  useDidHide(stopTrainingDiagnostics)
+  useDidHide(() => { stopTrainingDiagnostics(); stopCountedRetry() })
   useDidShow(() => {
     startTrainingDiagnostics()
+    startCountedRetry()
     if (isDemoSession()) {
       stopPendingGameUploadRetryLoop()
       return

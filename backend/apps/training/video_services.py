@@ -119,6 +119,7 @@ def create_training_video_session(
     training_date,
     expected_duration_seconds,
     training_started_at,
+    motion_attempt_id=None,
 ):
     lookup = {
         "project_patient": project_patient,
@@ -126,6 +127,9 @@ def create_training_video_session(
     }
     existing = TrainingVideo.objects.filter(**lookup).first()
     if existing is not None:
+        if existing.motion_attempt_id != motion_attempt_id:
+            raise SessionConflict("录像所属组尝试冲突")
+        _ensure_motion_attempt_valid(existing)
         _ensure_session_payload_matches(
             existing,
             prescription_action_id=prescription_action_id,
@@ -141,9 +145,46 @@ def create_training_video_session(
     ):
         raise ValidationError("训练视频时长超过限制")
     _ensure_staging_available()
-    active, action = _get_current_recordable_motion_action(
-        project_patient, prescription_action_id
-    )
+    if motion_attempt_id:
+        from .set_models import MotionSetAttempt
+
+        attempt = (
+            MotionSetAttempt.objects.select_related(
+                "group__session__prescription_action__prescription"
+            )
+            .filter(
+                pk=motion_attempt_id,
+                group__session__project_patient=project_patient,
+            )
+            .first()
+        )
+        if not attempt or attempt.abandoned_at or attempt.group.attempt_id != attempt.id:
+            raise ValidationError("录像尝试已失效")
+        group = attempt.group
+        action = group.session.prescription_action
+        active = action.prescription
+        if (
+            action.id != prescription_action_id
+            or group.started_at != training_started_at
+            or group.session.training_date != training_date
+        ):
+            raise SessionConflict("录像时间或动作与原组不符")
+        if not group.completed:
+            _get_current_recordable_motion_action(project_patient, prescription_action_id)
+        if group.video_id:
+            return group.video, False
+    else:
+        active, action = _get_current_recordable_motion_action(
+            project_patient, prescription_action_id
+        )
+        from apps.prescriptions.models import MotionPrescriptionCutover
+        from apps.prescriptions.doses import is_counted_motion
+
+        if action.dose_mode == "sets" or (
+            is_counted_motion(action.action_library_item.source_key)
+            and MotionPrescriptionCutover.objects.filter(project_patient=project_patient).exists()
+        ):
+            raise ValidationError("运动已切换为按组完成，请更新客户端后重新进入")
     try:
         with transaction.atomic():
             video = TrainingVideo.objects.create(
@@ -154,6 +195,7 @@ def create_training_video_session(
                 expected_duration_seconds=expected_duration_seconds,
                 training_started_at=training_started_at,
                 status=TrainingVideo.Status.RECORDING,
+                motion_attempt_id=motion_attempt_id,
             )
     except IntegrityError:
         winner = TrainingVideo.objects.filter(**lookup).first()
@@ -168,6 +210,17 @@ def create_training_video_session(
         )
         return winner, False
     return video, True
+
+
+def _ensure_motion_attempt_valid(video, *, require_completed=False):
+    if not video.motion_attempt_id:
+        return
+    attempt = video.motion_attempt
+    group = attempt.group
+    if attempt.abandoned_at or group.attempt_id != attempt.id:
+        raise ValidationError("录像尝试已放弃")
+    if require_completed and not group.completed:
+        raise ValidationError("请先确认完成本组")
 
 
 def _validate_segment_request(
@@ -243,6 +296,7 @@ def store_training_video_segment(
                     )
                     if video is None:
                         raise Http404
+                    _ensure_motion_attempt_valid(video)
                     if video.status not in {
                         TrainingVideo.Status.RECORDING,
                         TrainingVideo.Status.UPLOADING_SEGMENTS,
@@ -277,10 +331,7 @@ def store_training_video_segment(
                     max_duration_seconds, max_segments = _session_upload_limits(video)
                     if segment_count + 1 > max_segments:
                         raise ValidationError("训练视频分段数量超过限制")
-                    if (
-                        total_duration_ms + duration_ms
-                        > max_duration_seconds * 1000
-                    ):
+                    if total_duration_ms + duration_ms > max_duration_seconds * 1000:
                         raise ValidationError("训练视频总时长超过限制")
                     if (
                         total_size_bytes + actual_size_bytes
@@ -303,9 +354,7 @@ def store_training_video_segment(
                     )
                     video.status = TrainingVideo.Status.UPLOADING_SEGMENTS
                     video.uploaded_segment_count = segment_count + 1
-                    video.save(
-                        update_fields=["status", "uploaded_segment_count", "updated_at"]
-                    )
+                    video.save(update_fields=["status", "uploaded_segment_count", "updated_at"])
                     return segment, True
             except Exception:
                 if destination_was_installed:
@@ -360,6 +409,10 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
 
 
 def _validate_training_end(video, *, training_ended_at):
+    if video.motion_attempt_id:
+        _ensure_motion_attempt_valid(video, require_completed=True)
+        if training_ended_at != video.motion_attempt.group.ended_at:
+            raise ValidationError("录像结束时间与已完成组不符")
     if training_ended_at is None:
         return
     if video.training_started_at is None:
@@ -396,9 +449,9 @@ def finalize_training_video_session(
     note: str,
     training_ended_at=None,
 ):
-    locked_project_patient = ProjectPatient.objects.select_for_update().filter(
-        pk=project_patient.pk
-    ).first()
+    locked_project_patient = (
+        ProjectPatient.objects.select_for_update().filter(pk=project_patient.pk).first()
+    )
     if locked_project_patient is None:
         raise Http404
     video = (

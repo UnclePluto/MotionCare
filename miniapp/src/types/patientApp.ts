@@ -36,6 +36,10 @@ export type CurrentPrescription = null | {
     video_unavailable?: boolean
     has_ai_supervision: boolean
     weekly_frequency: string
+    dose_mode?: 'duration' | 'sets'
+    repetitions?: number | null
+    sets?: number | null
+    count_unit?: 'total' | 'per_side' | null
     duration_minutes: number | null
     weekly_target_count: number
     weekly_completed_count: number

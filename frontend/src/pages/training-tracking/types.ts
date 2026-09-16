@@ -150,6 +150,8 @@ export type TrainingVideoWearableWindowResponse =
     };
 
 export type TrackingRecentRecord = {
+  motion_session_id?: number | null;
+  set_index?: number | null;
   id: number;
   training_date: string;
   status: string;
@@ -198,6 +200,7 @@ export type TrackingPendingVideo = {
 };
 
 export type TrackingDetail = {
+  motion_sessions?: MotionSessionSummary[];
   patient: TrackingPatient;
   project_patients: TrackingProjectPatient[];
   selected_project_patient: TrackingProjectPatient | null;
@@ -211,4 +214,18 @@ export type TrackingDetail = {
   game_summary: TrackingGameSummary;
   recent_records: TrackingRecentRecord[];
   pending_training_videos: TrackingPendingVideo[];
+};
+
+export type MotionSessionSummary = {
+  id: number;
+  action_name: string;
+  training_date: string;
+  planned_sets: number;
+  completed_sets: number;
+  uploaded_sets: number;
+  repetitions: number;
+  count_unit: "total" | "per_side";
+  status: "partial" | "awaiting_upload" | "completed";
+  actual_duration_seconds: number;
+  sets: Array<{ index: number; completed: boolean; uploaded: boolean; video_id: number | null }>;
 };

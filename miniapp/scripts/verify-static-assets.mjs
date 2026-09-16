@@ -28,6 +28,7 @@ const CANONICAL_ASSET_SPECS = new Map([
   ['motion-resistance-row', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
   ['motion-resistance-leg-kickback', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
   ['motion-resistance-shoulder-press', ['motion-instruction-audio', 'audio/mp4', 'm4a']],
+  ...['0','1','2','3','4','5','6','7','8','9','start','sets','thirty','ready','ten','hundred','thousand','wan','yi','tick'].map(key => [`motion-rest-${key}`, ['motion-rest-audio', 'audio/mp4', 'm4a']]),
 ])
 
 function sha256(body) {
@@ -60,8 +61,8 @@ async function loadManifest(manifestPath) {
   if (!manifest || typeof manifest !== 'object' || !Array.isArray(manifest.entries)) {
     throw new Error('固定素材清单格式无效')
   }
-  if (manifest.entries.length !== 23) {
-    throw new Error('固定素材清单必须包含 23 项')
+  if (![23, 43].includes(manifest.entries.length)) {
+    throw new Error('固定素材清单必须包含 23 项或 43 项')
   }
   if (typeof manifest.assetVersion !== 'string' || !manifest.assetVersion) {
     throw new Error('固定素材清单版本无效')
@@ -82,8 +83,8 @@ function validateCanonicalKeySet(entries) {
   }
   const uniqueKeys = new Set(keys)
   if (
-    uniqueKeys.size !== CANONICAL_ASSET_SPECS.size
-    || [...uniqueKeys].some((key) => !CANONICAL_ASSET_SPECS.has(key))
+    uniqueKeys.size !== entries.length
+    || [...uniqueKeys].some((key) => !CANONICAL_ASSET_SPECS.has(key) || (entries.length === 23 && key.startsWith('motion-rest-')))
   ) {
     throw new Error('固定素材清单必须包含 23 项规范素材')
   }

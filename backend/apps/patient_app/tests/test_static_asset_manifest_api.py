@@ -7,9 +7,7 @@ import pytest
 def static_asset_settings(settings, monkeypatch):
     settings.QINIU_ACCESS_KEY = "test-access-key"
     settings.QINIU_SECRET_KEY = "test-secret-key"
-    settings.MINIAPP_STATIC_ASSET_BASE_URL = (
-        "https://cdn.example.com/motioncare/static-assets"
-    )
+    settings.MINIAPP_STATIC_ASSET_BASE_URL = "https://cdn.example.com/motioncare/static-assets"
     settings.MINIAPP_STATIC_ASSET_URL_TTL_SECONDS = 600
     monkeypatch.setattr(
         "apps.patient_app.throttles.MiniappStaticAssetRateThrottle.allow_request",
@@ -20,9 +18,7 @@ def static_asset_settings(settings, monkeypatch):
 def test_anonymous_manifest_contains_exact_signed_objects(client, monkeypatch):
     monkeypatch.setattr("apps.common.miniapp_signed_assets.time.time", lambda: 1_800_000_000)
 
-    response = client.get(
-        "/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"}
-    )
+    response = client.get("/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"})
 
     assert response.status_code == 200
     data = response.json()
@@ -67,19 +63,37 @@ def test_rejects_noncanonical_queries(client, query):
 
 
 def test_unknown_version_returns_404(client):
-    response = client.get(
-        "/api/patient-app/static-assets/", {"version": "v-000000000000"}
-    )
+    response = client.get("/api/patient-app/static-assets/", {"version": "v-000000000000"})
 
     assert response.status_code == 404
     assert response["Cache-Control"] == "no-store"
 
 
+def test_rest_audio_manifest_keeps_legacy_version_available(client):
+    response = client.get("/api/patient-app/static-assets/", {"version": "v-e3d7d741b44f"})
+    assert response.status_code == 200
+    keys = {asset["key"] for asset in response.json()["assets"]}
+    assert {
+        "motion-rest-start",
+        "motion-rest-thirty",
+        "motion-rest-5",
+        "motion-rest-ready",
+        "motion-rest-tick",
+    } <= keys
+    assert len(keys) == 43
+    assert (
+        len(
+            client.get("/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"}).json()[
+                "assets"
+            ]
+        )
+        == 23
+    )
+
+
 @pytest.mark.parametrize("method", ["post", "head", "options"])
 def test_only_get_is_allowed(client, method):
-    response = getattr(client, method)(
-        "/api/patient-app/static-assets/?version=v-3aafe09211fd"
-    )
+    response = getattr(client, method)("/api/patient-app/static-assets/?version=v-3aafe09211fd")
 
     assert response.status_code == 405
     assert response["Cache-Control"] == "no-store"
@@ -96,9 +110,7 @@ def test_signing_failure_is_redacted_from_response_and_logs(client, monkeypatch,
         fail,
     )
 
-    response = client.get(
-        "/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"}
-    )
+    response = client.get("/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"})
 
     assert response.status_code == 503
     assert response.json() == {"detail": "训练素材暂时不可用，请稍后重试"}
@@ -115,13 +127,9 @@ def test_signing_failure_is_redacted_from_response_and_logs(client, monkeypatch,
 
 @pytest.mark.django_db
 def test_authenticated_and_anonymous_requests_receive_same_keys(client, doctor):
-    anonymous = client.get(
-        "/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"}
-    )
+    anonymous = client.get("/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"})
     client.force_login(doctor)
-    authenticated = client.get(
-        "/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"}
-    )
+    authenticated = client.get("/api/patient-app/static-assets/", {"version": "v-3aafe09211fd"})
 
     assert authenticated.status_code == 200
     assert {asset["key"] for asset in authenticated.json()["assets"]} == {

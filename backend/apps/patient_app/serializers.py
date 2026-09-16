@@ -25,10 +25,7 @@ class ClientOffsetDateTimeField(serializers.DateTimeField):
             client_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             self.fail("timezone_required")
-        if (
-            client_datetime.tzinfo is None
-            or client_datetime.utcoffset() is None
-        ):
+        if client_datetime.tzinfo is None or client_datetime.utcoffset() is None:
             self.fail("timezone_required")
         return super().to_internal_value(value)
 
@@ -102,7 +99,10 @@ class PatientAppTrainingRecordCreateSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True)
     client_session_id = serializers.UUIDField(required=False)
     question_results = serializers.ListField(
-        child=serializers.JSONField(), required=False, allow_empty=True, max_length=2000,
+        child=serializers.JSONField(),
+        required=False,
+        allow_empty=True,
+        max_length=2000,
     )
 
     def validate(self, attrs):
@@ -112,15 +112,19 @@ class PatientAppTrainingRecordCreateSerializer(serializers.Serializer):
 
 
 class PatientAppTrainingVideoSessionSerializer(serializers.Serializer):
+    motion_attempt_id = serializers.UUIDField(required=False)
     client_session_id = serializers.UUIDField()
     prescription_action = serializers.IntegerField(min_value=1)
     training_date = serializers.DateField()
-    expected_duration_seconds = serializers.IntegerField(min_value=1)
+    expected_duration_seconds = serializers.IntegerField(min_value=1, required=False, default=1800)
     training_started_at = ClientOffsetDateTimeField()
 
     def validate(self, attrs):
         raw_started_at = self.initial_data["training_started_at"]
-        if client_local_date(raw_started_at) != attrs["training_date"]:
+        if (
+            not attrs.get("motion_attempt_id")
+            and client_local_date(raw_started_at) != attrs["training_date"]
+        ):
             raise serializers.ValidationError(
                 {"training_date": "训练日期必须与手机端开始时间一致。"}
             )

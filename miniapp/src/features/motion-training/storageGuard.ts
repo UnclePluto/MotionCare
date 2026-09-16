@@ -14,6 +14,7 @@ export type MotionTrainingStorageGuardResult =
   | { kind: 'blocked'; usedBytes: number; availableBytes: number }
 
 type StorageGuardInput = {
+  protectedPaths?: Set<string>
   hasPendingSession: () => boolean
   listSavedFiles: () => Promise<MotionTrainingSavedFile[]>
   removeSavedFile: (filePath: string) => Promise<void>
@@ -39,7 +40,8 @@ export async function cleanupAndCheckMotionTrainingStorage(
   const before = await input.listSavedFiles()
   if (!input.isActive()) return { kind: 'cancelled' }
 
-  await Promise.allSettled(before.map((file) => input.removeSavedFile(file.filePath)))
+  const protectedPaths = input.protectedPaths ?? new Set<string>()
+  await Promise.allSettled(before.filter(file => !protectedPaths.has(file.filePath)).map((file) => input.removeSavedFile(file.filePath)))
   if (!input.isActive()) return { kind: 'cancelled' }
 
   const after = await input.listSavedFiles()

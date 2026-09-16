@@ -30,17 +30,14 @@ class TrainingRecord(UserStampedModel):
     score = models.DecimalField("得分", max_digits=6, decimal_places=2, null=True, blank=True)
     form_data = models.JSONField("分类表单数据", default=dict)
     note = models.TextField("备注", blank=True)
-    client_session_id = models.UUIDField(
-        "游戏客户端会话 ID", null=True, blank=True, unique=True
-    )
-    client_payload_fingerprint = models.CharField(
-        "游戏客户端语义指纹", max_length=64, blank=True
-    )
+    client_session_id = models.UUIDField("游戏客户端会话 ID", null=True, blank=True, unique=True)
+    client_payload_fingerprint = models.CharField("游戏客户端语义指纹", max_length=64, blank=True)
+    invalidated_at = models.DateTimeField("作废时间", null=True, blank=True, db_index=True)
+    invalidation_reason = models.TextField("作废原因", blank=True)
+    cutover_marker = models.UUIDField("处方切换标记", null=True, blank=True)
     motion_total_count = models.PositiveIntegerField("动作总次数", null=True, blank=True)
     motion_standard_count = models.PositiveIntegerField("标准动作次数", null=True, blank=True)
-    motion_nonstandard_count = models.PositiveIntegerField(
-        "非标准动作次数", null=True, blank=True
-    )
+    motion_nonstandard_count = models.PositiveIntegerField("非标准动作次数", null=True, blank=True)
     motion_quality_data = models.JSONField("动作质量数据", default=dict)
     motion_result_source = models.CharField(
         "动作结果来源",
@@ -72,8 +69,7 @@ class TrainingRecord(UserStampedModel):
                         motion_standard_count__isnull=False,
                         motion_nonstandard_count__isnull=False,
                         motion_total_count=(
-                            models.F("motion_standard_count")
-                            + models.F("motion_nonstandard_count")
+                            models.F("motion_standard_count") + models.F("motion_nonstandard_count")
                         ),
                     )
                 ),
@@ -112,17 +108,11 @@ class GameQuestionResult(models.Model):
     difficulty = models.CharField("实际难度", max_length=40, db_index=True)
     response_duration_ms = models.PositiveIntegerField("有效作答时长毫秒")
     is_correct = models.BooleanField("是否正确")
-    result_type = models.CharField(
-        "结果类型", max_length=20, choices=ResultType.choices
-    )
-    swap_count = models.PositiveIntegerField(
-        "拼图交换次数", null=True, blank=True
-    )
+    result_type = models.CharField("结果类型", max_length=20, choices=ResultType.choices)
+    swap_count = models.PositiveIntegerField("拼图交换次数", null=True, blank=True)
     expected_step_count = models.PositiveIntegerField("应选择步数", null=True, blank=True)
     click_count = models.PositiveIntegerField("拼图点击次数", null=True, blank=True)
-    capture_version = models.CharField(
-        "采集版本", max_length=32, choices=CaptureVersion.choices
-    )
+    capture_version = models.CharField("采集版本", max_length=32, choices=CaptureVersion.choices)
 
     class Meta:
         ordering = ["question_index", "id"]
@@ -140,17 +130,16 @@ class GameQuestionResult(models.Model):
                 name="game_question_duration_nonnegative",
             ),
             models.CheckConstraint(
-                condition=(
-                    ~models.Q(result_type="timeout")
-                    | models.Q(is_correct=False)
-                ),
+                condition=(~models.Q(result_type="timeout") | models.Q(is_correct=False)),
                 name="game_question_timeout_incorrect",
             ),
         ]
 
 
 class GameQuestionSelectionStep(models.Model):
-    question = models.ForeignKey(GameQuestionResult, on_delete=models.CASCADE, related_name="selection_steps")
+    question = models.ForeignKey(
+        GameQuestionResult, on_delete=models.CASCADE, related_name="selection_steps"
+    )
     step_index = models.PositiveIntegerField("选择序号")
     selected_value = models.CharField("所选内容", max_length=32)
     expected_value = models.CharField("正确内容", max_length=32)
@@ -160,9 +149,17 @@ class GameQuestionSelectionStep(models.Model):
     class Meta:
         ordering = ["step_index", "id"]
         constraints = [
-            models.UniqueConstraint(fields=["question", "step_index"], name="game_selection_question_index_uniq"),
-            models.CheckConstraint(condition=models.Q(step_index__gte=1, step_index__lte=5), name="game_selection_index_range"),
-            models.CheckConstraint(condition=models.Q(response_duration_ms__gte=0, response_duration_ms__lte=3600000), name="game_selection_duration_range"),
+            models.UniqueConstraint(
+                fields=["question", "step_index"], name="game_selection_question_index_uniq"
+            ),
+            models.CheckConstraint(
+                condition=models.Q(step_index__gte=1, step_index__lte=5),
+                name="game_selection_index_range",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(response_duration_ms__gte=0, response_duration_ms__lte=3600000),
+                name="game_selection_duration_range",
+            ),
         ]
 
 
@@ -180,7 +177,9 @@ class TrainingDetailExportLog(models.Model):
         AUDIT_FAILED = "audit_failed", "审计失败"
         SCOPE_CHANGED = "scope_changed", "授权范围变化"
 
-    operator = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    operator = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL
+    )
     patient_id_snapshot = models.PositiveBigIntegerField()
     project_id_snapshot = models.PositiveBigIntegerField()
     project_patient_id_snapshot = models.PositiveBigIntegerField()
@@ -203,3 +202,4 @@ from .video_models import (  # noqa: E402,F401
 )
 
 from .diagnostic_models import TrainingUploadDiagnostic  # noqa: E402,F401
+from .set_models import MotionTrainingSession, MotionTrainingSet, MotionSetAttempt  # noqa: E402,F401

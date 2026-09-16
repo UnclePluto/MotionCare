@@ -41,6 +41,7 @@ export class MotionTrainingRecorder {
   private readonly onNativeError?: (error: unknown) => void
   private readonly onPause?: () => void
   private readonly onMaxDuration?: (cutoffMs: number) => void
+  private readonly onStopped?: (endedAtMs: number) => void
   private readonly maxDurationMs: number
   private generation = 0
   private mode: RecorderMode = 'idle'
@@ -61,6 +62,7 @@ export class MotionTrainingRecorder {
     onNativeError?: (error: unknown) => void
     onPause?: () => void
     onMaxDuration?: (cutoffMs: number) => void
+    onStopped?: (endedAtMs: number) => void
     maxDurationMs?: number
   }) {
     this.onNativeError = input.onNativeError
@@ -69,6 +71,7 @@ export class MotionTrainingRecorder {
     this.onSegment = input.onSegment
     this.onPause = input.onPause
     this.onMaxDuration = input.onMaxDuration
+    this.onStopped = input.onStopped
     this.maxDurationMs = input.maxDurationMs ?? Number.POSITIVE_INFINITY
   }
 
@@ -216,6 +219,7 @@ export class MotionTrainingRecorder {
     const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
 
     if (finishStopPending) {
+      this.onStopped?.(cutoffMs)
       if (reachedLimit) this.onMaxDuration?.(cutoffMs)
       void delivery
       return
@@ -251,6 +255,7 @@ export class MotionTrainingRecorder {
             return
           }
           targetGeneration.state = 'stopped'
+          if (this.mode === 'finishing' && !targetGeneration.timeoutHandled) this.onStopped?.(this.now())
           if (targetGeneration.timeoutHandled) {
             resolve(null)
             return

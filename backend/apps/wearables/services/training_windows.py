@@ -14,6 +14,12 @@ TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS = 300
 
 
 def training_video_health_window(video: "TrainingVideo") -> tuple[datetime, datetime] | None:
+    if video.prescription_action.dose_mode == "sets":
+        if video.training_started_at is None or video.training_ended_at is None:
+            return None
+        return video.training_started_at, video.training_ended_at + timedelta(
+            seconds=TRAINING_VIDEO_WEARABLE_BUFFER_SECONDS
+        )
     duration = video.expected_duration_seconds
     if video.training_started_at is None or duration is None or duration <= 0:
         return None

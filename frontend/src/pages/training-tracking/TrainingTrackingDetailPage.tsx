@@ -26,6 +26,8 @@ import { apiClient } from "../../api/client";
 import { formatShanghaiDate } from "../../utils/shanghaiTime";
 import { WearableHealthTab } from "../wearables/WearableHealthTab";
 import { MotionAnalysisPanel } from "./MotionAnalysisPanel";
+import { MotionSessionsPanel } from "./MotionSessionsPanel";
+import { TrainingHistoryPanel } from "./TrainingHistoryPanel";
 import { TrainingDetailExportModal } from "./TrainingDetailExportModal";
 import { TrainingVideoSwitcher, type TrainingVideoSource } from "./TrainingVideoSwitcher";
 import { TrainingVideoWearablePanel } from "./TrainingVideoWearablePanel";
@@ -668,10 +670,14 @@ export function TrainingTrackingDetailPage() {
         />
       </Card>
 
+      <Card title="按组运动记录">
+        <MotionSessionsPanel sessions={data.motion_sessions ?? []} records={data.recent_records} onOpen={openVideoDrawer} />
+      </Card>
+      {data.selected_project_patient && <TrainingHistoryPanel key={data.selected_project_patient.id} projectPatientId={data.selected_project_patient.id} />}
       <Card title="最近训练记录">
         <Table<TrackingRecentRecord>
           rowKey="id"
-          dataSource={data.recent_records}
+          dataSource={data.recent_records.filter(record => !record.motion_session_id)}
           pagination={{ pageSize: 10, showSizeChanger: false }}
           columns={[
             { title: "训练日期", dataIndex: "training_date" },

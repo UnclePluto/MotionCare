@@ -7,7 +7,8 @@ from rest_framework.exceptions import ValidationError as DrfValidationError
 from apps.studies.models import ProjectPatient, StudyProject
 from apps.studies.project_status import ensure_project_open
 
-from .models import Prescription
+from .models import Prescription, MotionPrescriptionCutover
+from .doses import COUNTED_MOTION_KEYS
 
 STALE_ACTIVE_VERSION_DETAIL = "当前处方已变化，请刷新后重试。"
 PROJECT_COMPLETED_PRESCRIPTION_DETAIL = "项目已完结，不能调整处方。"
@@ -37,14 +38,17 @@ def activate_prescription(prescription: Prescription, effective_at=None) -> Pres
         locked_project_patient = lock_open_project_patient_for_prescription(
             prescription.project_patient_id
         )
-        prescription = Prescription.objects.select_for_update(of=("self",)).get(
-            pk=prescription.pk
-        )
+        prescription = Prescription.objects.select_for_update(of=("self",)).get(pk=prescription.pk)
     else:
-        prescription = Prescription.objects.select_for_update(of=("self",)).get(
-            pk=prescription.pk
-        )
+        prescription = Prescription.objects.select_for_update(of=("self",)).get(pk=prescription.pk)
 
+    if MotionPrescriptionCutover.objects.filter(project_patient=locked_project_patient).exists():
+        if (
+            prescription.actions.filter(action_library_item__source_key__in=COUNTED_MOTION_KEYS)
+            .exclude(dose_mode="sets")
+            .exists()
+        ):
+            raise ValidationError("请重新开具包含每组个数和组数的运动处方。")
     now = timezone.now()
     effective_at = effective_at or now
     Prescription.objects.filter(
@@ -74,9 +78,7 @@ def create_active_prescription_now(
     note="",
 ) -> Prescription:
     note = note or ""
-    locked_project_patient = lock_open_project_patient_for_prescription(
-        project_patient.pk
-    )
+    locked_project_patient = lock_open_project_patient_for_prescription(project_patient.pk)
     prescriptions = Prescription.objects.select_for_update(of=("self",)).filter(
         project_patient=locked_project_patient
     )
@@ -113,5 +115,9 @@ def create_active_prescription_now(
             difficulty=action_data.get("difficulty", ""),
             notes=action_data.get("notes", ""),
             sort_order=action_data.get("sort_order", 0),
+            dose_mode=action_data.get("dose_mode", "duration"),
+            repetitions=action_data.get("repetitions"),
+            sets=action_data.get("sets"),
+            count_unit=action_data.get("count_unit", "total"),
         )
     return prescription

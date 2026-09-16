@@ -65,8 +65,9 @@ describe('固定演示数据', () => {
       expect(action).toMatchObject({
         id: expectedMotionIds[sourceKey],
         action_library_item: expectedMotionIds[sourceKey],
-        duration_minutes: 10,
-        weekly_target_count: 1,
+        duration_minutes: sourceKey === 'motion-aerobic-high-knee' ? 10 : null,
+        dose_mode: sourceKey === 'motion-aerobic-high-knee' ? 'duration' : 'sets',
+        weekly_target_count: sourceKey === 'motion-aerobic-high-knee' ? 1 : 3,
         video_url: demoVideoUrls[sourceKey],
         video_unavailable: false,
       })

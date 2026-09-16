@@ -223,6 +223,15 @@ describe("PrescriptionPanel", () => {
 
   afterEach(() => cleanup());
 
+  it("opens kickback with ten repetitions per side and three sets", async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /腿部后踢/ }));
+    expect(await screen.findByLabelText(`${legKickbackAction.name}每侧个数`)).toHaveValue("10");
+    expect(screen.getByLabelText(`${legKickbackAction.name}每次组数`)).toHaveValue("3");
+    expect(screen.queryByLabelText(`${legKickbackAction.name}时长`)).not.toBeInTheDocument();
+  });
+
   it("shows fixed action library as read-only", async () => {
     renderPanel();
 
@@ -311,7 +320,7 @@ describe("PrescriptionPanel", () => {
     });
   });
 
-  it("creates non-aerobic prescription action with adjustable duration", async () => {
+  it("creates counted motion with default repetitions and sets", async () => {
     renderPanel();
 
     fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
@@ -326,24 +335,26 @@ describe("PrescriptionPanel", () => {
           actions: [
             expect.objectContaining({
               action_library_item: 102,
-              weekly_target_count: 2,
-              duration_minutes: 10,
+              weekly_target_count: 3,
+              duration_minutes: null,
+              repetitions: 10,
+              sets: 3,
             }),
           ],
         }),
       );
     });
     const payload = mockPost.mock.calls[0][1] as { actions: Array<Record<string, unknown>> };
-    expect(payload.actions[0]).not.toHaveProperty("sets");
-    expect(payload.actions[0]).not.toHaveProperty("repetitions");
+    expect(payload.actions[0]).toHaveProperty("sets", 3);
+    expect(payload.actions[0]).toHaveProperty("repetitions");
   });
 
-  it("does not show set or repetition controls for motion actions", async () => {
+  it("shows per-side repetitions and sets for kickback", async () => {
     renderPanel();
 
     fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
     fireEvent.click(await screen.findByLabelText("腿部后踢"));
-    expect(await screen.findByLabelText("腿部后踢时长")).toHaveValue("10");
+    expect(await screen.findByLabelText("腿部后踢每侧个数")).toHaveValue("10");
     expect(screen.queryByLabelText("腿部后踢组数")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("腿部后踢次数")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
@@ -356,16 +367,18 @@ describe("PrescriptionPanel", () => {
           actions: [
             expect.objectContaining({
               action_library_item: 103,
-              weekly_target_count: 2,
-              duration_minutes: 10,
+              weekly_target_count: 3,
+              duration_minutes: null,
+              repetitions: 10,
+              sets: 3,
             }),
           ],
         }),
       );
     });
     const payload = mockPost.mock.calls[0][1] as { actions: Array<Record<string, unknown>> };
-    expect(payload.actions[0]).not.toHaveProperty("sets");
-    expect(payload.actions[0]).not.toHaveProperty("repetitions");
+    expect(payload.actions[0]).toHaveProperty("sets", 3);
+    expect(payload.actions[0]).toHaveProperty("repetitions");
   });
 
   it("opens new games at simple difficulty and saves the doctor's selected level", async () => {
@@ -427,7 +440,7 @@ describe("PrescriptionPanel", () => {
     ));
   });
 
-  it("groups actions by action type and submits edited duration parameters", async () => {
+  it("groups actions by action type and submits edited count parameters", async () => {
     renderPanel();
 
     fireEvent.click(await screen.findByRole("button", { name: "开具处方" }));
@@ -441,7 +454,7 @@ describe("PrescriptionPanel", () => {
 
     fireEvent.click(await screen.findByLabelText("坐姿划船"));
     fireEvent.change(screen.getByLabelText("坐姿划船频次"), { target: { value: "4" } });
-    fireEvent.change(screen.getByLabelText("坐姿划船时长"), { target: { value: "12" } });
+    fireEvent.change(screen.getByLabelText("坐姿划船每组个数"), { target: { value: "12" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即生效" }));
 
     await waitFor(() => {
@@ -453,15 +466,17 @@ describe("PrescriptionPanel", () => {
               action_library_item: 102,
               weekly_frequency: "4 次/周",
               weekly_target_count: 4,
-              duration_minutes: 12,
+              duration_minutes: null,
+              repetitions: 12,
+              sets: 3,
             }),
           ],
         }),
       );
     });
     const payload = mockPost.mock.calls[0][1] as { actions: Array<Record<string, unknown>> };
-    expect(payload.actions[0]).not.toHaveProperty("sets");
-    expect(payload.actions[0]).not.toHaveProperty("repetitions");
+    expect(payload.actions[0]).toHaveProperty("sets", 3);
+    expect(payload.actions[0]).toHaveProperty("repetitions");
   });
 
   it("does not submit when selected prescription actions cannot be mapped to action library", async () => {

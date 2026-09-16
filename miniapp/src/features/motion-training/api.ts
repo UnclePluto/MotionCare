@@ -146,6 +146,7 @@ export async function createVideoSession(input: {
   trainingDate: string
   expectedDurationSeconds: number
   trainingStartedAt: string
+  motionAttemptId?: string
 }): Promise<VideoSessionStatus> {
   return trainingRequest('/patient-app/training-video-sessions/', {
     method: 'POST',
@@ -156,7 +157,8 @@ export async function createVideoSession(input: {
       expected_duration_seconds: normalizeMotionTrainingExpectedDurationSeconds(
         input.expectedDurationSeconds
       ),
-      training_started_at: input.trainingStartedAt
+      training_started_at: input.trainingStartedAt,
+      ...(input.motionAttemptId ? { motion_attempt_id: input.motionAttemptId } : {})
     }
   }, 'session', { clientSessionId: input.clientSessionId },
     response => parseVideoSessionStatus(response, { requireUploadedSegments: true }))

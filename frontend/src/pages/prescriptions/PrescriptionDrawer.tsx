@@ -17,6 +17,7 @@ import { useEffect, useMemo } from "react";
 
 import {
   formatWeeklyFrequency,
+  isCountedMotion,
   parseWeeklyFrequencyTimes,
   weeklyFrequencyLabel,
 } from "./prescriptionUtils";
@@ -38,6 +39,8 @@ type FormValues = {
 };
 
 type ActionParamValues = {
+  repetitions?: number;
+  sets?: number;
   weekly_times?: number | null;
   duration_minutes?: number | null;
   difficulty?: string;
@@ -53,8 +56,11 @@ function actionTypeOrder(actionType: string) {
 
 function defaultParamsForAction(action: ActionLibraryItem, currentAction?: PrescriptionAction): ActionParamValues {
   return {
+    repetitions: currentAction?.repetitions ?? 10,
+    sets: currentAction?.sets ?? 3,
     weekly_times:
       currentAction?.weekly_target_count ??
+      (isCountedMotion(action.source_key) ? 3 : undefined) ??
       parseWeeklyFrequencyTimes(currentAction?.weekly_frequency ?? action.suggested_frequency) ??
       1,
     duration_minutes: currentAction?.duration_minutes ?? action.suggested_duration_minutes,
@@ -75,7 +81,9 @@ function buildActionPayload(
     action_library_item: action.id,
     weekly_frequency: formatWeeklyFrequency(weeklyTargetCount),
     weekly_target_count: weeklyTargetCount,
-    duration_minutes: params.duration_minutes ?? action.suggested_duration_minutes ?? 1,
+    ...(isCountedMotion(action.source_key)
+      ? { repetitions: params.repetitions ?? 10, sets: params.sets ?? 3, duration_minutes: null }
+      : { duration_minutes: params.duration_minutes ?? action.suggested_duration_minutes ?? 1 }),
     difficulty: action.internal_type === "game"
       ? normalizeGameDifficulty(params.difficulty ?? "简单")
       : params.difficulty ?? action.default_difficulty,
@@ -85,6 +93,7 @@ function buildActionPayload(
 }
 
 function renderDuration(action: ActionLibraryItem) {
+  if (isCountedMotion(action.source_key)) return `${action.source_key === "motion-resistance-leg-kickback" ? "每侧" : "每组"} 10 个 × 3 组`;
   return action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "—";
 }
 
@@ -127,6 +136,7 @@ export function PrescriptionDrawer({
   );
   const watchedActionParams = Form.useWatch("actionParams", form) ?? initialActionParams;
   const totalDurationMinutes = selectedActions.reduce((sum, action) => {
+    if (isCountedMotion(action.source_key)) return sum;
     const params = watchedActionParams[String(action.id)];
     return sum + (params?.duration_minutes ?? action.suggested_duration_minutes ?? 0);
   }, 0);
@@ -303,8 +313,24 @@ export function PrescriptionDrawer({
                 ),
               },
               {
-                title: "时长(分钟)",
-                render: (_: unknown, action) => (
+                title: "每次运动量",
+                render: (_: unknown, action) => isCountedMotion(action.source_key) ? (
+                  <Space wrap>
+                    <Form.Item
+                      label={action.source_key === "motion-resistance-leg-kickback" ? "每侧个数" : "每组个数"}
+                      name={["actionParams", String(action.id), "repetitions"]}
+                      rules={[{ required: true, type: "integer", min: 1, max: 2147483647, message: "请输入有效正整数" }]}
+                      style={{ marginBottom: 0 }}
+                    >
+                      <InputNumber min={1} max={2147483647} aria-label={`${action.name}${action.source_key === "motion-resistance-leg-kickback" ? "每侧个数" : "每组个数"}`} style={{ width: 96 }} />
+                    </Form.Item>
+                    <Form.Item label="每次组数" name={["actionParams", String(action.id), "sets"]}
+                      rules={[{ required: true, type: "integer", min: 1, max: 2147483647, message: "请输入有效正整数" }]}
+                      style={{ marginBottom: 0 }}>
+                      <InputNumber min={1} max={2147483647} aria-label={`${action.name}每次组数`} style={{ width: 96 }} />
+                    </Form.Item>
+                  </Space>
+                ) : (
                   <Form.Item
                     name={["actionParams", String(action.id), "duration_minutes"]}
                     rules={[{ required: true, message: "请填写时长" }]}
@@ -341,7 +367,7 @@ export function PrescriptionDrawer({
         )}
         <Form.Item style={{ marginTop: 16, marginBottom: 0 }}>
           <Space align="center" size={12}>
-            <Typography.Text>预计单次总时长</Typography.Text>
+            <Typography.Text>{selectedActions.some(action => isCountedMotion(action.source_key)) ? "按时长动作合计（计数组动作不估算时长）" : "预计单次总时长"}</Typography.Text>
             <InputNumber disabled value={totalDurationMinutes} aria-label="预计单次总时长" style={{ width: 96 }} />
             <Typography.Text>分钟</Typography.Text>
           </Space>

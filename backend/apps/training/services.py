@@ -19,6 +19,14 @@ TRAINING_RECORD_FIELD_NAMES = {
 
 @transaction.atomic
 def create_training_record(*, project_patient, training_date, prescription_action=None, **fields):
+    from apps.studies.models import ProjectPatient
+    from .history import legacy_invalidation_defaults
+
+    project_patient = (
+        ProjectPatient.objects.select_for_update()
+        .select_related("project")
+        .get(pk=project_patient.pk)
+    )
     ensure_project_open(project_patient.project)
     active = (
         Prescription.objects.filter(
@@ -34,6 +42,8 @@ def create_training_record(*, project_patient, training_date, prescription_actio
         raise ValidationError("必须选择当前处方动作")
     if prescription_action.prescription_id != active.id:
         raise ValidationError("只能录入当前生效处方下的动作")
+    if prescription_action.dose_mode == "sets":
+        raise ValidationError("计数组运动请通过逐组录像完成")
     training_fields = {
         key: value for key, value in fields.items() if key in TRAINING_RECORD_FIELD_NAMES
     }
@@ -46,6 +56,7 @@ def create_training_record(*, project_patient, training_date, prescription_actio
         prescription=active,
         prescription_action=prescription_action,
         training_date=training_date,
+        **legacy_invalidation_defaults(prescription_action),
         **training_fields,
     )
     if prescription_action.internal_type_snapshot == ActionLibraryItem.InternalType.GAME:
@@ -54,7 +65,7 @@ def create_training_record(*, project_patient, training_date, prescription_actio
             source_key=prescription_action.action_library_item.source_key,
             prescribed_difficulty=prescription_action.difficulty,
         )
-        GameQuestionResult.objects.bulk_create([
-            GameQuestionResult(training_record=record, **row) for row in legacy.rows
-        ])
+        GameQuestionResult.objects.bulk_create(
+            [GameQuestionResult(training_record=record, **row) for row in legacy.rows]
+        )
     return record

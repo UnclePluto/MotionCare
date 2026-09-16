@@ -197,6 +197,8 @@ export default function MotionTrainingPage() {
       <View className='page-hero motion-training-guide-hero'>
         <Text className='eyebrow'>{action?.training_type ?? '动作跟练'}</Text>
         <Text className='title'>{action?.action_name ?? '动作跟练'}</Text>
+        {action?.dose_mode === 'sets' ? <Text className='value'>{action.count_unit === 'per_side' ? '每侧' : '每组'} {action.repetitions} 个 · 每次 {action.sets} 组 · 每周 {action.weekly_target_count} 次</Text> : null}
+        {action?.dose_mode === 'sets' ? <Text className='muted'>自行计数，做完后点击完成本组。组间休息三分钟后，点击开始下一组。</Text> : null}
         <Text className='muted'>先熟悉动作要领，准备好后再进入独立摄像训练。</Text>
       </View>
 

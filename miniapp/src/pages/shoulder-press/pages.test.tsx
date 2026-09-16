@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../../app'
+import CountedCamera from '../../features/motion-training/CountedCamera'
+import ActionHistoryPage from '../action-history'
 import { SignedAssetManifestError } from '../../assets/signedAssetManifest'
 import { getPatientAppToken, setPatientAppToken } from '../../auth/token'
 import * as session from '../../demo/session'
@@ -222,7 +224,7 @@ const motionInstructionAudioCdnSrc = vi.hoisted(() => ({
 } as const))
 
 const motionInstructionAudioHarness = vi.hoisted(() => ({
-  play: vi.fn(async () => true),
+  play: vi.fn(async (_src: string) => true),
   stop: vi.fn(),
   dispose: vi.fn(),
   getSrc: vi.fn(async (sourceKey: unknown): Promise<string | undefined> => (
@@ -4425,7 +4427,7 @@ describe('审核演示模式', () => {
 
   it('示范视频刷新失败不触碰摄像上下文、录像、上传或本地会话', async () => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = '888808'
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises(20)
     page.rerender()
@@ -4587,7 +4589,7 @@ describe('审核演示模式', () => {
     }
   )
 
-  it.each(DEMO_MOTION_ACTION_CASES)(
+  it.each(DEMO_MOTION_ACTION_CASES.filter(action => action.id === 888808))(
     '演示动作 $name 只预览摄像头并开始 10 分钟本地计时',
     async ({ id, videoUrl }) => {
     session.startDemoSession()
@@ -4626,7 +4628,7 @@ describe('审核演示模式', () => {
     }
   )
 
-  it.each(DEMO_MOTION_ACTION_CASES)(
+  it.each(DEMO_MOTION_ACTION_CASES.filter(action => action.id === 888808))(
     '演示动作 $name 提前结束后只显示本地完成状态',
     async ({ id }) => {
     session.startDemoSession()
@@ -4664,9 +4666,9 @@ describe('审核演示模式', () => {
     }
   )
 
-  it('演示肩部推举在本地计时满十分钟后自动完成', async () => {
+  it('演示高抬腿在本地计时满十分钟后自动完成', async () => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = '888808'
     vi.useFakeTimers()
 
     const page = renderPage(ShoulderPressCameraPage)
@@ -4687,9 +4689,9 @@ describe('审核演示模式', () => {
     expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
   })
 
-  it('演示肩部推举切到后台时暂停计时并在返回后继续', async () => {
+  it('演示高抬腿切到后台时暂停计时并在返回后继续', async () => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = '888808'
     vi.useFakeTimers()
     vi.setSystemTime(1787184000000)
 
@@ -4725,9 +4727,9 @@ describe('审核演示模式', () => {
     expect(textContent(page.element)).toContain('体验完成')
   })
 
-  it('演示肩部推举在摄像头授权失败时引导打开设置', async () => {
+  it('演示高抬腿在摄像头授权失败时引导打开设置', async () => {
     session.startDemoSession()
-    taroHarness.routerParams.actionId = '888807'
+    taroHarness.routerParams.actionId = '888808'
 
     const page = renderPage(ShoulderPressCameraPage)
     await flushPromises()
@@ -4798,4 +4800,249 @@ describe('审核演示模式', () => {
       await flushPromises()
     }
   )
+})
+
+
+describe('计数组运动页面', () => {
+  it('演示逐组手动完成，三分钟休息不可跳过且结束不自动开始', async () => {
+    vi.useFakeTimers()
+    const action = { ...PRESCRIPTION!.actions[0], dose_mode: 'sets' as const, repetitions: 10, sets: 2, count_unit: 'per_side' as const }
+    const page = renderPage(() => <CountedCamera action={action} demo />)
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('每侧 10 个')
+    clickButtonByText(page.element, '开始本组')
+    await flushPromises()
+    page.rerender()
+    clickButtonByText(page.element, '完成本组')
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('03:00')
+    expect(findButtonByText(page.element, '开始下一组').props.disabled).toBe(true)
+    await vi.advanceTimersByTimeAsync(180000)
+    page.rerender()
+    expect(findButtonByText(page.element, '开始下一组').props.disabled).toBe(false)
+    expect(textContent(page.element)).not.toContain('完成本组')
+    clickButtonByText(page.element, '开始下一组')
+    await flushPromises()
+    page.rerender()
+    clickButtonByText(page.element, '完成本组')
+    await flushPromises()
+    page.rerender()
+    expect(textContent(page.element)).toContain('演示运动已做完')
+    expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.saveFile).not.toHaveBeenCalled()
+    expect(taroHarness.taroMock.setStorageSync).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    page.unmount()
+  })
+})
+
+
+describe('计数组真实录像', () => {
+  beforeEach(() => { vi.spyOn(session, 'isDemoSession').mockReturnValue(false) })
+  afterEach(() => { vi.mocked(session.isDemoSession).mockRestore() })
+  it('安全保存后网络失败仍可进入休息，重启保留已完成组且片段未提前删除', async () => {
+    vi.useFakeTimers()
+    setPatientAppToken('counted-user')
+    const action = { ...PRESCRIPTION!.actions[0], dose_mode: 'sets' as const, repetitions: 10, sets: 2, count_unit: 'total' as const }
+    requestMock.mockImplementation(async (path: string) => {
+      if (path === '/patient-app/home/') return { project_patient_id: 18, current_prescription: { ...PRESCRIPTION, actions: [action] } }
+      if (path === '/patient-app/current-prescription/') return { ...PRESCRIPTION, actions: [action] }
+      if (path === '/patient-app/motion-sessions/') return { id: 90 }
+      throw new Error('网络暂不可用')
+    })
+    const page = renderPage(() => <CountedCamera action={action} demo={false} />)
+    await flushPromises(30); page.rerender(); initializeCamera(page.element); page.rerender()
+    clickButtonByText(page.element, '开始本组')
+    await flushPromises(30); page.rerender()
+    expect(recorderHarness.instances).toHaveLength(1)
+    await recorderHarness.instances[0].options.onSegment('wxfile://temp/first.mp4', 5000)
+    await vi.advanceTimersByTimeAsync(5000)
+    clickButtonByText(page.element, '完成本组')
+    await flushPromises(40); page.rerender()
+    expect(textContent(page.element)).toContain('03:00')
+    expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
+    page.unmount(); reactHarness.reset()
+    const restored = renderPage(() => <CountedCamera action={action} demo={false} />)
+    await flushPromises(40); restored.rerender()
+    expect(textContent(restored.element)).toContain('第 2/2 组')
+    expect(findButtonByText(restored.element, '开始下一组').props.disabled).toBe(true)
+    restored.unmount()
+  })
+})
+
+
+it('休息按墙钟播报三十秒和末五秒，切后台回来不补播过时倒数', async () => {
+  vi.useFakeTimers()
+  const action = { ...PRESCRIPTION!.actions[0], dose_mode: 'sets' as const, repetitions: 10, sets: 2, count_unit: 'total' as const }
+  const page = renderPage(() => <CountedCamera action={action} demo />)
+  clickButtonByText(page.element, '开始本组'); await flushPromises(); page.rerender()
+  clickButtonByText(page.element, '完成本组'); await flushPromises(50); page.rerender()
+  expect(motionInstructionAudioHarness.play.mock.calls.some(([src]) => String(src).includes('motion-rest-start'))).toBe(true)
+  await vi.advanceTimersByTimeAsync(150000); page.rerender(); await flushPromises()
+  expect(motionInstructionAudioHarness.play.mock.calls.some(([src]) => String(src).includes('motion-rest-thirty'))).toBe(true)
+  taroHarness.hideCallbacks.at(-1)?.()
+  motionInstructionAudioHarness.play.mockClear()
+  vi.setSystemTime(Date.now() + 29000)
+  taroHarness.showCallbacks.at(-1)?.(); page.rerender(); await flushPromises()
+  expect(motionInstructionAudioHarness.play).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(1000); page.rerender(); await flushPromises()
+  expect(motionInstructionAudioHarness.play.mock.calls.some(([src]) => String(src).includes('motion-rest-ready'))).toBe(true)
+  expect(findButtonByText(page.element, '开始下一组').props.disabled).toBe(false)
+  page.unmount()
+})
+
+
+it.each(DEMO_MOTION_ACTION_CASES.filter(action => action.id !== 888808))('演示计数组动作 $name 从正式入口进入手动完成流程', async ({ id }) => {
+  session.startDemoSession()
+  taroHarness.routerParams.actionId = String(id)
+  const page = renderPage(ShoulderPressCameraPage)
+  await flushPromises(30); page.rerender(); await flushPromises(); page.rerender()
+  expect(textContent(page.element)).toContain('共 3 组')
+  clickButtonByText(page.element, '开始本组'); await flushPromises(); page.rerender()
+  expect(textContent(page.element)).toContain('完成本组')
+  expect(taroHarness.taroMock.createCameraContext).not.toHaveBeenCalled()
+  page.unmount()
+})
+
+
+it('计数组历史按一次运动显示完成组与视频状态，不将三组显示成三次', async () => {
+  requestMock.mockResolvedValue({ prescription_action: 42, last_7_days_completed_count: 1, last_30_days_completed_count: 1, records: [], motion_sessions: [{ id: 90, training_date: '2026-09-16', planned_sets: 3, completed_sets: 3, uploaded_sets: 2, status: 'awaiting_upload' }] })
+  const page = renderPage(ActionHistoryPage)
+  await taroHarness.showCallbacks[0](); await flushPromises(); page.rerender()
+  expect(textContent(page.element)).toContain('运动已做完，视频待上传')
+  expect(textContent(page.element)).toContain('已做完 3/3 组')
+  expect(textContent(page.element)).toContain('视频已上传 2/3 组')
+  expect(textContent(page.element)).not.toContain('暂无训练记录')
+})
+
+describe('计数组录像恢复与上传边界', () => {
+  const action = { ...PRESCRIPTION!.actions[0], dose_mode: 'sets' as const, repetitions: 10, sets: 2, count_unit: 'total' as const }
+  beforeEach(() => {
+    vi.spyOn(session, 'isDemoSession').mockReturnValue(false)
+    vi.useFakeTimers()
+    setPatientAppToken('counted-18')
+    requestMock.mockImplementation(async (path: string) => {
+      if (path === '/patient-app/home/') return { project_patient_id: 18 }
+      if (path === '/patient-app/current-prescription/') return { ...PRESCRIPTION, actions: [action] }
+      if (path === '/patient-app/motion-sessions/recover/') return { id: 90 }
+      throw new Error('unexpected request')
+    })
+  })
+  afterEach(() => { vi.mocked(session.isDemoSession).mockRestore() })
+  async function open() {
+    const page = renderPage(() => <CountedCamera action={action} demo={false} />)
+    await flushPromises(30); page.rerender(); initializeCamera(page.element); page.rerender()
+    return page
+  }
+  async function firstGroup(page: RenderedPage) {
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    await recorderHarness.instances.at(-1)!.options.onSegment('wxfile://temp/first.mp4', 5000)
+    await vi.advanceTimersByTimeAsync(5000)
+    clickButtonByText(page.element, '完成本组'); await flushPromises(50); page.rerender()
+  }
+  it('分片收齐或排队不清理本地录像，过期重建上传仍沿用原组尝试，绑定后才清理', async () => {
+    const page = await open(); await firstGroup(page)
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
+    const original = apiMocks.createVideoSession.mock.calls[0][0]
+    expect(original).toMatchObject({ expectedDurationSeconds: 1800, trainingDate: expect.any(String), motionAttemptId: expect.any(String) })
+    expect(apiMocks.finalizeVideoSession).toHaveBeenCalledTimes(1)
+    expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
+    apiMocks.getVideoSessionStatus.mockResolvedValueOnce({ video_id: 9, status: 'expired', uploaded_segments: [] })
+    clickButtonByText(page.element, '重试上传'); await flushPromises(50); page.rerender()
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(2)
+    const renewed = apiMocks.createVideoSession.mock.calls[1][0]
+    expect(renewed.motionAttemptId).toBe(original.motionAttemptId)
+    expect(renewed.clientSessionId).not.toBe(original.clientSessionId)
+    expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
+    apiMocks.getVideoSessionStatus.mockResolvedValueOnce({ video_id: 9, status: 'attached', uploaded_segments: [0] })
+    clickButtonByText(page.element, '重试上传'); await flushPromises(50); page.rerender()
+    expect(taroHarness.removeSavedFileMock).toHaveBeenCalledTimes(1)
+    expect(textContent(page.element)).toContain('视频已上传 1/1 组')
+    page.unmount()
+  })
+  it('切后台中断当前组清理录像，回来仍从同组重新开始且中断内容不上传', async () => {
+    const page = await open()
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    await recorderHarness.instances[0].options.onSegment('wxfile://temp/abandoned.mp4', 5000)
+    taroHarness.hideCallbacks.at(-1)?.(); await flushPromises(40); page.rerender()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    expect(taroHarness.removeSavedFileMock).toHaveBeenCalledTimes(1)
+    taroHarness.showCallbacks.at(-1)?.(); page.rerender()
+    expect(textContent(page.element)).toContain('第 1/2 组')
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    expect(recorderHarness.instances).toHaveLength(2)
+    page.unmount()
+  })
+  it('下一组空间不足明确拦截，已保存第一组不会被空间清理删除', async () => {
+    const page = await open(); await firstGroup(page)
+    await vi.advanceTimersByTimeAsync(180000); page.rerender()
+    taroHarness.getSavedFileListMock.mockImplementationOnce(options => options.success({ fileList: [{ filePath: 'wxfile://kept', size: 36 * 1024 * 1024 }] }))
+    clickButtonByText(page.element, '开始下一组'); await flushPromises(30); page.rerender()
+    expect(textContent(page.element)).toContain('录像空间不足')
+    expect(recorderHarness.instances).toHaveLength(1)
+    expect(taroHarness.removeSavedFileMock).not.toHaveBeenCalled()
+    page.unmount()
+  })
+  it('新组前发现运动计划已更新则阻止继续原计划', async () => {
+    const page = await open(); await firstGroup(page)
+    await vi.advanceTimersByTimeAsync(180000); page.rerender()
+    requestMock.mockImplementation(async path => path === '/patient-app/current-prescription/' ? { ...PRESCRIPTION, actions: [] } : { id: 90 })
+    clickButtonByText(page.element, '开始下一组'); await flushPromises(30); page.rerender()
+    expect(textContent(page.element)).toContain('运动计划已更新')
+    expect(recorderHarness.instances).toHaveLength(1)
+    page.unmount()
+  })
+  it('尾段保存失败不能进入休息或提交完成声明', async () => {
+    const page = await open()
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    recorderHarness.setNextFinishError(new Error('尾段保存失败'))
+    clickButtonByText(page.element, '完成本组'); await flushPromises(30); page.rerender()
+    expect(textContent(page.element)).toContain('重试保存本组')
+    expect(textContent(page.element)).not.toContain('03:00')
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    page.unmount()
+  })
+  it('连续跨上海午夜仍归首次日期，全部组做完后隔天仅补传也不新建运动', async () => {
+    vi.setSystemTime(new Date('2026-09-16T15:59:50.000Z'))
+    const page = await open(); await firstGroup(page)
+    await vi.advanceTimersByTimeAsync(180000); page.rerender()
+    clickButtonByText(page.element, '开始下一组'); await flushPromises(30); page.rerender()
+    await recorderHarness.instances.at(-1)!.options.onSegment('wxfile://temp/second.mp4', 5000)
+    await vi.advanceTimersByTimeAsync(5000)
+    clickButtonByText(page.element, '完成本组'); await flushPromises(50); page.rerender()
+    expect(textContent(page.element)).toContain('运动已做完，视频待上传')
+    expect(apiMocks.createVideoSession.mock.calls.every(([input]) => input.trainingDate === '2026-09-16')).toBe(true)
+    const recoverCalls = requestMock.mock.calls.filter(([path]) => path === '/patient-app/motion-sessions/recover/')
+    expect(recoverCalls.at(-1)![1].data.completed_sets.map((item: { index: number }) => item.index)).toEqual([1, 2])
+    page.unmount(); reactHarness.reset()
+    vi.setSystemTime(new Date('2026-09-18T01:00:00.000Z'))
+    const recovered = renderPage(() => <CountedCamera action={action} demo={false} />)
+    await flushPromises(40); recovered.rerender()
+    expect(textContent(recovered.element)).toContain('运动已做完，视频待上传')
+    expect(textContent(recovered.element)).not.toContain('开始本组')
+    recovered.unmount()
+  })
+  it('部分完成退出后跨上海日期返回从第一组新开，旧组只补传', async () => {
+    vi.setSystemTime(new Date('2026-09-16T15:59:50.000Z'))
+    const page = await open(); await firstGroup(page)
+    taroHarness.hideCallbacks.at(-1)?.(); await flushPromises()
+    vi.setSystemTime(new Date('2026-09-16T16:03:00.000Z'))
+    taroHarness.showCallbacks.at(-1)?.(); await flushPromises(40); page.rerender()
+    expect(textContent(page.element)).toContain('第 1/2 组')
+    expect(textContent(page.element)).toContain('已进入新的一天')
+    page.unmount()
+  })
+  it('账号切换后不恢复或上传其他用户的已完成组', async () => {
+    const page = await open(); await firstGroup(page); page.unmount(); reactHarness.reset()
+    setPatientAppToken('counted-22')
+    requestMock.mockImplementation(async path => path === '/patient-app/home/' ? { project_patient_id: 22 } : { ...PRESCRIPTION, actions: [action] })
+    apiMocks.createVideoSession.mockClear(); apiMocks.getVideoSessionStatus.mockClear()
+    const another = await open()
+    expect(textContent(another.element)).toContain('第 1/2 组')
+    expect(apiMocks.getVideoSessionStatus).not.toHaveBeenCalled()
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    another.unmount()
+  })
 })

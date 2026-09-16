@@ -57,12 +57,12 @@ const mutations: [string, (fixture: Fixture) => unknown][] = [
   ['TTL 大于 3600', (f) => { f.expires_at = f.issued_at + 3601 }],
 ]
 describe('签名清单校验', () => {
-  it('提取完整 23 项地址，不透传原始字段', async () => {
+  it('提取完整 43 项地址，不透传原始字段', async () => {
     const { parseSignedAssetManifest } = await import('./signedAssetManifest')
     const fixture = signedAssetFixture()
     const manifest = parseSignedAssetManifest(fixture)
-    expect(Object.keys(manifest.urls)).toHaveLength(23)
-    expect(manifest).toEqual({ assetVersion: 'v-3aafe09211fd', issuedAt: 1_800_000_000,
+    expect(Object.keys(manifest.urls)).toHaveLength(43)
+    expect(manifest).toEqual({ assetVersion: 'v-e3d7d741b44f', issuedAt: 1_800_000_000,
       expiresAt: 1_800_000_600, urls: Object.fromEntries(fixture.assets.map((asset) => [asset.key, asset.url])) })
   })
   it.each(mutations)('拒绝%s，错误不含签名 URL', async (_, mutate) => {
@@ -88,7 +88,7 @@ describe('内存签名缓存', () => {
     const { fetchSignedAssetManifest } = await import('./signedAssetManifest')
     await Promise.all([fetchSignedAssetManifest(), fetchSignedAssetManifest()])
     expect(api.publicRequest).toHaveBeenCalledTimes(1)
-    expect(api.publicRequest).toHaveBeenCalledWith('/patient-app/static-assets/?version=v-3aafe09211fd')
+    expect(api.publicRequest).toHaveBeenCalledWith('/patient-app/static-assets/?version=v-e3d7d741b44f')
     vi.setSystemTime(539_000)
     await fetchSignedAssetManifest()
     expect(api.publicRequest).toHaveBeenCalledTimes(1)

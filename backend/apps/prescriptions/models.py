@@ -1,6 +1,9 @@
+import uuid
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 from apps.common.models import UserStampedModel
 
@@ -52,6 +55,7 @@ class Prescription(UserStampedModel):
     archived_at = models.DateTimeField("归档时间", null=True, blank=True)
     status = models.CharField("状态", max_length=20, choices=Status.choices, default=Status.DRAFT)
     note = models.TextField("备注", blank=True)
+    migration_source = models.CharField(max_length=80, blank=True)
 
     class Meta:
         unique_together = [("project_patient", "version")]
@@ -66,6 +70,10 @@ class Prescription(UserStampedModel):
         difficulty: str = "",
         notes: str = "",
         sort_order: int = 0,
+        dose_mode: str = "duration",
+        repetitions: int | None = None,
+        sets: int | None = None,
+        count_unit: str = "total",
     ):
         if weekly_target_count <= 0:
             raise ValidationError("每周目标次数必须大于 0")
@@ -86,13 +94,15 @@ class Prescription(UserStampedModel):
             difficulty=difficulty,
             notes=notes,
             sort_order=sort_order,
+            dose_mode=dose_mode,
+            repetitions=repetitions,
+            sets=sets,
+            count_unit=count_unit,
         )
 
 
 class PrescriptionAction(UserStampedModel):
-    prescription = models.ForeignKey(
-        Prescription, on_delete=models.CASCADE, related_name="actions"
-    )
+    prescription = models.ForeignKey(Prescription, on_delete=models.CASCADE, related_name="actions")
     action_library_item = models.ForeignKey(ActionLibraryItem, on_delete=models.PROTECT)
     action_name_snapshot = models.CharField("动作名称快照", max_length=120)
     training_type_snapshot = models.CharField("训练类型快照", max_length=80)
@@ -108,11 +118,40 @@ class PrescriptionAction(UserStampedModel):
     difficulty = models.CharField("难度", max_length=40, blank=True)
     notes = models.TextField("注意事项", blank=True)
     sort_order = models.PositiveIntegerField("排序", default=0)
+    dose_mode = models.CharField(
+        max_length=16, default="duration", choices=[("duration", "时长"), ("sets", "计数组")]
+    )
+    repetitions = models.PositiveIntegerField(null=True, blank=True)
+    sets = models.PositiveIntegerField(null=True, blank=True)
+    count_unit = models.CharField(
+        max_length=16, default="total", choices=[("total", "每组"), ("per_side", "每侧")]
+    )
+    migrated_from = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.SET_NULL, related_name="migrated_actions"
+    )
 
     class Meta:
         constraints = [
             models.CheckConstraint(
+                condition=models.Q(dose_mode="duration")
+                | models.Q(
+                    dose_mode="sets",
+                    repetitions__gt=0,
+                    repetitions__isnull=False,
+                    sets__gt=0,
+                    sets__isnull=False,
+                    duration_minutes__isnull=True,
+                ),
+                name="prescription_counted_dose_valid",
+            ),
+            models.CheckConstraint(
                 condition=models.Q(weekly_target_count__gt=0),
                 name="prescription_action_weekly_target_count_gt_0",
-            )
+            ),
         ]
+
+
+class MotionPrescriptionCutover(models.Model):
+    project_patient = models.OneToOneField("studies.ProjectPatient", on_delete=models.CASCADE)
+    marker = models.UUIDField(default=uuid.uuid4, unique=True)
+    switched_at = models.DateTimeField(default=timezone.now)

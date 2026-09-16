@@ -2,7 +2,7 @@ from collections.abc import Mapping
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.cache import cache
-from django.db.models import Count, Prefetch
+from django.db.models import Prefetch
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.authentication import get_authorization_header
@@ -150,6 +150,8 @@ def serialize_training_record(record):
 
 
 def serialize_prescription(project_patient):
+    from apps.training.completion import completed_count
+
     prescription = current_prescription_for(project_patient)
     if prescription is None:
         return None
@@ -158,21 +160,9 @@ def serialize_prescription(project_patient):
     action_ids = [action.id for action in actions]
     week_start, week_end = current_week_bounds()
 
-    completed_counts = {
-        row["prescription_action_id"]: row["count"]
-        for row in TrainingRecord.objects.filter(
-            project_patient=project_patient,
-            prescription_action_id__in=action_ids,
-            training_date__gte=week_start,
-            training_date__lte=week_end,
-            status=TrainingRecord.Status.COMPLETED,
-        )
-        .values("prescription_action_id")
-        .annotate(count=Count("id"))
-    }
-
     recent_records = {}
     for record in TrainingRecord.objects.filter(
+        invalidated_at__isnull=True,
         project_patient=project_patient,
         prescription_action_id__in=action_ids,
     ).order_by("prescription_action_id", "-training_date", "-id"):
@@ -200,7 +190,13 @@ def serialize_prescription(project_patient):
                 "weekly_frequency": action.weekly_frequency,
                 "duration_minutes": action.duration_minutes,
                 "weekly_target_count": action.weekly_target_count,
-                "weekly_completed_count": completed_counts.get(action.id, 0),
+                "weekly_completed_count": completed_count(
+                    project_patient, action, week_start, week_end
+                ),
+                "dose_mode": action.dose_mode,
+                "repetitions": action.repetitions,
+                "sets": action.sets,
+                "count_unit": action.count_unit,
                 "difficulty": action.difficulty,
                 "notes": action.notes,
                 "sort_order": action.sort_order,
@@ -235,7 +231,11 @@ class PatientAppBindView(APIView):
                 code=serializer.validated_data["code"],
                 wx_openid=wx_openid,
             )
-        except (WechatLoginCodeInvalid, WechatIdentityUnavailable, PatientAppBindingConflict) as exc:
+        except (
+            WechatLoginCodeInvalid,
+            WechatIdentityUnavailable,
+            PatientAppBindingConflict,
+        ) as exc:
             return wechat_identity_error_response(exc)
         except DjangoValidationError as exc:
             return Response(
@@ -259,7 +259,11 @@ class PatientAppWechatSessionView(APIView):
                 wx_openid=wx_openid,
                 presented_token=optional_bearer_token(request),
             )
-        except (WechatLoginCodeInvalid, WechatIdentityUnavailable, PatientAppBindingConflict) as exc:
+        except (
+            WechatLoginCodeInvalid,
+            WechatIdentityUnavailable,
+            PatientAppBindingConflict,
+        ) as exc:
             return wechat_identity_error_response(exc)
 
         if recovery.status == "unbound":
@@ -347,7 +351,8 @@ class PatientAppTrainingRecordView(PatientAppBaseView):
         project_patient = self.project_patient()
         try:
             action = PrescriptionAction.objects.select_related(
-                "prescription", "action_library_item",
+                "prescription",
+                "action_library_item",
             ).get(
                 pk=data.pop("prescription_action"),
                 prescription__project_patient=project_patient,
@@ -407,6 +412,7 @@ class PatientAppTrainingVideoSessionView(PatientAppBaseView):
                 training_date=serializer.validated_data["training_date"],
                 expected_duration_seconds=serializer.validated_data["expected_duration_seconds"],
                 training_started_at=serializer.validated_data["training_started_at"],
+                motion_attempt_id=serializer.validated_data.get("motion_attempt_id"),
             )
         except SessionConflict as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
@@ -459,9 +465,7 @@ class PatientAppTrainingVideoFinalizeView(PatientAppBaseView):
                 project_patient=self.project_patient(),
                 video_id=video_id,
                 segment_count=serializer.validated_data["segment_count"],
-                actual_duration_seconds=serializer.validated_data[
-                    "actual_duration_seconds"
-                ],
+                actual_duration_seconds=serializer.validated_data["actual_duration_seconds"],
                 note=serializer.validated_data["note"],
                 training_ended_at=serializer.validated_data.get("training_ended_at"),
             )
@@ -494,6 +498,10 @@ class PatientAppTrainingVideoStatusView(PatientAppBaseView):
 
 class PatientAppActionHistoryView(PatientAppBaseView):
     def get(self, request, prescription_action_id):
+        from apps.training.completion import action_lineage, completed_count
+        from apps.training.models import MotionTrainingSession
+        from apps.training.sets import serialize_session
+
         project_patient = self.project_patient()
         active_prescription = current_prescription_for(project_patient)
         if (
@@ -508,22 +516,28 @@ class PatientAppActionHistoryView(PatientAppBaseView):
         today = timezone.localdate()
         last_7_start = today - timezone.timedelta(days=6)
         last_30_start = today - timezone.timedelta(days=29)
+        action = active_prescription.actions.get(pk=prescription_action_id)
         records = TrainingRecord.objects.filter(
+            invalidated_at__isnull=True,
+            video__motion_attempt__isnull=True,
             project_patient=project_patient,
-            prescription=active_prescription,
-            prescription_action_id=prescription_action_id,
+            prescription_action_id__in=action_lineage(action),
         ).order_by("-training_date", "-id")
         return Response(
             {
                 "prescription_action": prescription_action_id,
-                "last_7_days_completed_count": records.filter(
-                    training_date__gte=last_7_start,
-                    status=TrainingRecord.Status.COMPLETED,
-                ).count(),
-                "last_30_days_completed_count": records.filter(
-                    training_date__gte=last_30_start,
-                    status=TrainingRecord.Status.COMPLETED,
-                ).count(),
+                "last_7_days_completed_count": completed_count(
+                    project_patient, action, last_7_start, today
+                ),
+                "last_30_days_completed_count": completed_count(
+                    project_patient, action, last_30_start, today
+                ),
                 "records": [serialize_training_record(record) for record in records[:30]],
+                "motion_sessions": [
+                    serialize_session(session)
+                    for session in MotionTrainingSession.objects.filter(
+                        project_patient=project_patient, prescription_action=action
+                    ).order_by("-training_date", "-id")[:30]
+                ],
             }
         )

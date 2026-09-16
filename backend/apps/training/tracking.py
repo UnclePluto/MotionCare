@@ -3,7 +3,7 @@ from decimal import Decimal
 from statistics import mean
 
 from django.conf import settings
-from django.db.models import Count, F, Max, Prefetch, Q
+from django.db.models import Count, F, Max, Prefetch, Q, OuterRef, Subquery
 from django.http import Http404
 from django.utils import timezone
 
@@ -126,6 +126,7 @@ def _raw_int(form_data, key):
 
 
 def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[dict]:
+    from .models import MotionTrainingSession
     from apps.wearables.services.queries import tracking_wearable_summaries
 
     today = today or timezone.localdate()
@@ -137,12 +138,29 @@ def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[di
     rows = (
         qs.values("patient_id", "patient__name", "patient__phone")
         .annotate(
+            set_completed_count=Subquery(
+                MotionTrainingSession.objects.filter(
+                    project_patient__in=qs,
+                    project_patient__patient_id=OuterRef("patient_id"),
+                    completed_at__isnull=False,
+                    training_date__gte=last_30_start,
+                    training_date__lte=today,
+                )
+                .values("project_patient__patient_id")
+                .annotate(count=Count("id"))
+                .values("count")[:1]
+            ),
             project_count=Count("id", distinct=True),
-            last_training_at=Max("training_records__training_date"),
+            last_training_at=Max(
+                "training_records__training_date",
+                filter=Q(training_records__invalidated_at__isnull=True),
+            ),
             last_30_days_completed_count=Count(
                 "training_records",
                 filter=Q(
                     training_records__status=TrainingRecord.Status.COMPLETED,
+                    training_records__invalidated_at__isnull=True,
+                    training_records__video__motion_attempt__isnull=True,
                     training_records__training_date__gte=last_30_start,
                     training_records__training_date__lte=today,
                 ),
@@ -165,7 +183,8 @@ def list_patient_tracking_summaries(user, *, q: str = "", today=None) -> list[di
             "last_training_at": (
                 row["last_training_at"].isoformat() if row["last_training_at"] else None
             ),
-            "last_30_days_completed_count": row["last_30_days_completed_count"],
+            "last_30_days_completed_count": row["last_30_days_completed_count"]
+            + (row["set_completed_count"] or 0),
             "wearable": wearable_summaries[row["patient_id"]],
         }
         for row in rows
@@ -211,21 +230,12 @@ def prescription_completion(project_patient: ProjectPatient, prescription: Presc
     actions = list(prescription.actions.order_by("sort_order", "id"))
     action_ids = [action.id for action in actions]
     week_start, week_end = current_week_bounds()
-    completed_counts = {
-        row["prescription_action_id"]: row["count"]
-        for row in TrainingRecord.objects.filter(
-            project_patient=project_patient,
-            prescription_action_id__in=action_ids,
-            status=TrainingRecord.Status.COMPLETED,
-            training_date__gte=week_start,
-            training_date__lte=week_end,
-        )
-        .values("prescription_action_id")
-        .annotate(count=Count("id"))
-    }
+    from .completion import completed_count
+
     recent_dates = {
         row["prescription_action_id"]: row["recent"]
         for row in TrainingRecord.objects.filter(
+            invalidated_at__isnull=True,
             project_patient=project_patient,
             prescription_action_id__in=action_ids,
         )
@@ -235,7 +245,7 @@ def prescription_completion(project_patient: ProjectPatient, prescription: Presc
 
     result = []
     for action in actions:
-        completed_count = completed_counts.get(action.id, 0)
+        count = completed_count(project_patient, action, week_start, week_end)
         target_count = action.weekly_target_count
         result.append(
             {
@@ -244,10 +254,8 @@ def prescription_completion(project_patient: ProjectPatient, prescription: Presc
                 "internal_type": action.internal_type_snapshot,
                 "action_type": action.action_type_snapshot,
                 "target_count": target_count,
-                "completed_count": completed_count,
-                "completion_rate": round(completed_count / target_count * 100, 2)
-                if target_count
-                else 0,
+                "completed_count": count,
+                "completion_rate": round(count / target_count * 100, 2) if target_count else 0,
                 "recent_record_at": recent_dates[action.id].isoformat()
                 if action.id in recent_dates and recent_dates[action.id]
                 else None,
@@ -266,6 +274,8 @@ def _empty_day(day):
 
 
 def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> dict:
+    from .models import MotionTrainingSession
+
     today = today or timezone.localdate()
     day_count = 7 if range_value == "7d" else 30
     start = today - timezone.timedelta(days=day_count - 1)
@@ -281,6 +291,8 @@ def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> d
 
     records = (
         TrainingRecord.objects.filter(
+            invalidated_at__isnull=True,
+            video__motion_attempt__isnull=True,
             project_patient=project_patient,
             training_date__gte=start,
             training_date__lte=today,
@@ -308,6 +320,26 @@ def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> d
             day_bucket["game_scores"].append(score)
             weekly_bucket["game_scores"].append(score)
 
+    for session in MotionTrainingSession.objects.filter(
+        project_patient=project_patient, training_date__gte=start, training_date__lte=today
+    ).prefetch_related("groups__video"):
+        seconds = sum(
+            (
+                group.video.actual_duration_seconds
+                if group.video_id
+                else (group.ended_at - group.started_at).total_seconds()
+            )
+            for group in session.groups.all()
+            if group.completed
+        )
+        day_bucket = buckets[session.training_date]
+        weekly_bucket = weekly_buckets[
+            session.training_date - timezone.timedelta(days=session.training_date.weekday())
+        ]
+        for bucket in (day_bucket, weekly_bucket):
+            bucket["duration_minutes"] += seconds / 60
+            bucket["completed_count"] += int(session.completed_at is not None)
+
     daily = []
     for day in days:
         bucket = buckets[day]
@@ -315,7 +347,7 @@ def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> d
             {
                 "date": bucket["date"],
                 "completed_count": bucket["completed_count"],
-                "duration_minutes": bucket["duration_minutes"],
+                "duration_minutes": round(bucket["duration_minutes"], 2),
                 "game_average_score": _round_or_none(bucket["game_scores"]),
             }
         )
@@ -347,7 +379,7 @@ def trend(project_patient: ProjectPatient, *, range_value: str, today=None) -> d
                 "week_start": week_start.isoformat(),
                 "week_end": (week_start + timezone.timedelta(days=6)).isoformat(),
                 "completed_count": bucket["completed_count"],
-                "duration_minutes": bucket["duration_minutes"],
+                "duration_minutes": round(bucket["duration_minutes"], 2),
                 "game_average_score": _round_or_none(bucket["game_scores"]),
             }
         )
@@ -361,6 +393,7 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
     start = today - timezone.timedelta(days=29)
     records = list(
         TrainingRecord.objects.filter(
+            invalidated_at__isnull=True,
             project_patient=project_patient,
             training_date__gte=start,
             training_date__lte=today,
@@ -426,13 +459,35 @@ def game_summary(project_patient: ProjectPatient, *, today=None) -> dict:
 
 
 def recent_records(project_patient: ProjectPatient) -> list[dict]:
+    from .models import MotionTrainingSession
+
+    latest_sessions = (
+        MotionTrainingSession.objects.filter(project_patient=project_patient)
+        .order_by("-training_date", "-id")
+        .values("id")[:30]
+    )
+    ordinary_ids = (
+        TrainingRecord.objects.filter(
+            project_patient=project_patient,
+            invalidated_at__isnull=True,
+            video__motion_attempt__isnull=True,
+        )
+        .order_by("-training_date", "-id")
+        .values("id")[:30]
+    )
     records = (
-        TrainingRecord.objects.filter(project_patient=project_patient)
+        TrainingRecord.objects.filter(
+            Q(id__in=ordinary_ids)
+            | Q(video__motion_attempt__group__session_id__in=latest_sessions),
+            invalidated_at__isnull=True,
+            project_patient=project_patient,
+        )
         .select_related(
             "prescription",
             "prescription_action",
             "prescription_action__action_library_item",
             "video",
+            "video__motion_attempt__group__session",
         )
         .prefetch_related(
             Prefetch(
@@ -443,7 +498,7 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
                 to_attr="ordered_analysis_jobs",
             )
         )
-        .order_by("-training_date", "-id")[:30]
+        .order_by("-training_date", "-id")
     )
     rows = []
     for record in records:
@@ -483,6 +538,12 @@ def recent_records(project_patient: ProjectPatient) -> list[dict]:
         rows.append(
             {
                 "id": record.id,
+                "motion_session_id": video.motion_attempt.group.session_id
+                if video and video.motion_attempt_id
+                else None,
+                "set_index": video.motion_attempt.group.index
+                if video and video.motion_attempt_id
+                else None,
                 "training_date": record.training_date.isoformat(),
                 "status": record.status,
                 "prescription": record.prescription_id,
@@ -578,7 +639,12 @@ def _select_project_patient(qs, *, project_patient_id=None):
             raise Http404
         return selected
     selected = (
-        qs.annotate(last_training_at=Max("training_records__training_date"))
+        qs.annotate(
+            last_training_at=Max(
+                "training_records__training_date",
+                filter=Q(training_records__invalidated_at__isnull=True),
+            )
+        )
         .order_by(F("last_training_at").desc(nulls_last=True), "-enrolled_at", "-id")
         .first()
     )
@@ -600,6 +666,21 @@ def get_patient_tracking_detail(
     selected = _select_project_patient(qs, project_patient_id=project_patient_id)
     project_patients = list(qs.order_by("-enrolled_at", "-id"))
     active_prescription = current_prescription_for(selected)
+    from .models import MotionTrainingSession
+    from .sets import serialize_session
+
+    motion_sessions = []
+    for session in (
+        MotionTrainingSession.objects.filter(project_patient=selected)
+        .select_related("prescription_action")
+        .order_by("-training_date", "-id")[:30]
+    ):
+        item = serialize_session(session)
+        item["action_name"] = session.prescription_action.action_name_snapshot
+        item["actual_duration_seconds"] = sum(
+            (g.ended_at - g.started_at).total_seconds() for g in session.groups.all() if g.completed
+        )
+        motion_sessions.append(item)
 
     return {
         "patient": serialize_patient(selected.patient),
@@ -610,5 +691,6 @@ def get_patient_tracking_detail(
         "trend": trend(selected, range_value=range_value),
         "game_summary": game_summary(selected),
         "recent_records": recent_records(selected),
+        "motion_sessions": motion_sessions,
         "pending_training_videos": pending_training_videos(selected),
     }

@@ -4,6 +4,7 @@ from rest_framework import serializers
 
 from .action_library import is_official_motion_action, official_action_queryset
 from .models import ActionLibraryItem, Prescription, PrescriptionAction
+from .doses import count_unit_for, is_counted_motion
 from .motion_videos import MotionVideoResolution, resolve_motion_video_url
 
 
@@ -58,6 +59,13 @@ class ActionLibraryItemSerializer(serializers.ModelSerializer):
 class PrescriptionActionSerializer(serializers.ModelSerializer):
     video_url_snapshot = serializers.SerializerMethodField()
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.dose_mode == "duration":
+            for key in ("sets", "repetitions", "count_unit"):
+                data.pop(key, None)
+        return data
+
     def get_video_url_snapshot(self, action):
         return resolve_motion_video_url_safely(
             action.video_object_key_snapshot,
@@ -79,6 +87,10 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
             "has_ai_supervision_snapshot",
             "weekly_frequency",
             "duration_minutes",
+            "dose_mode",
+            "repetitions",
+            "sets",
+            "count_unit",
             "weekly_target_count",
             "difficulty",
             "notes",
@@ -89,7 +101,10 @@ class PrescriptionActionSerializer(serializers.ModelSerializer):
 
 class PrescriptionSerializer(serializers.ModelSerializer):
     actions = PrescriptionActionSerializer(many=True, read_only=True)
-    opened_by_name = serializers.CharField(source="opened_by.name", read_only=True)
+    opened_by_name = serializers.SerializerMethodField()
+
+    def get_opened_by_name(self, prescription):
+        return "系统切换" if prescription.migration_source else prescription.opened_by.name
 
     class Meta:
         model = Prescription
@@ -105,11 +120,14 @@ class PrescriptionSerializer(serializers.ModelSerializer):
             "status",
             "note",
             "actions",
+            "migration_source",
         ]
         read_only_fields = fields
 
 
 class ActivateNowActionSerializer(serializers.Serializer):
+    repetitions = serializers.IntegerField(required=False, min_value=1, max_value=2147483647)
+    sets = serializers.IntegerField(required=False, min_value=1, max_value=2147483647)
     action_library_item = serializers.PrimaryKeyRelatedField(
         queryset=official_action_queryset(ActionLibraryItem.objects.filter(is_active=True))
     )
@@ -122,43 +140,52 @@ class ActivateNowActionSerializer(serializers.Serializer):
     weekly_target_count = serializers.IntegerField(
         required=False, min_value=1, max_value=2147483647, default=1
     )
-    difficulty = serializers.CharField(
-        required=False, allow_blank=True, max_length=40, default=""
-    )
+    difficulty = serializers.CharField(required=False, allow_blank=True, max_length=40, default="")
     notes = serializers.CharField(required=False, allow_blank=True, default="")
     sort_order = serializers.IntegerField(
         required=False, min_value=0, max_value=2147483647, default=0
     )
 
     def to_internal_value(self, data):
-        if isinstance(data, dict) and ("sets" in data or "repetitions" in data):
-            raise serializers.ValidationError("处方动作仅支持时长，不支持组数或次数")
+        default_weekly = (
+            isinstance(data, dict)
+            and "weekly_target_count" not in data
+            and not data.get("weekly_frequency")
+        )
         if isinstance(data, dict) and (
             "weekly_target_count" not in data or data.get("weekly_target_count") is None
         ):
             data = data.copy()
-            data["weekly_target_count"] = parse_weekly_target_count(
-                data.get("weekly_frequency")
-            )
-        return super().to_internal_value(data)
+            data["weekly_target_count"] = parse_weekly_target_count(data.get("weekly_frequency"))
+        result = super().to_internal_value(data)
+        if default_weekly and is_counted_motion(result["action_library_item"].source_key):
+            result["weekly_target_count"] = 3
+        return result
 
     def validate(self, attrs):
+        action = attrs["action_library_item"]
+        if is_counted_motion(action.source_key):
+            attrs.update(
+                dose_mode="sets",
+                count_unit=count_unit_for(action.source_key),
+                duration_minutes=None,
+            )
+            attrs.setdefault("repetitions", 10)
+            attrs.setdefault("sets", 3)
+            return attrs
+        if "sets" in attrs or "repetitions" in attrs:
+            raise serializers.ValidationError("该动作使用时长，不支持组数或个数")
         duration_minutes = attrs.get("duration_minutes")
         if duration_minutes is None:
             raise serializers.ValidationError("动作需填写时长")
         action_library_item = attrs["action_library_item"]
-        if (
-            is_official_motion_action(action_library_item.source_key)
-            and duration_minutes > 30
-        ):
+        if is_official_motion_action(action_library_item.source_key) and duration_minutes > 30:
             raise serializers.ValidationError("运动动作时长不能超过 30 分钟")
         return attrs
 
 
 class ActivateNowPrescriptionSerializer(serializers.Serializer):
-    expected_active_version = serializers.IntegerField(
-        required=False, allow_null=True, min_value=1
-    )
+    expected_active_version = serializers.IntegerField(required=False, allow_null=True, min_value=1)
     note = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     actions = ActivateNowActionSerializer(many=True, allow_empty=False)
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import sharp from 'sharp'
 
@@ -146,7 +146,12 @@ async function buildEntries(projectRoot) {
     }
   }))
 
-  return [...images, ...audios]
+  const restRoot = join(projectRoot, 'resources', 'motion-rest-audio', 'source')
+  const rests = await Promise.all((await readdir(restRoot)).filter(name => name.endsWith('.m4a')).sort().map(async name => {
+    const content = await readFile(join(restRoot, name))
+    return { kind: 'motion-rest-audio', key: name.slice(0, -4), contentType: 'audio/mp4', sizeBytes: content.length, sha256: sha256(content), content }
+  }))
+  return [...images, ...audios, ...rests]
 }
 
 function publicEntry(entry, assetVersion) {

@@ -58,7 +58,7 @@ def summary_fields(stats, *, has_window):
     return fields
 
 
-def stream_measurements(*, patient_id, windows, rows):
+def stream_measurements(*, patient_id, windows, rows, contexts=None):
     if not windows:
         return {}
     table = connection.ops.quote_name(WearableMeasurement._meta.db_table)
@@ -138,6 +138,7 @@ def stream_measurements(*, patient_id, windows, rows):
                         "窗口开始": start,
                         "窗口结束": end,
                         "窗口口径": WINDOW_DESCRIPTION,
+                        **(contexts or {}).get(record_id, {}),
                     },
                 )
     return stats

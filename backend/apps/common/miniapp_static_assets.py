@@ -71,6 +71,24 @@ CANONICAL_ASSET_SPECS = {
     ),
 }
 EXPECTED_ASSET_KEYS = frozenset(CANONICAL_ASSET_SPECS)
+REST_ASSET_SPECS = {
+    f"motion-rest-{key}": ("motion-rest-audio", "audio/mp4", "m4a")
+    for key in [
+        *map(str, range(10)),
+        "hundred",
+        "ready",
+        "sets",
+        "start",
+        "ten",
+        "thirty",
+        "thousand",
+        "tick",
+        "wan",
+        "yi",
+    ]
+}
+ALL_ASSET_SPECS = {**CANONICAL_ASSET_SPECS, **REST_ASSET_SPECS}
+REST_ASSET_VERSION = "v-e3d7d741b44f"
 REQUIRED_ENTRY_FIELDS = frozenset(
     {"kind", "key", "contentType", "sizeBytes", "sha256", "relativePath"}
 )
@@ -118,9 +136,7 @@ def _resolve_asset_path(
 ) -> tuple[Path, str]:
     if not isinstance(relative_path_value, str) or not relative_path_value:
         raise CommandError("固定素材路径无效")
-    expected_relative_path = (
-        f"{source_root.name}/{key}.{sha256[:12]}.{extension}"
-    )
+    expected_relative_path = f"{source_root.name}/{key}.{sha256[:12]}.{extension}"
     if relative_path_value != expected_relative_path:
         raise CommandError("固定素材路径不符合规范路径")
 
@@ -166,7 +182,12 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
     if manifest.get("assetVersion") != source_root.name:
         raise CommandError("固定素材清单版本与目录名不一致")
     entries = manifest.get("entries")
-    if not isinstance(entries, list) or len(entries) != len(EXPECTED_ASSET_KEYS):
+    expected_keys = (
+        frozenset(ALL_ASSET_SPECS)
+        if source_root.name == REST_ASSET_VERSION
+        else EXPECTED_ASSET_KEYS
+    )
+    if not isinstance(entries, list) or len(entries) != len(expected_keys):
         raise CommandError("固定素材清单必须包含 23 项")
     if any(not isinstance(entry, dict) for entry in entries):
         raise CommandError("固定素材清单项格式无效")
@@ -176,7 +197,7 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
     manifest_keys = [entry["key"] for entry in entries]
     if any(not isinstance(key, str) or not key for key in manifest_keys):
         raise CommandError("固定素材清单 key 无效")
-    if len(set(manifest_keys)) != len(manifest_keys) or set(manifest_keys) != EXPECTED_ASSET_KEYS:
+    if len(set(manifest_keys)) != len(manifest_keys) or set(manifest_keys) != expected_keys:
         raise CommandError("固定素材清单必须包含 23 项规范素材")
 
     prepared: list[PreparedStaticAsset] = []
@@ -187,14 +208,12 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
         content_type = entry["contentType"]
         size_bytes = entry["sizeBytes"]
         expected_sha256 = entry["sha256"]
-        expected_kind, expected_content_type, extension = CANONICAL_ASSET_SPECS[key]
+        expected_kind, expected_content_type, extension = ALL_ASSET_SPECS[key]
         if kind != expected_kind or content_type != expected_content_type:
             raise CommandError(f"固定素材规范类型或媒体类型不匹配：{key}")
         if type(size_bytes) is not int or size_bytes < 0:
             raise CommandError(f"固定素材字节数无效：{key}")
-        if not isinstance(expected_sha256, str) or not SHA256_PATTERN.fullmatch(
-            expected_sha256
-        ):
+        if not isinstance(expected_sha256, str) or not SHA256_PATTERN.fullmatch(expected_sha256):
             raise CommandError(f"固定素材 SHA-256 无效：{key}")
 
         path, relative_path = _resolve_asset_path(
@@ -304,9 +323,7 @@ def publish_miniapp_static_assets(source_root: Path) -> list[PublishedStaticAsse
                 metadata = _stat_remote(asset)
                 if metadata is None:
                     logger.warning("固定素材远端操作失败：%s", asset.object_key)
-                    raise CommandError(
-                        f"固定素材远端操作失败：{asset.object_key}"
-                    ) from None
+                    raise CommandError(f"固定素材远端操作失败：{asset.object_key}") from None
                 if not _remote_metadata_matches(metadata, asset):
                     raise CommandError(f"远端固定素材冲突：{asset.object_key}")
                 status = "existing"

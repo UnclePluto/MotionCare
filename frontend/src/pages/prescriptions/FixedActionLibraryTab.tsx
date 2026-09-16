@@ -1,7 +1,7 @@
 import { Badge, Card, Empty, List, Space, Tag, Typography } from "antd";
 
 import type { ActionLibraryItem } from "./types";
-import { weeklyFrequencyLabel } from "./prescriptionUtils";
+import { isCountedMotion, weeklyFrequencyLabel } from "./prescriptionUtils";
 
 type Props = {
   actions: ActionLibraryItem[];
@@ -30,9 +30,9 @@ export function FixedActionLibraryTab({ actions }: Props) {
                 <Tag>{action.training_type}</Tag>
                 <Tag>{internalTypeLabel(action.internal_type)}</Tag>
                 <Tag>{action.action_type}</Tag>
-                <Tag>{weeklyFrequencyLabel(action.suggested_frequency)}</Tag>
+                <Tag>{isCountedMotion(action.source_key) ? "每周 3 次" : weeklyFrequencyLabel(action.suggested_frequency)}</Tag>
                 <Tag>
-                  {action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "未配置时长"}
+                  {isCountedMotion(action.source_key) ? `${action.source_key === "motion-resistance-leg-kickback" ? "每侧" : "每组"} 10 个 × 3 组` : action.suggested_duration_minutes ? `${action.suggested_duration_minutes} 分钟` : "未配置时长"}
                 </Tag>
                 <Badge
                   status={action.video_configured ? "success" : "default"}

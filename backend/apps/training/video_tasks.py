@@ -60,9 +60,7 @@ def ensure_motion_analysis_job(video: TrainingVideo) -> MotionAnalysisJob | None
     if not settings.PP_MCARE_AUTO_ENQUEUE_ENABLED:
         return None
 
-    existing = (
-        MotionAnalysisJob.objects.filter(training_video=video).order_by("id").first()
-    )
+    existing = MotionAnalysisJob.objects.filter(training_video=video).order_by("id").first()
     if existing is not None:
         return existing
 
@@ -140,9 +138,7 @@ def qiniu_attempt_object_key(video, lease_attempt):
 def _ensure_qiniu_cleanup_tombstone(video, job, *, retain_canonical):
     prefix = qiniu_attempt_key_prefix(video)
     tombstone = (
-        QiniuCleanupTombstone.objects.select_for_update()
-        .filter(attempt_key_prefix=prefix)
-        .first()
+        QiniuCleanupTombstone.objects.select_for_update().filter(attempt_key_prefix=prefix).first()
     )
     canonical_key = ""
     max_attempt_number = 0
@@ -266,18 +262,13 @@ def _lock_optional_project_patient_training_video_then_job(job_id):
     project_patient_id = ids["training_video__project_patient_id"]
     if project_patient_id is not None:
         project_patient = (
-            ProjectPatient.objects.select_for_update()
-            .filter(pk=project_patient_id)
-            .first()
+            ProjectPatient.objects.select_for_update().filter(pk=project_patient_id).first()
         )
         if project_patient is None:
             raise AssemblyLeaseLost("训练视频合并任务租约已失效")
     video = TrainingVideo.objects.select_for_update().get(pk=ids["training_video_id"])
     job = VideoAssemblyJob.objects.select_for_update().get(pk=job_id)
-    if (
-        video.project_patient_id != project_patient_id
-        or job.training_video_id != video.id
-    ):
+    if video.project_patient_id != project_patient_id or job.training_video_id != video.id:
         raise AssemblyLeaseLost("训练视频合并任务租约已失效")
     video.project_patient = project_patient
     job.training_video = video
@@ -453,9 +444,7 @@ def publish_canonical_under_lease(
     expected_hash,
     expected_size_bytes,
 ):
-    project_patient, video, job = (
-        _lock_optional_project_patient_training_video_then_job(job_id)
-    )
+    project_patient, video, job = _lock_optional_project_patient_training_video_then_job(job_id)
     if (
         project_patient is None
         or video.status != TrainingVideo.Status.UPLOADING_QINIU
@@ -513,6 +502,8 @@ def attach_training_video(
     if actual_duration_seconds is None:
         raise ValidationError("训练视频实际时长缺失")
 
+    from .history import legacy_invalidation_defaults
+
     record = TrainingRecord.objects.create(
         project_patient=project_patient,
         prescription=video.prescription,
@@ -525,6 +516,7 @@ def attach_training_video(
             "video_object_key": object_key,
         },
         note=video.note,
+        **legacy_invalidation_defaults(video.prescription_action),
     )
     now = timezone.now()
     video.training_record = record
@@ -562,6 +554,9 @@ def attach_training_video(
         ]
     )
     ensure_motion_analysis_job(video)
+    from .sets import attach_set_video
+
+    attach_set_video(video)
     tombstone = _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=True)
     transaction.on_commit(lambda job_id=job.id: cleanup_training_video_files.delay(job_id))
     transaction.on_commit(
@@ -583,9 +578,7 @@ def process_video_assembly_job(job_id):
             _touch_heartbeat(job.id, lease_attempt)
 
         segments = list(
-            video.segments.filter(status=TrainingVideoSegment.Status.UPLOADED).order_by(
-                "index"
-            )
+            video.segments.filter(status=TrainingVideoSegment.Status.UPLOADED).order_by("index")
         )
         heartbeat()
         result = load_verified_assembly_output(job, lease_attempt)
@@ -644,15 +637,10 @@ def process_video_assembly_job(job_id):
 @transaction.atomic
 def _record_assembly_failure(job_id, reason, *, lease_attempt):
     video, job = _lock_training_video_then_job(job_id)
-    if (
-        job.status != VideoAssemblyJob.Status.RUNNING
-        or job.attempt_count != lease_attempt
-    ):
+    if job.status != VideoAssemblyJob.Status.RUNNING or job.attempt_count != lease_attempt:
         return job, False
 
-    cleanup_requested = (
-        video.cleanup_requested_at is not None or video.project_patient_id is None
-    )
+    cleanup_requested = video.cleanup_requested_at is not None or video.project_patient_id is None
     retryable = not cleanup_requested and job.attempt_count < MAX_ASSEMBLY_ATTEMPTS
     now = timezone.now()
     job.status = VideoAssemblyJob.Status.PENDING if retryable else VideoAssemblyJob.Status.FAILED
@@ -712,11 +700,7 @@ def _remove_session_files(video):
 @transaction.atomic
 def _claim_unbound_video_cleanup(video_id):
     video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
-    if (
-        video is None
-        or video.project_patient_id is not None
-        or video.cleanup_requested_at is None
-    ):
+    if video is None or video.project_patient_id is not None or video.cleanup_requested_at is None:
         return video, None, False
 
     job = VideoAssemblyJob.objects.select_for_update().filter(training_video=video).first()
@@ -899,9 +883,7 @@ def cleanup_qiniu_tombstones():
 
 @shared_task(ignore_result=True)
 def recover_training_video_cleanup():
-    cutoff = timezone.now() - timedelta(
-        seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS
-    )
+    cutoff = timezone.now() - timedelta(seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS)
     candidate_ids = list(
         TrainingVideo.objects.filter(
             project_patient__isnull=True,
@@ -932,15 +914,11 @@ def recover_training_video_cleanup():
     )
     for video_id in candidate_ids:
         transaction.on_commit(
-            lambda durable_video_id=video_id: cleanup_unbound_training_video.delay(
-                durable_video_id
-            )
+            lambda durable_video_id=video_id: cleanup_unbound_training_video.delay(durable_video_id)
         )
     for job_id in attached_job_ids:
         transaction.on_commit(
-            lambda durable_job_id=job_id: cleanup_training_video_files.delay(
-                durable_job_id
-            )
+            lambda durable_job_id=job_id: cleanup_training_video_files.delay(durable_job_id)
         )
     return len(candidate_ids) + len(attached_job_ids)
 
@@ -962,8 +940,8 @@ def _claim_cleanup(job_id):
 
 @transaction.atomic
 def _mark_cleanup_succeeded(job_id):
-    job = VideoAssemblyJob.objects.select_for_update().select_related("training_video").get(
-        pk=job_id
+    job = (
+        VideoAssemblyJob.objects.select_for_update().select_related("training_video").get(pk=job_id)
     )
     TrainingVideoSegment.objects.filter(training_video_id=job.training_video_id).update(
         status=TrainingVideoSegment.Status.DELETED,
@@ -1051,15 +1029,12 @@ def recover_stale_video_assembly_jobs():
         <= settings.VIDEO_ASSEMBLY_TIMEOUT_SECONDS + settings.QINIU_UPLOAD_TIMEOUT_SECONDS
     ):
         raise ValidationError("视频合并 stale timeout 必须大于合并与上传 timeout 之和")
-    cutoff = timezone.now() - timedelta(
-        seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS
+    cutoff = timezone.now() - timedelta(seconds=settings.VIDEO_ASSEMBLY_STALE_TIMEOUT_SECONDS)
+    candidate_ids = (
+        VideoAssemblyJob.objects.filter(status=VideoAssemblyJob.Status.RUNNING)
+        .filter(Q(heartbeat_at__lt=cutoff) | Q(heartbeat_at__isnull=True, started_at__lt=cutoff))
+        .values_list("id", flat=True)
     )
-    candidate_ids = VideoAssemblyJob.objects.filter(
-        status=VideoAssemblyJob.Status.RUNNING
-    ).filter(
-        Q(heartbeat_at__lt=cutoff)
-        | Q(heartbeat_at__isnull=True, started_at__lt=cutoff)
-    ).values_list("id", flat=True)
     recovered = 0
     for job_id in candidate_ids:
         with transaction.atomic():
@@ -1085,9 +1060,7 @@ def recover_stale_video_assembly_jobs():
                     ]
                 )
                 transaction.on_commit(
-                    lambda video_id=video.id: cleanup_unbound_training_video.delay(
-                        video_id
-                    )
+                    lambda video_id=video.id: cleanup_unbound_training_video.delay(video_id)
                 )
                 continue
             if job.attempt_count >= MAX_ASSEMBLY_ATTEMPTS:
@@ -1099,20 +1072,17 @@ def recover_stale_video_assembly_jobs():
             video.status = TrainingVideo.Status.QUEUED
             video.save(update_fields=["status", "updated_at"])
             transaction.on_commit(
-                lambda recovered_job_id=job.id: run_video_assembly_job.delay(
-                    recovered_job_id
-                )
+                lambda recovered_job_id=job.id: run_video_assembly_job.delay(recovered_job_id)
             )
             recovered += 1
     return recovered
 
 
 def _is_expirable_video(video, job, cutoff):
-    if (
-        video.finalized_at is None
-        and video.status
-        in {TrainingVideo.Status.RECORDING, TrainingVideo.Status.UPLOADING_SEGMENTS}
-    ):
+    if video.finalized_at is None and video.status in {
+        TrainingVideo.Status.RECORDING,
+        TrainingVideo.Status.UPLOADING_SEGMENTS,
+    }:
         return video.updated_at < cutoff
     if video.status != TrainingVideo.Status.FAILED or video.updated_at >= cutoff:
         return False
@@ -1175,25 +1145,27 @@ def _remove_expired_orphan_staging(cutoff):
 @shared_task(ignore_result=True)
 def expire_stale_training_video_sessions():
     cutoff = timezone.now() - timedelta(seconds=settings.TRAINING_VIDEO_STAGING_TTL_SECONDS)
-    candidate_ids = TrainingVideo.objects.filter(updated_at__lt=cutoff).filter(
-        Q(
-            finalized_at__isnull=True,
-            status__in=[
-                TrainingVideo.Status.RECORDING,
-                TrainingVideo.Status.UPLOADING_SEGMENTS,
-            ],
+    candidate_ids = (
+        TrainingVideo.objects.filter(updated_at__lt=cutoff)
+        .filter(
+            Q(
+                finalized_at__isnull=True,
+                status__in=[
+                    TrainingVideo.Status.RECORDING,
+                    TrainingVideo.Status.UPLOADING_SEGMENTS,
+                ],
+            )
+            | Q(status=TrainingVideo.Status.FAILED)
         )
-        | Q(status=TrainingVideo.Status.FAILED)
-    ).values_list("id", flat=True)
+        .values_list("id", flat=True)
+    )
     expired = 0
     for video_id in candidate_ids:
         with transaction.atomic():
             video = TrainingVideo.objects.select_for_update().filter(pk=video_id).first()
             if video is None:
                 continue
-            job = VideoAssemblyJob.objects.select_for_update().filter(
-                training_video=video
-            ).first()
+            job = VideoAssemblyJob.objects.select_for_update().filter(training_video=video).first()
             if not _is_expirable_video(video, job, cutoff):
                 continue
             _remove_session_files(video)
@@ -1214,9 +1186,7 @@ def expire_stale_training_video_sessions():
                 job.cleanup_error = ""
                 job.save(update_fields=["cleanup_status", "cleanup_error", "updated_at"])
             transaction.on_commit(
-                lambda tombstone_id=tombstone.id: cleanup_qiniu_tombstone.delay(
-                    tombstone_id
-                )
+                lambda tombstone_id=tombstone.id: cleanup_qiniu_tombstone.delay(tombstone_id)
             )
             expired += 1
     return expired + _remove_expired_orphan_staging(cutoff)

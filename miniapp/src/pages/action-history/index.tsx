@@ -10,6 +10,7 @@ type History = {
   last_7_days_completed_count: number
   last_30_days_completed_count: number
   records: TrainingRecordSummary[]
+  motion_sessions?: Array<{ id: number; training_date: string; planned_sets: number; completed_sets: number; uploaded_sets: number; status: 'partial' | 'awaiting_upload' | 'completed' }>
 }
 
 const STATUS_LABEL: Record<TrainingRecordSummary['status'], string> = {
@@ -66,7 +67,11 @@ export default function ActionHistoryPage() {
             </View>
           </View>
           <View className='history-list'>
-            {data.records.length === 0 ? (
+            {data.motion_sessions?.map(motion => <View key={`motion-${motion.id}`} className='history-row'>
+              <Text className='value'>{motion.training_date} · {motion.status === 'completed' ? '本次运动已完成' : motion.status === 'awaiting_upload' ? '运动已做完，视频待上传' : '部分完成'}</Text>
+              <Text className='muted'>已做完 {motion.completed_sets}/{motion.planned_sets} 组 · 视频已上传 {motion.uploaded_sets}/{motion.planned_sets} 组</Text>
+            </View>)}
+            {data.records.length === 0 && !data.motion_sessions?.length ? (
               <View className='empty-state'>
                 <Text className='value'>暂无训练记录</Text>
                 <Text className='muted'>完成本动作后，最近记录会显示在这里。</Text>

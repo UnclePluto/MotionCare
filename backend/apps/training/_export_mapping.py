@@ -3,6 +3,7 @@
 import json
 import math
 from decimal import Decimal
+from datetime import timedelta
 
 from .game_questions import MAX_QUESTIONS, MAX_RESPONSE_DURATION_MS
 from .motion_analysis_support import get_analysis_profile
@@ -50,9 +51,37 @@ def duration_fields(record, video, is_game):
 
 
 def plan_seconds(action, video):
+    if action.dose_mode == "sets":
+        return None
     if video is not None and video.expected_duration_seconds is not None:
         return video.expected_duration_seconds
     return action.duration_minutes * 60 if action.duration_minutes is not None else None
+
+
+def group_fields(video):
+    if video is None or not video.motion_attempt_id:
+        return {}
+    group = video.motion_attempt.group
+    return group_identity(group)
+
+
+def group_identity(group):
+    session = group.session
+    status = (
+        "已完成"
+        if session.completed_at
+        else "运动已做完，视频待上传"
+        if session.export_completed_sets == session.planned_sets
+        else "部分完成"
+    )
+    return {
+        "所属运动编号": session.id,
+        "组序号": f"{group.index}/{session.planned_sets}",
+        "计划组数": session.planned_sets,
+        "每组目标个数": session.repetitions if session.count_unit == "total" else None,
+        "每侧目标个数": session.repetitions if session.count_unit == "per_side" else None,
+        "所属运动状态": status,
+    }
 
 
 SEQUENCE_TOKENS = {
@@ -332,6 +361,7 @@ def session_row(record, pp, video, window, questions, stats):
     start = video.training_started_at if video and not is_game else None
     end = video.training_ended_at if video and not is_game else None
     row = {
+        **group_fields(video),
         "患者编号": pp.patient_id,
         "患者姓名": pp.patient.name,
         "脱敏手机号": phone_masked(pp.patient.phone),
@@ -360,7 +390,11 @@ def session_row(record, pp, video, window, questions, stats):
         "备注": record.note,
         "窗口开始": window[0] if window else None,
         "窗口结束": window[1] if window else None,
-        "窗口口径": WINDOW_DESCRIPTION if window else "无可用观察窗口",
+        "窗口口径": (
+            "本组实际开始至实际结束后5分钟" if action.dose_mode == "sets" else WINDOW_DESCRIPTION
+        )
+        if window
+        else "无可用观察窗口",
     }
     row.update(game_summary(record, questions, is_game))
     row.update(stats)
@@ -407,6 +441,7 @@ def motion_row(record, video):
         "训练记录编号": record.pk,
         "训练日期": record.training_date,
         "动作编码": action.action_library_item.source_key,
+        **group_fields(video),
         "动作名称": action.action_name_snapshot,
         "处方时长（秒）": plan_seconds(action, video),
         "首次录像开始": video.training_started_at if video else None,
@@ -429,3 +464,50 @@ def motion_row(record, video):
         "录像处理状态": video.get_status_display() if video else None,
         "备注": record.note,
     }
+
+
+def pending_group_rows(group, pp, stats):
+    """已完成但尚未附加视频的组：保留真实起止，视频及分析字段留空。"""
+    session = group.session
+    action = session.prescription_action
+    common = {
+        **group_identity(group),
+        "训练日期": session.training_date,
+        "动作编码": action.action_library_item.source_key,
+        "动作名称": action.action_name_snapshot,
+    }
+    seconds = (group.ended_at - group.started_at).total_seconds()
+    window_end = group.ended_at + timedelta(minutes=5)
+    training = {
+        **common,
+        "患者编号": pp.patient_id,
+        "患者姓名": pp.patient.name,
+        "脱敏手机号": phone_masked(pp.patient.phone),
+        "项目编号": pp.project_id,
+        "项目名称": pp.project.name,
+        "项目患者编号": pp.pk,
+        "当前分组名称": pp.group.name if pp.group_id else None,
+        "提交时间": group.created_at,
+        "处方编号": action.prescription_id,
+        "处方版本": action.prescription.version,
+        "动作编号": action.pk,
+        "训练类型": action.training_type_snapshot,
+        "完成状态": "本组已完成，视频待上传",
+        "实际训练时长（秒）": seconds,
+        "时长来源与精度": "本组实际起止秒数",
+        "训练开始时间": group.started_at,
+        "实际结束时间": group.ended_at,
+        "窗口开始": group.started_at,
+        "窗口结束": window_end,
+        "窗口口径": "本组实际开始至实际结束后5分钟",
+        **stats,
+    }
+    motion = {
+        **common,
+        "首次录像开始": group.started_at,
+        "实际结束": group.ended_at,
+        "实际训练秒数": seconds,
+        "录像处理状态": "待上传",
+        "分析状态": "待上传",
+    }
+    return training, motion

@@ -209,9 +209,10 @@ def test_wechat_session_migrates_valid_legacy_token(project_patient, monkeypatch
     assert response.status_code == 200, response.data
     assert response.data["status"] == "authenticated"
     assert response.data["token"] is None
-    assert PatientAppWechatBinding.objects.get(
-        project_patient=project_patient
-    ).wx_openid == "openid-001"
+    assert (
+        PatientAppWechatBinding.objects.get(project_patient=project_patient).wx_openid
+        == "openid-001"
+    )
 
 
 @pytest.mark.django_db
@@ -245,9 +246,10 @@ def test_bind_api_requires_wx_code_and_ignores_forged_wx_openid(
 
     assert missing_code_response.status_code == 400, missing_code_response.data
     assert response.status_code == 200, response.data
-    assert PatientAppWechatBinding.objects.get(
-        project_patient=project_patient
-    ).wx_openid == "openid-001"
+    assert (
+        PatientAppWechatBinding.objects.get(project_patient=project_patient).wx_openid
+        == "openid-001"
+    )
 
 
 @pytest.mark.django_db
@@ -446,9 +448,7 @@ def test_current_prescription_keeps_other_actions_when_one_video_signing_raises(
             url="https://signed.example.com/working.mp4", unavailable=False
         )
 
-    monkeypatch.setattr(
-        "apps.patient_app.views.resolve_motion_video_url", resolve_video
-    )
+    monkeypatch.setattr("apps.patient_app.views.resolve_motion_video_url", resolve_video)
 
     response = client.get("/api/patient-app/current-prescription/")
 
@@ -697,7 +697,7 @@ def test_activate_now_rejects_official_motion_action_over_30_minutes(
     doctor,
     active_prescription,
 ):
-    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    action = ActionLibraryItem.objects.get(source_key="motion-aerobic-high-knee")
     client = APIClient()
     client.force_authenticate(user=doctor)
 
@@ -718,7 +718,7 @@ def test_activate_now_accepts_official_motion_action_at_30_minutes(
     doctor,
     active_prescription,
 ):
-    action = ActionLibraryItem.objects.get(source_key="motion-resistance-row")
+    action = ActionLibraryItem.objects.get(source_key="motion-aerobic-high-knee")
     client = APIClient()
     client.force_authenticate(user=doctor)
 

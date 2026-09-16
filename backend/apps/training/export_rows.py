@@ -12,12 +12,14 @@ import time
 from typing import Iterator
 
 from django.db import DatabaseError, connection
-from django.db.models import Count, Max, Min, OuterRef, Subquery
+from django.db.models import Count, Max, Min, OuterRef, Subquery, Q, Prefetch
 from django.utils import timezone
 
 from apps.wearables.services.training_windows import training_video_health_window
 from ._export_mapping import (
     ACTIVE_DESCRIPTION,
+    pending_group_rows,
+    group_identity,
     WINDOW_DESCRIPTION,
     has_valid_response_duration,
     motion_row,
@@ -28,7 +30,14 @@ from ._export_mapping import (
 from ._export_measurements import stream_measurements, summary_fields
 from .export_schema import CellValue, FIELD_DEFINITIONS, SHEET_HEADERS
 from .export_scope import ExportFilter
-from .models import GameQuestionSelectionStep, GameQuestionResult, MotionAnalysisJob, TrainingRecord
+from .models import (
+    GameQuestionSelectionStep,
+    GameQuestionResult,
+    MotionAnalysisJob,
+    TrainingRecord,
+    MotionTrainingSession,
+    MotionTrainingSet,
+)
 
 MAX_RECORDS = 10_000
 MAX_SHEET_ROWS = 200_000
@@ -172,7 +181,9 @@ def _records_query(project_patient, filters):
     latest_job = MotionAnalysisJob.objects.filter(training_record_id=OuterRef("pk")).order_by(
         "-created_at", "-pk"
     )
-    queryset = TrainingRecord.objects.filter(project_patient_id=project_patient.pk)
+    queryset = TrainingRecord.objects.filter(
+        project_patient_id=project_patient.pk, invalidated_at__isnull=True
+    )
     if filters.start_date is not None:
         queryset = queryset.filter(training_date__gte=filters.start_date)
     if filters.end_date is not None:
@@ -183,7 +194,16 @@ def _records_query(project_patient, filters):
             "prescription_action",
             "prescription_action__action_library_item",
             "video",
+            "video__motion_attempt__group",
             "motion_result_updated_by",
+        )
+        .prefetch_related(
+            Prefetch(
+                "video__motion_attempt__group__session",
+                queryset=MotionTrainingSession.objects.annotate(
+                    export_completed_sets=Count("groups", filter=Q(groups__completed=True))
+                ),
+            )
         )
         .annotate(export_analysis_status=Subquery(latest_job.values("status")[:1]))
         .order_by("training_date", "pk")
@@ -264,6 +284,7 @@ def _prepare_chunk(records, project_patient, rows):
     questions = _questions_for_records(records, rows=rows)
     windows = []
     window_by_record = {}
+    contexts = {}
     for record in records:
         video = getattr(record, "video", None)
         if video and record.prescription_action.internal_type_snapshot == "motion":
@@ -271,7 +292,13 @@ def _prepare_chunk(records, project_patient, rows):
             if window:
                 windows.append((record.pk, video.pk, *window))
                 window_by_record[record.pk] = window
-    stats = stream_measurements(patient_id=project_patient.patient_id, windows=windows, rows=rows)
+                if video.motion_attempt_id:
+                    identity = group_identity(video.motion_attempt.group)
+                    contexts[record.pk] = {key: identity[key] for key in ("所属运动编号", "组序号")}
+                    contexts[record.pk]["窗口口径"] = "本组实际开始至实际结束后5分钟"
+    stats = stream_measurements(
+        patient_id=project_patient.patient_id, windows=windows, rows=rows, contexts=contexts
+    )
     for record in records:
         video = getattr(record, "video", None)
         window = window_by_record.get(record.pk)
@@ -295,6 +322,51 @@ def _prepare_chunk(records, project_patient, rows):
                         rows.append("顺序选择明细", step)
         elif record.prescription_action.internal_type_snapshot == "motion":
             rows.append("运动明细", motion_row(record, video))
+
+
+def _pending_groups_query(project_patient, filters):
+    query = MotionTrainingSet.objects.filter(
+        session__project_patient=project_patient, completed=True, video__isnull=True
+    )
+    if filters.start_date:
+        query = query.filter(session__training_date__gte=filters.start_date)
+    if filters.end_date:
+        query = query.filter(session__training_date__lte=filters.end_date)
+    return query.prefetch_related(
+        Prefetch(
+            "session",
+            queryset=MotionTrainingSession.objects.annotate(
+                export_completed_sets=Count("groups", filter=Q(groups__completed=True))
+            ).select_related(
+                "prescription_action__prescription", "prescription_action__action_library_item"
+            ),
+        )
+    ).order_by("session__training_date", "session_id", "index")
+
+
+def _prepare_pending_groups(groups, pp, rows):
+    windows, contexts = [], {}
+    for group in groups:
+        # 负编号仅用于内存统计关联，不导出为训练记录编号。
+        key = -group.pk
+        windows.append(
+            (key, None, group.started_at, group.ended_at + timezone.timedelta(minutes=5))
+        )
+        contexts[key] = {
+            "训练记录编号": None,
+            "所属运动编号": group.session_id,
+            "组序号": f"{group.index}/{group.session.planned_sets}",
+            "窗口口径": "本组实际开始至实际结束后5分钟",
+        }
+    stats = stream_measurements(
+        patient_id=pp.patient_id, windows=windows, rows=rows, contexts=contexts
+    )
+    for group in groups:
+        training, motion = pending_group_rows(
+            group, pp, summary_fields(stats.get(-group.pk), has_window=True)
+        )
+        rows.append("训练场次", training)
+        rows.append("运动明细", motion)
 
 
 def _add_explanations(rows):
@@ -336,7 +408,15 @@ def prepare_export_rows(*, project_patient, filters: ExportFilter, deadline: flo
         aggregate = queryset.aggregate(
             count=Count("pk"), start=Min("training_date"), end=Max("training_date")
         )
-        if aggregate["count"] > MAX_RECORDS:
+        pending_query = _pending_groups_query(project_patient, filters)
+        pending = pending_query.aggregate(
+            count=Count("pk"),
+            start=Min("session__training_date"),
+            end=Max("session__training_date"),
+        )
+        starts = [value for value in (aggregate["start"], pending["start"]) if value]
+        ends = [value for value in (aggregate["end"], pending["end"]) if value]
+        if aggregate["count"] + pending["count"] > MAX_RECORDS:
             raise ExportLimitError("导出数据过多，请缩小日期范围")
         rows.metadata = {
             "format_version": "training_detail_v2",
@@ -348,8 +428,8 @@ def prepare_export_rows(*, project_patient, filters: ExportFilter, deadline: flo
             "range": filters.range_value,
             "requested_start_date": filters.start_date,
             "requested_end_date": filters.end_date,
-            "actual_start_date": aggregate["start"],
-            "actual_end_date": aggregate["end"],
+            "actual_start_date": min(starts) if starts else None,
+            "actual_end_date": max(ends) if ends else None,
             "group_scope": "导出时当前分组，不是训练时历史分组快照",
         }
         for offset in range(0, aggregate["count"], RECORD_CHUNK_SIZE):
@@ -357,6 +437,11 @@ def prepare_export_rows(*, project_patient, filters: ExportFilter, deadline: flo
             records = list(queryset[offset : offset + RECORD_CHUNK_SIZE])
             _prepare_chunk(records, project_patient, rows)
             rows.check_deadline()
+        for offset in range(0, pending["count"], RECORD_CHUNK_SIZE):
+            _set_statement_deadline(rows)
+            _prepare_pending_groups(
+                list(pending_query[offset : offset + RECORD_CHUNK_SIZE]), project_patient, rows
+            )
         _add_explanations(rows)
         rows.metadata["row_counts"] = dict(rows.row_counts)
         rows.check_deadline()

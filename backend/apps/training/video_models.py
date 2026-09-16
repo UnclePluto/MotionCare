@@ -35,6 +35,14 @@ class LegacyTrainingVideoSegmentArchive(models.Model):
 
 
 class TrainingVideo(UserStampedModel):
+    motion_attempt = models.ForeignKey(
+        "training.MotionSetAttempt",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="videos",
+    )
+
     class CleanupStatus(models.TextChoices):
         NONE = "", "无需清理"
         PENDING = "pending", "待清理"

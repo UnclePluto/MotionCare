@@ -1,3 +1,4 @@
+import CountedUploads from '../../features/motion-training/CountedUploads'
 import { Button, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -173,6 +174,7 @@ export default function PrescriptionPage() {
         </Text>
       </View>
       {!demoMode && pendingUploadBanner ? <Text className='pending-upload-banner'>{pendingUploadBanner}</Text> : null}
+      {!demoMode ? <CountedUploads /> : null}
       {error ? <Text className='muted prescription-refresh-error'>{error}</Text> : null}
       {gameLoadError ? <Text className='error'>{gameLoadError}</Text> : null}
       {gameLoadingActionId !== null ? (
@@ -208,6 +210,7 @@ export default function PrescriptionPage() {
                 {action.internal_type === 'game' ? '游戏' : '训练'}
               </Text>
             </View>
+            {action.dose_mode === 'sets' ? <Text className='value'>{action.count_unit === 'per_side' ? '每侧' : '每组'} {action.repetitions} 个 · 每次 {action.sets} 组 · 每周 {action.weekly_target_count} 次</Text> : null}
             <View className='action-progress'>
               <View className='row'>
                 <Text className='label'>本周进度</Text>

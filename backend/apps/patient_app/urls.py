@@ -3,6 +3,12 @@ from django.urls import path
 from .diagnostic_views import TrainingUploadDiagnosticView
 
 from .static_asset_views import StaticAssetManifestView
+from .set_views import (
+    MotionSessionView,
+    MotionSessionDetailView,
+    MotionSetView,
+    MotionSessionRecoverView,
+)
 
 from .views import (
     PatientAppActionHistoryView,
@@ -20,6 +26,10 @@ from .views import (
 )
 
 urlpatterns = [
+    path("motion-sessions/", MotionSessionView.as_view()),
+    path("motion-sessions/recover/", MotionSessionRecoverView.as_view()),
+    path("motion-sessions/<int:session_id>/", MotionSessionDetailView.as_view()),
+    path("motion-sessions/<int:session_id>/sets/<int:index>/", MotionSetView.as_view()),
     path(
         "training-upload-diagnostics/",
         TrainingUploadDiagnosticView.as_view(),
