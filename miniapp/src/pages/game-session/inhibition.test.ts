@@ -8,7 +8,7 @@ describe('createInhibitionRound', () => {
 
     expect(round.options).toEqual(['2', '1', '1', '1'])
     expect(round.correctIndex).toBe(0)
-    expect(round.timeoutMs).toBe(7000)
+    expect(round.timeoutMs).toBe(15000)
   })
 
   it('creates a difficult nine-option round', () => {
@@ -17,7 +17,7 @@ describe('createInhibitionRound', () => {
     expect(round.options).toHaveLength(9)
     expect(round.correctIndex).toBeGreaterThanOrEqual(0)
     expect(round.correctIndex).toBeLessThan(9)
-    expect(round.timeoutMs).toBe(4000)
+    expect(round.timeoutMs).toBe(5000)
   })
 
   it('keeps options and correct index valid when random returns a negative value', () => {

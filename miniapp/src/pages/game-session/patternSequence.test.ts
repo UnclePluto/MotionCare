@@ -14,7 +14,7 @@ describe('createPatternSequenceRound', () => {
     })
     expect(round.patterns.every((pattern) => !('imageSrc' in pattern))).toBe(true)
     expect(round.revealMs).toBe(2000)
-    expect(round.inputTimeoutMs).toBe(8000)
+    expect(round.inputTimeoutMs).toBe(15000)
   })
 
   it('creates a difficult sequence with five patterns and five two-second steps', () => {

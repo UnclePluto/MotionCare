@@ -58,8 +58,8 @@ const SOUND_IMAGE_KEY: Record<SoundDiscriminationCategory, GameImageKey> = {
 }
 
 const CONFIG: Record<GameDifficulty, { optionCount: number; timeoutMs: number }> = {
-  简单: { optionCount: 3, timeoutMs: 8000 },
-  中等: { optionCount: 4, timeoutMs: 6500 },
+  简单: { optionCount: 3, timeoutMs: 15000 },
+  中等: { optionCount: 4, timeoutMs: 10000 },
   困难: { optionCount: 5, timeoutMs: 5000 },
 }
 

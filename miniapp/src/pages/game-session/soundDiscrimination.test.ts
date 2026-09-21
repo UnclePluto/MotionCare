@@ -117,7 +117,7 @@ describe('createSoundDiscriminationRound', () => {
     expect(round.cards.map((card) => card.soundId)).toContain(round.target.soundId)
     expect(round.cards.every((card) => card.previewed === false)).toBe(true)
     expect(round.previewComplete).toBe(false)
-    expect(round.timeoutMs).toBe(8000)
+    expect(round.timeoutMs).toBe(15000)
   })
 
   it('keeps same-category variants on the same image key while preserving distinct sound ids', () => {
@@ -170,7 +170,7 @@ describe('createSoundDiscriminationRound', () => {
     expect(round.cards).toHaveLength(4)
     expect(Object.values(categoryCounts)).toHaveLength(2)
     expect(Object.values(categoryCounts).every((count) => count === 2)).toBe(true)
-    expect(round.timeoutMs).toBe(6500)
+    expect(round.timeoutMs).toBe(10000)
     expect(round.cards.map((card) => card.soundId)).toContain(round.target.soundId)
   })
 

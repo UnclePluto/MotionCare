@@ -9,7 +9,7 @@ describe('createColorSequenceRound', () => {
     expect(round.colors).toEqual(['blue', 'green', 'yellow'])
     expect(round.sequence).toEqual(['blue', 'blue', 'blue'])
     expect(round.revealMs).toBe(2000)
-    expect(round.inputTimeoutMs).toBe(8000)
+    expect(round.inputTimeoutMs).toBe(15000)
   })
 
   it('creates a difficult five-step sequence with full two-second observation time', () => {

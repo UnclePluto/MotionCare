@@ -1021,7 +1021,7 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     page.unmount()
   })
 
-  it('后台挂起作答 timeout，并从剩余的 4500ms 继续', async () => {
+  it('后台挂起作答 timeout，并从剩余的 12500ms 继续', async () => {
     const page = await renderGame('game-executive-inhibition', '反应抑制')
     await enterPlaying(page)
     await vi.advanceTimersByTimeAsync(2500)
@@ -1029,7 +1029,7 @@ describe('GameSessionPage 生命周期与反馈接线', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     await showPage(page)
 
-    await vi.advanceTimersByTimeAsync(4499)
+    await vi.advanceTimersByTimeAsync(12499)
     page.rerender()
     expect(findAll(page.element, (item) => hasClass(item, 'game-feedback'))).toHaveLength(0)
 
@@ -1289,7 +1289,7 @@ describe('GameSessionPage 规范逐题采集', () => {
     page.unmount()
   })
 
-  it('隐藏8000ms后按剩余时间超时，只输出一次7000ms错误判定', async () => {
+  it('隐藏8000ms后按剩余时间超时，只输出一次15000ms错误判定', async () => {
     prescriptionHarness.demo = false
     const page = await renderGame('game-executive-inhibition', '反应抑制')
     await enterPlaying(page)
@@ -1297,11 +1297,11 @@ describe('GameSessionPage 规范逐题采集', () => {
     await hidePage(page)
     await vi.advanceTimersByTimeAsync(8000)
     await showPage(page)
-    await vi.advanceTimersByTimeAsync(5800)
+    await vi.advanceTimersByTimeAsync(13800)
     page.rerender()
     click(numberTiles(page.element)[0])
     const payload = await endAndRead(page)
-    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 7000, is_correct: false, result_type: 'timeout'})])
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 15000, is_correct: false, result_type: 'timeout'})])
     page.unmount()
   })
 
@@ -1348,7 +1348,7 @@ describe('GameSessionPage 规范逐题采集', () => {
     page.unmount()
   })
 
-  it('重播失败保持禁选且不静默计时，成功重试保留剩余6800ms超时', async () => {
+  it('重播失败保持禁选且不静默计时，成功重试保留剩余13800ms超时', async () => {
     prescriptionHarness.demo = false
     const page = await renderGame('game-audiovisual-sound-discrimination', '声音辨别')
     await enterPlaying(page)
@@ -1363,13 +1363,13 @@ describe('GameSessionPage 规范逐题采集', () => {
     await vi.advanceTimersByTimeAsync(9000)
     click(findButtonByText(page.element, '重播目标声音'))
     await flushPromises(); page.rerender()
-    await vi.advanceTimersByTimeAsync(6799)
+    await vi.advanceTimersByTimeAsync(13799)
     page.rerender()
     expect(findAll(page.element, item => hasClass(item, 'game-feedback'))).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(1)
     page.rerender()
     const payload = await endAndRead(page)
-    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 8000, result_type: 'timeout', is_correct: false})])
+    expect(payload.question_results).toEqual([expect.objectContaining({response_duration_ms: 15000, result_type: 'timeout', is_correct: false})])
     page.unmount()
   })
 
@@ -1593,9 +1593,9 @@ describe('GameSessionPage 规范逐题采集', () => {
     await vi.advanceTimersByTimeAsync(7000); page.rerender()
     await vi.advanceTimersByTimeAsync(500)
     click(findButtonByText(page.element, code.includes('color') ? '绿' : '小船')); page.rerender()
-    await vi.advanceTimersByTimeAsync(7500); page.rerender()
+    await vi.advanceTimersByTimeAsync(14500); page.rerender()
     const payload = await endAndRead(page)
-    expect(payload.question_results).toEqual([expect.objectContaining({result_type: 'timeout', is_correct: false, response_duration_ms: 8000, selection_steps: [expect.objectContaining({is_correct: false, response_duration_ms: 500})]})])
+    expect(payload.question_results).toEqual([expect.objectContaining({result_type: 'timeout', is_correct: false, response_duration_ms: 15000, selection_steps: [expect.objectContaining({is_correct: false, response_duration_ms: 500})]})])
     expect(payload.form_data).toMatchObject({error_count: 1, raw_detail: {completed_units: 1, recorded_question_count: 1}})
     page.unmount()
   })

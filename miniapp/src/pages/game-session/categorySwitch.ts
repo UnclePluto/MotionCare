@@ -88,9 +88,9 @@ const OPTIONS: Record<CategoryRule, string[]> = {
 }
 
 const CONFIG = {
-  简单: { rules: ['kind'], optionLimit: 3, timeoutMs: 7000 },
-  中等: { rules: ['kind'], optionLimit: 4, timeoutMs: 5500 },
-  困难: { rules: ['kind'], optionLimit: 5, timeoutMs: 4200 },
+  简单: { rules: ['kind'], optionLimit: 3, timeoutMs: 15000 },
+  中等: { rules: ['kind'], optionLimit: 4, timeoutMs: 10000 },
+  困难: { rules: ['kind'], optionLimit: 5, timeoutMs: 5000 },
 } satisfies Record<GameDifficulty, { rules: CategoryRule[]; optionLimit: number; timeoutMs: number }>
 
 function pickIndex(length: number, random: () => number): number {

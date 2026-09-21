@@ -354,3 +354,5 @@ POST /api/patient-app/training-records/
 - 微信小程序 App 生命周期：`https://developers.weixin.qq.com/miniprogram/dev/reference/api/App.html`
 - 微信小程序网络请求：`https://developers.weixin.qq.com/miniprogram/dev/api/network/request/wx.request.html`
 - 微信小程序本地缓存：`https://developers.weixin.qq.com/miniprogram/dev/api/storage/wx.setStorageSync.html`
+
+修订（2026-09-21, codex）：五款限时答题游戏统一为简单 15 秒、中等 10 秒、困难 5 秒，沿用每题整体计时和暂停恢复规则；拼图不新增单次点击超时。医生新开具处方时，六款游戏建议时长统一为 5 分钟，已有处方时长保留。

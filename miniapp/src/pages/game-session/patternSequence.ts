@@ -29,8 +29,8 @@ const CONFIG: Record<
   GameDifficulty,
   { patternCount: number; minLength: number; maxLength: number; revealMs: number; inputTimeoutMs: number }
 > = {
-  简单: { patternCount: 3, minLength: 3, maxLength: 3, revealMs: 2000, inputTimeoutMs: 8000 },
-  中等: { patternCount: 4, minLength: 4, maxLength: 4, revealMs: 2000, inputTimeoutMs: 6500 },
+  简单: { patternCount: 3, minLength: 3, maxLength: 3, revealMs: 2000, inputTimeoutMs: 15000 },
+  中等: { patternCount: 4, minLength: 4, maxLength: 4, revealMs: 2000, inputTimeoutMs: 10000 },
   困难: { patternCount: 5, minLength: 5, maxLength: 5, revealMs: 2000, inputTimeoutMs: 5000 },
 }
 

@@ -7,9 +7,9 @@ export type InhibitionRound = {
 }
 
 const CONFIG: Record<GameDifficulty, { optionCount: number; timeoutMs: number }> = {
-  简单: { optionCount: 4, timeoutMs: 7000 },
-  中等: { optionCount: 6, timeoutMs: 5500 },
-  困难: { optionCount: 9, timeoutMs: 4000 },
+  简单: { optionCount: 4, timeoutMs: 15000 },
+  中等: { optionCount: 6, timeoutMs: 10000 },
+  困难: { optionCount: 9, timeoutMs: 5000 },
 }
 
 function pickIndex(length: number, random: () => number): number {

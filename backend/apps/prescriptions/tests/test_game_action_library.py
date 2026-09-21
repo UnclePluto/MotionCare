@@ -26,7 +26,7 @@ def test_game_actions_are_seeded_by_migration():
     assert color.action_type == "记忆力训练"
     assert color.instruction_text == "按顺序点击变色方块\n\n实现成本：可实现\n资源难度：低"
     assert color.suggested_frequency == "1 次/周"
-    assert color.suggested_duration_minutes == 10
+    assert color.suggested_duration_minutes == 5
     assert color.has_ai_supervision is False
     assert color.is_active is True
 
@@ -43,6 +43,7 @@ def test_action_library_endpoint_filters_game_actions(client, doctor):
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 6
+    assert {row["suggested_duration_minutes"] for row in body} == {5}
     assert {row["internal_type"] for row in body} == {"game"}
     assert {row["training_type"] for row in body} == {"认知训练"}
     assert "颜色顺序记忆" in {row["name"] for row in body}

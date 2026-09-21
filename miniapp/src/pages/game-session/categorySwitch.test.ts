@@ -28,7 +28,7 @@ describe('createCategorySwitchRound', () => {
     expect(round.options).toHaveLength(3)
     expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
     expectUniqueOptions(round.options)
-    expect(round.timeoutMs).toBe(7000)
+    expect(round.timeoutMs).toBe(15000)
   })
 
   it('creates a medium kind round with four options', () => {
@@ -39,7 +39,7 @@ describe('createCategorySwitchRound', () => {
     expect(round.options).toHaveLength(4)
     expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
     expectUniqueOptions(round.options)
-    expect(round.timeoutMs).toBe(5500)
+    expect(round.timeoutMs).toBe(10000)
   })
 
   it('creates a difficult kind round with five options', () => {
@@ -50,7 +50,7 @@ describe('createCategorySwitchRound', () => {
     expect(round.options).toHaveLength(5)
     expect(round.options.filter((option) => option === round.correctOption)).toHaveLength(1)
     expectUniqueOptions(round.options)
-    expect(round.timeoutMs).toBe(4200)
+    expect(round.timeoutMs).toBe(5000)
   })
 
   it('uses random to avoid keeping the correct option fixed at the first position', () => {
