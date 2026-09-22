@@ -12,6 +12,9 @@ import devConfig from './dev'
 import prodConfig from './prod'
 
 const configEnvironment = resolveConfigEnvironment(process.env)
+const outputRoot = process.env.TARO_ENV === 'weapp' && configEnvironment === 'production'
+  ? 'deploy_versions/weapp'
+  : 'dist'
 const localEnv = dotenvParse(resolve(__dirname, '..'), ['TARO_APP_'], configEnvironment)
 const apiBaseUrl = resolveApiBaseUrl({
   configuredUrl: process.env.TARO_APP_API_BASE_URL || localEnv.TARO_APP_API_BASE_URL,
@@ -37,7 +40,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
       828: 1.81 / 2
     },
     sourceRoot: 'src',
-    outputRoot: 'dist',
+    outputRoot,
     plugins: [
       "@tarojs/plugin-generator"
     ],
@@ -49,11 +52,11 @@ export default defineConfig<'webpack5'>(async (merge) => {
       patterns: [
         {
           from: 'src/pages/game-session/assets/audio/game-session',
-          to: 'dist/pages/game-session/assets/audio/game-session'
+          to: `${outputRoot}/pages/game-session/assets/audio/game-session`
         },
         {
           from: 'src/pages/game-session/assets/audio/sound-discrimination',
-          to: 'dist/pages/game-session/assets/audio/sound-discrimination'
+          to: `${outputRoot}/pages/game-session/assets/audio/sound-discrimination`
         }
       ],
       options: {

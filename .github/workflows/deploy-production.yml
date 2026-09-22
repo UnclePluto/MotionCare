@@ -84,7 +84,7 @@ jobs:
         run: |
           npm ci
           npm run test
-          npm run build:weapp
+          TARO_APP_ASSET_BASE_URL=https://cdn.whestsun.com/motioncare/static-assets npm run build:weapp:ci
           npm run build:h5
 
   publish:

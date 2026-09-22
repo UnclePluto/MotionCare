@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { assertPackageBudgets, measureWeappPackages } from './weappPackageSize.mjs'
 
 const MIB = 1024 * 1024
-const distRoot = resolve(process.cwd(), 'dist')
+const distRoot = resolve(process.cwd(), process.argv[2] || 'deploy_versions/weapp')
 
 function formatPackage(label, report) {
   return `${label} (${report.name}): ${report.bytes} 字节 (${(report.bytes / 1024).toFixed(2)} KiB)`
