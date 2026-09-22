@@ -171,7 +171,7 @@ export async function uploadVideoSegment(input: {
   filePath: string
   durationMs: number
   sizeBytes: number
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number, bytesSent?: number) => void
 }): Promise<UploadedVideoSegment> {
   const diagnosticContext = { diagnosticScope: captureTrainingDiagnosticScope(), clientSessionId: input.clientSessionId, videoId: input.videoId, segmentIndex: input.index }
   let exactSizeBytes: number
@@ -204,6 +204,7 @@ export async function uploadVideoSegment(input: {
         url: apiUrl(`/patient-app/training-video-sessions/${input.videoId}/segments/${input.index}/`),
         filePath: input.filePath,
         name: 'file',
+        timeout: 60000,
         header: patientAuthorizationHeader(),
         formData: {
           duration_ms: input.durationMs,
@@ -243,7 +244,7 @@ export async function uploadVideoSegment(input: {
       if (input.onProgress && task && typeof task.onProgressUpdate === 'function') {
         task.onProgressUpdate((event) => {
           if (!Number.isFinite(event.progress)) return
-          input.onProgress?.(Math.max(0, Math.min(100, Math.round(event.progress))))
+          input.onProgress?.(Math.max(0, Math.min(100, Math.round(event.progress))), Number.isFinite(event.totalBytesSent) ? event.totalBytesSent : undefined)
         })
       }
     } catch (error) {
@@ -305,7 +306,7 @@ export async function createMotionTrainingUploadIntent(input: {
 
 export async function uploadVideoToQiniu(input: Record<string, unknown> & {
   filePath: string
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number, bytesSent?: number) => void
 }): Promise<{ key: string; hash: string }> {
   if (
     !Number.isInteger(input.videoId) ||

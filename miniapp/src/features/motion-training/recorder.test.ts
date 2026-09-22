@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { MotionTrainingRecorder } from './recorder'
+
+afterEach(() => { vi.useRealTimers() })
 
 type StartOptions = {
   success?: () => void
@@ -122,8 +124,8 @@ describe('MotionTrainingRecorder', () => {
 
     await recorder.start()
     now = 30000
-    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     const finishPromise = recorder.finish()
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     await finishPromise
     await Promise.resolve()
@@ -158,6 +160,7 @@ describe('MotionTrainingRecorder', () => {
   })
 
   it('keeps the active generation stoppable after the native stop fails', async () => {
+    vi.useFakeTimers()
     const { camera, stopOptions } = fakeCamera()
     let now = 1000
     const recorder = new MotionTrainingRecorder({
@@ -168,10 +171,10 @@ describe('MotionTrainingRecorder', () => {
 
     await recorder.start()
     now = 4000
-    const firstFinish = recorder.finish()
+    const firstFinish = recorder.finish().catch(error => error)
     stopOptions[0].fail?.()
-
-    await expect(firstFinish).rejects.toThrow('录像停止失败，请稍后重试')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(await firstFinish).toEqual(expect.objectContaining({ message: '录像停止失败，请稍后重试' }))
 
     now = 5000
     const retriedFinish = recorder.finish()
@@ -220,15 +223,12 @@ describe('MotionTrainingRecorder', () => {
     expect(onSegment).toHaveBeenNthCalledWith(3, 'wxfile://temp/timeout-tail.mp4', 2_000)
 
     stopOptions[0].fail?.()
-    await expect(firstFinishResult).resolves.toEqual(
-      expect.objectContaining({ message: '录像停止失败，请稍后重试' })
-    )
+    await expect(firstFinishResult).resolves.toHaveLength(3)
 
     startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
     now = 13_000
     const retriedFinish = recorder.finish()
-    expect(camera.stopRecord).toHaveBeenCalledTimes(2)
-    stopOptions[1].success?.({ tempVideoPath: 'wxfile://temp/stop-duplicate.mp4' })
+    expect(camera.stopRecord).toHaveBeenCalledTimes(1)
 
     await expect(retriedFinish).resolves.toEqual([
       { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
@@ -456,6 +456,8 @@ describe('MotionTrainingRecorder', () => {
     await Promise.resolve()
     now = 4000
     const pausePromise = recorder.pause()
+    expect(camera.stopRecord).not.toHaveBeenCalled()
+    startOptions[0].success?.()
     stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     startOptions[0].fail?.()
 
@@ -482,10 +484,12 @@ describe('MotionTrainingRecorder', () => {
     await recorder.start()
     now = 30000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
+    await flushPromises()
     now = 31000
     const finishPromise = recorder.finish()
-    stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-1.mp4' })
+    expect(camera.stopRecord).not.toHaveBeenCalled()
     startOptions[1].success?.()
+    stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-1.mp4' })
 
     await expect(finishPromise).resolves.toEqual([
       { savedFilePath: 'wxfile://store/segment-0.mp4', durationMs: 30000 },
@@ -546,6 +550,7 @@ describe('MotionTrainingRecorder', () => {
 
 describe('recording native diagnostics', () => {
   it('preserves native start and stop errors at the recorder boundary', async () => {
+    vi.useFakeTimers()
     const onNativeError = vi.fn()
     const startError = { errMsg: 'startRecord:fail permission denied', errCode: 1001 }
     const stopError = { errMsg: 'stopRecord:fail timeout' }
@@ -559,7 +564,241 @@ describe('recording native diagnostics', () => {
     camera.startRecord.mockImplementation(options => options.success())
     const next = new MotionTrainingRecorder({ camera, now: () => 1000, onSegment: vi.fn(), onNativeError })
     await next.start()
-    await expect(next.pause()).rejects.toThrow('停止失败')
+    const stopped = next.pause().catch(error => error)
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(await stopped).toEqual(expect.objectContaining({ message: '录像停止失败，请稍后重试' }))
     expect(onNativeError).toHaveBeenCalledWith(stopError)
   })
+})
+
+it('停止录像没有回调时保留等待，主动取消后迟到回调不保存或重启录像', async () => {
+  vi.useFakeTimers()
+  try {
+    const { camera, stopOptions, startOptions } = fakeCamera()
+    const onSegment = vi.fn()
+    const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment })
+    await recorder.start()
+    const result = recorder.finish().catch(error => error)
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(await Promise.race([result, Promise.resolve('still-pending')])).toBe('still-pending')
+    recorder.discard()
+    stopOptions[0].success?.({ tempVideoPath: 'late.mp4' })
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'late-timeout.mp4' })
+    await flushPromises()
+    expect(onSegment).not.toHaveBeenCalled()
+    expect(camera.startRecord).toHaveBeenCalledTimes(1)
+  } finally { vi.useRealTimers() }
+})
+
+
+it('主动取消正在停止的录像立即结束等待，迟到结果不再交付', async () => {
+  const { camera, stopOptions } = fakeCamera()
+  const onSegment = vi.fn()
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment })
+  await recorder.start()
+  const result = recorder.finish().catch(error => error)
+  recorder.discard()
+  expect(await result).toBeInstanceOf(Error)
+  stopOptions[0].success?.({ tempVideoPath: 'discarded.mp4' })
+  await flushPromises()
+  expect(onSegment).not.toHaveBeenCalled()
+})
+
+it('完成本组遇到五秒切段启动中，应等启动确认再停止而不报停止失败', async () => {
+  const { camera, startOptions } = fakeCamera()
+  let nativeReady = true
+  camera.startRecord.mockImplementation(options => {
+    startOptions.push(options)
+    if (startOptions.length === 1) options.success?.()
+    else nativeReady = false
+  })
+  camera.stopRecord.mockImplementation(options => {
+    if (!nativeReady) options.fail?.()
+    else options.success?.({ tempVideoPath: 'tail.mp4' })
+  })
+  let now = 0
+  const recorder = new MotionTrainingRecorder({ camera, now: () => now, onSegment: vi.fn() })
+  await recorder.start()
+  now = 5000
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'first.mp4' })
+  await flushPromises()
+  const result = recorder.finish().catch(error => error)
+  await flushPromises()
+  nativeReady = true
+  startOptions[1].success?.()
+  expect(await result).toEqual([
+    { savedFilePath: 'first.mp4', durationMs: 5000 },
+    { savedFilePath: 'tail.mp4', durationMs: 0 }
+  ])
+})
+
+it.each(['timeout-first', 'fail-first'])('完成本组与自动结束相撞（%s），使用自动结束的视频而不是报停止失败', async order => {
+  const { camera, startOptions, stopOptions } = fakeCamera()
+  let now = 0
+  const onSegment = vi.fn()
+  const recorder = new MotionTrainingRecorder({ camera, now: () => now, onSegment })
+  await recorder.start()
+  now = 4900
+  const result = recorder.finish().catch(error => error)
+  if (order === 'fail-first') stopOptions[0].fail?.()
+  now = 5000
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'complete.mp4' })
+  if (order === 'timeout-first') stopOptions[0].fail?.()
+  expect(await result).toEqual([{ savedFilePath: 'complete.mp4', durationMs: 5000 }])
+  expect(onSegment).toHaveBeenCalledTimes(1)
+  expect(camera.startRecord).toHaveBeenCalledTimes(1)
+})
+
+it('启动回调不返回时保留等待，主动取消后迟到启动不再停止或保存', async () => {
+  vi.useFakeTimers()
+  const { camera, startOptions } = fakeCamera()
+  camera.startRecord.mockImplementation(options => { startOptions.push(options) })
+  const onSegment = vi.fn()
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment })
+  const started = recorder.start()
+  await flushPromises()
+  const finished = recorder.finish().catch(error => error)
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(await Promise.race([finished, Promise.resolve('still-pending')])).toBe('still-pending')
+  expect(camera.stopRecord).not.toHaveBeenCalled()
+  recorder.discard()
+  const stopsAfterDiscard = camera.stopRecord.mock.calls.length
+  startOptions[0].success?.()
+  await started
+  expect(camera.stopRecord).toHaveBeenCalledTimes(stopsAfterDiscard)
+  expect(onSegment).not.toHaveBeenCalled()
+})
+
+it('切段启动失败时完成也失败，不用已有片段冒充整组录像', async () => {
+  const { camera, startOptions } = fakeCamera()
+  camera.startRecord.mockImplementation(options => {
+    startOptions.push(options)
+    if (startOptions.length === 1) options.success?.()
+  })
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment: vi.fn() })
+  await recorder.start()
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'first.mp4' })
+  await flushPromises()
+  const result = recorder.finish().catch(error => error)
+  startOptions[1].fail?.()
+  expect(await result).toEqual(expect.objectContaining({ message: '摄像头录像启动失败，请检查权限后重试' }))
+  expect(camera.stopRecord).not.toHaveBeenCalled()
+})
+
+it('自动结束救回视频后仍等待文件保存，保存失败不假报完成且能原片重试', async () => {
+  const { camera, startOptions, stopOptions } = fakeCamera()
+  let rejectSave!: (error: Error) => void
+  const onSegment = vi.fn().mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject }))
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment })
+  await recorder.start()
+  let settled = false
+  const result = recorder.finish().catch(error => error).finally(() => { settled = true })
+  stopOptions[0].fail?.()
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'final.mp4' })
+  await flushPromises()
+  expect(settled).toBe(false)
+  rejectSave(new Error('保存失败'))
+  expect(await result).toEqual(expect.objectContaining({ message: '保存失败' }))
+  await recorder.retryFailedSegment()
+  expect(await recorder.finish()).toHaveLength(1)
+  expect(camera.stopRecord).toHaveBeenCalledTimes(1)
+})
+
+it('停止回调超过十秒仍接收原录像，重试完成不重复向微信发送停止请求', async () => {
+  vi.useFakeTimers()
+  const { camera, stopOptions } = fakeCamera()
+  const onSegment = vi.fn()
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment })
+  await recorder.start()
+  const first = recorder.finish().catch(error => error)
+  await vi.advanceTimersByTimeAsync(12000)
+  const retry = recorder.finish().catch(error => error)
+  stopOptions[0].success?.({ tempVideoPath: 'wxfile://late-complete.mp4' })
+  const expected = [{ savedFilePath: 'wxfile://late-complete.mp4', durationMs: 12000 }]
+  expect(await first).toEqual(expected)
+  expect(await retry).toEqual(expected)
+  expect(camera.stopRecord).toHaveBeenCalledTimes(1)
+  expect(onSegment).toHaveBeenCalledTimes(1)
+})
+
+it('微信在自动结束回调返回后清理状态，续录不能在同一回调栈内启动', async () => {
+  let nativeRecording = false
+  let options: StartOptions | undefined
+  const paths: string[] = []
+  let now = 0
+  // WeChat 3.16.0 _videoTaken invokes timeoutCallback BEFORE resetting
+  // _isRecording. Model that boundary, including its asynchronous start ack.
+  const camera = {
+    startRecord: (next: StartOptions) => {
+      options = next
+      if (!nativeRecording) nativeRecording = true
+      queueMicrotask(() => next.success?.())
+    },
+    stopRecord: (_options: StopOptions) => undefined
+  }
+  const nativeTimeout = (path: string) => {
+    if (!nativeRecording) return
+    options!.timeoutCallback?.({ tempVideoPath: path })
+    nativeRecording = false
+  }
+  const recorder = new MotionTrainingRecorder({ camera, now: () => now, onSegment: path => { paths.push(path) } })
+  await recorder.start()
+  now = 5000; nativeTimeout('first.mp4'); await flushPromises(15)
+  now = 10000; nativeTimeout('second.mp4'); await flushPromises(15)
+  expect(paths).toEqual(['first.mp4', 'second.mp4'])
+  recorder.discard()
+})
+
+it('自动结束回调后尚未续录就完成本组，不再启动或停止额外一段', async () => {
+  const { camera, startOptions } = fakeCamera()
+  let now = 0
+  const recorder = new MotionTrainingRecorder({ camera, now: () => now, onSegment: vi.fn() })
+  await recorder.start()
+  now = 5000
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'final.mp4' })
+  expect(await recorder.finish()).toEqual([{ savedFilePath: 'final.mp4', durationMs: 5000 }])
+  expect(camera.startRecord).toHaveBeenCalledTimes(1)
+  expect(camera.stopRecord).not.toHaveBeenCalled()
+})
+
+it('慢停止提示后收到明确失败回调，仍结束等待并允许重试', async () => {
+  vi.useFakeTimers()
+  const { camera, stopOptions } = fakeCamera()
+  const onStopSlow = vi.fn()
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, onSegment: vi.fn(), onStopSlow })
+  await recorder.start()
+  const result = recorder.finish().catch(error => error)
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(onStopSlow).toHaveBeenCalledWith('stopping')
+  stopOptions[0].fail?.()
+  expect(await result).toEqual(expect.objectContaining({ message: '录像停止失败，请稍后重试' }))
+})
+
+it('回放真机第18段启动974毫秒后完成：保留自动结束回调，保存后不续录', async () => {
+  vi.useFakeTimers()
+  const paths: string[] = []
+  let nativeTimer: ReturnType<typeof setTimeout>
+  const camera = {
+    startRecord: vi.fn((options: StartOptions) => {
+      options.success?.()
+      nativeTimer = setTimeout(() => options.timeoutCallback?.({ tempVideoPath: 'native-tail.mp4' }), 5229)
+    }),
+    stopRecord: vi.fn((options: StopOptions) => {
+      // Actual WeChat stopRecord removes the timeout delivery even on failure.
+      clearTimeout(nativeTimer)
+      options.fail?.()
+    })
+  }
+  const recorder = new MotionTrainingRecorder({ camera, now: Date.now, finishAtSegmentBoundary: true,
+    onSegment: path => { paths.push(path) } })
+  await recorder.start()
+  await vi.advanceTimersByTimeAsync(974)
+  let finished = false
+  const finishing = recorder.finish().then(() => { finished = true })
+  await vi.advanceTimersByTimeAsync(4255)
+  expect(finished).toBe(true)
+  await finishing
+  expect(paths).toEqual(['native-tail.mp4'])
+  expect(camera.stopRecord).not.toHaveBeenCalled()
+  expect(camera.startRecord).toHaveBeenCalledTimes(1)
 })

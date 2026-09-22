@@ -1233,6 +1233,9 @@ export function MotionTrainingRecordingCameraPage() {
   const bufferPaused = bufferState === 'buffer_paused'
   const bufferReady = bufferState === 'buffer_ready'
 
+  // Resolve the recording flow before mounting native camera hardware. Mounting
+  // the legacy camera first and replacing it with CountedCamera races release/init.
+  if (!loaded) return <View className='page'><Text>正在加载当前动作</Text></View>
   if (action?.dose_mode === 'sets') return <CountedCamera action={action} demo={false} />
 
   return (
