@@ -181,6 +181,8 @@ const taroHarness = vi.hoisted(() => {
       screenHeight: 812,
       pixelRatio: 3
     })),
+    getDeviceInfo: vi.fn(() => ({ platform: 'ios', system: 'iOS 26.6.1', model: 'iPhone 13' })),
+    getAppBaseInfo: vi.fn(() => ({ version: '8.0.78', SDKVersion: '3.17.0' })),
     getFileSystemManager: vi.fn(() => ({
       getSavedFileList: getSavedFileListMock,
       removeSavedFile: removeSavedFileMock,
@@ -379,6 +381,12 @@ vi.mock('../../features/motion-training/recorder', async importOriginal => {
   const actual = await importOriginal<typeof import('../../features/motion-training/recorder')>()
   return { MotionTrainingRecorder: function(options: ConstructorParameters<typeof actual.MotionTrainingRecorder>[0]) {
     return recorderHarness.useReal ? new actual.MotionTrainingRecorder(options) : new recorderHarness.MockShoulderPressRecorder(options)
+  } }
+})
+vi.mock('../../features/motion-training/countedRecorder', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../features/motion-training/countedRecorder')>()
+  return { CountedTrainingRecorder: function(options: ConstructorParameters<typeof actual.CountedTrainingRecorder>[0]) {
+    return recorderHarness.useReal ? new actual.CountedTrainingRecorder(options) : new recorderHarness.MockShoulderPressRecorder(options)
   } }
 })
 vi.mock('../../features/motion-training/alertAudio', () => ({
@@ -4992,6 +5000,35 @@ describe('计数组录像恢复与上传边界', () => {
     await vi.advanceTimersByTimeAsync(5000)
     clickButtonByText(page.element, '完成本组'); await flushPromises(50); page.rerender()
   }
+  it('尾段永久失联后必须重建摄像头重做，迟到结果不能保存或完成新组', async () => {
+    recorderHarness.useReal = true
+    let oldStop: any
+    const camera = {
+      startRecord: vi.fn(options => options.success()),
+      stopRecord: vi.fn(options => { oldStop = options })
+    }
+    taroHarness.taroMock.createCameraContext.mockReturnValueOnce(camera)
+    const page = await open()
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    await vi.advanceTimersByTimeAsync(5000)
+    clickButtonByText(page.element, '完成本组'); await flushPromises(); page.rerender()
+    await vi.advanceTimersByTimeAsync(30000); page.rerender()
+    expect(textContent(page.element)).toContain('摄像头返回录像超时，请重做本组')
+    expect(textContent(page.element)).not.toContain('重试保存本组')
+    expect(findButtonByText(page.element, '返回运动计划').props.disabled).toBe(false)
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    clickButtonByText(page.element, '重做本组'); await flushPromises(); page.rerender()
+    expect(findButtonByText(page.element, '开始本组').props.disabled).toBe(true)
+    initializeCamera(page.element); page.rerender()
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    expect(taroHarness.taroMock.createCameraContext).toHaveBeenCalledTimes(2)
+    oldStop.success({ tempVideoPath: 'wxfile://late-old-group.mp4' })
+    await flushPromises(40); page.rerender()
+    expect(taroHarness.taroMock.saveFile).not.toHaveBeenCalled()
+    expect(textContent(page.element)).not.toContain('已做完 1/2 组')
+    expect(textContent(page.element)).toContain('完成本组')
+    page.unmount()
+  })
   it('上传中显示百分比和速度，传完进入确认状态而非失败状态', async () => {
     const upload = deferred<any>()
     let progress: ((percent: number) => void) | undefined
@@ -5107,8 +5144,10 @@ describe('计数组录像恢复与上传边界', () => {
     clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
     await vi.advanceTimersByTimeAsync(4900)
     if (timing === 'starting') {
-      starts[0].timeoutCallback({ tempVideoPath: 'wxfile://temp/first.mp4' })
+      await vi.advanceTimersByTimeAsync(100)
+      stops[0].success({ tempVideoPath: 'wxfile://temp/first.mp4' })
       await flushPromises(30)
+      await vi.advanceTimersByTimeAsync(1)
     }
     clickButtonByText(page.element, '完成本组')
     // Two clicks before React renders must still issue one finish operation.
@@ -5118,15 +5157,16 @@ describe('计数组录像恢复与上传边界', () => {
     expect(saving.props.loading).toBe(true)
     expect(saving.props.disabled).toBe(true)
     if (timing === 'starting') {
-      expect(camera.stopRecord).not.toHaveBeenCalled()
+      expect(stops).toHaveLength(1)
       starts[1].success()
-      starts[1].timeoutCallback({ tempVideoPath: 'wxfile://temp/tail.mp4' })
+      expect(stops).toHaveLength(2)
+      stops[1].success({ tempVideoPath: 'wxfile://temp/tail.mp4' })
     } else {
-      starts[0].timeoutCallback({ tempVideoPath: 'wxfile://temp/tail.mp4' })
-      expect(camera.stopRecord).not.toHaveBeenCalled()
+      expect(stops).toHaveLength(1)
+      stops[0].success({ tempVideoPath: 'wxfile://temp/tail.mp4' })
     }
     await flushPromises(80); page.rerender()
-    expect(camera.stopRecord).not.toHaveBeenCalled()
+    expect(camera.stopRecord).toHaveBeenCalledTimes(timing === 'starting' ? 2 : 1)
     expect(textContent(page.element)).toContain('已做完 1/2 组')
     expect(textContent(page.element)).toContain('03:00')
     expect(textContent(page.element)).not.toContain('停止失败')
@@ -5161,12 +5201,12 @@ describe('计数组录像恢复与上传边界', () => {
     expect(textContent(page.element)).toContain('重新开启摄像头')
     page.unmount()
   })
-  it('自动分段超过十秒后返回视频，仍保存上传原组且不会手动停止录像', async () => {
+  it('停止超过十秒后返回视频，仍保存上传原组且不会重复停止录像', async () => {
     recorderHarness.useReal = true
-    let start: any
+    let stop: any
     const camera = {
-      startRecord: vi.fn(options => { start = options; options.success() }),
-      stopRecord: vi.fn()
+      startRecord: vi.fn(options => options.success()),
+      stopRecord: vi.fn(options => { stop = options })
     }
     taroHarness.taroMock.createCameraContext.mockReturnValueOnce(camera)
     const page = await open()
@@ -5177,22 +5217,23 @@ describe('计数组录像恢复与上传边界', () => {
     expect(textContent(page.element)).toContain('仍在等待保存')
     clickButtonByText(page.element, '复制录制诊断'); await flushPromises()
     const diagnostic = JSON.parse(taroHarness.taroMock.setClipboardData.mock.calls.at(-1)![0].data)
+    expect(diagnostic.environment).toEqual({ platform: 'ios', system: 'iOS 26.6.1', model: 'iPhone 13', version: '8.0.78', SDKVersion: '3.17.0' })
     expect(diagnostic.events.map((event: any) => event.event)).toEqual(expect.arrayContaining(['group_start', 'start_call', 'start_success', 'group_finish', 'stop_slow']))
     expect(diagnostic.events.some((event: any) => event.event === 'stop_success')).toBe(false)
     expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
     clickButtonByText(page.element, '重试保存本组'); await flushPromises(); page.rerender()
     expect(findButtonByText(page.element, '返回运动计划').props.disabled).toBe(false)
-    start.timeoutCallback({ tempVideoPath: 'wxfile://late-tail.mp4' })
+    stop.success({ tempVideoPath: 'wxfile://late-tail.mp4' })
     await flushPromises(80); page.rerender()
     expect(textContent(page.element)).toContain('已做完 1/2 组')
-    expect(textContent(page.element)).toContain('03:00')
-    expect(camera.stopRecord).not.toHaveBeenCalled()
+    expect(textContent(page.element)).toContain('02:48')
+    expect(camera.stopRecord).toHaveBeenCalledTimes(1)
     expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
     expect(apiMocks.uploadVideoSegment).toHaveBeenCalledTimes(1)
     expect(textContent(page.element)).not.toContain('仍在等待保存')
     page.unmount()
   })
-  it('真实设备无自动分段回调时结束 loading，不计完成并保留脱敏诊断', async () => {
+  it('真实设备明确停止失败时结束 loading，不计完成并保留脱敏诊断', async () => {
     recorderHarness.useReal = true
     setPatientAppToken('recording-test-token')
     const camera = {
@@ -5203,14 +5244,14 @@ describe('计数组录像恢复与上传边界', () => {
     const page = await open()
     clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
     clickButtonByText(page.element, '完成本组'); await flushPromises(); page.rerender()
-    expect(findButtonByText(page.element, '正在保存本组').props.loading).toBe(true)
-    await vi.advanceTimersByTimeAsync(10000); page.rerender()
-    expect(findButtonByText(page.element, '重试保存本组').props.disabled).toBe(false)
+    expect(findButtonByText(page.element, '重做本组').props.disabled).not.toBe(true)
+    expect(textContent(page.element)).toContain('摄像头未能结束本组录像')
+    expect(textContent(page.element)).not.toContain('重试保存本组')
     expect(textContent(page.element)).not.toContain('已做完 1/2 组')
     expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
     const diagnostics = taroHarness.taroMock.getStorageSync('motioncare_training_diagnostics_v1')
     expect(diagnostics).toEqual(expect.objectContaining({ events: expect.arrayContaining([
-      expect.objectContaining({ stage: 'recording', error_code: 'recording_timeout' })
+      expect.objectContaining({ stage: 'recording', error_code: 'recording_native_1001' })
     ]) }))
     clickButtonByText(page.element, '重做本组'); await flushPromises(); page.rerender()
     expect(findButtonByText(page.element, '返回运动计划').props.disabled).toBe(false)
@@ -5226,26 +5267,38 @@ describe('计数组录像恢复与上传边界', () => {
     expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
     page.unmount()
   })
-  it('尾段保存失败后可原组重试成功，不要求重做且不会重复计组', async () => {
+  it.each(['saveFile', 'getFileInfo'] as const)('尾段 %s 失败后原文件重试，不重复停止且只完成一次', async stage => {
+    recorderHarness.useReal = true
+    const camera = {
+      startRecord: vi.fn(options => options.success()),
+      stopRecord: vi.fn(options => options.success({ tempVideoPath: 'wxfile://temp/retried-final.mp4' }))
+    }
+    taroHarness.taroMock.createCameraContext.mockReturnValueOnce(camera)
     const page = await open()
     clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
-    const recorder = recorderHarness.instances.at(-1)!
-    recorder.finish.mockImplementationOnce(async () => {
-      recorder.options.onNativeError?.({ errMsg: 'stopRecord:fail' })
-      throw new Error('录像停止失败，请稍后重试')
-    })
-    clickButtonByText(page.element, '完成本组'); await flushPromises(30)
-    await vi.advanceTimersByTimeAsync(0); page.rerender()
-    recorder.hasFailedSegment.mockReturnValue(true)
-    recorder.retryFailedSegment.mockImplementationOnce(async () => {
-      await recorder.options.onSegment('wxfile://temp/retried-final.mp4', 5000)
-      return null
-    })
-    clickButtonByText(page.element, '重试保存本组'); await flushPromises(50); page.rerender()
+    taroHarness.taroMock[stage].mockRejectedValueOnce(new Error('文件保存失败'))
+    clickButtonByText(page.element, '完成本组'); await flushPromises(80); page.rerender()
+    expect(textContent(page.element)).toContain('重试保存本组')
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
+    clickButtonByText(page.element, '重试保存本组'); await flushPromises(80); page.rerender()
     expect(textContent(page.element)).toContain('已做完 1/2 组')
     expect(textContent(page.element)).toContain('03:00')
     expect(textContent(page.element)).not.toContain('重做本组')
-    expect(recorderHarness.instances).toHaveLength(1)
+    expect(camera.stopRecord).toHaveBeenCalledTimes(1)
+    expect(taroHarness.taroMock.saveFile).toHaveBeenCalledTimes(stage === 'saveFile' ? 2 : 1)
+    expect(apiMocks.createVideoSession).toHaveBeenCalledTimes(1)
+    page.unmount()
+  })
+  it('尾段已保存但读取元数据失败后重做，也清理尚未登记的持久文件', async () => {
+    recorderHarness.useReal = true
+    const page = await open()
+    clickButtonByText(page.element, '开始本组'); await flushPromises(30); page.rerender()
+    taroHarness.taroMock.saveFile.mockResolvedValueOnce({ savedFilePath: 'wxfile://saved/unlisted.mp4' })
+    taroHarness.taroMock.getFileInfo.mockRejectedValueOnce(new Error('文件信息读取失败'))
+    clickButtonByText(page.element, '完成本组'); await flushPromises(80); page.rerender()
+    clickButtonByText(page.element, '重做本组'); await flushPromises(40); page.rerender()
+    expect(taroHarness.removeSavedFileMock).toHaveBeenCalledWith(expect.objectContaining({ filePath: 'wxfile://saved/unlisted.mp4' }))
+    expect(apiMocks.createVideoSession).not.toHaveBeenCalled()
     page.unmount()
   })
   it('空闲摄像头错误有明确恢复入口，重新初始化后可开始本组', async () => {

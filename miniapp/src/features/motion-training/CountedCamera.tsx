@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchCurrentPrescriptionData, fetchPatientHomeData } from '../../demo/patientAppData'
 import { getPatientAppToken } from '../../auth/token'
 import type { MotionTrainingAction } from './pageState'
-import { MotionTrainingRecorder } from './recorder'
+import { CountedTrainingRecorder } from './countedRecorder'
 import { createRecordingTrace } from './recordingTrace'
 import { captureTrainingDiagnosticScope, reportTrainingDiagnostic } from './diagnostics'
 import { createClientSessionId } from './session'
@@ -18,7 +18,12 @@ import {
 export default function CountedCamera({ action, demo }: { action: MotionTrainingAction; demo: boolean }) {
   const [session, setSession] = useState<CountedSession | null>(null)
   const current = useRef<CountedSession | null>(null)
-  const [trace] = useState(() => createRecordingTrace())
+  const [trace] = useState(() => {
+    const environment = {}
+    try { Object.assign(environment, Taro.getDeviceInfo()) } catch { /* optional metadata */ }
+    try { Object.assign(environment, Taro.getAppBaseInfo()) } catch { /* optional metadata */ }
+    return createRecordingTrace(Date.now, environment)
+  })
   const [ready, setReady] = useState(demo)
   const [cameraReady, setCameraReady] = useState(demo)
   const cameraReadyRef = useRef(demo)
@@ -36,13 +41,15 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
   const [showStart, setShowStart] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [error, setError] = useState('')
+  const [needsRedo, setNeedsRedo] = useState(false)
   const [audioError, setAudioError] = useState(false)
   const audio = useRef<ReturnType<typeof createRestAudio> | null>(null)
   if (!audio.current) audio.current = createRestAudio(() => setAudioError(true))
   const [now, setNow] = useState(Date.now())
   const busy = useRef(false)
   const active = useRef<CountedAttempt | null>(null)
-  const recorder = useRef<MotionTrainingRecorder | null>(null)
+  const activeSavedFiles = useRef(new Set<string>())
+  const recorder = useRef<CountedTrainingRecorder | null>(null)
   const visible = useRef(true)
   const mounted = useRef(true)
   const token = useRef(getPatientAppToken())
@@ -96,13 +103,15 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       mounted.current = false; visible.current = false; audio.current?.dispose()
       unsubscribe()
       clearInterval(timer); if (uploadTimer) clearInterval(uploadTimer)
-      if (active.current && !pendingEnd.current) void abandon('录像已中断，请重做本组')
+      if (active.current) void abandon('录像已中断，请重做本组')
     }
   }, [])
 
   async function abandon(message: string) {
     const attempt = active.current
     if (!attempt) return
+    const files = new Set([...activeSavedFiles.current, ...attempt.segments.map(segment => segment.path)])
+    activeSavedFiles.current = new Set()
     trace.mark('group_abandon')
     operation.current += 1
     interrupting.current = true
@@ -113,7 +122,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     saveChain.current = Promise.resolve()
     abandonedRecorder?.discard()
     if (mounted.current) {
-      setProcessing(false); setRecording(false); setShowStart(false); setError(message)
+      setProcessing(false); setRecording(false); setShowStart(false); setError(message); setNeedsRedo(false)
       if (!demo) resetCamera()
     }
     try {
@@ -124,7 +133,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
           const found = s.attempts.find(a => a.id === attempt.id)
           if (found) { found.abandoned = true; found.segments = [] }
         }))
-        for (const segment of attempt.segments) void removeCountedFile(segment.path).catch(() => undefined)
+        for (const path of files) void removeCountedFile(path).catch(() => undefined)
       }
       if (demo && old) persist({ ...old, attempts: old.attempts.filter(a => a.id !== attempt.id) })
     } catch { if (mounted.current) setError('本地录像记录未能保存，请退出后重新进入检查。') }
@@ -133,13 +142,13 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
   }
 
   async function start() {
-    if (busy.current || interrupting.current || !ready || !cameraReadyRef.current || !visible.current || !isOwned()) return
+    if (busy.current || active.current || interrupting.current || !ready || !cameraReadyRef.current || !visible.current || !isOwned()) return
     const startingCameraEpoch = cameraEpoch.current
     const latest = current.current
     const done = latest ? completedAttempts(latest) : []
     if (done.length >= total || (done.length && Date.now() < Date.parse(done[done.length - 1].endedAt!) + 180000)) return
     const ownOperation = ++operation.current
-    busy.current = true; setProcessing(true); setError(''); audio.current?.stop()
+    busy.current = true; setProcessing(true); setError(''); setNeedsRedo(false); audio.current?.stop()
     try {
       if (!demo) {
         await checkCountedStorage()
@@ -162,6 +171,8 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       if (!demo) {
         const diagnosticScope = captureTrainingDiagnosticScope()
         const savedPaths = new Map<string, string>()
+        const savedFiles = new Set<string>()
+        activeSavedFiles.current = savedFiles
         const saveSegment = (path: string, durationMs: number) => {
           trace.mark('save_call')
           const delivery = saveChain.current.then(async () => {
@@ -169,6 +180,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
             const saved = savedPaths.has(path) ? { savedFilePath: savedPaths.get(path)! } : await Taro.saveFile({ tempFilePath: path })
             if (!('savedFilePath' in saved) || !saved.savedFilePath) throw new Error('录像未能安全保存，请重试保存或重做本组')
             savedPaths.set(path, saved.savedFilePath)
+            savedFiles.add(saved.savedFilePath)
             if (active.current?.id !== attempt.id) { await removeCountedFile(saved.savedFilePath); return }
             const info = await Taro.getFileInfo({ filePath: saved.savedFilePath })
             if (active.current?.id !== attempt.id) { await removeCountedFile(saved.savedFilePath); return }
@@ -179,6 +191,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
               s.attempts.find(a => a.id === attempt.id)!.segments = [...attempt.segments]
             })
             publish(changed); trace.mark('save_success')
+            if (!pendingEnd.current) setError('')
           })
           saveChain.current = delivery.catch(() => undefined)
           return delivery.catch(err => {
@@ -194,10 +207,20 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
           })
         }
         cameraContext.current ??= Taro.createCameraContext()
-        recorder.current = new MotionTrainingRecorder({ camera: trace.wrap(cameraContext.current), finishAtSegmentBoundary: true, now: Date.now, onSegment: saveSegment,
+        recorder.current = new CountedTrainingRecorder({ camera: trace.wrap(cameraContext.current), now: Date.now, onSegment: saveSegment,
+          onEvent: event => trace.mark(event),
+          onFatalError: error => {
+            if (!mounted.current || active.current?.id !== attempt.id) return
+            pendingEnd.current ??= new Date().toISOString()
+            busy.current = false; setProcessing(false); setNeedsRedo(true); setError(error.message)
+          },
           onStopSlow: phase => {
             trace.mark('stop_slow')
-            if (!mounted.current || active.current?.id !== attempt.id || !pendingEnd.current) return
+            if (!mounted.current || active.current?.id !== attempt.id) return
+            if (!pendingEnd.current) {
+              setError(phase === 'starting' ? '摄像头启动较慢，正在等待确认。' : '本段录像返回较慢，正在等待保存。')
+              return
+            }
             busy.current = false; setProcessing(false)
             setError(phase === 'starting'
               ? '摄像头仍未确认本段录像启动，正在等待。可以继续等待，或退出后重做本组。'
@@ -207,9 +230,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
           maxDurationMs: 1800000, onMaxDuration: () => { void abandon('已达到单组录像时限，本组未完成，请休息后重做。') },
           onNativeError: error => {
             reportTrainingDiagnostic('recording', error, { diagnosticScope, clientSessionId: attempt.id })
-            setTimeout(() => {
-            if (active.current?.id === attempt.id && !pendingEnd.current) void abandon('录像已中断，请重做本组。')
-          }, 0) } })
+          } })
         await recorder.current.start()
       }
       if (operation.current !== ownOperation) return
@@ -222,17 +243,17 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
         saved.attempts.find(a => a.id === attempt.id)!.startedAt = attempt.startedAt
         if (!done.length) { saved.startedAt = attempt.startedAt; saved.trainingDate = shanghaiDate(Date.parse(attempt.startedAt)) }
       }))
-      setNow(Date.now()); setShowStart(true); setRecording(true)
+      setNow(Date.now()); setShowStart(true); setRecording(true); setError('')
       if (!demo) void Taro.setKeepScreenOn({ keepScreenOn: true }).catch(() => undefined)
     } catch (err) {
       if (operation.current !== ownOperation) return
-      if (active.current) await abandon('本组未开始，请重试')
+      if (active.current && !pendingEnd.current) await abandon('本组未开始，请重试')
       setError(err instanceof Error ? err.message : '无法开始本组，请重试')
     } finally { if (operation.current === ownOperation) { busy.current = false; if (mounted.current) setProcessing(false) } }
   }
 
   async function finish() {
-    if (busy.current || !active.current || !isOwned()) return
+    if (busy.current || needsRedo || !active.current || !isOwned()) return
     const ownOperation = ++operation.current
     trace.mark('group_finish')
     const finishingAttempt = active.current
@@ -341,11 +362,11 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     </>}
     <View className='counted-controls'>
       {!demo && !finished && !cameraReady && !processing ? <Button className='secondary-button' onClick={resetCamera}>重新开启摄像头</Button> : null}
-      {!finished && (recording ? <>
+      {!finished && (needsRedo ? <Button onClick={() => void abandon('请重做本组')}>重做本组</Button> : recording ? <>
         <Text>请自行计数，做完后点击完成本组。</Text>
         {active.current && now - Date.parse(active.current.startedAt) > 1740000 ? <Text className='error'>即将达到单组录像时限，请及时完成或结束本组。</Text> : null}
         <Button className='primary-button full-button' loading={processing} disabled={processing} onClick={() => void finish()}>{processing ? '正在保存本组' : pendingEnd.current ? '重试保存本组' : '完成本组'}</Button>
-        {processing ? <Text>正在保存最后一段录像，通常约 5 秒内完成，请稍候。</Text> : null}
+        {processing ? <Text>正在保存最后一段录像，请稍候。</Text> : null}
         {pendingEnd.current ? <Button onClick={() => void abandon('请重做本组')}>重做本组</Button> : null}
       </> : <Button className='primary-button full-button' disabled={left > 0 || processing || !ready || !cameraReady} onClick={() => void start()}>{done.length ? '开始下一组' : '开始本组'}</Button>)}
     {!demo && done.length ? <Text className='muted'>已做完 {done.length}/{total} 组 · 视频已上传 {done.filter(a => a.uploaded).length}/{done.length} 组</Text> : null}
