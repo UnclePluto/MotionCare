@@ -1,7 +1,7 @@
 import type { CameraContext } from './recorder'
 import type { CountedRecorderEvent } from './countedRecorder'
 
-export const RECORDING_BUILD = 'counted-recorder-2'
+export const RECORDING_BUILD = 'counted-single-video-1'
 
 type Event = 'camera_ready' | 'camera_error' | 'camera_stop' | 'page_hide' | 'page_show' | 'group_start' | 'group_finish' | 'group_saved' | 'group_abandon' | 'stop_slow' | 'save_call' | 'save_success' | 'save_failure'
   | 'start_call' | 'start_success' | 'start_failure' | 'start_throw' | 'timeout_video' | 'stop_call' | 'stop_success' | 'stop_failure' | 'stop_throw'

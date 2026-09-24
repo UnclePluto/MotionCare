@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { fetchCurrentPrescriptionData, fetchPatientHomeData } from '../../demo/patientAppData'
 import { getPatientAppToken } from '../../auth/token'
 import type { MotionTrainingAction } from './pageState'
-import { CountedTrainingRecorder } from './countedRecorder'
+import { createCountedFilePreparer, releaseCountedFile } from './countedFiles'
+import { CountedTrainingRecorder, type CompletionReason } from './countedRecorder'
 import { createRecordingTrace } from './recordingTrace'
 import { captureTrainingDiagnosticScope, reportTrainingDiagnostic } from './diagnostics'
 import { createClientSessionId } from './session'
@@ -38,6 +39,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     setCameraReady(false); setCameraGeneration(cameraEpoch.current)
   }
   const [recording, setRecording] = useState(false)
+  const [ending, setEnding] = useState<{ endedAt: number; index: number } | null>(null)
   const [showStart, setShowStart] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [error, setError] = useState('')
@@ -110,7 +112,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
   async function abandon(message: string) {
     const attempt = active.current
     if (!attempt) return
-    const files = new Set([...activeSavedFiles.current, ...attempt.segments.map(segment => segment.path)])
+    const files = new Set([...activeSavedFiles.current, ...(attempt.segments ?? []).map(segment => segment.path)])
     activeSavedFiles.current = new Set()
     trace.mark('group_abandon')
     operation.current += 1
@@ -122,7 +124,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     saveChain.current = Promise.resolve()
     abandonedRecorder?.discard()
     if (mounted.current) {
-      setProcessing(false); setRecording(false); setShowStart(false); setError(message); setNeedsRedo(false)
+      setProcessing(false); setRecording(false); setEnding(null); audio.current?.stop(); setShowStart(false); setError(message); setNeedsRedo(false)
       if (!demo) resetCamera()
     }
     try {
@@ -131,8 +133,9 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
         // Invalidate locally before any best-effort device/file cleanup can stall.
         if (isOwned()) publish(updateCountedSession(old.owner, old.id, s => {
           const found = s.attempts.find(a => a.id === attempt.id)
-          if (found) { found.abandoned = true; found.segments = [] }
+          if (found) { found.abandoned = true; found.segments = []; found.video = undefined }
         }))
+        if (attempt.video) void releaseCountedFile(attempt.video)
         for (const path of files) void removeCountedFile(path).catch(() => undefined)
       }
       if (demo && old) persist({ ...old, attempts: old.attempts.filter(a => a.id !== attempt.id) })
@@ -151,7 +154,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     busy.current = true; setProcessing(true); setError(''); setNeedsRedo(false); audio.current?.stop()
     try {
       if (!demo) {
-        await checkCountedStorage()
+        await checkCountedStorage(owner.current)
         // New groups require a successful current-prescription check.
         const fresh = await fetchCurrentPrescriptionData()
         if (fresh !== undefined && !fresh?.actions.some(a => a.id === action.id && a.dose_mode === 'sets')) {
@@ -164,50 +167,38 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       }
       let next = (!demo && latest ? countedSessions(owner.current).find(s => s.id === latest.id) : latest) ?? newCountedSession(owner.current, { ...action, sets: total, repetitions: action.repetitions || 10 }, new Date().toISOString())
       const attempt: CountedAttempt = { id: createClientSessionId(), index: done.length + 1, startedAt: new Date().toISOString(),
-        completed: false, segments: [], uploadId: createClientSessionId() }
+        completed: false, uploadMode: 'direct', completionReason: 'manual', uploadId: createClientSessionId() }
       next = { ...next, exited: false, attempts: [...next.attempts, attempt] }
       trace.mark('group_start', attempt.index)
       persist(next); active.current = attempt; pendingEnd.current = null
       if (!demo) {
         const diagnosticScope = captureTrainingDiagnosticScope()
-        const savedPaths = new Map<string, string>()
         const savedFiles = new Set<string>()
         activeSavedFiles.current = savedFiles
-        const saveSegment = (path: string, durationMs: number) => {
+        const prepareFile = createCountedFilePreparer(path => savedFiles.add(path))
+        const saveVideo = (path: string, durationMs: number) => {
           trace.mark('save_call')
           const delivery = saveChain.current.then(async () => {
-            if (active.current?.id !== attempt.id) { await removeCountedFile(path); return }
-            const saved = savedPaths.has(path) ? { savedFilePath: savedPaths.get(path)! } : await Taro.saveFile({ tempFilePath: path })
-            if (!('savedFilePath' in saved) || !saved.savedFilePath) throw new Error('录像未能安全保存，请重试保存或重做本组')
-            savedPaths.set(path, saved.savedFilePath)
-            savedFiles.add(saved.savedFilePath)
-            if (active.current?.id !== attempt.id) { await removeCountedFile(saved.savedFilePath); return }
-            const info = await Taro.getFileInfo({ filePath: saved.savedFilePath })
-            if (active.current?.id !== attempt.id) { await removeCountedFile(saved.savedFilePath); return }
-            if (!('size' in info) || info.size <= 0) throw new Error('录像文件大小读取失败，请重试保存')
-            const segment = { path: saved.savedFilePath, durationMs: Math.max(1, durationMs), sizeBytes: info.size }
-            if (!attempt.segments.some(item => item.path === segment.path)) attempt.segments.push(segment)
-            const changed = updateCountedSession(next.owner, next.id, s => {
-              s.attempts.find(a => a.id === attempt.id)!.segments = [...attempt.segments]
-            })
-            publish(changed); trace.mark('save_success')
-            if (!pendingEnd.current) setError('')
+            if (active.current?.id !== attempt.id) return
+            const video = await prepareFile(path, durationMs)
+            if (active.current?.id !== attempt.id || !isOwned()) { await releaseCountedFile(video); return }
+            attempt.video = video
+            publish(updateCountedSession(next.owner, next.id, s => {
+              s.attempts.find(a => a.id === attempt.id)!.video = video
+            }))
+            trace.mark('save_success')
           })
           saveChain.current = delivery.catch(() => undefined)
-          return delivery.catch(err => {
-            trace.mark('save_failure')
-            if (!pendingEnd.current && active.current?.id === attempt.id) {
-              // A save may have succeeded before metadata failed; include that file in abandonment cleanup.
-              for (const savedPath of savedPaths.values()) {
-                if (!attempt.segments.some(segment => segment.path === savedPath)) attempt.segments.push({ path: savedPath, durationMs: 0, sizeBytes: 0 })
-              }
-              void abandon('录像保存失败，本组未完成，请检查空间后重做。')
-            }
-            throw err
-          })
+          return delivery.catch(err => { trace.mark('save_failure'); throw err })
         }
         cameraContext.current ??= Taro.createCameraContext()
-        recorder.current = new CountedTrainingRecorder({ camera: trace.wrap(cameraContext.current), now: Date.now, onSegment: saveSegment,
+        recorder.current = new CountedTrainingRecorder({ camera: trace.wrap(cameraContext.current), now: Date.now, onVideo: saveVideo,
+          onEnding: (endedAt, reason) => {
+            if (active.current?.id !== attempt.id) return
+            beginEnding(endedAt, reason)
+            // Avoid re-entering finish while the recorder is still reporting its ending event.
+            if (reason === 'time_limit') void Promise.resolve().then(() => { if (active.current?.id === attempt.id) void finish(reason) })
+          },
           onEvent: event => trace.mark(event),
           onFatalError: error => {
             if (!mounted.current || active.current?.id !== attempt.id) return
@@ -218,16 +209,14 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
             trace.mark('stop_slow')
             if (!mounted.current || active.current?.id !== attempt.id) return
             if (!pendingEnd.current) {
-              setError(phase === 'starting' ? '摄像头启动较慢，正在等待确认。' : '本段录像返回较慢，正在等待保存。')
+              setError(phase === 'starting' ? '摄像头启动较慢，正在等待确认。' : '本组录像返回较慢，正在等待保存。')
               return
             }
             busy.current = false; setProcessing(false)
             setError(phase === 'starting'
-              ? '摄像头仍未确认本段录像启动，正在等待。可以继续等待，或退出后重做本组。'
+              ? '摄像头仍未确认本组录像启动，正在等待。可以继续等待，或退出后重做本组。'
               : '摄像头尚未返回本组视频，仍在等待保存。可以继续等待，或退出后重做本组。')
           },
-          onStopped: endedAt => { if (pendingEnd.current && active.current?.id === attempt.id) pendingEnd.current = new Date(endedAt).toISOString() },
-          maxDurationMs: 1800000, onMaxDuration: () => { void abandon('已达到单组录像时限，本组未完成，请休息后重做。') },
           onNativeError: error => {
             reportTrainingDiagnostic('recording', error, { diagnosticScope, clientSessionId: attempt.id })
           } })
@@ -235,7 +224,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       }
       if (operation.current !== ownOperation) return
       if (!visible.current || active.current?.id !== attempt.id) { await abandon('录像已中断，请重做本组'); return }
-      attempt.startedAt = new Date().toISOString()
+      attempt.startedAt = new Date(demo ? Date.now() : recorder.current!.startedAtMs).toISOString()
       if (demo) {
         if (!done.length) { next.startedAt = attempt.startedAt; next.trainingDate = shanghaiDate(Date.parse(attempt.startedAt)) }
         persist({ ...next, attempts: next.attempts.map(a => a.id === attempt.id ? attempt : a) })
@@ -252,26 +241,36 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     } finally { if (operation.current === ownOperation) { busy.current = false; if (mounted.current) setProcessing(false) } }
   }
 
-  async function finish() {
+  function beginEnding(endedAt: number, reason: CompletionReason) {
+    if (!active.current || pendingEnd.current) return
+    pendingEnd.current = new Date(endedAt).toISOString()
+    active.current.completionReason = reason
+    setEnding({ endedAt, index: active.current.index }); setRecording(false); setShowStart(false); setNow(Date.now())
+  }
+
+  async function finish(reason: CompletionReason = 'manual') {
     if (busy.current || needsRedo || !active.current || !isOwned()) return
     const ownOperation = ++operation.current
     trace.mark('group_finish')
     const finishingAttempt = active.current
     const finishingRecorder = recorder.current
     busy.current = true; setProcessing(true); setError('')
-    pendingEnd.current ??= new Date().toISOString()
+    if (demo) {
+      const started = Date.parse(finishingAttempt.startedAt)
+      beginEnding(reason === 'time_limit' ? started + 300000 : Date.now(), reason)
+    }
     try {
       if (!demo) {
-        if (finishingRecorder?.hasFailedSegment()) await finishingRecorder.retryFailedSegment()
+        if (finishingRecorder?.hasFailedVideo()) await finishingRecorder.retryVideo()
         if (operation.current !== ownOperation) return
-        await finishingRecorder?.finish(); await saveChain.current
+        await finishingRecorder?.finish(reason); await saveChain.current
       }
       if (operation.current !== ownOperation || active.current?.id !== finishingAttempt.id) return
       const attempt = finishingAttempt
-      if (!demo && !attempt.segments.length) throw new Error('录像未能安全保存，请重试保存或重做本组')
+      if (!demo && !attempt.video) throw new Error('录像未能安全保存，请重试保存或重做本组')
       const complete = (s: CountedSession) => {
         const a = s.attempts.find(item => item.id === attempt.id)!
-        a.completed = true; a.endedAt = pendingEnd.current!; a.segments = [...attempt.segments]
+        a.completed = true; a.endedAt = pendingEnd.current!; a.video = attempt.video; a.completionReason = attempt.completionReason
       }
       if (demo) { const copy = { ...current.current!, attempts: [...current.current!.attempts] }; complete(copy); persist(copy) }
       else publish(updateCountedSession(owner.current, current.current!.id, complete))
@@ -280,7 +279,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       if (completed < total) audio.current?.begin(Date.parse(pendingEnd.current!) + 180000, total - completed)
       else audio.current?.stop()
       active.current = null; pendingEnd.current = null; recorder.current = null
-      setError(''); setRecording(false); setShowStart(false); setNow(Date.now()); void retry()
+      setError(attempt.video?.persistence === 'temporary' ? '本机空间不足，视频正从临时文件上传。请保持小程序打开，直到显示已上传。' : ''); setRecording(false); setEnding(null); setShowStart(false); setNow(Date.now()); void retry()
       if (!demo) void Taro.setKeepScreenOn({ keepScreenOn: false }).catch(() => undefined)
     } catch (err) { if (mounted.current && operation.current === ownOperation) setError(err instanceof Error ? err.message : '保存失败，请重试保存或重做本组') }
     finally { if (operation.current === ownOperation) { busy.current = false; if (mounted.current) setProcessing(false) } }
@@ -303,10 +302,10 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     void retry()
   })
   useEffect(() => {
-    if (!recording) return
+    if (!recording || !demo) return
     const timer = setInterval(() => {
-      if (active.current && Date.now() - Date.parse(active.current.startedAt) >= 1800000) void abandon('已达到单组录像时限，本组未完成，请休息后重做。')
-    }, 1000)
+      if (active.current && Date.now() - Date.parse(active.current.startedAt) >= 300000) void finish('time_limit')
+    }, 250)
     return () => clearInterval(timer)
   }, [recording])
 
@@ -315,13 +314,14 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     const timer = setTimeout(() => setShowStart(false), 1000)
     return () => clearTimeout(timer)
   }, [showStart])
-  const elapsed = recording && active.current
+  const elapsed = (recording || ending) && active.current
     ? Math.max(0, Math.floor(((pendingEnd.current ? Date.parse(pendingEnd.current) : now) - Date.parse(active.current.startedAt)) / 1000)) : 0
   const recordingClock = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`
   const done = session ? completedAttempts(session) : []
   const finished = done.length === total
-  const restUntil = done.length && !finished ? Date.parse(done[done.length - 1].endedAt!) + 180000 : 0
-  const left = Math.max(0, Math.ceil((restUntil - now) / 1000))
+  const restUntil = ending ? (ending.index < total ? ending.endedAt + 180000 : 0)
+    : done.length && !finished ? Date.parse(done[done.length - 1].endedAt!) + 180000 : 0
+  const left = Math.min(180, Math.max(0, Math.ceil((restUntil - now) / 1000)))
   return <View className='counted-training-page'>
     <View className='counted-heading'>
     <Text className='title'>{action.action_name}</Text>
@@ -348,6 +348,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       onStop={() => {
         trace.mark('camera_stop')
         if (cameraEpoch.current !== cameraGeneration || pendingEnd.current) return
+        if (active.current && Date.now() >= Date.parse(active.current.startedAt) + 300000) { void finish('time_limit'); return }
         cameraReadyRef.current = false; cameraContext.current = null; setCameraReady(false)
         if (active.current) void abandon('录像已中断，请重做本组')
       }} /> : null}
@@ -357,16 +358,15 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       {restUntil > 0 && !recording ? <View className='counted-rest'>
         <Text>{left ? '组间休息' : '休息结束，请点击开始下一组'}</Text>
         <Text className='counted-timer'>{String(Math.floor(left / 60)).padStart(2, '0')}:{String(left % 60).padStart(2, '0')}</Text>
-        <Text>还剩 {total - done.length} 组{left ? ' · 请充分休息' : ''}</Text>
+        <Text>还剩 {total - (ending?.index ?? done.length)} 组{left ? ' · 请充分休息' : ''}</Text>
       </View> : null}
     </>}
     <View className='counted-controls'>
       {!demo && !finished && !cameraReady && !processing ? <Button className='secondary-button' onClick={resetCamera}>重新开启摄像头</Button> : null}
-      {!finished && (needsRedo ? <Button onClick={() => void abandon('请重做本组')}>重做本组</Button> : recording ? <>
-        <Text>请自行计数，做完后点击完成本组。</Text>
-        {active.current && now - Date.parse(active.current.startedAt) > 1740000 ? <Text className='error'>即将达到单组录像时限，请及时完成或结束本组。</Text> : null}
+      {!finished && (needsRedo ? <Button onClick={() => void abandon('请重做本组')}>重做本组</Button> : recording || ending ? <>
+        {recording ? <Text>请自行计数，做完后点击完成本组。</Text> : null}
         <Button className='primary-button full-button' loading={processing} disabled={processing} onClick={() => void finish()}>{processing ? '正在保存本组' : pendingEnd.current ? '重试保存本组' : '完成本组'}</Button>
-        {processing ? <Text>正在保存最后一段录像，请稍候。</Text> : null}
+        {processing ? <Text>正在保存本组录像，请稍候。</Text> : null}
         {pendingEnd.current ? <Button onClick={() => void abandon('请重做本组')}>重做本组</Button> : null}
       </> : <Button className='primary-button full-button' disabled={left > 0 || processing || !ready || !cameraReady} onClick={() => void start()}>{done.length ? '开始下一组' : '开始本组'}</Button>)}
     {!demo && done.length ? <Text className='muted'>已做完 {done.length}/{total} 组 · 视频已上传 {done.filter(a => a.uploaded).length}/{done.length} 组</Text> : null}

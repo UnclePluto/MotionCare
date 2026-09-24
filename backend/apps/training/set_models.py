@@ -21,6 +21,9 @@ class MotionTrainingSession(TimeStampedModel):
 
 
 class MotionTrainingSet(TimeStampedModel):
+    completion_reason = models.CharField(
+        max_length=16, choices=[("manual", "手动结束"), ("time_limit", "到时结束")], default="manual"
+    )
     session = models.ForeignKey(
         MotionTrainingSession, on_delete=models.CASCADE, related_name="groups"
     )

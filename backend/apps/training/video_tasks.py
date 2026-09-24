@@ -16,7 +16,6 @@ from apps.studies.models import ProjectPatient
 from .models import (
     MotionAnalysisJob,
     QiniuCleanupTombstone,
-    TrainingRecord,
     TrainingVideo,
     TrainingVideoSegment,
     VideoAssemblyJob,
@@ -148,6 +147,9 @@ def _ensure_qiniu_cleanup_tombstone(video, job, *, retain_canonical):
     if video.object_key:
         canonical_key = video.object_key
     now = timezone.now()
+    earliest_check = now
+    if video.upload_mode == "direct" and video.direct_upload_expires_at and not retain_canonical:
+        earliest_check = max(now, video.direct_upload_expires_at + timedelta(seconds=300))
     if tombstone is None:
         return QiniuCleanupTombstone.objects.create(
             session_id=video.client_session_id,
@@ -156,7 +158,7 @@ def _ensure_qiniu_cleanup_tombstone(video, job, *, retain_canonical):
             max_attempt_number=max_attempt_number,
             canonical_key=canonical_key,
             retain_canonical=retain_canonical,
-            next_check_at=now,
+            next_check_at=earliest_check,
         )
 
     tombstone.bucket = video.bucket or settings.QINIU_BUCKET
@@ -167,7 +169,7 @@ def _ensure_qiniu_cleanup_tombstone(video, job, *, retain_canonical):
     if canonical_key:
         tombstone.canonical_key = canonical_key
     tombstone.retain_canonical = retain_canonical
-    tombstone.next_check_at = min(tombstone.next_check_at, now)
+    tombstone.next_check_at = earliest_check if video.upload_mode == "direct" else min(tombstone.next_check_at, now)
     tombstone.archived_at = None
     tombstone.save(
         update_fields=[
@@ -502,42 +504,10 @@ def attach_training_video(
     if actual_duration_seconds is None:
         raise ValidationError("训练视频实际时长缺失")
 
-    from .history import legacy_invalidation_defaults
+    from .video_attachment import attach_verified_video
 
-    record = TrainingRecord.objects.create(
-        project_patient=project_patient,
-        prescription=video.prescription,
-        prescription_action=video.prescription_action,
-        training_date=video.training_date,
-        status=TrainingRecord.Status.COMPLETED,
-        actual_duration_minutes=max(1, math.ceil(actual_duration_seconds / 60)),
-        form_data={
-            "video_id": video.id,
-            "video_object_key": object_key,
-        },
-        note=video.note,
-        **legacy_invalidation_defaults(video.prescription_action),
-    )
+    attach_verified_video(video, metadata, object_key=object_key)
     now = timezone.now()
-    video.training_record = record
-    video.status = TrainingVideo.Status.ATTACHED
-    video.bucket = settings.QINIU_BUCKET
-    video.object_key = object_key
-    video.object_hash = object_hash
-    video.uploaded_at = now
-    video.failure_reason = ""
-    video.save(
-        update_fields=[
-            "training_record",
-            "status",
-            "bucket",
-            "object_key",
-            "object_hash",
-            "uploaded_at",
-            "failure_reason",
-            "updated_at",
-        ]
-    )
     job.status = VideoAssemblyJob.Status.SUCCEEDED
     job.qiniu_object_hash = object_hash
     job.failure_reason = ""
@@ -553,10 +523,6 @@ def attach_training_video(
             "updated_at",
         ]
     )
-    ensure_motion_analysis_job(video)
-    from .sets import attach_set_video
-
-    attach_set_video(video)
     tombstone = _ensure_qiniu_cleanup_tombstone(video, job, retain_canonical=True)
     transaction.on_commit(lambda job_id=job.id: cleanup_training_video_files.delay(job_id))
     transaction.on_commit(
@@ -793,7 +759,8 @@ def cleanup_unbound_training_video(self, video_id):
         ).exclude(skeleton_object_key="")
     ]
     try:
-        _remove_session_files(video)
+        if video.upload_mode != "direct":
+            _remove_session_files(video)
     except Exception as exc:
         video, retryable = _record_unbound_cleanup_failure(
             video_id,
@@ -824,6 +791,8 @@ def cleanup_qiniu_tombstone(tombstone_id):
         return False
 
     now = timezone.now()
+    if tombstone.canonical_key.startswith("training-videos/direct/") and tombstone.next_check_at > now:
+        return False
     seen = False
     try:
         for key in _qiniu_cleanup_keys(tombstone):
@@ -1168,7 +1137,8 @@ def expire_stale_training_video_sessions():
             job = VideoAssemblyJob.objects.select_for_update().filter(training_video=video).first()
             if not _is_expirable_video(video, job, cutoff):
                 continue
-            _remove_session_files(video)
+            if video.upload_mode != "direct":
+                _remove_session_files(video)
             tombstone = _ensure_qiniu_cleanup_tombstone(
                 video,
                 job,

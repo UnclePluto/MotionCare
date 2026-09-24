@@ -7,11 +7,11 @@ describe('真机录制诊断', () => {
       platform: 'ios', system: 'iOS 26.6.1', version: '8.0.78', SDKVersion: '3.17.0',
       model: 'iPhone 13', deviceId: 'private-device', token: 'private-token'
     })
-    trace.mark('segment_stop')
+    trace.mark('finish_stop')
     trace.mark('stop_timeout')
     const result = JSON.parse(trace.export())
     expect(result.environment).toEqual({ platform: 'ios', system: 'iOS 26.6.1', version: '8.0.78', SDKVersion: '3.17.0', model: 'iPhone 13' })
-    expect(result.events.map((event: any) => event.event)).toEqual(['segment_stop', 'stop_timeout'])
+    expect(result.events.map((event: any) => event.event)).toEqual(['finish_stop', 'stop_timeout'])
     expect(trace.export()).not.toMatch(/private-device|private-token/)
   })
   it('区分发出停止与收到视频，保留耗时并排除视频路径和原始错误', () => {

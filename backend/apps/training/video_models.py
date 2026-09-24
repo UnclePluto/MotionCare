@@ -35,6 +35,11 @@ class LegacyTrainingVideoSegmentArchive(models.Model):
 
 
 class TrainingVideo(UserStampedModel):
+    upload_mode = models.CharField(
+        "上传方式", max_length=16, choices=[("segments", "分片"), ("direct", "整文件直传")],
+        default="segments",
+    )
+    direct_upload_expires_at = models.DateTimeField("直传凭证截止时间", null=True, blank=True)
     motion_attempt = models.ForeignKey(
         "training.MotionSetAttempt",
         null=True,
