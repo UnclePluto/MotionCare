@@ -126,12 +126,14 @@ function updateCompressedSegment(
 async function deleteUploadedLocalFile(
   segment: CompressedMotionTrainingSegment,
   dependencies: Pick<PendingSegmentUploadDependencies, 'deleteSavedFile'>
-): Promise<void> {
-  if (!isSegmentReadyForLocalDeletion(segment)) return
+): Promise<boolean> {
+  if (segment.localFileDeleted) return true
+  if (!isSegmentReadyForLocalDeletion(segment)) return false
   try {
     await dependencies.deleteSavedFile(segment.savedFilePath)
+    return true
   } catch {
-    // Local cleanup is best-effort; uploaded state is the durable truth.
+    return false
   }
 }
 
@@ -175,7 +177,12 @@ export async function runPendingSegmentUploads(
       if (!isCompressedMotionTrainingSegment(segment)) {
         throw new Error('录像分段尚未压缩，请重试')
       }
-      if (segment.uploadState === 'uploaded') continue
+      if (segment.uploadState === 'uploaded') {
+        if (!segment.localFileDeleted && await deleteUploadedLocalFile(segment, dependencies)) {
+          session = persist(updateCompressedSegment(session, segment.index, { localFileDeleted: true }), dependencies)
+        }
+        continue
+      }
 
       session = persist(updateCompressedSegment(session, segment.index, {
         uploadState: 'uploading',
@@ -204,7 +211,9 @@ export async function runPendingSegmentUploads(
       onProgress({ phase: 'upload', index: segment.index, state: 'uploaded', progress: 100 })
       const uploadedSegment = session.segments[segment.index]
       if (uploadedSegment && isCompressedMotionTrainingSegment(uploadedSegment)) {
-        await deleteUploadedLocalFile(uploadedSegment, dependencies)
+        if (await deleteUploadedLocalFile(uploadedSegment, dependencies)) {
+          session = persist(updateCompressedSegment(session, segment.index, { localFileDeleted: true }), dependencies)
+        }
       }
     }
 

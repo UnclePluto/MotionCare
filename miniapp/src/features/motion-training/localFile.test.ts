@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { saveTemporaryMotionTrainingSegmentForRetry } from './localFile'
+import { releaseMotionTrainingLocalFile, saveTemporaryMotionTrainingSegmentForRetry } from './localFile'
+
+it('treats repeated file deletion as success but preserves real I/O failures', async () => {
+  const fs = { unlink: vi.fn(options => options.fail({ errMsg: 'unlink:fail no such file or directory' })), removeSavedFile: vi.fn(options => options.success()) }
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://temp/gone.mp4', localFileState: 'temporary' }, () => fs)).toBe(true)
+  fs.unlink.mockImplementationOnce(options => options.fail({ errMsg: 'unlink:fail permission denied' }))
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://temp/kept.mp4', localFileState: 'save_failed' }, () => fs)).toBe(false)
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://store/saved.mp4', localFileState: 'saved' }, () => fs)).toBe(true)
+  expect(fs.removeSavedFile).toHaveBeenCalledWith(expect.objectContaining({ filePath: 'wxfile://store/saved.mp4' }))
+})
 
 describe('shoulder press failed segment persistence', () => {
   it('moves one temporary failed segment into saved storage', async () => {

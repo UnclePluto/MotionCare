@@ -5,6 +5,31 @@ export { MOTION_TRAINING_SEGMENT_DURATION_MS }
 
 export const MOTION_TRAINING_BUFFER_HIGH_BYTES = 65 * 1024 * 1024
 export const MOTION_TRAINING_BUFFER_LOW_BYTES = 10 * 1024 * 1024
+const MIN_NEXT_SEGMENT_RESERVE_BYTES = 20 * 1024 * 1024
+
+const TARGET_SEGMENT_BYTES = 25 * 1024 * 1024
+
+function observedBytesPerMs(segments: PendingMotionTrainingSegment[]): number {
+  let rate = 0
+  for (const segment of segments) {
+    if (segment.compressionState !== 'compressed' || !Number.isFinite(segment.sizeBytes) ||
+      segment.sizeBytes <= 0 || !Number.isFinite(segment.durationMs) || segment.durationMs <= 0) return Infinity
+    rate = Math.max(rate, segment.sizeBytes / segment.durationMs)
+  }
+  return rate
+}
+
+/** Keep the shorter duration for the rest of this session after a large file. */
+export function motionTrainingSegmentDurationMs(segments: PendingMotionTrainingSegment[]): number {
+  return observedBytesPerMs(segments) * MOTION_TRAINING_SEGMENT_DURATION_MS > TARGET_SEGMENT_BYTES
+    ? 30_000 : MOTION_TRAINING_SEGMENT_DURATION_MS
+}
+
+/** Application buffer estimate, not a measurement of the device's free disk. */
+export function motionTrainingNextSegmentReserveBytes(segments: PendingMotionTrainingSegment[]): number {
+  return Math.max(MIN_NEXT_SEGMENT_RESERVE_BYTES,
+    Math.ceil(observedBytesPerMs(segments) * motionTrainingSegmentDurationMs(segments) * 1.5))
+}
 
 export type MotionTrainingBufferState = 'recording' | 'buffer_paused' | 'buffer_ready'
 
@@ -20,7 +45,7 @@ export function pendingMotionTrainingLocalBytes(
 
   for (const segment of segments) {
     if (segment.compressionState !== 'compressed') return Number.POSITIVE_INFINITY
-    if (segment.uploadState === 'uploaded') continue
+    if (segment.uploadState === 'uploaded' && segment.localFileDeleted) continue
     if (Number.isFinite(segment.sizeBytes) && segment.sizeBytes > 0) {
       totalBytes += segment.sizeBytes
     }
@@ -32,22 +57,23 @@ export function pendingMotionTrainingLocalBytes(
 export function nextMotionTrainingBufferTransition(input: {
   state: MotionTrainingBufferState
   pendingBytes: number
+  reserveBytes?: number
 }): MotionTrainingBufferTransition {
   if (
     input.state === 'recording' &&
-    input.pendingBytes >= MOTION_TRAINING_BUFFER_HIGH_BYTES
+    input.pendingBytes + (input.reserveBytes ?? MIN_NEXT_SEGMENT_RESERVE_BYTES) >= MOTION_TRAINING_BUFFER_HIGH_BYTES
   ) {
     return { state: 'buffer_paused', alert: 'pause' }
   }
   if (
     input.state === 'buffer_paused' &&
-    input.pendingBytes < MOTION_TRAINING_BUFFER_LOW_BYTES
+    canResumeMotionTrainingFromBuffer(input.pendingBytes, input.reserveBytes)
   ) {
     return { state: 'buffer_ready', alert: 'ready' }
   }
   return { state: input.state, alert: null }
 }
 
-export function canResumeMotionTrainingFromBuffer(pendingBytes: number): boolean {
-  return pendingBytes < MOTION_TRAINING_BUFFER_LOW_BYTES
+export function canResumeMotionTrainingFromBuffer(pendingBytes: number, reserveBytes = MIN_NEXT_SEGMENT_RESERVE_BYTES): boolean {
+  return pendingBytes < MOTION_TRAINING_BUFFER_LOW_BYTES && pendingBytes + reserveBytes < MOTION_TRAINING_BUFFER_HIGH_BYTES
 }

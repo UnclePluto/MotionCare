@@ -35,18 +35,21 @@ type RecordingGeneration = {
 }
 
 const MIN_PAUSE_SEGMENT_MS = 2000
-export const MOTION_TRAINING_SEGMENT_DURATION_MS = 5_000
+export const MOTION_TRAINING_SEGMENT_DURATION_MS = 60_000
 
 export class MotionTrainingRecorder {
   private readonly camera: CameraContext
   private readonly now: () => number
   private readonly onSegment: (path: string, durationMs: number) => Promise<void> | void
   private readonly onNativeError?: (error: unknown) => void
+  private readonly onRecordingChange?: (active: boolean, recordedDurationMs: number) => void
   private readonly onPause?: () => void
+  private readonly canContinueRecording?: () => boolean
   private readonly onMaxDuration?: (cutoffMs: number) => void
   private readonly onStopped?: (endedAtMs: number) => void
   private readonly onStopSlow?: (phase: 'starting' | 'stopping') => void
   private readonly finishAtSegmentBoundary: boolean
+  private readonly segmentDurationMs: () => number
   private readonly maxDurationMs: number
   private generation = 0
   private mode: RecorderMode = 'idle'
@@ -67,19 +70,25 @@ export class MotionTrainingRecorder {
     now: () => number
     onSegment: (path: string, durationMs: number) => Promise<void> | void
     onNativeError?: (error: unknown) => void
+    onRecordingChange?: (active: boolean, recordedDurationMs: number) => void
     onPause?: () => void
+    canContinueRecording?: () => boolean
     onMaxDuration?: (cutoffMs: number) => void
     onStopped?: (endedAtMs: number) => void
     onStopSlow?: (phase: 'starting' | 'stopping') => void
     finishAtSegmentBoundary?: boolean
+    segmentDurationMs?: () => number
     maxDurationMs?: number
   }) {
+    this.segmentDurationMs = input.segmentDurationMs ?? (() => MOTION_TRAINING_SEGMENT_DURATION_MS)
     this.finishAtSegmentBoundary = input.finishAtSegmentBoundary ?? false
     this.onNativeError = input.onNativeError
     this.camera = input.camera
     this.now = input.now
     this.onSegment = input.onSegment
+    this.onRecordingChange = input.onRecordingChange
     this.onPause = input.onPause
+    this.canContinueRecording = input.canContinueRecording
     this.onMaxDuration = input.onMaxDuration
     this.onStopped = input.onStopped
     this.onStopSlow = input.onStopSlow
@@ -89,6 +98,7 @@ export class MotionTrainingRecorder {
   async start(): Promise<void> {
     await this.waitForPendingDeliveries()
     if (this.mode === 'recording') return Promise.resolve()
+    if (this.canContinueRecording?.() === false) throw new Error('录像空间正在清理，请等待上传完成后继续')
     this.mode = 'recording'
     return this.startGeneration()
   }
@@ -97,7 +107,10 @@ export class MotionTrainingRecorder {
     if (this.mode !== 'recording') return Promise.resolve(null)
     this.mode = 'pausing'
     const generation = this.generation
-    const stopping = this.stopCurrent(generation, true)
+    const stopping = this.stopCurrent(generation, true).then(async segment => {
+      await this.waitForPendingDeliveries()
+      return segment
+    })
     this.stoppingPromise = stopping
     return stopping.finally(() => {
       this.onPause?.()
@@ -178,7 +191,7 @@ export class MotionTrainingRecorder {
       return Promise.resolve()
     }
     const timeoutSeconds = Math.min(
-      MOTION_TRAINING_SEGMENT_DURATION_MS / 1000,
+      this.segmentDurationMs() === 30_000 ? 30 : 60,
       Math.floor(remainingMs / 1000)
     )
     const generation: RecordingGeneration = {
@@ -200,6 +213,7 @@ export class MotionTrainingRecorder {
             return
           }
           generation.state = 'recording'
+          this.onRecordingChange?.(true, this.recordedDurationMs)
           generation.stopWhenReady?.()
           resolve()
         },
@@ -239,16 +253,22 @@ export class MotionTrainingRecorder {
       cutoffMs
     )
     this.recordedDurationMs += durationMs
-    const reachedLimit = generation.requestedDurationMs < MOTION_TRAINING_SEGMENT_DURATION_MS ||
-      this.recordedDurationMs >= this.maxDurationMs
+    this.onRecordingChange?.(false, this.recordedDurationMs)
+    const reachedLimit = this.maxDurationMs - this.recordedDurationMs < 1000
+    const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
     if (!finishStopPending && !reachedLimit) {
-      // WeChat clears the previous recording state AFTER timeoutCallback returns.
-      // Starting synchronously here lets that cleanup overwrite the new recording.
-      void Promise.resolve().then(() => {
-        if (this.mode === 'recording' && this.currentGeneration === generation) return this.startGeneration()
+      // Leave the native callback first, then admit another file only after its
+      // predecessor's metadata is persisted. Upload remains asynchronous.
+      void delivery.then(segment => {
+        if (this.mode !== 'recording' || this.currentGeneration !== generation) return
+        if (!segment || this.canContinueRecording?.() === false) {
+          this.mode = 'idle'
+          this.onPause?.()
+          return
+        }
+        return this.startGeneration()
       }).catch((error: unknown) => this.recordError(error))
     }
-    const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
 
     if (finishStopPending) {
       generation.state = 'stopped'
@@ -339,6 +359,7 @@ export class MotionTrainingRecorder {
             return
           }
           this.recordedDurationMs += durationMs
+          this.onRecordingChange?.(false, this.recordedDurationMs)
           this.trackDelivery(this.deliver(result.tempVideoPath, durationMs), true)
             .then((segment) => resolve(segment))
             .catch((error: unknown) => reject(error instanceof Error ? error : new Error('录像分段保存失败')))
@@ -436,6 +457,7 @@ export class MotionTrainingRecorder {
     const error = this.pendingError
     this.pendingError = null
     if (error) throw error
+    if (this.failedSegment) throw new Error('录像分段保存失败，请重试保存后再结束训练')
   }
 
   private recordError(error: unknown): void {

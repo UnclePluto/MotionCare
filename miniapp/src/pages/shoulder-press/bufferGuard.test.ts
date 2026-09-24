@@ -24,12 +24,12 @@ function compressedSegment(
 }
 
 describe('shoulder-press buffer guard', () => {
-  it('counts only segments that still depend on a local file', () => {
+  it('counts uploaded segments until cleanup is confirmed', () => {
     expect(pendingShoulderPressLocalBytes([
       compressedSegment({ sizeBytes: 7 * MB, uploadState: 'pending' }),
       compressedSegment({ sizeBytes: 8 * MB, uploadState: 'uploading' }),
       compressedSegment({ sizeBytes: 9 * MB, uploadState: 'uploaded', sha256: 'ok' })
-    ])).toBe(15 * MB)
+    ])).toBe(24 * MB)
   })
 
   it('pauses once at 65MB and becomes ready only below 10MB', () => {

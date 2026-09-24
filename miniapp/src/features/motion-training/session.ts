@@ -21,6 +21,7 @@ export type CompressedMotionTrainingSegment = {
   sizeBytes: number
   uploadState: 'pending' | 'uploading' | 'uploaded'
   localFileState?: 'temporary' | 'save_failed' | 'saved'
+  localFileDeleted?: boolean
   sha256?: string
 }
 
@@ -188,6 +189,7 @@ function normalizeSegment(value: unknown, expectedIndex: number): PendingMotionT
     sizeBytes: segment.sizeBytes,
     uploadState: segment.uploadState,
     localFileState: segment.localFileState ?? 'saved',
+    ...(segment.uploadState === 'uploaded' && segment.localFileDeleted === true ? { localFileDeleted: true } : {}),
     ...(segment.sha256 ? { sha256: segment.sha256 } : {})
   }
 }

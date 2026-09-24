@@ -75,6 +75,15 @@ async function flushPromises(times = 6) {
 }
 
 describe('motion training pending segment upload workflow', () => {
+  it('retries cleanup after reload without reuploading acknowledged segments', async () => {
+    const { deps } = dependencies()
+    deps.deleteSavedFile.mockRejectedValueOnce(new Error('busy'))
+    const first = await runPendingSegmentUploads(baseSession(), deps, vi.fn())
+    expect(first.segments[0]).not.toMatchObject({ localFileDeleted: true })
+    const second = await runPendingSegmentUploads(first, deps, vi.fn())
+    expect(second.segments[0]).toMatchObject({ localFileDeleted: true })
+    expect(deps.uploadVideoSegment).toHaveBeenCalledTimes(3)
+  })
   it('keeps clear Chinese business errors and hides unsafe transport details', () => {
     expect(motionTrainingUploadErrorMessage(new Error('处方已更新，请重新进入')))
       .toBe('运动计划已更新，请重新进入')

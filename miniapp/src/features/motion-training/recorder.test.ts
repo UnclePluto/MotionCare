@@ -34,14 +34,106 @@ function fakeCamera() {
   }
 }
 
-async function flushPromises(times = 6) {
+async function flushPromises(times = 30) {
   for (let index = 0; index < times; index += 1) {
     await Promise.resolve()
   }
 }
 
 describe('MotionTrainingRecorder', () => {
-  it('starts five-second recordings before asynchronously delivering a timeout segment', async () => {
+  it('keeps finish blocked after pause reports a failed metadata write until the original segment is retried', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let failMetadata!: (error: Error) => void
+    let now = 0
+    const onSegment = vi.fn().mockResolvedValueOnce(undefined).mockImplementationOnce(() => new Promise((_resolve, reject) => { failMetadata = reject })).mockResolvedValue(undefined)
+    const recorder = new MotionTrainingRecorder({ camera, now: () => now, onSegment })
+    await recorder.start()
+    now = 60000
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/first.mp4' })
+    await flushPromises()
+    now = 120000
+    startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/second.mp4' })
+    await flushPromises()
+    const pauseResult = recorder.pause().catch(error => error)
+    failMetadata(new Error('storage full'))
+    expect(await pauseResult).toBeInstanceOf(Error)
+    await expect(recorder.finish()).rejects.toThrow()
+    await expect(recorder.start()).rejects.toThrow()
+    expect(camera.startRecord).toHaveBeenCalledTimes(2)
+    await recorder.retryFailedSegment()
+    expect(await recorder.finish()).toHaveLength(2)
+  })
+  it('records thirty minute-long clips and never starts clip thirty-one', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let now = 0
+    const recorder = new MotionTrainingRecorder({ camera, now: () => now, maxDurationMs: 1800000, onSegment: async () => {} })
+    await recorder.start()
+    for (let index = 0; index < 30; index += 1) {
+      expect(startOptions[index].timeout).toBe(60)
+      now += 60000
+      startOptions[index].timeoutCallback?.({ tempVideoPath: `wxfile://temp/minute-${index}.mp4` })
+      await flushPromises(30)
+    }
+    expect(camera.startRecord).toHaveBeenCalledTimes(30)
+    expect(await recorder.finish()).toHaveLength(30)
+  })
+
+  it('waits for segment metadata before admitting the next recording and pauses if space is insufficient', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const onPause = vi.fn()
+    let canContinue = true
+    const recorder = new MotionTrainingRecorder({ camera, now: () => 60000, onSegment: () => pending, canContinueRecording: () => canContinue, onPause })
+    await recorder.start()
+    canContinue = false
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/full.mp4' })
+    await flushPromises(30)
+    expect(camera.startRecord).toHaveBeenCalledTimes(1)
+    release()
+    await flushPromises(30)
+    expect(camera.startRecord).toHaveBeenCalledTimes(1)
+    expect(camera.stopRecord).not.toHaveBeenCalled()
+    expect(onPause).toHaveBeenCalledTimes(1)
+    expect(await recorder.finish()).toHaveLength(1)
+  })
+
+  it('does not complete pause or allow resume until pending metadata passes the buffer check', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let release!: () => void
+    const metadata = new Promise<void>(resolve => { release = resolve })
+    let allowed = true
+    const recorder = new MotionTrainingRecorder({ camera, now: () => 60000, onSegment: () => metadata, canContinueRecording: () => allowed })
+    await recorder.start()
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/pending.mp4' })
+    let paused = false
+    const pausing = recorder.pause().then(() => { paused = true })
+    await flushPromises()
+    expect(paused).toBe(false)
+    allowed = false
+    release()
+    await pausing
+    await expect(recorder.start()).rejects.toThrow('等待')
+    expect(camera.startRecord).toHaveBeenCalledTimes(1)
+    allowed = true
+    await recorder.start()
+    expect(camera.startRecord).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not restart if finish arrives while segment metadata is pending', async () => {
+    const { camera, startOptions } = fakeCamera()
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    const recorder = new MotionTrainingRecorder({ camera, now: () => 60000, onSegment: () => pending, canContinueRecording: () => true })
+    await recorder.start()
+    startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/full.mp4' })
+    const finishing = recorder.finish()
+    release()
+    expect(await finishing).toHaveLength(1)
+    await flushPromises(30)
+    expect(camera.startRecord).toHaveBeenCalledTimes(1)
+  })
+  it('persists timeout metadata before starting the next minute-long recording', async () => {
     const { camera, startOptions } = fakeCamera()
     const order: string[] = []
     let now = 0
@@ -62,21 +154,21 @@ describe('MotionTrainingRecorder', () => {
     await recorder.start()
     expect(camera.startRecord).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ timeout: 5 })
+      expect.objectContaining({ timeout: 60 })
     )
-    now = 5_000
+    now = 60_000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
-    await Promise.resolve()
+    await flushPromises()
 
     expect(camera.startRecord).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ timeout: 5 })
+      expect.objectContaining({ timeout: 60 })
     )
-    expect(onSegment).toHaveBeenNthCalledWith(1, 'wxfile://store/segment-0.mp4', 5_000)
+    expect(onSegment).toHaveBeenNthCalledWith(1, 'wxfile://store/segment-0.mp4', 60_000)
     expect(order).toEqual([
       'start',
-      'start',
-      'segment:wxfile://store/segment-0.mp4:5000'
+      'segment:wxfile://store/segment-0.mp4:60000',
+      'start'
     ])
   })
 
@@ -128,7 +220,7 @@ describe('MotionTrainingRecorder', () => {
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
     await finishPromise
-    await Promise.resolve()
+    await flushPromises()
 
     expect(delivered).toEqual(['wxfile://store/segment-0.mp4'])
   })
@@ -145,7 +237,7 @@ describe('MotionTrainingRecorder', () => {
     await recorder.start()
     now = 30000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-0.mp4' })
-    await Promise.resolve()
+    await flushPromises()
 
     now = 42000
     const finishPromise = recorder.finish()
@@ -194,30 +286,30 @@ describe('MotionTrainingRecorder', () => {
     const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 12_000,
+      maxDurationMs: 122_000,
       onMaxDuration,
       onSegment
     })
 
     await recorder.start()
-    now = 5_000
+    now = 60_000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-0.mp4' })
     await flushPromises()
     expect(camera.startRecord).toHaveBeenCalledTimes(2)
-    now = 10_000
+    now = 120_000
     startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-1.mp4' })
     await flushPromises()
     expect(camera.startRecord).toHaveBeenCalledTimes(3)
 
-    now = 11_900
+    now = 121_900
     const firstFinish = recorder.finish()
     const firstFinishResult = firstFinish.catch((error: unknown) => error)
     expect(camera.stopRecord).toHaveBeenCalledTimes(1)
 
-    now = 12_000
+    now = 122_000
     startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
 
-    expect(onMaxDuration).toHaveBeenCalledWith(12_000)
+    expect(onMaxDuration).toHaveBeenCalledWith(122_000)
     expect(camera.stopRecord).toHaveBeenCalledTimes(1)
     await flushPromises()
     expect(onSegment).toHaveBeenNthCalledWith(3, 'wxfile://temp/timeout-tail.mp4', 2_000)
@@ -226,20 +318,20 @@ describe('MotionTrainingRecorder', () => {
     await expect(firstFinishResult).resolves.toHaveLength(3)
 
     startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/timeout-tail.mp4' })
-    now = 13_000
+    now = 123_000
     const retriedFinish = recorder.finish()
     expect(camera.stopRecord).toHaveBeenCalledTimes(1)
 
     await expect(retriedFinish).resolves.toEqual([
-      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
-      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 60_000 },
+      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 60_000 },
       { savedFilePath: 'wxfile://temp/timeout-tail.mp4', durationMs: 2_000 }
     ])
     expect(onSegment).toHaveBeenCalledTimes(3)
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
 
-  it('uses the remaining duration for generation 360 and never records past the upload contract', async () => {
+  it('uses the remaining duration for generation 30 and never records past the upload contract', async () => {
     const { camera, startOptions } = fakeCamera()
     let now = 0
     const onMaxDuration = vi.fn()
@@ -252,24 +344,24 @@ describe('MotionTrainingRecorder', () => {
     })
 
     await recorder.start()
-    for (let index = 0; index < 359; index += 1) {
-      now = (index + 1) * 5_000
+    for (let index = 0; index < 29; index += 1) {
+      now = (index + 1) * 60_000
       startOptions[index].timeoutCallback?.({ tempVideoPath: `wxfile://store/segment-${index}.mp4` })
       await flushPromises()
     }
 
-    expect(camera.startRecord).toHaveBeenCalledTimes(360)
-    expect(startOptions.slice(0, 359).every((options) => options.timeout === 5)).toBe(true)
-    expect(startOptions[359].timeout).toBe(2)
+    expect(camera.startRecord).toHaveBeenCalledTimes(30)
+    expect(startOptions.slice(0, 29).every((options) => options.timeout === 60)).toBe(true)
+    expect(startOptions[29].timeout).toBe(57)
 
     now = 1_797_000
-    startOptions[359].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-359.mp4' })
+    startOptions[29].timeoutCallback?.({ tempVideoPath: 'wxfile://store/segment-29.mp4' })
     const finishPromise = recorder.finish()
     await flushPromises()
 
-    expect(camera.startRecord).toHaveBeenCalledTimes(360)
+    expect(camera.startRecord).toHaveBeenCalledTimes(30)
     const segments = await finishPromise
-    expect(segments).toHaveLength(360)
+    expect(segments).toHaveLength(30)
     expect(segments.reduce((total, segment) => total + segment.durationMs, 0)).toBe(1_797_000)
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
   })
@@ -285,24 +377,24 @@ describe('MotionTrainingRecorder', () => {
     const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 12_000,
+      maxDurationMs: 122_000,
       onMaxDuration,
-      onSegment: async () => segmentPending
+      onSegment: async path => { if (path.includes('final')) await segmentPending }
     })
 
     await recorder.start()
-    now = 6_000
+    now = 61_000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-0.mp4' })
     await flushPromises()
     expect(camera.startRecord).toHaveBeenCalledTimes(2)
-    now = 11_000
+    now = 121_000
     startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-1.mp4' })
     await flushPromises()
     expect(camera.startRecord).toHaveBeenCalledTimes(3)
-    now = 13_000
+    now = 123_000
     startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
 
-    expect(onMaxDuration).toHaveBeenCalledWith(13_000)
+    expect(onMaxDuration).toHaveBeenCalledWith(123_000)
 
     let finishSettled = false
     const finishPromise = recorder.finish().finally(() => {
@@ -311,11 +403,11 @@ describe('MotionTrainingRecorder', () => {
     await flushPromises()
     expect(finishSettled).toBe(false)
 
-    now = 14_000
+    now = 124_000
     releaseSegment()
     await expect(finishPromise).resolves.toEqual([
-      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
-      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 60_000 },
+      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 60_000 },
       { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 2_000 }
     ])
     expect(onMaxDuration).toHaveBeenCalledTimes(1)
@@ -358,7 +450,7 @@ describe('MotionTrainingRecorder', () => {
   })
 
   it('keeps timeout onSegment rejection controlled and observable from finish', async () => {
-    const { camera, startOptions, stopOptions } = fakeCamera()
+    const { camera, startOptions } = fakeCamera()
     const unhandled: unknown[] = []
     const onUnhandled = (reason: unknown) => {
       unhandled.push(reason)
@@ -381,7 +473,7 @@ describe('MotionTrainingRecorder', () => {
 
       now = 42000
       const finishPromise = recorder.finish()
-      stopOptions[0].success?.({ tempVideoPath: 'wxfile://store/segment-1.mp4' })
+      expect(camera.startRecord).toHaveBeenCalledTimes(1)
 
       await expect(finishPromise).rejects.toThrow('保存失败')
       expect(unhandled).toEqual([])
@@ -453,7 +545,7 @@ describe('MotionTrainingRecorder', () => {
     })
 
     const startPromise = recorder.start()
-    await Promise.resolve()
+    await flushPromises()
     now = 4000
     const pausePromise = recorder.pause()
     expect(camera.stopRecord).not.toHaveBeenCalled()
@@ -511,25 +603,25 @@ describe('MotionTrainingRecorder', () => {
     const recorder = new MotionTrainingRecorder({
       camera,
       now: () => now,
-      maxDurationMs: 12_000,
+      maxDurationMs: 122_000,
       onMaxDuration,
       onSegment
     })
 
     await recorder.start()
-    now = 5_000
+    now = 60_000
     startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-0.mp4' })
     await flushPromises()
     expect(camera.startRecord).toHaveBeenCalledTimes(2)
-    now = 10_000
+    now = 120_000
     startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/segment-1.mp4' })
     await flushPromises()
     expect(camera.startRecord).toHaveBeenCalledTimes(3)
-    now = 12_000
+    now = 122_000
     startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://temp/final.mp4' })
     await flushPromises()
 
-    expect(onMaxDuration).toHaveBeenCalledWith(12_000)
+    expect(onMaxDuration).toHaveBeenCalledWith(122_000)
     await expect(recorder.finish()).rejects.toThrow('尾段保存失败')
     expect(recorder.hasFailedSegment()).toBe(true)
 
@@ -539,8 +631,8 @@ describe('MotionTrainingRecorder', () => {
     })
     expect(recorder.hasFailedSegment()).toBe(false)
     await expect(recorder.finish()).resolves.toEqual([
-      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 5_000 },
-      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 5_000 },
+      { savedFilePath: 'wxfile://temp/segment-0.mp4', durationMs: 60_000 },
+      { savedFilePath: 'wxfile://temp/segment-1.mp4', durationMs: 60_000 },
       { savedFilePath: 'wxfile://temp/final.mp4', durationMs: 2_000 }
     ])
     expect(onSegment).toHaveBeenCalledTimes(4)
@@ -801,4 +893,30 @@ it('回放真机第18段启动974毫秒后完成：保留自动结束回调，�
   expect(paths).toEqual(['native-tail.mp4'])
   expect(camera.stopRecord).not.toHaveBeenCalled()
   expect(camera.startRecord).toHaveBeenCalledTimes(1)
+})
+
+it('continues adaptive 30-second chunks and caps the final chunk to remaining time', async () => {
+  const { camera, startOptions } = fakeCamera()
+  let now = 0
+  let duration = 60_000
+  const recorder = new MotionTrainingRecorder({
+    camera, now: () => now, maxDurationMs: 100_000,
+    segmentDurationMs: () => duration,
+    onSegment: () => { duration = 30_000 }
+  })
+  await recorder.start()
+  expect(startOptions[0].timeout).toBe(60)
+  now = 60_000
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://first.mp4' })
+  await flushPromises(20)
+  expect(startOptions[1].timeout).toBe(30)
+  now = 90_000
+  startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://second.mp4' })
+  await flushPromises(20)
+  expect(startOptions[2].timeout).toBe(10)
+  now = 100_000
+  startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://last.mp4' })
+  await flushPromises(20)
+  expect(startOptions).toHaveLength(3)
+  expect(await recorder.finish()).toHaveLength(3)
 })
