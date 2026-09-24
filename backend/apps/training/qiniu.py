@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import json
 from pathlib import Path
 import time
 from collections.abc import Callable
@@ -9,10 +10,35 @@ from urllib.parse import quote, urlencode
 from django.conf import settings
 from django.core.exceptions import ValidationError
 import qiniu
+import httpx
 from qiniu import Auth, BucketManager, put_file
 
 
 ALLOWED_VIDEO_CONTENT_TYPES = frozenset({"video/mp4", "video/quicktime"})
+
+
+def read_private_video_info(object_key: str) -> dict:
+    """Read metadata only; never download the original video through the API server."""
+    if not object_key.startswith("training-videos/direct/"):
+        raise ValidationError("整组录像对象无效")
+    base = settings.QINIU_DOWNLOAD_DOMAIN.rstrip("/")
+    if not base.startswith("https://"):
+        raise ValidationError("私有录像媒体信息配置未就绪")
+    url = private_download_url(f"{base}/{quote(object_key, safe='/')}?avinfo", expires_at=int(time.time()) + 60)
+    try:
+        with httpx.stream("GET", url, timeout=httpx.Timeout(15, connect=5), follow_redirects=False) as response:
+            response.raise_for_status()
+            raw = bytearray()
+            for chunk in response.iter_bytes():
+                raw.extend(chunk)
+                if len(raw) > 1024 * 1024:
+                    raise ValueError("oversized metadata")
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise ValueError("invalid metadata")
+            return result
+    except (httpx.HTTPError, ValueError, TypeError):
+        raise ValidationError("云端录像信息暂时无法核验，请稍后重试") from None
 
 
 class QiniuUploadDeadlineExceeded(ValidationError):

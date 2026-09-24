@@ -269,6 +269,8 @@ def store_training_video_segment(
     ).first()
     if preliminary_video is None:
         raise Http404
+    if preliminary_video.upload_mode == "direct":
+        raise ValidationError("整组录像请使用直传接口")
 
     max_duration_seconds, max_segments = _session_upload_limits(preliminary_video)
     _validate_segment_request(
@@ -463,6 +465,9 @@ def finalize_training_video_session(
     )
     if video is None:
         raise Http404
+
+    if video.upload_mode == "direct":
+        raise ValidationError("整组录像请使用直传确认接口")
 
     existing_job = VideoAssemblyJob.objects.filter(training_video=video).first()
     if existing_job is not None:

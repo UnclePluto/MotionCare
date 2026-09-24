@@ -23,6 +23,7 @@ class SetOperationSerializer(serializers.Serializer):
     attempt_id = serializers.UUIDField()
     started_at = ClientOffsetDateTimeField(required=False)
     ended_at = ClientOffsetDateTimeField(required=False)
+    completion_reason = serializers.ChoiceField(choices=["manual", "time_limit"], default="manual")
 
 
 class MotionSessionView(PatientAppBaseView):
@@ -51,6 +52,7 @@ class CompletedSetSerializer(serializers.Serializer):
     attempt_id = serializers.UUIDField()
     started_at = ClientOffsetDateTimeField()
     ended_at = ClientOffsetDateTimeField()
+    completion_reason = serializers.ChoiceField(choices=["manual", "time_limit"], default="manual")
 
 
 class RecoverSessionSerializer(OpenSessionSerializer):

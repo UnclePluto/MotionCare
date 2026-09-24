@@ -1,4 +1,5 @@
 from django.urls import path
+from .direct_video_views import DirectUploadGrantView, DirectUploadCompleteView
 
 from .diagnostic_views import TrainingUploadDiagnosticView
 
@@ -26,6 +27,8 @@ from .views import (
 )
 
 urlpatterns = [
+    path("training-video-direct-uploads/", DirectUploadGrantView.as_view()),
+    path("training-video-direct-uploads/<int:video_id>/complete/", DirectUploadCompleteView.as_view()),
     path("motion-sessions/", MotionSessionView.as_view()),
     path("motion-sessions/recover/", MotionSessionRecoverView.as_view()),
     path("motion-sessions/<int:session_id>/", MotionSessionDetailView.as_view()),

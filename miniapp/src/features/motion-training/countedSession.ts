@@ -4,14 +4,16 @@ import { getPatientAppToken } from '../../auth/token'
 import { fetchPatientHomeData } from '../../demo/patientAppData'
 import { isDemoSession } from '../../demo/session'
 import { createClientSessionId } from './session'
-import { createVideoSession, finalizeVideoSession, getVideoSessionStatus, uploadVideoSegment } from './api'
+import { uploadLegacyCountedAttempt } from './countedLegacyUpload'
+import { releaseCountedFile, type CountedVideoFile } from './countedFiles'
+import { uploadDirectVideo, type DirectUploadGrant } from './directUpload'
 import type { MotionTrainingAction } from './pageState'
 
 export const COUNTED_QUEUE_KEY = 'motioncare.countedMotionQueue.v1'
 export type CountedSegment = { path: string; durationMs: number; sizeBytes: number }
 export type CountedAttempt = {
   id: string; index: number; startedAt: string; endedAt?: string; completed: boolean
-  abandoned?: boolean; segments: CountedSegment[]; uploaded?: boolean; videoId?: number
+  abandoned?: boolean; segments?: CountedSegment[]; uploadMode?: 'direct'; video?: CountedVideoFile; completionReason?: 'manual' | 'time_limit'; uploaded?: boolean; videoId?: number
   uploadId: string; error?: string
 }
 export type CountedSession = {
@@ -44,7 +46,7 @@ export function updateCountedSession(owner: number, id: string, update: (session
 }
 export function completedAttempts(session: CountedSession): CountedAttempt[] { return session.attempts.filter(item => item.completed && !item.abandoned) }
 export function protectedCountedPaths(): Set<string> {
-  return new Set(Object.values(readQueue()).flatMap(sessions => sessions.flatMap(session => session.attempts.flatMap(a => a.segments.map(s => s.path)))))
+  return new Set(Object.values(readQueue()).flatMap(sessions => sessions.flatMap(session => session.attempts.flatMap(a => a.video ? [a.video.path] : (a.segments ?? []).map(s => s.path)))))
 }
 export function newCountedSession(owner: number, action: MotionTrainingAction, startedAt: string): CountedSession {
   return { id: createClientSessionId(), owner, actionId: action.id, actionName: action.action_name,
@@ -58,18 +60,23 @@ export async function removeCountedFile(filePath: string): Promise<void> {
 }
 export async function discardIncomplete(session: CountedSession): Promise<CountedSession> {
   const incomplete = session.attempts.filter(a => !a.completed)
-  for (const attempt of incomplete) for (const segment of attempt.segments) await removeCountedFile(segment.path)
+  for (const attempt of incomplete) {
+    if (attempt.video) await releaseCountedFile(attempt.video)
+    for (const segment of attempt.segments ?? []) await removeCountedFile(segment.path)
+  }
   return updateCountedSession(session.owner, session.id, item => {
-    for (const attempt of item.attempts) if (!attempt.completed) { attempt.abandoned = true; attempt.segments = [] }
+    for (const attempt of item.attempts) if (!attempt.completed) { attempt.abandoned = true; attempt.segments = []; attempt.video = undefined }
   })
 }
-export async function checkCountedStorage(): Promise<void> {
-  const files = await new Promise<Array<{ size: number }>>((resolve, reject) => {
-    Taro.getFileSystemManager().getSavedFileList({ success: result => resolve(result.fileList), fail: reject })
-  })
-  if (files.reduce((sum, file) => sum + file.size, 0) > 35 * 1024 * 1024) {
-    throw new Error('录像空间不足，至少需要 65 MB 可用空间。请先补传已完成组后再开始。')
+export async function checkCountedStorage(owner?: number): Promise<void> {
+  if (owner !== undefined && countedSessions(owner).some(s => completedAttempts(s).some(a => !a.uploaded && a.video?.persistence === 'temporary'))) {
+    throw new Error('请先完成临时录像上传，再开始下一组。请保持小程序打开，避免录像丢失。')
   }
+  // The saved-file list is not a device free-space measurement. Validate access only;
+  // real persistence errors are handled when the complete file is returned.
+  await new Promise<void>((resolve, reject) => {
+    Taro.getFileSystemManager().getSavedFileList({ success: () => resolve(), fail: reject })
+  })
 }
 
 export type CountedUploadState = {
@@ -92,12 +99,17 @@ const inflight = new Map<number, Promise<void>>()
 export function syncCountedQueue(owner: number, automatic = false): Promise<void> {
   const previous = inflight.get(owner); if (previous) return previous
   const token = getPatientAppToken()
-  const active = () => token && token === getPatientAppToken() && !isDemoSession()
+  const active = () => !!token && token === getPatientAppToken() && !isDemoSession()
   const run = async () => {
     if (!active()) return
     for (const initial of countedSessions(owner)) {
       if (!active()) return
       let session = countedSessions(owner).find(s => s.id === initial.id)!
+      for (const attempt of session.attempts.filter(a => a.uploaded && a.video)) {
+        const released = await releaseCountedFile(attempt.video!)
+        if (!active()) return
+        if (released) session = updateCountedSession(owner, session.id, s => { s.attempts.find(a => a.id === attempt.id)!.video = undefined })
+      }
       const pending = completedAttempts(session).filter(a => !a.uploaded)
       if (!pending.length) continue
       for (const original of pending) {
@@ -111,7 +123,7 @@ export function syncCountedQueue(owner: number, automatic = false): Promise<void
           // A later invalid group must not prevent earlier valid groups from uploading.
           const response = await request<{ id: number }>('/patient-app/motion-sessions/recover/', { method: 'POST', data: {
             client_session_id: session.id, prescription_action: session.actionId, started_at: session.startedAt,
-            completed_sets: completedAttempts(session).filter(a => a.index <= original.index).map(a => ({ index: a.index, attempt_id: a.id, started_at: a.startedAt, ended_at: a.endedAt }))
+            completed_sets: completedAttempts(session).filter(a => a.index <= original.index).map(a => ({ index: a.index, attempt_id: a.id, started_at: a.startedAt, ended_at: a.endedAt, completion_reason: a.completionReason ?? 'manual' }))
           } })
           if (!active()) return
           if (!Number.isInteger(response.id)) throw new Error('运动进度响应无效，请稍后重试')
@@ -121,52 +133,23 @@ export function syncCountedQueue(owner: number, automatic = false): Promise<void
             const latest = updateCountedSession(owner, session.id, s => change(s.attempts.find(a => a.id === original.id)!))
             attempt = latest.attempts.find(a => a.id === original.id)!
           }
-          let status = attempt.videoId ? await getVideoSessionStatus(attempt.videoId) : undefined
+          const status = attempt.uploadMode === 'direct'
+            ? await syncDirectAttempt(attempt, progress, active, patch)
+            : await uploadLegacyCountedAttempt(session, attempt, progress, active, patch)
           if (!active()) return
-          if (status && ['expired', 'failed'].includes(status.status)) { patch(a => { a.videoId = undefined; a.uploadId = createClientSessionId() }); status = undefined }
-          if (!status) {
-            status = await createVideoSession({ actionId: session.actionId, clientSessionId: attempt.uploadId,
-              trainingDate: session.trainingDate, trainingStartedAt: attempt.startedAt, expectedDurationSeconds: 1800,
-              motionAttemptId: attempt.id })
-            if (!active()) return
-            patch(a => { a.videoId = status!.video_id })
-          }
-          const totalBytes = attempt.segments.reduce((sum, segment) => sum + segment.sizeBytes, 0)
-          let sentBytes = attempt.segments.reduce((sum, segment, index) => sum + (status!.uploaded_segments?.includes(index) ? segment.sizeBytes : 0), 0)
-          progress.percent = totalBytes ? Math.min(100, Math.floor(sentBytes / totalBytes * 100)) : 0
-          if (status.status !== 'attached' && !['queued', 'assembling', 'uploading_qiniu'].includes(status.status)) {
-            for (let index = 0; index < attempt.segments.length; index++) {
-              if (!active()) return
-              if (status.uploaded_segments?.includes(index)) continue
-              const segment = attempt.segments[index]
-              try { await Taro.getFileInfo({ filePath: segment.path }) } catch { throw new Error('本地录像文件已丢失，无法完成上传。请联系指导老师。') }
-              if (!active()) return
-              const segmentStartedAt = Date.now()
-              await uploadVideoSegment({ videoId: status.video_id, clientSessionId: attempt.uploadId, index,
-                filePath: segment.path, durationMs: segment.durationMs, sizeBytes: segment.sizeBytes,
-                onProgress: (percent, bytesSent) => {
-                  if (!active()) return
-                  const bytes = Math.min(segment.sizeBytes, Math.max(0, bytesSent ?? segment.sizeBytes * percent / 100))
-                  progress.percent = totalBytes ? Math.min(100, Math.floor((sentBytes + bytes) / totalBytes * 100)) : 0
-                  progress.updatedAt = Date.now()
-                  progress.bytesPerSecond = bytes * 1000 / Math.max(1, Date.now() - segmentStartedAt)
-                } })
-              sentBytes += segment.sizeBytes
-              progress.percent = totalBytes ? Math.min(100, Math.floor(sentBytes / totalBytes * 100)) : 0
-            }
-            if (!active()) return
-            progress.phase = 'confirming'; progress.percent = 100; progress.bytesPerSecond = 0
-            status = await finalizeVideoSession({ videoId: status.video_id, clientSessionId: attempt.uploadId,
-              segmentCount: attempt.segments.length, actualDurationSeconds: Math.max(1, Math.round(attempt.segments.reduce((sum, p) => sum + p.durationMs, 0) / 1000)),
-              trainingEndedAt: attempt.endedAt, note: '' })
-          }
-          if (!active()) return
-          if (status.status === 'attached') {
+          if (status?.status === 'attached') {
             // Persist the server acknowledgement before releasing any original file.
             progress.phase = 'completed'; progress.percent = 100; progress.bytesPerSecond = 0; progress.failures = 0
             patch(a => { a.uploaded = true; a.error = undefined })
-            for (const segment of attempt.segments) await removeCountedFile(segment.path)
-            patch(a => { a.segments = [] })
+            if (attempt.uploadMode === 'direct') {
+              const released = attempt.video && await releaseCountedFile(attempt.video)
+              if (!active()) return
+              if (released) patch(a => { a.video = undefined })
+            } else {
+              for (const segment of attempt.segments ?? []) await removeCountedFile(segment.path)
+              if (!active()) return
+              patch(a => { a.segments = [] })
+            }
           } else {
             progress.phase = 'confirming'; progress.percent = 100; progress.bytesPerSecond = 0; progress.retryAt = Date.now() + 2000
             patch(a => { a.error = undefined })
@@ -184,6 +167,54 @@ export function syncCountedQueue(owner: number, automatic = false): Promise<void
   const promise = run().finally(() => { inflight.delete(owner) })
   inflight.set(owner, promise); return promise
 }
+async function syncDirectAttempt(attempt: CountedAttempt, progress: CountedUploadState, active: () => boolean,
+  patch: (change: (a: CountedAttempt) => void) => void): Promise<DirectUploadGrant | undefined> {
+  const complete = (id: number) => request<DirectUploadGrant>(`/patient-app/training-video-direct-uploads/${id}/complete/`, { method: 'POST' })
+  const validate = (response: DirectUploadGrant, id?: number) => {
+    if (!response || !Number.isInteger(response.video_id) || response.video_id <= 0 || (id && response.video_id !== id)
+        || !['recording', 'attached', 'expired', 'failed'].includes(response.status)) throw new Error('上传确认响应无效，请重试')
+    return response
+  }
+  // Cloud acknowledgement may have been lost even when the local file no longer exists.
+  let uploadId = attempt.uploadId
+  if (attempt.videoId) {
+    const status = validate(await complete(attempt.videoId), attempt.videoId)
+    if (!active()) return
+    if (status.status === 'attached') return status
+    if (['expired', 'failed'].includes(status.status)) {
+      uploadId = createClientSessionId()
+      patch(a => { a.videoId = undefined; a.uploadId = uploadId })
+    }
+  }
+  const file = attempt.video
+  if (!file) throw new Error('本地录像文件已丢失，无法完成上传。请联系指导老师。')
+  const grant = validate(await request<DirectUploadGrant>('/patient-app/training-video-direct-uploads/', { method: 'POST', data: {
+    client_session_id: uploadId, motion_attempt_id: attempt.id, size_bytes: file.sizeBytes, duration_ms: file.durationMs
+  } }))
+  if (!active()) return
+  if (!['recording', 'attached'].includes(grant.status)) throw new Error('上传授权已失效，请重试')
+  patch(a => { a.videoId = grant.video_id })
+  if (grant.status === 'attached') return grant
+  const existing = validate(await complete(grant.video_id), grant.video_id)
+  if (!active()) return
+  if (existing.status === 'attached') return existing
+  try {
+    const info = await Taro.getFileInfo({ filePath: file.path })
+    if (!('size' in info) || info.size !== file.sizeBytes) throw new Error('changed')
+  } catch { throw new Error('本地录像文件已丢失或变化，无法完成上传。请联系指导老师。') }
+  if (!active()) return
+  const started = Date.now()
+  await uploadDirectVideo({ file, grant, isActive: active, onProgress: (percent, bytes) => {
+    if (!active()) return
+    progress.percent = percent; progress.updatedAt = Date.now()
+    progress.bytesPerSecond = bytes * 1000 / Math.max(1, Date.now() - started)
+  } })
+  if (!active()) return
+  progress.phase = 'confirming'; progress.percent = 100; progress.bytesPerSecond = 0
+  const status = validate(await complete(grant.video_id), grant.video_id)
+  return active() ? status : undefined
+}
+
 let retryTimer: ReturnType<typeof setInterval> | undefined
 let retryEpoch = 0
 let networkHandler: ((event: { isConnected: boolean }) => void) | undefined
@@ -207,7 +238,7 @@ export function startCountedRetry() {
     if (getPatientAppToken() !== token || isDemoSession()) { stopCountedRetry(); return }
     checking = true
     try {
-      if (!Object.values(readQueue()).some(list => list.some(s => completedAttempts(s).some(a => !a.uploaded)))) return
+      if (!Object.values(readQueue()).some(list => list.some(s => completedAttempts(s).some(a => !a.uploaded || a.video)))) return
       owner ??= (await fetchPatientHomeData()).project_patient_id
       if (epoch !== retryEpoch || getPatientAppToken() !== token) return
       await syncCountedQueue(owner, true)

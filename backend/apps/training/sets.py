@@ -62,6 +62,7 @@ def serialize_session(session):
                 "index": g.index,
                 "attempt_id": str(g.attempt_id) if g.attempt_id else None,
                 "completed": g.completed,
+                "completion_reason": g.completion_reason,
                 "started_at": g.started_at.isoformat() if g.started_at else None,
                 "ended_at": g.ended_at.isoformat() if g.ended_at else None,
                 "rest_until": (g.ended_at + timedelta(seconds=180)).isoformat()
@@ -122,7 +123,7 @@ def owned_session(pp, session_id, *, lock=False):
 
 
 @transaction.atomic
-def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None, ended_at=None):
+def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None, ended_at=None, completion_reason="manual"):
     pp = ProjectPatient.objects.select_for_update().select_related("project").get(pk=pp.pk)
     session = owned_session(pp, session_id, lock=True)
     if not 1 <= index <= session.planned_sets:
@@ -158,7 +159,7 @@ def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None,
             raise ValidationError("录像尝试不存在或已失效")
         if operation == "complete":
             if group.completed:
-                if group.ended_at != ended_at:
+                if group.ended_at != ended_at or group.completion_reason != completion_reason:
                     raise ValidationError("重复完成时间冲突")
                 return session
             if not ended_at or not group.started_at < ended_at <= group.started_at + timedelta(
@@ -167,7 +168,10 @@ def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None,
                 raise ValidationError("本组结束时间无效")
             if ended_at > timezone.now() + timedelta(seconds=30):
                 raise ValidationError("本组结束时间超出当前时间")
+            if completion_reason == "time_limit" and (ended_at - group.started_at).total_seconds() != 300:
+                raise ValidationError("到时结束的组必须对应五分钟保护")
             group.ended_at, group.completed = ended_at, True
+            group.completion_reason = completion_reason
         elif operation == "abandon":
             if group.completed:
                 raise ValidationError("已完成组无需重做，请补传视频")
@@ -251,6 +255,9 @@ def recover_session(pp, *, client_session_id, prescription_action, started_at, c
     for item in completed_sets:
         index, attempt_id = item["index"], item["attempt_id"]
         start, end = item["started_at"], item["ended_at"]
+        completion_reason = item.get("completion_reason", "manual")
+        if completion_reason == "time_limit" and (end - start).total_seconds() != 300:
+            raise ValidationError("到时结束的组必须对应五分钟保护")
         if (
             not 1 <= index <= session.planned_sets
             or not started_at <= start < end <= start + timedelta(minutes=30)
@@ -266,7 +273,7 @@ def recover_session(pp, *, client_session_id, prescription_action, started_at, c
                 raise ValidationError("已完成组缺少上一组或三分钟休息")
         group, _ = MotionTrainingSet.objects.get_or_create(session=session, index=index)
         if group.completed:
-            if (group.attempt_id, group.started_at, group.ended_at) != (attempt_id, start, end):
+            if (group.attempt_id, group.started_at, group.ended_at, group.completion_reason) != (attempt_id, start, end, completion_reason):
                 raise ValidationError("已完成组声明冲突")
             continue
         attempt = MotionSetAttempt.objects.filter(pk=attempt_id).first()
@@ -284,5 +291,6 @@ def recover_session(pp, *, client_session_id, prescription_action, started_at, c
             end,
             True,
         )
+        group.completion_reason = completion_reason
         group.save()
     return session
