@@ -809,6 +809,9 @@ def test_phone_jitter_video_can_be_probed_and_encoded_without_dropping_frames(tm
             "-an",
             "-c:v",
             "libx264",
+            # Keep packet durations equal to presentation intervals on FFmpeg 6 too.
+            "-bf",
+            "0",
             "-pix_fmt",
             "yuv420p",
             str(source),
