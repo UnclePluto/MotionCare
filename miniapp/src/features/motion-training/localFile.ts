@@ -1,12 +1,12 @@
 export type MotionTrainingLocalFileState = 'temporary' | 'save_failed' | 'saved'
 
 type RemoveOptions = { filePath: string; success: () => void; fail: (error: unknown) => void }
-type LocalFileSystem = { unlink: (options: RemoveOptions) => void; removeSavedFile: (options: RemoveOptions) => void }
+type LocalFileSystem = { access?: (options: { path: string; success: () => void; fail: (error: unknown) => void }) => void; unlink: (options: RemoveOptions) => void; removeSavedFile: (options: RemoveOptions) => void }
 
 function fileAlreadyMissing(error: unknown): boolean {
   const value = error && typeof error === 'object' ? error as { errMsg?: unknown; message?: unknown } : {}
   const message = typeof value.errMsg === 'string' ? value.errMsg : typeof value.message === 'string' ? value.message : ''
-  return /ENOENT|no such file|file (?:not exist|does not exist|not found)|文件不存在|文件未找到/i.test(message)
+  return /ENOENT|no such file|file (?:not exists?|does not exist|doesn't exist|not found)|文件不存在|文件未找到/i.test(message)
 }
 
 export function releaseMotionTrainingLocalFile(
@@ -14,9 +14,28 @@ export function releaseMotionTrainingLocalFile(
   getFileSystem: () => LocalFileSystem
 ): Promise<boolean> {
   return new Promise(resolve => {
-    const options = { filePath: file.filePath, success: () => resolve(true), fail: (error: unknown) => resolve(fileAlreadyMissing(error)) }
     try {
       const fs = getFileSystem()
+      const verifyMissing = () => {
+        if (!fs.access) { resolve(false); return }
+        try {
+          fs.access({ path: file.filePath, success: () => resolve(false), fail: error => resolve(fileAlreadyMissing(error)) })
+        } catch { resolve(false) }
+      }
+      const options = {
+        filePath: file.filePath,
+        success: () => resolve(true),
+        fail: (error: unknown) => {
+          if (fileAlreadyMissing(error)) { resolve(true); return }
+          // Historical abandoned-file manifests retain only the path, not its
+          // saved/temporary kind. unlink cannot remove every saved-file path.
+          if (file.localFileState === undefined) {
+            try {
+              fs.removeSavedFile({ filePath: file.filePath, success: () => resolve(true), fail: verifyMissing })
+            } catch { verifyMissing() }
+          } else verifyMissing()
+        }
+      }
       if (file.localFileState === 'saved') fs.removeSavedFile(options)
       else fs.unlink(options)
     } catch (error) { resolve(fileAlreadyMissing(error)) }
