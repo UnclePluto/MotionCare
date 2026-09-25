@@ -33,6 +33,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
   const cameraEpoch = useRef(0)
   const operation = useRef(0)
   const resetCamera = () => {
+    trace.mark('camera_reset')
     cameraEpoch.current += 1
     cameraReadyRef.current = false
     cameraContext.current = null
@@ -279,6 +280,9 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       if (completed < total) audio.current?.begin(Date.parse(pendingEnd.current!) + 180000, total - completed)
       else audio.current?.stop()
       active.current = null; pendingEnd.current = null; recorder.current = null
+      // The file is durable before replacing the native camera. Do not carry
+      // the previous group's AV recording session through rest/audio playback.
+      if (!demo && completed < total) resetCamera()
       setError(attempt.video?.persistence === 'temporary' ? '本机空间不足，视频正从临时文件上传。请保持小程序打开，直到显示已上传。' : ''); setRecording(false); setEnding(null); setShowStart(false); setNow(Date.now()); void retry()
       if (!demo) void Taro.setKeepScreenOn({ keepScreenOn: false }).catch(() => undefined)
     } catch (err) { if (mounted.current && operation.current === ownOperation) setError(err instanceof Error ? err.message : '保存失败，请重试保存或重做本组') }
@@ -346,8 +350,9 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
         else setError('摄像头暂不可用，请重新开启摄像头后开始。')
       }}
       onStop={() => {
+        if (cameraEpoch.current !== cameraGeneration) return
         trace.mark('camera_stop')
-        if (cameraEpoch.current !== cameraGeneration || pendingEnd.current) return
+        if (pendingEnd.current) return
         if (active.current && Date.now() >= Date.parse(active.current.startedAt) + 300000) { void finish('time_limit'); return }
         cameraReadyRef.current = false; cameraContext.current = null; setCameraReady(false)
         if (active.current) void abandon('录像已中断，请重做本组')

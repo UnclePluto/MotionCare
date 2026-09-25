@@ -676,8 +676,7 @@ def test_timeline_parser_counts_missing_ticks_in_last_frame_duration():
     for frame_index in range(100):
         duration = 2.0 if frame_index == 99 else 1 / 30
         lines.append(
-            "best_effort_timestamp_time="
-            f"{frame_index / 30:.6f}|pkt_duration_time={duration:.6f}\n"
+            f"best_effort_timestamp_time={frame_index / 30:.6f}|pkt_duration_time={duration:.6f}\n"
         )
 
     with pytest.raises(MediaEncodingError, match="缺帧比例"):
@@ -685,6 +684,165 @@ def test_timeline_parser_counts_missing_ticks_in_last_frame_duration():
             io.BytesIO("".join(lines).encode("utf-8")),
             expected_fps=30.0,
         )
+
+
+def test_timeline_parser_accepts_phone_capture_jitter_without_changing_frame_count_or_time():
+    from pp_mcare.media import _parse_cfr_timeline
+
+    # Sanitized timestamps from a phone recording: one 35 ms interval among 33.33 ms frames.
+    timestamps = [
+        0,
+        0.033333,
+        0.066667,
+        0.1,
+        0.133333,
+        0.166667,
+        0.201667,
+        0.235,
+        0.268333,
+        0.301667,
+        0.335,
+        0.368333,
+    ]
+    payload = "".join(
+        f"best_effort_timestamp_time={pts:.6f}|pkt_duration_time=0.033333\n" for pts in timestamps
+    )
+
+    timeline = _parse_cfr_timeline(io.BytesIO(payload.encode()), expected_fps=179 / 6)
+
+    assert timeline.frame_count == 12
+    assert timeline.duration_seconds == pytest.approx(0.401666, abs=0.000001)
+
+
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        [0, 0.033333, 0.033333],
+        [0, 0.033333, 0.02],
+        [0, 0.033333, 0.083333],
+    ],
+)
+def test_timeline_parser_still_rejects_duplicates_reversal_and_large_jitter(timestamps):
+    from pp_mcare.media import MediaEncodingError, _parse_cfr_timeline
+
+    payload = "".join(f"best_effort_timestamp_time={pts:.6f}\n" for pts in timestamps)
+    with pytest.raises(MediaEncodingError):
+        _parse_cfr_timeline(io.BytesIO(payload.encode()), expected_fps=30)
+
+
+def test_timeline_parser_rejects_local_playback_drift_even_when_total_duration_matches():
+    from pp_mcare.media import MediaEncodingError, _parse_cfr_timeline
+
+    # Each interval differs by only 2 ms, but the first half falls 120 ms behind.
+    # The second half catches up: total duration alone would miss the distortion.
+    timestamps = [index / 30 + min(index, 120 - index) * 0.002 for index in range(121)]
+    payload = "".join(
+        f"best_effort_timestamp_time={pts:.6f}|pkt_duration_time=0.033333\n" for pts in timestamps
+    )
+    with pytest.raises(MediaEncodingError, match="时间轴偏差"):
+        _parse_cfr_timeline(io.BytesIO(payload.encode()), expected_fps=30)
+
+
+def test_timeline_parser_preserves_existing_sparse_drop_support_on_nominal_grid():
+    from pp_mcare.media import _parse_cfr_timeline
+
+    # Existing inputs may miss <1% of nominal ticks, including several adjacent ticks.
+    # Their established CFR playback can drift by more than the new jitter-only guard.
+    ticks = [tick for tick in range(600) if tick not in (300, 301, 302, 303)]
+    payload = "".join(
+        f"best_effort_timestamp_time={tick / 30:.6f}|pkt_duration_time=0.033333\n"
+        for tick in ticks
+    )
+    timeline = _parse_cfr_timeline(
+        io.BytesIO(payload.encode()), expected_fps=30, playback_fps=29.8
+    )
+    assert timeline.frame_count == 596
+    assert timeline.duration_seconds == pytest.approx(20, abs=0.000001)
+
+
+@pytest.mark.parametrize("last_duration,accepted", [(0.031333, True), (0.035333, False)])
+def test_jitter_guard_includes_last_frame_playback_duration(last_duration, accepted):
+    from pp_mcare.media import MediaEncodingError, _parse_cfr_timeline
+
+    # The final frame starts 49 ms behind. Its duration moves the final drift to
+    # either 47 ms (allowed) or 51 ms (rejected), without any missing nominal tick.
+    timestamps = [index / 30 + min(index * 0.002, 0.049) for index in range(30)]
+    payload = "".join(
+        f"best_effort_timestamp_time={pts:.6f}|pkt_duration_time="
+        f"{last_duration if index == 29 else 1 / 30:.6f}\n"
+        for index, pts in enumerate(timestamps)
+    ).encode()
+    if accepted:
+        result = _parse_cfr_timeline(io.BytesIO(payload), expected_fps=30)
+        assert result.frame_count == 30
+        assert result.duration_seconds == pytest.approx(1.047, abs=0.000001)
+    else:
+        with pytest.raises(MediaEncodingError, match="时间轴偏差"):
+            _parse_cfr_timeline(io.BytesIO(payload), expected_fps=30)
+
+
+@pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")
+def test_phone_jitter_video_can_be_probed_and_encoded_without_dropping_frames(tmp_path):
+    from types import SimpleNamespace
+
+    import cv2
+
+    from pp_mcare.media import SkeletonVideoEncoder, probe_source_video
+    from pp_mcare.pose_inference import open_full_frame_pose_stream
+
+    source = tmp_path / "phone-jitter.mp4"
+    subprocess.run(
+        [
+            FFMPEG,
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=64x48:rate=30:duration=12",
+            "-vf",
+            "settb=1/600,setpts=N*20+floor(N/6)",
+            "-fps_mode",
+            "passthrough",
+            "-enc_time_base",
+            "1:600",
+            "-an",
+            "-c:v",
+            "libx264",
+            # Keep packet durations equal to presentation intervals on FFmpeg 6 too.
+            "-bf",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            str(source),
+        ],
+        check=True,
+    )
+
+    metadata = probe_source_video(source)
+    assert metadata.frame_count == 360
+    assert metadata.duration_seconds == pytest.approx(12.098333, abs=0.001)
+
+    class EmptyPoseModel:
+        def predict(self, _image):
+            return [SimpleNamespace(json={"res": {"kpts": []}})]
+
+    encoder = SkeletonVideoEncoder(tmp_path / "skeleton.mp4", 64, 48, metadata.fps)
+    try:
+        with open_full_frame_pose_stream(
+            source, model=EmptyPoseModel(), capture=cv2.VideoCapture(str(source))
+        ) as stream:
+            timestamps = []
+            for frame in stream:
+                timestamps.append(frame.timestamp_ms)
+                encoder.write(frame.image)
+        assert timestamps[:8] == [0, 33, 67, 100, 133, 167, 202, 235]
+        assert stream.decoded_frame_count == stream.inferred_frame_count == 360
+        result = encoder.finish()
+        assert result.frame_count == 360
+        assert result.duration_seconds == pytest.approx(metadata.duration_seconds, abs=0.001)
+    finally:
+        encoder.abort()
 
 
 @pytest.mark.skipif(not FFMPEG or not FFPROBE, reason="需要真实 ffmpeg/ffprobe")

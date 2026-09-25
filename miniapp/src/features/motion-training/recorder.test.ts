@@ -908,3 +908,29 @@ it('回放真机第18段启动974毫秒后完成：保留自动结束回调，�
   expect(camera.stopRecord).not.toHaveBeenCalled()
   expect(camera.startRecord).toHaveBeenCalledTimes(1)
 })
+
+it('continues adaptive 30-second chunks and caps the final chunk to remaining time', async () => {
+  const { camera, startOptions } = fakeCamera()
+  let now = 0
+  let duration = 60_000
+  const recorder = new MotionTrainingRecorder({
+    camera, now: () => now, maxDurationMs: 100_000,
+    segmentDurationMs: () => duration,
+    onSegment: () => { duration = 30_000 }
+  })
+  await recorder.start()
+  expect(startOptions[0].timeout).toBe(60)
+  now = 60_000
+  startOptions[0].timeoutCallback?.({ tempVideoPath: 'wxfile://first.mp4' })
+  await flushPromises(20)
+  expect(startOptions[1].timeout).toBe(30)
+  now = 90_000
+  startOptions[1].timeoutCallback?.({ tempVideoPath: 'wxfile://second.mp4' })
+  await flushPromises(20)
+  expect(startOptions[2].timeout).toBe(10)
+  now = 100_000
+  startOptions[2].timeoutCallback?.({ tempVideoPath: 'wxfile://last.mp4' })
+  await flushPromises(20)
+  expect(startOptions).toHaveLength(3)
+  expect(await recorder.finish()).toHaveLength(3)
+})

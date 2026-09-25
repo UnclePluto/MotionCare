@@ -20,6 +20,7 @@ import {
 import {
   canResumeMotionTrainingFromBuffer,
   motionTrainingNextSegmentReserveBytes,
+  motionTrainingSegmentDurationMs,
   nextMotionTrainingBufferTransition,
   pendingMotionTrainingLocalBytes,
   type MotionTrainingBufferState
@@ -455,6 +456,7 @@ export function MotionTrainingRecordingCameraPage() {
   const cameraContextRef = useRef<CameraContext | null>(null)
   const recorderRef = useRef<MotionTrainingRecorder | null>(null)
   const sessionRef = useRef<PendingMotionTrainingSession | null>(null)
+  const nativeTimingRef = useRef<{ active: boolean; durationMs: number; startedAt: number } | null>(null)
   const recordingRef = useRef(false)
   const pausedRef = useRef(false)
   const commandInFlightRef = useRef(false)
@@ -592,6 +594,10 @@ export function MotionTrainingRecordingCameraPage() {
 
   function currentElapsedMs(): number {
     if (timeReachedAtRef.current !== null) return timeReachedElapsedRef.current
+    const timing = nativeTimingRef.current
+    if (recordingRef.current && timing) {
+      return timing.durationMs + (timing.active ? Math.max(0, Date.now() - timing.startedAt) : 0)
+    }
     const savedDuration = sessionRef.current?.actualDurationMs ?? session?.actualDurationMs ?? 0
     return computeMotionTrainingEffectiveDuration({
       savedDurationMs: savedDuration,
@@ -786,6 +792,7 @@ export function MotionTrainingRecordingCameraPage() {
       camera: diagnosticOwner ? segmentTraceFor(diagnosticOwner.clientSessionId).recording.wrap(context) : context,
       now: () => Date.now(),
       maxDurationMs: MOTION_TRAINING_RECORDING_STOP_MS,
+      segmentDurationMs: () => motionTrainingSegmentDurationMs(sessionRef.current?.segments ?? []),
       canContinueRecording: () => {
         if (!mountedRef.current || !pageVisibleRef.current || timeReachedAtRef.current !== null) return false
         const latest = loadPendingMotionTrainingSession(Taro) ?? sessionRef.current
@@ -795,6 +802,13 @@ export function MotionTrainingRecordingCameraPage() {
           pendingBytes: pendingMotionTrainingLocalBytes(latest.segments),
           reserveBytes: motionTrainingNextSegmentReserveBytes(latest.segments)
         }).state === 'recording'
+      },
+      onRecordingChange: (active, recordedDurationMs) => {
+        nativeTimingRef.current = {
+          active,
+          durationMs: active ? sessionRef.current?.actualDurationMs ?? recordedDurationMs : recordedDurationMs,
+          startedAt: Date.now()
+        }
       },
       onMaxDuration: (cutoffMs) => {
         notifyTrainingTimeReached(cutoffMs)
@@ -1293,10 +1307,13 @@ export function MotionTrainingRecordingCameraPage() {
 
   useEffect(() => {
     if (!recording) return undefined
-    const stopDelayMs = Math.max(0, MOTION_TRAINING_RECORDING_STOP_MS - currentElapsedMs())
-    const hardStopTimer = setTimeout(() => {
-      notifyTrainingTimeReached()
-    }, stopDelayMs)
+    let hardStopTimer: ReturnType<typeof setTimeout>
+    const checkHardStop = () => {
+      const remainingMs = MOTION_TRAINING_RECORDING_STOP_MS - currentElapsedMs()
+      if (remainingMs <= 0) notifyTrainingTimeReached()
+      else hardStopTimer = setTimeout(checkHardStop, remainingMs)
+    }
+    hardStopTimer = setTimeout(checkHardStop, Math.max(0, MOTION_TRAINING_RECORDING_STOP_MS - currentElapsedMs()))
     const timer = setInterval(() => {
       const elapsedMs = currentElapsedMs()
       setLiveTick(Date.now())

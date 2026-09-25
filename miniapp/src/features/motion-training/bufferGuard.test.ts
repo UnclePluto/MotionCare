@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   canResumeMotionTrainingFromBuffer,
   motionTrainingNextSegmentReserveBytes,
+  motionTrainingSegmentDurationMs,
   nextMotionTrainingBufferTransition,
   pendingMotionTrainingLocalBytes
 } from './bufferGuard'
@@ -71,4 +72,24 @@ describe('shoulder-press buffer guard', () => {
       }
     ])).toBe(Number.POSITIVE_INFINITY)
   })
+})
+
+it('keeps 60 seconds normally and selects 30 seconds when a minute would exceed 25 MiB', () => {
+  expect(motionTrainingSegmentDurationMs([])).toBe(60_000)
+  expect(motionTrainingSegmentDurationMs([compressedSegment({ durationMs: 60_000, sizeBytes: 25 * MB })])).toBe(60_000)
+  const large = compressedSegment({ durationMs: 60_000, sizeBytes: 40 * MB })
+  expect(motionTrainingSegmentDurationMs([large])).toBe(30_000)
+  expect(motionTrainingNextSegmentReserveBytes([large])).toBe(30 * MB)
+  expect(motionTrainingSegmentDurationMs([large, compressedSegment({ durationMs: 30_000, sizeBytes: 10 * MB })])).toBe(30_000)
+})
+
+it('blocks another recording even with an empty queue if its estimated file cannot fit', () => {
+  const reserve = motionTrainingNextSegmentReserveBytes([compressedSegment({ durationMs: 30_000, sizeBytes: 70 * MB })])
+  expect(reserve).toBeGreaterThan(65 * MB)
+  expect(nextMotionTrainingBufferTransition({ state: 'recording', pendingBytes: 0, reserveBytes: reserve }).state).toBe('buffer_paused')
+  expect(canResumeMotionTrainingFromBuffer(0, reserve)).toBe(false)
+})
+
+it('does not offer resume when the next file consumes the entire budget', () => {
+  expect(canResumeMotionTrainingFromBuffer(0, 65 * MB)).toBe(false)
 })

@@ -28,6 +28,10 @@ PROBE_POLL_SECONDS = 0.05
 PROBE_KILL_WAIT_SECONDS = 5
 TIMESTAMP_RELATIVE_TOLERANCE = 0.01
 TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS = 0.001
+# Capture jitter is distinct from the tighter metadata/duration consistency tolerance.
+CAPTURE_JITTER_RELATIVE_TOLERANCE = 0.10
+CAPTURE_JITTER_MAX_SECONDS = 0.005
+MAX_PLAYBACK_TIMELINE_DRIFT_SECONDS = 0.050
 MAX_MISSING_NOMINAL_TICK_RATIO = 0.01
 
 
@@ -263,12 +267,22 @@ class _TimelineMetadata:
     duration_seconds: float
 
 
-def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMetadata:
+def _parse_cfr_timeline(
+    output: BinaryIO, *, expected_fps: float, playback_fps: float | None = None
+) -> _TimelineMetadata:
+    """Accept slight capture jitter only when CFR playback stays close to every source frame."""
     nominal_interval = 1.0 / expected_fps
-    tolerance = max(
+    nominal_tolerance = max(
         TIMESTAMP_ABSOLUTE_TOLERANCE_SECONDS,
         nominal_interval * TIMESTAMP_RELATIVE_TOLERANCE,
     )
+    tolerance = max(
+        nominal_tolerance,
+        min(CAPTURE_JITTER_MAX_SECONDS, nominal_interval * CAPTURE_JITTER_RELATIVE_TOLERANCE),
+    )
+    has_capture_jitter = False
+    playback_interval = 1.0 / (playback_fps if playback_fps is not None else expected_fps)
+    max_playback_drift = 0.0
     first_pts: float | None = None
     previous_pts: float | None = None
     frame_count = 0
@@ -301,24 +315,25 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
         duration = _optional_positive_float(fields.get("pkt_duration_time"))
         if duration is not None:
             duration_ticks = round(duration / nominal_interval)
-            if (
-                duration_ticks < 1
-                or abs(duration - duration_ticks * nominal_interval) > tolerance
-            ):
+            duration_error = abs(duration - duration_ticks * nominal_interval)
+            if duration_ticks < 1 or duration_error > tolerance:
                 raise MediaEncodingError("输入视频帧持续时间不均匀")
+            has_capture_jitter |= duration_error > nominal_tolerance
             last_duration_tick_count = duration_ticks
         else:
             last_duration_tick_count = 1
         if first_pts is None:
             first_pts = pts
+        max_playback_drift = max(
+            max_playback_drift, abs(pts - first_pts - frame_count * playback_interval)
+        )
         if previous_pts is not None:
             interval = pts - previous_pts
             interval_ticks = round(interval / nominal_interval)
-            if (
-                interval_ticks < 1
-                or abs(interval - interval_ticks * nominal_interval) > tolerance
-            ):
+            interval_error = abs(interval - interval_ticks * nominal_interval)
+            if interval_ticks < 1 or interval_error > tolerance:
                 raise MediaEncodingError("输入视频帧时间戳不均匀")
+            has_capture_jitter |= interval_error > nominal_tolerance
             nominal_tick_count += interval_ticks
         else:
             nominal_tick_count = 1
@@ -332,6 +347,13 @@ def _parse_cfr_timeline(output: BinaryIO, *, expected_fps: float) -> _TimelineMe
     if missing_tick_count / nominal_tick_count > MAX_MISSING_NOMINAL_TICK_RATIO:
         raise MediaEncodingError("输入视频缺帧比例过高")
     duration_seconds = previous_pts - first_pts + (last_duration or nominal_interval)
+    max_playback_drift = max(
+        max_playback_drift, abs(duration_seconds - frame_count * playback_interval)
+    )
+    # Preserve the existing nominal-grid / <1% missing-tick policy (including the
+    # 90-repetition reference). Only newly accepted jitter needs this extra guard.
+    if has_capture_jitter and max_playback_drift > MAX_PLAYBACK_TIMELINE_DRIFT_SECONDS:
+        raise MediaEncodingError("输入视频与骨架播放时间轴偏差过大")
     return _TimelineMetadata(
         frame_count=frame_count,
         duration_seconds=_positive_float(duration_seconds, "输入视频时间轴时长"),
@@ -478,7 +500,9 @@ def probe_source_video(path, *, pass_fds: tuple[int, ...] = ()) -> SourceVideoMe
             stderr_limit=PROBE_STDERR_LIMIT_BYTES,
             timeout_seconds=PROBE_TIMEOUT_SECONDS,
             redact_paths=(source_path,),
-            parser=lambda output: _parse_cfr_timeline(output, expected_fps=nominal_fps),
+            parser=lambda output: _parse_cfr_timeline(
+                output, expected_fps=nominal_fps, playback_fps=average_fps
+            ),
             pass_fds=pass_fds,
         )
         summary_frame_count = int(video["nb_read_frames"])

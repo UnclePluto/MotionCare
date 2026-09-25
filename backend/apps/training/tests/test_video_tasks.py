@@ -652,7 +652,7 @@ def test_oversized_assembly_result_enters_existing_failure_flow_without_upload(
     ("declared_duration", "segment_duration_ms", "probed_duration"),
     [
         (1_800, 5_000, 1_800.001),
-        (60, 30_000, 65.001),
+        (60, 30_000, 120.001),
     ],
 )
 def test_invalid_assembled_duration_enters_failure_flow_without_remote_upload(
@@ -1708,3 +1708,32 @@ def test_expire_scan_removes_wrong_session_uuid_for_existing_video_including_qua
     assert not wrong_session.exists()
     assert not wrong_quarantine.exists()
     assert right_session.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("probed_duration", [60.0, 60.001, 179.999, 180.0])
+def test_assembled_duration_allows_up_to_one_minute_difference(
+    project_patient, active_prescription, tmp_path, settings, probed_duration
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=120)
+    module = _video_tasks()
+    claimed, ok = module.claim_video_assembly_job(job.id)
+    assert ok
+    module.mark_uploading_qiniu(job.id, _assembly_result(video, duration=probed_duration), lease_attempt=claimed.attempt_count)
+    video.refresh_from_db()
+    assert video.status == TrainingVideo.Status.UPLOADING_QINIU
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("probed_duration", [59.999, 180.001])
+def test_assembled_duration_rejects_more_than_one_minute_difference(
+    project_patient, active_prescription, tmp_path, settings, probed_duration
+):
+    settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
+    video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=120)
+    module = _video_tasks()
+    claimed, ok = module.claim_video_assembly_job(job.id)
+    assert ok
+    with pytest.raises(ValidationError, match="训练视频真实时长与客户端声明不一致"):
+        module.mark_uploading_qiniu(job.id, _assembly_result(video, duration=probed_duration), lease_attempt=claimed.attempt_count)

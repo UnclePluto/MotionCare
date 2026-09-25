@@ -66,7 +66,7 @@ export async function releaseManagedMotionTrainingFile(
   const moved = resolveManagedMotionTrainingPath(file.filePath, storage) !== file.filePath
   const removed = moved ? false : await releaseMotionTrainingLocalFile({ ...file, onError: error => {
     const value = error as { errMsg?: string; message?: string } | undefined
-    permissionDenied = /permission|denied|not permitted/i.test(value?.errMsg ?? value?.message ?? '')
+    permissionDenied ||= /permission|denied|not permitted/i.test(value?.errMsg ?? value?.message ?? '')
     file.onError?.(error)
   } }, getFileSystem)
   if (removed || (file.localFileState === 'saved' && !moved) || (!permissionDenied && !moved)) return { removed, filePath: file.filePath }

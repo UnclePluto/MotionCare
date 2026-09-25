@@ -12,7 +12,7 @@ export const LOCAL_FILE_CLEANUP_TIMEOUT_MS = 10000
 function fileAlreadyMissing(error: unknown): boolean {
   const value = error && typeof error === 'object' ? error as { errMsg?: unknown; message?: unknown } : {}
   const message = typeof value.errMsg === 'string' ? value.errMsg : typeof value.message === 'string' ? value.message : ''
-  return /ENOENT|no such file|file (?:not exist|does not exist|not found)|文件不存在|文件未找到/i.test(message)
+  return /ENOENT|no such file|file (?:not exists?|does not exist|doesn't exist|not found)|文件不存在|文件未找到/i.test(message)
 }
 
 export function releaseMotionTrainingLocalFile(
@@ -23,6 +23,7 @@ export function releaseMotionTrainingLocalFile(
   return new Promise(resolve => {
     let settled = false
     let checking = false
+    let triedSavedFallback = false
     const report = (error: unknown) => {
       try { file.onError?.(error) } catch { /* Diagnostics cannot affect cleanup. */ }
     }
@@ -47,10 +48,16 @@ export function releaseMotionTrainingLocalFile(
     const success = () => {
       finish(true)
     }
-    const fail = (error: unknown) => {
+    const fail = (error: unknown, verifyOnly = false) => {
       if (settled || checking) return
       report(error)
-      if (fileAlreadyMissing(error)) { success(); return }
+      if (!verifyOnly && fileAlreadyMissing(error)) { success(); return }
+      if (file.localFileState === undefined && !triedSavedFallback && fs?.removeSavedFile) {
+        triedSavedFallback = true
+        try { fs.removeSavedFile({ filePath: file.filePath, success, fail: error => fail(error, true) }) }
+        catch (fallbackError) { fail(fallbackError, true) }
+        return
+      }
       if (!fs?.access) { finish(false); return }
       checking = true
       accessEvent('access_call')

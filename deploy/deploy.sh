@@ -19,6 +19,7 @@ if compose ps --status running --services 2>/dev/null | grep -qx postgres; then
 fi
 
 compose --profile tools pull
+compose --profile tools run --rm migrate python manage.py check_deployment_migrations
 compose --profile tools run --rm migrate
 compose up -d --wait --wait-timeout 240
 compose ps

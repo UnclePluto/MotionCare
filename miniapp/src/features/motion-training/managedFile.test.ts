@@ -56,3 +56,12 @@ it('does not delete after a failed checkpoint or resave a saved file', async () 
   expect((await releaseManagedMotionTrainingFile({ filePath: 'wxfile://store/four', localFileState: 'saved', onMoved: vi.fn() }, () => fs, save)).removed).toBe(false)
   expect(save).toHaveBeenCalledTimes(1)
 })
+
+it('retains permission failure through a failed legacy saved-file fallback', async () => {
+  const fs = { unlink: vi.fn(o => o.fail({ errMsg: 'permission denied' })),
+    removeSavedFile: vi.fn(o => o.filePath.includes('/store/') ? o.success() : o.fail({ errMsg: 'invalid file' })),
+    access: vi.fn(o => o.success()) }
+  const save = vi.fn(async () => ({ savedFilePath: 'wxfile://store/legacy-moved' }))
+  expect(await releaseManagedMotionTrainingFile({ filePath: 'wxfile://temp/legacy-untyped', onMoved: vi.fn() }, () => fs, save))
+    .toEqual({ removed: true, filePath: 'wxfile://store/legacy-moved' })
+})
