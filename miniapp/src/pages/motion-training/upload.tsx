@@ -4,6 +4,8 @@ import Taro, { useDidShow } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 
 import { saveTemporaryMotionTrainingSegmentForRetry } from '../../features/motion-training/localFile'
+import { cleanupUploadedMotionTrainingSegments, rememberAbandonedMotionTrainingFiles } from '../../features/motion-training/segmentCleanup'
+import { saveManagedMotionTrainingFile, releaseManagedMotionTrainingFile } from '../../features/motion-training/managedFile'
 import {
   isServerRetryableFinalizeStatus,
   isServerSafeFinalizeStatus,
@@ -31,7 +33,6 @@ import {
 } from '../../features/motion-training/api'
 
 type UploadPhase = 'preparing' | 'session' | 'status' | 'segments' | 'finalize' | 'done'
-const ABANDONED_MOTION_TRAINING_FILES_KEY = 'motioncare.motionTraining.abandonedFiles.v1'
 
 const PHASE_LABELS: Record<UploadPhase, string> = {
   preparing: '准备训练分段',
@@ -90,42 +91,31 @@ function statusMessage(status: TrainingVideoStatus | string): string {
   return '上传失败，本地视频仍保留。请检查网络后重试。'
 }
 
-function deleteSavedFile(path: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      Taro.getFileSystemManager().unlink({
-        filePath: path,
-        success: () => resolve(true),
-        fail: () => resolve(false)
-      })
-    } catch {
-      resolve(false)
-    }
-  })
-}
-
-async function cleanupAfterServerReceipt(session: PendingMotionTrainingSession): Promise<void> {
+async function cleanupAfterServerReceipt(session: PendingMotionTrainingSession): Promise<boolean> {
   const failedPaths: string[] = []
-  try {
-    for (const segment of session.segments) {
-      const filePath = isCompressedMotionTrainingSegment(segment)
-        ? segment.savedFilePath
-        : segment.rawSavedFilePath
-      if (!await deleteSavedFile(filePath)) {
-        failedPaths.push(filePath)
+  for (const segment of session.segments) {
+    if (!loadOwnedPendingMotionTrainingSession(Taro, session.clientSessionId)) return false
+    if (isCompressedMotionTrainingSegment(segment) && segment.localFileDeleted) continue
+    const filePath = isCompressedMotionTrainingSegment(segment)
+      ? segment.savedFilePath
+      : segment.rawSavedFilePath
+    const result = await releaseManagedMotionTrainingFile({ filePath, localFileState: isCompressedMotionTrainingSegment(segment) ? segment.localFileState : undefined,
+      onMoved: savedFilePath => {
+        const current = loadOwnedPendingMotionTrainingSession(Taro, session.clientSessionId)
+        if (!current) throw new Error('录像会话已变更')
+        saveOwnedPendingMotionTrainingSession(Taro, { ...current, segments: current.segments.map(item => item.index !== segment.index ? item : isCompressedMotionTrainingSegment(item)
+          ? { ...item, savedFilePath, localFileState: 'saved' } : { ...item, rawSavedFilePath: savedFilePath }) })
       }
+    }, () => Taro.getFileSystemManager(), options => Taro.saveFile(options), Taro)
+    if (!result.removed) {
+      failedPaths.push(result.filePath)
     }
-    if (failedPaths.length > 0) {
-      Taro.setStorageSync(ABANDONED_MOTION_TRAINING_FILES_KEY, {
-        paths: failedPaths,
-        recordedAt: Date.now()
-      })
-    } else {
-      Taro.removeStorageSync(ABANDONED_MOTION_TRAINING_FILES_KEY)
-    }
-  } finally {
-    clearPendingMotionTrainingSession(Taro)
   }
+  if (!loadOwnedPendingMotionTrainingSession(Taro, session.clientSessionId)) return false
+  // Keep the original manifest if saving the remaining cleanup paths fails.
+  rememberAbandonedMotionTrainingFiles(Taro, failedPaths)
+  clearPendingMotionTrainingSession(Taro)
+  return true
 }
 
 export default function MotionTrainingUploadPage() {
@@ -148,9 +138,23 @@ export default function MotionTrainingUploadPage() {
     return saved
   }
 
+  function cleanupUploadedSegments(clientSessionId: string) {
+    return cleanupUploadedMotionTrainingSegments({
+      loadSession: () => loadOwnedPendingMotionTrainingSession(Taro, clientSessionId),
+      saveSession: persist,
+      releaseFile: segment => releaseManagedMotionTrainingFile({ filePath: segment.savedFilePath, localFileState: segment.localFileState,
+        onMoved: savedFilePath => {
+          const current = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
+          if (!current) throw new Error('录像会话已变更')
+          persist(updateSegment(current, segment.index, { savedFilePath, localFileState: 'saved' }))
+        }
+      }, () => Taro.getFileSystemManager(), options => Taro.saveFile(options), Taro)
+    })
+  }
+
   async function leaveAfterSafeReceipt(session: PendingMotionTrainingSession) {
     setPhase('done')
-    await cleanupAfterServerReceipt(session)
+    if (!await cleanupAfterServerReceipt(session)) return
     await Taro.reLaunch({ url: '/pages/prescription/index' })
   }
 
@@ -256,6 +260,7 @@ export default function MotionTrainingUploadPage() {
     setPhase('segments')
     const clientSessionId = session.clientSessionId
     let current: PendingMotionTrainingSession | null = session
+    await cleanupUploadedSegments(clientSessionId)
 
     for (;;) {
       const latest = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
@@ -268,6 +273,14 @@ export default function MotionTrainingUploadPage() {
       if (!segment) break
       if (!isCompressedMotionTrainingSegment(segment)) {
         throw new Error('录像分段尚未压缩，请重试')
+      }
+      if (segment.localFileState && segment.localFileState !== 'saved') {
+        await saveManagedMotionTrainingFile(segment.savedFilePath, options => Taro.saveFile(options), savedFilePath => {
+          const owner = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
+          if (!owner) throw new Error('录像会话已变更')
+          persist(updateSegment(owner, segment.index, { savedFilePath, sourceTempFilePath: segment.sourceTempFilePath ?? segment.savedFilePath, localFileState: 'saved' }))
+        }, Taro)
+        continue
       }
       setActiveIndex(segment.index)
       setSegmentProgress(0)
@@ -296,6 +309,7 @@ export default function MotionTrainingUploadPage() {
         }))
         if (!current) return null
         setSegmentProgress(100)
+        await cleanupUploadedSegments(clientSessionId)
       } catch (uploadError) {
         current = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
         if (!current) return null
@@ -399,7 +413,7 @@ export default function MotionTrainingUploadPage() {
   async function restartTraining() {
     const current = loadPendingMotionTrainingSession(Taro)
     if (!current) return
-    await cleanupAfterServerReceipt(current)
+    if (!await cleanupAfterServerReceipt(current)) return
     await Taro.reLaunch({ url: `/pages/motion-training/index?actionId=${encodeURIComponent(String(current.actionId))}` })
   }
 

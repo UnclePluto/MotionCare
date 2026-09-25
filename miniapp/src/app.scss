@@ -1929,6 +1929,15 @@ button:active {
   transform: translateX(-50%);
 }
 
+.training-copy-diagnostics {
+  margin-top: 6px;
+  padding: 4px 12px;
+  color: #fff;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1.8;
+}
+
 .training-camera-loading {
   position: fixed;
   top: 50%;

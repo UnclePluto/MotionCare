@@ -35,7 +35,7 @@ type RecordingGeneration = {
 }
 
 const MIN_PAUSE_SEGMENT_MS = 2000
-export const MOTION_TRAINING_SEGMENT_DURATION_MS = 5_000
+export const MOTION_TRAINING_SEGMENT_DURATION_MS = 60_000
 
 export class MotionTrainingRecorder {
   private readonly camera: CameraContext
@@ -43,6 +43,7 @@ export class MotionTrainingRecorder {
   private readonly onSegment: (path: string, durationMs: number) => Promise<void> | void
   private readonly onNativeError?: (error: unknown) => void
   private readonly onPause?: () => void
+  private readonly canContinueRecording?: () => boolean
   private readonly onMaxDuration?: (cutoffMs: number) => void
   private readonly onStopped?: (endedAtMs: number) => void
   private readonly onStopSlow?: (phase: 'starting' | 'stopping') => void
@@ -68,6 +69,7 @@ export class MotionTrainingRecorder {
     onSegment: (path: string, durationMs: number) => Promise<void> | void
     onNativeError?: (error: unknown) => void
     onPause?: () => void
+    canContinueRecording?: () => boolean
     onMaxDuration?: (cutoffMs: number) => void
     onStopped?: (endedAtMs: number) => void
     onStopSlow?: (phase: 'starting' | 'stopping') => void
@@ -80,6 +82,7 @@ export class MotionTrainingRecorder {
     this.now = input.now
     this.onSegment = input.onSegment
     this.onPause = input.onPause
+    this.canContinueRecording = input.canContinueRecording
     this.onMaxDuration = input.onMaxDuration
     this.onStopped = input.onStopped
     this.onStopSlow = input.onStopSlow
@@ -89,15 +92,19 @@ export class MotionTrainingRecorder {
   async start(): Promise<void> {
     await this.waitForPendingDeliveries()
     if (this.mode === 'recording') return Promise.resolve()
+    if (this.canContinueRecording?.() === false) throw new Error('录像空间正在清理，请等待上传完成后继续')
     this.mode = 'recording'
     return this.startGeneration()
   }
 
-  pause(): Promise<MotionTrainingRecordedSegment | null> {
+  pause(options: { preserveShortTail?: boolean } = {}): Promise<MotionTrainingRecordedSegment | null> {
     if (this.mode !== 'recording') return Promise.resolve(null)
     this.mode = 'pausing'
     const generation = this.generation
-    const stopping = this.stopCurrent(generation, true)
+    const stopping = this.stopCurrent(generation, !options.preserveShortTail).then(async segment => {
+      await this.waitForPendingDeliveries()
+      return segment
+    })
     this.stoppingPromise = stopping
     return stopping.finally(() => {
       this.onPause?.()
@@ -241,14 +248,20 @@ export class MotionTrainingRecorder {
     this.recordedDurationMs += durationMs
     const reachedLimit = generation.requestedDurationMs < MOTION_TRAINING_SEGMENT_DURATION_MS ||
       this.recordedDurationMs >= this.maxDurationMs
+    const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
     if (!finishStopPending && !reachedLimit) {
-      // WeChat clears the previous recording state AFTER timeoutCallback returns.
-      // Starting synchronously here lets that cleanup overwrite the new recording.
-      void Promise.resolve().then(() => {
-        if (this.mode === 'recording' && this.currentGeneration === generation) return this.startGeneration()
+      // Leave the native callback first, then admit another file only after its
+      // predecessor's metadata is persisted. Upload remains asynchronous.
+      void delivery.then(segment => {
+        if (this.mode !== 'recording' || this.currentGeneration !== generation) return
+        if (!segment || this.canContinueRecording?.() === false) {
+          this.mode = 'idle'
+          this.onPause?.()
+          return
+        }
+        return this.startGeneration()
       }).catch((error: unknown) => this.recordError(error))
     }
-    const delivery = this.trackDelivery(this.deliver(path, durationMs), false)
 
     if (finishStopPending) {
       generation.state = 'stopped'
@@ -436,6 +449,7 @@ export class MotionTrainingRecorder {
     const error = this.pendingError
     this.pendingError = null
     if (error) throw error
+    if (this.failedSegment) throw new Error('录像分段保存失败，请重试保存后再结束训练')
   }
 
   private recordError(error: unknown): void {

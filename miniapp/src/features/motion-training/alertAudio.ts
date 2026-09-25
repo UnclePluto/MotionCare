@@ -6,8 +6,8 @@ import './assets/audio/upload_recovered.m4a'
 export type MotionTrainingAlertKind = 'pause' | 'ready'
 
 export const MOTION_TRAINING_ALERT_TEXT: Record<MotionTrainingAlertKind, string> = {
-  pause: '网络较慢，训练已暂停，请保持页面打开，等待视频上传。',
-  ready: '视频上传已恢复，可以继续训练。',
+  pause: '录像缓存较多，训练已暂停，请保持页面打开，等待上传和清理。',
+  ready: '录像空间已恢复，可以继续训练。',
 }
 
 export const MOTION_TRAINING_ALERT_SRC: Record<MotionTrainingAlertKind, string> = {

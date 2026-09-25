@@ -26,6 +26,20 @@ const { taroMock } = vi.hoisted(() => ({
 vi.mock('@tarojs/taro', () => ({ default: taroMock }))
 
 describe('shoulder press segmented upload api', () => {
+  it('allows a large segment to finish after three minutes on a slow connection', async () => {
+    vi.useFakeTimers()
+    try {
+      taroMock.getFileInfo.mockResolvedValue({ size: 20 * 1024 * 1024 })
+      taroMock.uploadFile.mockImplementation(options => {
+        const deadline = setTimeout(() => options.fail({ errMsg: 'uploadFile:fail timeout' }), options.timeout)
+        setTimeout(() => { clearTimeout(deadline); options.success({ statusCode: 201, data: '{"index":0,"sha256":"slow-network-sha"}' }) }, 180000)
+        return { onProgressUpdate: vi.fn() }
+      })
+      const result = uploadVideoSegment({ videoId: 9, index: 0, filePath: 'wxfile://temp/minute.mp4', durationMs: 60000, sizeBytes: 20 * 1024 * 1024 }).catch(error => error)
+      await vi.advanceTimersByTimeAsync(180000)
+      expect(await result).toEqual({ index: 0, sha256: 'slow-network-sha' })
+    } finally { vi.useRealTimers() }
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     taroMock.getStorageSync.mockReturnValue('patient-token')

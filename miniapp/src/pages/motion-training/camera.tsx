@@ -1,4 +1,6 @@
 import { protectedCountedPaths } from '../../features/motion-training/countedSession'
+import { createSegmentTrace, segmentTraceFor } from '../../features/motion-training/segmentTrace'
+import { saveManagedMotionTrainingFile, releaseManagedMotionTrainingFile, resolveManagedMotionTrainingPath, protectedManagedMotionTrainingPaths } from '../../features/motion-training/managedFile'
 import { captureTrainingDiagnosticScope, reportTrainingDiagnostic } from '../../features/motion-training/diagnostics'
 import { Button, Camera, Text, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
@@ -17,11 +19,13 @@ import {
 } from '../../features/motion-training/alertAudio'
 import {
   canResumeMotionTrainingFromBuffer,
+  motionTrainingNextSegmentReserveBytes,
   nextMotionTrainingBufferTransition,
   pendingMotionTrainingLocalBytes,
   type MotionTrainingBufferState
 } from '../../features/motion-training/bufferGuard'
-import { saveTemporaryMotionTrainingSegmentForRetry } from '../../features/motion-training/localFile'
+import { releaseMotionTrainingLocalFile, saveTemporaryMotionTrainingSegmentForRetry } from '../../features/motion-training/localFile'
+import { cleanupUploadedMotionTrainingSegments, retryAbandonedMotionTrainingFiles, hasAbandonedMotionTrainingFiles } from '../../features/motion-training/segmentCleanup'
 import {
   canStartMotionTrainingRecording,
   computeMotionTrainingEffectiveDuration,
@@ -228,15 +232,30 @@ function persistOwnedSession(
 }
 
 function deleteLocalSegmentFile(filePath: string) {
-  try {
-    Taro.getFileSystemManager().unlink({
-      filePath,
-      success: () => undefined,
-      fail: () => undefined
-    })
-  } catch {
-    // 服务端已确认分段后，本地清理失败不应阻塞后续训练。
-  }
+  return releaseMotionTrainingLocalFile({ filePath }, () => Taro.getFileSystemManager())
+}
+
+function cleanupUploadedSegments(clientSessionId: string, onSession?: SessionUpdate): Promise<void> {
+  const trace = segmentTraceFor(clientSessionId)
+  return cleanupUploadedMotionTrainingSegments({
+    loadSession: () => loadOwnedPendingMotionTrainingSession(Taro, clientSessionId),
+    saveSession: session => persistOwnedSession(session, onSession),
+    releaseFile: segment => {
+      trace.mark('cleanup_call', segment.index)
+      return releaseManagedMotionTrainingFile({
+        filePath: segment.savedFilePath, localFileState: segment.localFileState,
+        onMoved: savedFilePath => {
+          const current = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
+          if (!current) throw new Error('录像会话已变更')
+          persistOwnedSession(updateSegment(current, segment.index, { savedFilePath, localFileState: 'saved' }), onSession)
+        },
+        onError: error => trace.mark('cleanup_failure', segment.index, error),
+        onSave: (event, error) => trace.mark(event, segment.index, error),
+        onAccess: (event, error) => trace.mark(event, segment.index, error),
+        onSuccess: () => trace.mark('cleanup_success', segment.index)
+      }, () => Taro.getFileSystemManager(), options => Taro.saveFile(options), Taro)
+    }
+  })
 }
 
 function mergeServerUploaded(
@@ -257,20 +276,6 @@ function mergeServerUploaded(
       return segment
     })
   }
-}
-
-function newlyConfirmedLocalFiles(
-  session: PendingMotionTrainingSession,
-  uploadedSegments: number[] | undefined
-): string[] {
-  const uploaded = new Set(uploadedSegments ?? [])
-  return session.segments.flatMap((segment) => (
-    isCompressedMotionTrainingSegment(segment) &&
-    segment.uploadState !== 'uploaded' &&
-    uploaded.has(segment.index)
-      ? [segment.savedFilePath]
-      : []
-  ))
 }
 
 function hasUnresolvedMotionTrainingLocalSegment(
@@ -298,12 +303,10 @@ async function ensureRemoteSession(
   })
   const latest = loadOwnedPendingMotionTrainingSession(Taro, session.clientSessionId)
   if (!latest) return null
-  const confirmedLocalFiles = newlyConfirmedLocalFiles(latest, created.uploaded_segments)
   const saved = persistOwnedSession({
     ...mergeServerUploaded(latest, created.uploaded_segments),
     videoId: created.video_id
   }, onSession)
-  if (saved) confirmedLocalFiles.forEach(deleteLocalSegmentFile)
   return saved
 }
 
@@ -314,21 +317,21 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
   if (session.segments.some((segment) => !isCompressedMotionTrainingSegment(segment))) return
 
   const clientSessionId = session.clientSessionId
+  await cleanupUploadedSegments(clientSessionId, onSession)
+  session = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
+  if (!session) return
+  if (session.segments.every(segment => isCompressedMotionTrainingSegment(segment) && segment.uploadState === 'uploaded')) return
   session = await ensureRemoteSession(session, onSession)
   if (!session || !session.videoId) return
   const status = await getVideoSessionStatus(session.videoId)
   const latestAfterStatus = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
   if (!latestAfterStatus) return
-  const confirmedLocalFiles = newlyConfirmedLocalFiles(
-    latestAfterStatus,
-    status.uploaded_segments
-  )
   session = persistOwnedSession(mergeServerUploaded({
     ...latestAfterStatus,
     videoId: session.videoId
   }, status.uploaded_segments), onSession)
   if (!session) return
-  confirmedLocalFiles.forEach(deleteLocalSegmentFile)
+  await cleanupUploadedSegments(clientSessionId, onSession)
 
   for (;;) {
     session = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
@@ -339,6 +342,15 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
     ))
     if (!segment) return
     if (!isCompressedMotionTrainingSegment(segment)) return
+    if (segment.localFileState === 'temporary') throw new Error('录像正在转存，请稍候或重试保存')
+    if (segment.localFileState === 'save_failed') {
+      await saveManagedMotionTrainingFile(segment.savedFilePath, options => Taro.saveFile(options), savedFilePath => {
+        const current = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
+        if (!current) throw new Error('录像会话已变更')
+        persistOwnedSession(updateSegment(current, segment.index, { savedFilePath, sourceTempFilePath: segment.sourceTempFilePath ?? segment.savedFilePath, localFileState: 'saved' }), onSession)
+      }, Taro)
+      continue
+    }
 
     session = persistOwnedSession(updateSegment(session, segment.index, {
       uploadState: 'uploading',
@@ -347,6 +359,7 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
     if (!session || !session.videoId) return
 
     try {
+      segmentTraceFor(clientSessionId).mark('upload_call', segment.index)
       const uploaded = await uploadVideoSegment({
         clientSessionId,
         videoId: session.videoId,
@@ -355,6 +368,7 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
         durationMs: segment.durationMs,
         sizeBytes: segment.sizeBytes
       })
+      segmentTraceFor(clientSessionId).mark('upload_success', segment.index)
       session = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
       if (!session) return
       session = persistOwnedSession(updateSegment(session, uploaded.index, {
@@ -362,8 +376,9 @@ async function uploadPendingSegments(onSession?: SessionUpdate): Promise<void> {
         sha256: uploaded.sha256
       }), onSession)
       if (!session) return
-      deleteLocalSegmentFile(segment.savedFilePath)
+      await cleanupUploadedSegments(clientSessionId, onSession)
     } catch (error) {
+      segmentTraceFor(clientSessionId).mark('upload_failure', segment.index, error)
       session = loadOwnedPendingMotionTrainingSession(Taro, clientSessionId)
       if (!session) return
       const retained = await saveTemporaryMotionTrainingSegmentForRetry({
@@ -423,8 +438,17 @@ export function MotionTrainingRecordingCameraPage() {
   const [preflightState, setPreflightState] = useState<PreflightState>('idle')
   const [bufferState, setBufferState] = useState<MotionTrainingBufferState>('recording')
   const [tailSaveFailed, setTailSaveFailed] = useState(false)
+  const [timeReached, setTimeReached] = useState(false)
+  const timeReachedAtRef = useRef<number | null>(null)
+  const timeReachedElapsedRef = useRef(0)
   const [session, setSession] = useState<PendingMotionTrainingSession | null>(null)
   const [error, setError] = useState('')
+  const [preflightTrace] = useState(() => {
+    const environment = {}
+    try { Object.assign(environment, Taro.getDeviceInfo()) } catch { /* optional metadata */ }
+    try { Object.assign(environment, Taro.getAppBaseInfo()) } catch { /* optional metadata */ }
+    return createSegmentTrace(Date.now, environment)
+  })
   const [trainingTopLayout] = useState(resolveTrainingTopLayout)
   const [, setLiveTick] = useState(Date.now())
   const pageDiagnosticScope = useRef(captureTrainingDiagnosticScope())
@@ -459,6 +483,8 @@ export function MotionTrainingRecordingCameraPage() {
   }
 
   function playBufferAlert(kind: MotionTrainingAlertKind) {
+    const current = sessionRef.current
+    if (current && kind === 'pause' && (hasUnresolvedMotionTrainingLocalSegment(current) || current.segments.some(segment => isCompressedMotionTrainingSegment(segment) && segment.uploadState === 'uploaded' && !segment.localFileDeleted))) return
     void alertPlayerRef.current?.play(kind).catch(() => false)
   }
 
@@ -491,6 +517,7 @@ export function MotionTrainingRecordingCameraPage() {
     const hasUnresolvedLocalSegment = hasUnresolvedMotionTrainingLocalSegment(nextSession)
     if (hasUnresolvedLocalSegment) {
       if (bufferStateRef.current === 'recording') {
+        segmentTraceFor(nextSession.clientSessionId).mark('buffer_paused')
         enterBufferPaused()
       } else if (bufferStateRef.current === 'buffer_ready') {
         bufferStateRef.current = 'buffer_paused'
@@ -501,9 +528,13 @@ export function MotionTrainingRecordingCameraPage() {
 
     const transition = nextMotionTrainingBufferTransition({
       state: bufferStateRef.current,
-      pendingBytes
+      pendingBytes,
+      reserveBytes: motionTrainingNextSegmentReserveBytes(nextSession.segments)
     })
     if (transition.state === bufferStateRef.current) return
+    if (transition.state === 'buffer_paused' || transition.state === 'buffer_ready') {
+      segmentTraceFor(nextSession.clientSessionId).mark(transition.state)
+    }
     bufferStateRef.current = transition.state
     setBufferState(transition.state)
     if (transition.alert) playBufferAlert(transition.alert)
@@ -511,6 +542,10 @@ export function MotionTrainingRecordingCameraPage() {
   }
 
   function syncSession(nextSession: PendingMotionTrainingSession) {
+    const environment = {}
+    try { Object.assign(environment, Taro.getDeviceInfo()) } catch { /* optional metadata */ }
+    try { Object.assign(environment, Taro.getAppBaseInfo()) } catch { /* optional metadata */ }
+    segmentTraceFor(nextSession.clientSessionId, environment)
     sessionRef.current = nextSession
     if (!mountedRef.current) return
     setSession(nextSession)
@@ -556,6 +591,7 @@ export function MotionTrainingRecordingCameraPage() {
   }
 
   function currentElapsedMs(): number {
+    if (timeReachedAtRef.current !== null) return timeReachedElapsedRef.current
     const savedDuration = sessionRef.current?.actualDurationMs ?? session?.actualDurationMs ?? 0
     return computeMotionTrainingEffectiveDuration({
       savedDurationMs: savedDuration,
@@ -629,10 +665,18 @@ export function MotionTrainingRecordingCameraPage() {
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回运动计划重新进入')
       const expectedClientSessionId = currentSession.clientSessionId
+      const delivered = currentSession.segments.find(segment => isCompressedMotionTrainingSegment(segment) && segment.sourceTempFilePath === tempFilePath && segment.localFileState === 'saved')
+      if (delivered) {
+        // A failed recorder delivery may be retried after the foreground uploader
+        // already moved (and possibly uploaded/deleted) the same native clip.
+        void uploadPendingSegmentsInBackground(syncSession)
+        return
+      }
+      const readablePath = resolveManagedMotionTrainingPath(tempFilePath, Taro)
 
       let durationMs = Math.max(1, Math.round(recordedDurationMs))
       try {
-        const info = await Taro.getVideoInfo({ src: tempFilePath })
+        const info = await Taro.getVideoInfo({ src: readablePath })
         if (Number.isFinite(info.duration) && info.duration > 0) {
           durationMs = Math.max(1, Math.round(info.duration * 1000))
         }
@@ -641,7 +685,7 @@ export function MotionTrainingRecordingCameraPage() {
       }
       let sizeBytes: number
       try {
-        const fileInfo = await Taro.getFileInfo({ filePath: tempFilePath })
+        const fileInfo = await Taro.getFileInfo({ filePath: readablePath })
         sizeBytes = Number('size' in fileInfo ? fileInfo.size : Number.NaN)
         if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) {
           throw new Error('无法读取录像分段实际大小，请重试')
@@ -697,6 +741,24 @@ export function MotionTrainingRecordingCameraPage() {
         })
         saveCurrentSession(writeBase)
       }
+      const pendingSegment = writeBase.segments.find(segment => isCompressedMotionTrainingSegment(segment) && segment.savedFilePath === tempFilePath)
+      if (pendingSegment && isCompressedMotionTrainingSegment(pendingSegment) && pendingSegment.localFileState !== 'saved') {
+        const trace = segmentTraceFor(expectedClientSessionId)
+        trace.mark('save_call', pendingSegment.index)
+        try {
+          await saveManagedMotionTrainingFile(tempFilePath, options => Taro.saveFile(options), savedFilePath => {
+            const latest = loadOwnedPendingMotionTrainingSession(Taro, expectedClientSessionId)
+            if (!latest) throw new Error('录像会话已变更，转存文件已保留')
+            persistOwnedSession(updateSegment(latest, pendingSegment.index, { savedFilePath, sourceTempFilePath: tempFilePath, localFileState: 'saved' }), syncSession)
+          }, Taro)
+          trace.mark('save_success', pendingSegment.index)
+        } catch (saveError) {
+          trace.mark('save_failure', pendingSegment.index, saveError)
+          const latest = resolveOwnedSegmentWriteBase(expectedClientSessionId)
+          if (latest) saveCurrentSession(updateSegment(latest, pendingSegment.index, { localFileState: 'save_failed' }))
+          throw saveError
+        }
+      }
       void uploadPendingSegmentsInBackground(syncSession)
     })
 
@@ -721,11 +783,21 @@ export function MotionTrainingRecordingCameraPage() {
     const diagnosticOwner = sessionRef.current
     recorderRef.current = new MotionTrainingRecorder({
       onNativeError: (error) => reportTrainingDiagnostic('recording', error, { diagnosticScope, clientSessionId: diagnosticOwner?.clientSessionId, videoId: diagnosticOwner?.videoId }),
-      camera: context,
+      camera: diagnosticOwner ? segmentTraceFor(diagnosticOwner.clientSessionId).recording.wrap(context) : context,
       now: () => Date.now(),
       maxDurationMs: MOTION_TRAINING_RECORDING_STOP_MS,
+      canContinueRecording: () => {
+        if (!mountedRef.current || !pageVisibleRef.current || timeReachedAtRef.current !== null) return false
+        const latest = loadPendingMotionTrainingSession(Taro) ?? sessionRef.current
+        if (!latest || hasUnresolvedMotionTrainingLocalSegment(latest)) return false
+        return nextMotionTrainingBufferTransition({
+          state: 'recording',
+          pendingBytes: pendingMotionTrainingLocalBytes(latest.segments),
+          reserveBytes: motionTrainingNextSegmentReserveBytes(latest.segments)
+        }).state === 'recording'
+      },
       onMaxDuration: (cutoffMs) => {
-        void finishTraining(cutoffMs)
+        notifyTrainingTimeReached(cutoffMs)
       },
       onSegment: (tempFilePath, durationMs) => persistRecordedSegment(tempFilePath, durationMs),
       onPause: () => {
@@ -735,6 +807,7 @@ export function MotionTrainingRecordingCameraPage() {
         recordingStartedAtRef.current = 0
         setRecording(false)
         setPaused(true)
+        setTrainingScreenAwake(false)
       }
     })
     return recorderRef.current
@@ -843,8 +916,27 @@ export function MotionTrainingRecordingCameraPage() {
     preflightInFlightRef.current = true
     setProcessing(true)
     setPreflightState('checking')
+    preflightTrace.mark('preflight_call')
     setError('')
+    let cleanupIndex = 0
     try {
+      const savedPaths = new Set(hasAbandonedMotionTrainingFiles(Taro) ? (await listSavedMotionTrainingFiles()).map(file => file.filePath) : [])
+      if (!isForegroundAttemptActive(foregroundGeneration)) return
+      if (!loadPendingMotionTrainingSession(Taro) && !await retryAbandonedMotionTrainingFiles(
+        Taro, (path, checkpointMoved) => {
+          const index = cleanupIndex++
+          preflightTrace.mark('cleanup_call', index)
+          return releaseManagedMotionTrainingFile({ filePath: path, localFileState: savedPaths.has(path) ? 'saved' : 'temporary', onMoved: checkpointMoved,
+            onError: error => preflightTrace.mark('cleanup_failure', index, error),
+            onSave: (event, error) => preflightTrace.mark(event, index, error),
+            onSuccess: () => preflightTrace.mark('cleanup_success', index),
+            onAccess: (event, error) => preflightTrace.mark(event, index, error)
+          }, () => Taro.getFileSystemManager(), options => Taro.saveFile(options), Taro).then(result => result.removed)
+        }, () => isForegroundAttemptActive(foregroundGeneration), protectedCountedPaths()
+      )) {
+        if (!isForegroundAttemptActive(foregroundGeneration)) return
+        throw new Error('上次录像的本地文件暂时无法清理，请重试')
+      }
       const preparedRetrySession = sessionRef.current
       if (
         preparedRetrySession?.videoId &&
@@ -854,13 +946,14 @@ export function MotionTrainingRecordingCameraPage() {
       ) {
         await createAndPersistServerSession(preparedRetrySession)
         if (!isForegroundAttemptActive(foregroundGeneration)) return
+        preflightTrace.mark('preflight_success')
         setPreflightState('idle')
         setProcessing(false)
         await startRecordingForCurrentSession(foregroundGeneration)
         return
       }
       const result = await cleanupAndCheckMotionTrainingStorage({
-        protectedPaths: protectedCountedPaths(),
+        protectedPaths: new Set([...protectedCountedPaths(), ...protectedManagedMotionTrainingPaths(Taro)]),
         hasPendingSession: () => Boolean(loadPendingMotionTrainingSession(Taro)),
         listSavedFiles: listSavedMotionTrainingFiles,
         removeSavedFile: removeSavedMotionTrainingFile,
@@ -886,11 +979,13 @@ export function MotionTrainingRecordingCameraPage() {
       })
       await createAndPersistServerSession(nextSession)
       if (!isForegroundAttemptActive(foregroundGeneration)) return
+      preflightTrace.mark('preflight_success')
       setPreflightState('idle')
       setProcessing(false)
       await startRecordingForCurrentSession(foregroundGeneration)
     } catch (startError) {
       if (!mountedRef.current) return
+      preflightTrace.mark('preflight_failure', undefined, startError)
       setPreflightState('failed')
       setError(startError instanceof Error ? startError.message : '无法建立录像会话，请重试')
     } finally {
@@ -905,6 +1000,7 @@ export function MotionTrainingRecordingCameraPage() {
   }
 
   async function resumeTrainingAfterBufferReady() {
+    if (timeReachedAtRef.current !== null) return
     if (bufferStateRef.current === 'buffer_paused') return
     if (bufferStateRef.current === 'buffer_ready') {
       const latest = loadPendingMotionTrainingSession(Taro) ?? sessionRef.current
@@ -913,7 +1009,7 @@ export function MotionTrainingRecordingCameraPage() {
       latestPendingBytesRef.current = pendingBytes
       if (
         hasUnresolvedMotionTrainingLocalSegment(latest) ||
-        !canResumeMotionTrainingFromBuffer(pendingBytes)
+        !canResumeMotionTrainingFromBuffer(pendingBytes, motionTrainingNextSegmentReserveBytes(latest.segments))
       ) {
         bufferStateRef.current = 'buffer_paused'
         setBufferState('buffer_paused')
@@ -937,11 +1033,11 @@ export function MotionTrainingRecordingCameraPage() {
     hidePauseRequestedRef.current = false
     commandInFlightRef.current = true
     setProcessing(true)
-    let shouldFinishAfterPause = false
+    let timeReachedAfterPause = false
     try {
-      await recorderRef.current.pause()
+      await recorderRef.current.pause({ preserveShortTail: timeReachedAtRef.current !== null })
       const pausedSession = sessionRef.current
-      shouldFinishAfterPause = Boolean(pausedSession) && shouldAutoFinishMotionTraining({
+      timeReachedAfterPause = Boolean(pausedSession) && shouldAutoFinishMotionTraining({
         actualDurationMs: pausedSession?.actualDurationMs ?? 0,
         expectedDurationSeconds: pausedSession?.expectedDurationSeconds ?? 1
       })
@@ -958,9 +1054,21 @@ export function MotionTrainingRecordingCameraPage() {
       commandInFlightRef.current = false
       setProcessing(false)
     }
-    if (shouldFinishAfterPause) {
-      await finishTraining()
+    if (timeReachedAfterPause) {
+      notifyTrainingTimeReached()
     }
+  }
+
+  function notifyTrainingTimeReached(endedAtMs = Date.now()) {
+    if (timeReachedAtRef.current !== null || finishCompletedRef.current || finishInFlightRef.current) return
+    timeReachedElapsedRef.current = Math.min(currentElapsedMs(), (sessionRef.current?.expectedDurationSeconds ?? 1) * 1000, MOTION_TRAINING_RECORDING_STOP_MS)
+    timeReachedAtRef.current = endedAtMs
+    setTimeReached(true)
+    const current = sessionRef.current
+    if (current) {
+      try { saveCurrentSession(markMotionTrainingEnded(current, endedAtMs)) } catch { /* Keep the cutoff in memory for the user's finish action. */ }
+    }
+    void pauseTraining()
   }
 
   async function finishTraining(endedAtMs = Date.now()) {
@@ -975,7 +1083,7 @@ export function MotionTrainingRecordingCameraPage() {
       const currentSession = sessionRef.current
       if (!currentSession) throw new Error('训练会话未准备好，请返回运动计划重新进入')
       try {
-        const endedSession = markMotionTrainingEnded(currentSession, endedAtMs)
+        const endedSession = markMotionTrainingEnded(currentSession, timeReachedAtRef.current ?? endedAtMs)
         syncSession(endedSession)
         savePendingMotionTrainingSession(Taro, endedSession)
       } catch {
@@ -1022,6 +1130,10 @@ export function MotionTrainingRecordingCameraPage() {
       commandInFlightRef.current ||
       finishPromptInFlightRef.current
     ) return
+    if (timeReachedAtRef.current !== null) {
+      await finishTraining()
+      return
+    }
     const finishAttemptGeneration = finishAttemptGenerationRef.current
     finishPromptInFlightRef.current = true
     try {
@@ -1169,10 +1281,21 @@ export function MotionTrainingRecordingCameraPage() {
   }, [])
 
   useEffect(() => {
+    if (!session?.segments.length || session.finalized) return undefined
+    const timer = setInterval(() => {
+      if (!pageVisibleRef.current || finishInFlightRef.current) return
+      const latest = loadPendingMotionTrainingSession(Taro)
+      if (!latest || latest.finalized || !latest.segments.some(segment => isCompressedMotionTrainingSegment(segment) && (segment.uploadState !== 'uploaded' || !segment.localFileDeleted))) return
+      void uploadPendingSegmentsInBackground(syncSession)
+    }, 15000)
+    return () => clearInterval(timer)
+  }, [session?.clientSessionId, Boolean(session?.segments.length), session?.finalized])
+
+  useEffect(() => {
     if (!recording) return undefined
     const stopDelayMs = Math.max(0, MOTION_TRAINING_RECORDING_STOP_MS - currentElapsedMs())
     const hardStopTimer = setTimeout(() => {
-      void finishTraining()
+      notifyTrainingTimeReached()
     }, stopDelayMs)
     const timer = setInterval(() => {
       const elapsedMs = currentElapsedMs()
@@ -1181,7 +1304,7 @@ export function MotionTrainingRecordingCameraPage() {
         actualDurationMs: elapsedMs,
         expectedDurationSeconds: sessionRef.current?.expectedDurationSeconds ?? 1
       })) {
-        void finishTraining()
+        notifyTrainingTimeReached()
       }
     }, 1000)
     return () => {
@@ -1191,6 +1314,7 @@ export function MotionTrainingRecordingCameraPage() {
   }, [recording])
 
   useDidHide(() => {
+    if (sessionRef.current) segmentTraceFor(sessionRef.current.clientSessionId).mark('page_hide')
     pageVisibleRef.current = false
     foregroundGenerationRef.current += 1
     if (finishInFlightRef.current) return
@@ -1199,6 +1323,7 @@ export function MotionTrainingRecordingCameraPage() {
   })
 
   useDidShow(() => {
+    if (sessionRef.current) segmentTraceFor(sessionRef.current.clientSessionId).mark('page_show')
     pageVisibleRef.current = true
     if (
       bufferStateRef.current !== 'buffer_paused' &&
@@ -1212,6 +1337,16 @@ export function MotionTrainingRecordingCameraPage() {
   })
 
   const elapsedMs = currentElapsedMs()
+  function copyRecordingDiagnostics() {
+    const latest = sessionRef.current
+    const preflight = JSON.parse(preflightTrace.export(null, `preflight_${preflightState}`))
+    const data = latest ? JSON.stringify({
+      ...JSON.parse(segmentTraceFor(latest.clientSessionId).export(latest, bufferStateRef.current)), preflight
+    }) : JSON.stringify(preflight)
+    void Taro.setClipboardData({ data }).catch(() => {
+      void Taro.showToast({ title: '复制失败，请重试', icon: 'none' })
+    })
+  }
   const counters = motionTrainingUploadCounters(session?.segments ?? [])
   const canStartInitial = canStartMotionTrainingRecording({
     actionReady: action !== null,
@@ -1225,8 +1360,10 @@ export function MotionTrainingRecordingCameraPage() {
       : preflightState === 'failed'
         ? '无法开始录像，请重试'
         : ''
-  const bufferMessage = bufferState === 'buffer_paused'
-    ? MOTION_TRAINING_ALERT_TEXT.pause
+  const bufferMessage = timeReached ? '运动时间已到，请点击“结束运动”完成本次训练。' : bufferState === 'buffer_paused'
+    ? counters.total > 0 && counters.uploaded === counters.total
+      ? '视频已上传，本地录像清理未完成。请保持页面打开，或复制诊断。'
+      : MOTION_TRAINING_ALERT_TEXT.pause
     : bufferState === 'buffer_ready'
       ? MOTION_TRAINING_ALERT_TEXT.ready
       : ''
@@ -1293,6 +1430,7 @@ export function MotionTrainingRecordingCameraPage() {
               </Button>
             </View>
           ) : null}
+          <Button className='training-preflight-back' onClick={copyRecordingDiagnostics}>复制录制诊断</Button>
         </View>
       ) : null}
 
@@ -1302,12 +1440,13 @@ export function MotionTrainingRecordingCameraPage() {
         </View>
       ) : null}
 
-      {session?.segments.length ? (
+      {session ? (
         <View
           className='training-upload-status'
           style={{ top: `${trainingTopLayout.uploadStatusTop}px` }}
         >
           <Text>分段上传 {counters.uploaded}/{counters.total}</Text>
+          <Button className='training-copy-diagnostics' onClick={copyRecordingDiagnostics}>复制录制诊断</Button>
         </View>
       ) : null}
 
@@ -1341,6 +1480,11 @@ export function MotionTrainingRecordingCameraPage() {
               重新训练
             </Button>
           </>
+        ) : timeReached ? (
+          <Button className='camera-stop-button' loading={processing} disabled={processing || !session?.trainingStartedAt}
+            onClick={() => void requestManualFinishTraining()}>
+            结束运动
+          </Button>
         ) : bufferPaused ? (
           <>
             <Button className='camera-start-button' disabled>等待上传</Button>

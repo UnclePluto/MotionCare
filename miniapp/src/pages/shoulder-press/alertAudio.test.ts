@@ -44,8 +44,8 @@ describe('shoulder press alert audio', () => {
 
   it('uses the approved paused and recovered alert copy with local audio sources', () => {
     expect(SHOULDER_PRESS_ALERT_TEXT).toEqual({
-      pause: '网络较慢，训练已暂停，请保持页面打开，等待视频上传。',
-      ready: '视频上传已恢复，可以继续训练。',
+      pause: '录像缓存较多，训练已暂停，请保持页面打开，等待上传和清理。',
+      ready: '录像空间已恢复，可以继续训练。',
     })
     expect(SHOULDER_PRESS_ALERT_SRC).toEqual({
       pause: '/features/motion-training/assets/audio/network_slow_paused.m4a',

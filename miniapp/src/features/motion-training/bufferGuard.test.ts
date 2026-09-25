@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   canResumeMotionTrainingFromBuffer,
+  motionTrainingNextSegmentReserveBytes,
   nextMotionTrainingBufferTransition,
   pendingMotionTrainingLocalBytes
 } from './bufferGuard'
@@ -24,12 +25,27 @@ function compressedSegment(
 }
 
 describe('shoulder-press buffer guard', () => {
-  it('counts only segments that still depend on a local file', () => {
+  it('counts uploaded files until their deletion is confirmed', () => {
     expect(pendingMotionTrainingLocalBytes([
       compressedSegment({ sizeBytes: 7 * MB, uploadState: 'pending' }),
       compressedSegment({ sizeBytes: 8 * MB, uploadState: 'uploading' }),
       compressedSegment({ sizeBytes: 9 * MB, uploadState: 'uploaded', sha256: 'ok' })
-    ])).toBe(15 * MB)
+    ])).toBe(24 * MB)
+    expect(pendingMotionTrainingLocalBytes([
+      compressedSegment({ sizeBytes: 9 * MB, uploadState: 'uploaded', localFileDeleted: true })
+    ])).toBe(0)
+  })
+
+  it('reserves a full minute from observed bitrate before admitting another segment', () => {
+    const reserve = motionTrainingNextSegmentReserveBytes([
+      compressedSegment({ durationMs: 60_000, sizeBytes: 20 * MB })
+    ])
+    expect(reserve).toBe(30 * MB)
+    expect(nextMotionTrainingBufferTransition({ state: 'recording', pendingBytes: 36 * MB, reserveBytes: reserve }))
+      .toEqual({ state: 'buffer_paused', alert: 'pause' })
+    expect(nextMotionTrainingBufferTransition({ state: 'recording', pendingBytes: 34 * MB, reserveBytes: reserve }))
+      .toEqual({ state: 'recording', alert: null })
+    expect(canResumeMotionTrainingFromBuffer(9 * MB, 60 * MB)).toBe(false)
   })
 
   it('pauses once at 65MB and becomes ready only below 10MB', () => {

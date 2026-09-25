@@ -204,7 +204,9 @@ export async function uploadVideoSegment(input: {
         url: apiUrl(`/patient-app/training-video-sessions/${input.videoId}/segments/${input.index}/`),
         filePath: input.filePath,
         name: 'file',
-        timeout: 60000,
+        // One-minute recordings can take several minutes to transfer on mobile
+        // data. Buffer admission pauses recording while this request drains.
+        timeout: 600000,
         header: patientAuthorizationHeader(),
         formData: {
           duration_ms: input.durationMs,

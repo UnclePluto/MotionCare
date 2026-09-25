@@ -1,6 +1,50 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { saveTemporaryMotionTrainingSegmentForRetry } from './localFile'
+import { releaseMotionTrainingLocalFile, saveTemporaryMotionTrainingSegmentForRetry } from './localFile'
+
+it('checks existence after an ambiguous delete failure before retiring a stale path', async () => {
+  const fs = { unlink: vi.fn(options => options.fail({ errMsg: 'unlink:fail' })), removeSavedFile: vi.fn(),
+    access: vi.fn(options => options.fail({ errMsg: 'access:fail no such file or directory' })) }
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://old.mp4' }, () => fs)).toBe(true)
+  expect(fs.access).toHaveBeenCalledWith(expect.objectContaining({ path: 'wxfile://old.mp4' }))
+  fs.access.mockImplementationOnce(options => options.fail({ errMsg: 'access:fail permission denied' }))
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://kept.mp4' }, () => fs)).toBe(false)
+  fs.access.mockImplementationOnce(options => options.success())
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://still-exists.mp4' }, () => fs)).toBe(false)
+})
+
+it('bounds a missing native callback and ignores its late success', async () => {
+  vi.useFakeTimers()
+  try {
+    let complete!: () => void
+    const onSuccess = vi.fn()
+    const onError = vi.fn()
+    const fs = { unlink: vi.fn(options => { complete = options.success }), removeSavedFile: vi.fn() }
+    const pending = releaseMotionTrainingLocalFile({ filePath: 'wxfile://old.mp4', onError, onSuccess }, () => fs)
+    await vi.advanceTimersByTimeAsync(10000)
+    await expect(pending).resolves.toBe(false)
+    complete()
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ errMsg: expect.stringContaining('timeout') }))
+  } finally { vi.useRealTimers() }
+})
+
+it('reports native cleanup failures and isolates throwing diagnostic callbacks', async () => {
+  const error = { errCode: 130001, errMsg: 'unlink:fail permission denied' }
+  const onError = vi.fn(() => { throw new Error('diagnostic failed') })
+  const fs = { unlink: vi.fn(options => options.fail(error)), removeSavedFile: vi.fn() }
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'private', onError }, () => fs)).toBe(false)
+  expect(onError).toHaveBeenCalledWith(error)
+})
+
+it('treats repeated file deletion as success but preserves real I/O failures', async () => {
+  const fs = { unlink: vi.fn(options => options.fail({ errMsg: 'unlink:fail no such file or directory' })), removeSavedFile: vi.fn(options => options.success()) }
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://temp/gone.mp4', localFileState: 'temporary' }, () => fs)).toBe(true)
+  fs.unlink.mockImplementationOnce(options => options.fail({ errMsg: 'unlink:fail permission denied' }))
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://temp/kept.mp4', localFileState: 'save_failed' }, () => fs)).toBe(false)
+  expect(await releaseMotionTrainingLocalFile({ filePath: 'wxfile://store/saved.mp4', localFileState: 'saved' }, () => fs)).toBe(true)
+  expect(fs.removeSavedFile).toHaveBeenCalledWith(expect.objectContaining({ filePath: 'wxfile://store/saved.mp4' }))
+})
 
 describe('shoulder press failed segment persistence', () => {
   it('moves one temporary failed segment into saved storage', async () => {
