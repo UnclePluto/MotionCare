@@ -25,6 +25,7 @@ dev = [
   "pytest-django>=4.8,<5.0",
   "factory-boy>=3.3,<4.0",
   "ruff==0.15.21",
+  "pypdf==6.10.0",
 ]
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "config.settings"

@@ -1,8 +1,14 @@
+from apps.crf.answer_values import reconcile_answer_patch
+from apps.crf.registry_loader import load_crf_registry
 import datetime
 
 from rest_framework import serializers
 
-from apps.crf.registry_validate import validate_patient_baseline_payload
+from apps.crf.field_values import changed_crf_paths, merge_crf_patch
+from apps.crf.registry_validate import (
+    validate_crf_structure_patch,
+    validate_patient_baseline_payload,
+)
 
 from .models import Patient, PatientBaseline
 
@@ -91,15 +97,33 @@ class PatientBaselineSerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         if not any(k in attrs for k in _BASELINE_REGISTRY_FIELD_NAMES):
             return attrs
-        inst = self.instance
-        full: dict = {}
-        for k in _BASELINE_REGISTRY_FIELD_NAMES:
-            if inst is not None:
-                full[k] = getattr(inst, k)
-        for k in _BASELINE_REGISTRY_FIELD_NAMES:
-            if k in attrs:
-                full[k] = attrs[k]
-        errors = validate_patient_baseline_payload(full)
+        current = (
+            {key: getattr(self.instance, key) for key in _BASELINE_REGISTRY_FIELD_NAMES}
+            if self.instance is not None
+            else {}
+        )
+        structure_errors = validate_crf_structure_patch(
+            {"patient_baseline": current},
+            {"patient_baseline": attrs},
+            scope="patient_baseline",
+            visit_type=None,
+        )
+        if structure_errors:
+            raise serializers.ValidationError(
+                {
+                    path.removeprefix("patient_baseline."): message
+                    for path, message in structure_errors.items()
+                }
+            )
+        canonical=reconcile_answer_patch({'patient_baseline':current},{'patient_baseline':attrs},load_crf_registry()['fields'])
+        attrs=canonical['patient_baseline']
+        candidate = merge_crf_patch(current, attrs)
+        errors = validate_patient_baseline_payload(
+            candidate,
+            changed_paths=changed_crf_paths(current, candidate)
+            if self.instance is not None
+            else None,
+        )
         if errors:
             raise serializers.ValidationError(errors)
-        return attrs
+        return {key: candidate[key] for key in attrs}

@@ -21,7 +21,7 @@ def test_validate_patient_baseline_bad_type():
     assert "demographics.education_years" in errors
 
 
-def test_other_requires_remark_when_required(monkeypatch):
+def test_missing_other_remark_allows_draft(monkeypatch):
     fake = {
         "fields": [
             {
@@ -42,7 +42,7 @@ def test_other_requires_remark_when_required(monkeypatch):
     errors = validate_patient_baseline_payload(
         {"demographics": {"ethnicity": "其他", "ethnicity_other_remark": ""}}
     )
-    assert "demographics.ethnicity_other_remark" in errors
+    assert errors == {}
 
 
 def test_other_remark_ok_when_filled(monkeypatch):

@@ -170,3 +170,122 @@ def test_patch_patient_baseline_invalid_gender_returns_400(doctor, patient):
     detail = resp.data["demographics.gender"]
     assert isinstance(detail, (list, str))
     assert "不在可选项" in (detail[0] if isinstance(detail, list) else detail)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("method", ["patch", "put"])
+def test_baseline_nested_patch_preserves_existing_and_legacy_values(doctor, patient, method):
+    baseline = PatientBaseline.objects.create(
+        patient=patient,
+        demographics={"gender": "旧选项", "ethnicity": "汉族", "education_years": 12},
+        surgery_allergy={"surgery_history": "原始手术文本"},
+    )
+    client = APIClient()
+    client.force_authenticate(doctor)
+    response = getattr(client, method)(
+        f"/api/patients/{patient.id}/baseline/",
+        {"demographics": {"education_years": 16}},
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    baseline.refresh_from_db()
+    assert baseline.demographics == {"gender": "旧选项", "ethnicity": "汉族", "education_years": 16}
+    assert baseline.surgery_allergy == {"surgery_history": "原始手术文本"}
+
+
+@pytest.mark.django_db
+def test_baseline_null_clears_value_and_literal_metadata_key_is_merged(doctor, patient):
+    key = "patient_baseline.demographics.education_years"
+    baseline = PatientBaseline.objects.create(
+        patient=patient,
+        demographics={
+            "education_years": 12,
+            "_crf_field_meta": {key: {"state": "unknown", "reason": "旧原因"}},
+        },
+    )
+    client = APIClient()
+    client.force_authenticate(doctor)
+    response = client.patch(
+        f"/api/patients/{patient.id}/baseline/",
+        {"demographics": {"education_years": None, "_crf_field_meta": {key: {"reason": None}}}},
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    baseline.refresh_from_db()
+    assert baseline.demographics == {
+        "education_years": None,
+        "_crf_field_meta": {key: {"state": "unknown", "reason": None}},
+    }
+
+
+@pytest.mark.django_db
+def test_baseline_invalid_patch_rolls_back_other_fields(doctor, patient):
+    baseline = PatientBaseline.objects.create(
+        patient=patient, subject_id="原编号", demographics={"education_years": 12, "gender": "男"}
+    )
+    client = APIClient()
+    client.force_authenticate(doctor)
+    response = client.patch(
+        f"/api/patients/{patient.id}/baseline/",
+        {"subject_id": "新编号", "demographics": {"education_years": -1}},
+        format="json",
+    )
+    assert response.status_code == 400
+    baseline.refresh_from_db()
+    assert baseline.subject_id == "原编号"
+    assert baseline.demographics == {"education_years": 12, "gender": "男"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("old", ["历史人口学原文", 7, False])
+def test_baseline_structure_patch_cannot_erase_historical_scalar(doctor, patient, old):
+    baseline = PatientBaseline.objects.create(
+        patient=patient, demographics=old, subject_id="原编号"
+    )
+    client = APIClient()
+    client.force_authenticate(doctor)
+    response = client.patch(
+        f"/api/patients/{patient.pk}/baseline/",
+        {"subject_id": "新编号", "demographics": {"education_years": 12}},
+        format="json",
+    )
+    assert response.status_code == 400, response.data
+    assert "demographics" in response.data
+    baseline.refresh_from_db()
+    assert baseline.demographics == old
+    assert baseline.subject_id == "原编号"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("old", ["", None])
+def test_baseline_empty_value_allows_initial_structured_entry(doctor, patient, old):
+    baseline = PatientBaseline.objects.create(patient=patient, demographics={"document": old})
+    client = APIClient()
+    client.force_authenticate(doctor)
+    response = client.patch(
+        f"/api/patients/{patient.pk}/baseline/",
+        {"demographics": {"document": {"enrolled_on": "2026-10-08"}}},
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    baseline.refresh_from_db()
+    assert baseline.demographics["document"] == {"enrolled_on": "2026-10-08"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("old", ["2026-10", "2026-10-08"])
+def test_baseline_controlled_date_can_switch_to_partial_components(doctor, patient, old):
+    baseline = PatientBaseline.objects.create(
+        patient=patient, comorbidities={"cm_coronary": {"diagnosed_at": old}}
+    )
+    parts = {"year": {"state": "value", "value": 2026}, "month": {"state": "unknown"}}
+    client = APIClient()
+    client.force_authenticate(doctor)
+    response = client.patch(
+        f"/api/patients/{patient.pk}/baseline/",
+        {"comorbidities": {"cm_coronary": {"diagnosed_at": parts}}},
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    baseline.refresh_from_db()
+    assert baseline.comorbidities["cm_coronary"]["diagnosed_at"] == parts

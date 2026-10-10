@@ -12,4 +12,4 @@ def test_comorbidity_diagnosed_at_invalid_date_key_matches_storage_path():
 
     key = "comorbidities.cm_coronary.diagnosed_at"
     assert key in errors
-    assert errors[key] == "日期格式应为 YYYY-MM-DD"
+    assert errors[key] == "日期格式应为 YYYY-MM"

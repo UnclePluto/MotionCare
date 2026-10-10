@@ -17,11 +17,15 @@ REG = ROOT / "specs" / "patient-rehab-system" / "crf" / "registry.v1.json"
 def main() -> int:
     doc = json.loads(REG.read_text(encoding="utf-8"))
     fields = doc.get("fields", [])
-    by_id = {f["field_id"]: f for f in fields if isinstance(f, dict) and "field_id" in f}
+    by_id = {
+        f["field_id"]: f for f in fields if isinstance(f, dict) and "field_id" in f
+    }
     baseline_ids = {
         f["field_id"]
         for f in fields
-        if isinstance(f.get("storage"), str) and f["storage"].startswith("patient_baseline.")
+        if isinstance(f.get("storage"), str)
+        and f["storage"].startswith("patient_baseline.")
+        and not f.get("visit_types")
     }
     order = doc.get("baseline_section_order")
     layout = doc.get("baseline_table_layout") or {}
@@ -40,7 +44,9 @@ def main() -> int:
                 if not fid:
                     continue
                 if fid in seen:
-                    print(f"ERROR: field_id 重复出现在 layout 中: {fid}", file=sys.stderr)
+                    print(
+                        f"ERROR: field_id 重复出现在 layout 中: {fid}", file=sys.stderr
+                    )
                     return 1
                 seen.add(fid)
                 if fid not in by_id:
@@ -48,7 +54,9 @@ def main() -> int:
                     return 1
     missing = baseline_ids - seen
     if missing:
-        print(f"ERROR: 下列基线字段未出现在 layout 中: {sorted(missing)}", file=sys.stderr)
+        print(
+            f"ERROR: 下列基线字段未出现在 layout 中: {sorted(missing)}", file=sys.stderr
+        )
         return 1
     extra = seen - baseline_ids
     if extra:

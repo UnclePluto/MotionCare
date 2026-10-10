@@ -1,5 +1,6 @@
+import { useEffect, useState } from "react";
 import { Alert } from "antd";
-import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import { createBrowserRouter, createRoutesFromElements, Navigate, Outlet, Route, RouterProvider, useParams } from "react-router-dom";
 
 import { AuthProvider } from "../auth/AuthContext";
 import { RequireAuth } from "../auth/RequireAuth";
@@ -40,11 +41,8 @@ function LegacyPrescriptionRouteRedirect() {
   return <Navigate to={`/prescriptions/project-patients/${projectPatientId ?? ""}`} replace />;
 }
 
-export function App() {
-  return (
-    <BrowserRouter>
-      <AuthProvider>
-        <Routes>
+const routes = createRoutesFromElements(
+  <Route element={<AuthProvider><Outlet /></AuthProvider>}>
           <Route path="/login" element={<LoginPage />} />
           <Route element={<RequireAuth />}>
             <Route element={<AdminLayout />}>
@@ -75,8 +73,15 @@ export function App() {
               <Route path="*" element={<Navigate to="/patients" replace />} />
             </Route>
           </Route>
-        </Routes>
-      </AuthProvider>
-    </BrowserRouter>
-  );
+  </Route>
+);
+
+export function App() {
+  const [router, setRouter] = useState<ReturnType<typeof createBrowserRouter>>();
+  useEffect(() => {
+    const current = createBrowserRouter(routes);
+    setRouter(current);
+    return () => current.dispose();
+  }, []);
+  return router ? <RouterProvider router={router} /> : null;
 }

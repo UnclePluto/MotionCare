@@ -2,7 +2,8 @@ from django.db import transaction
 from django.db.models import Max
 from django.utils import timezone
 
-from apps.studies.models import ProjectPatient, StudyProject
+from apps.studies.locking import lock_project_patient
+from apps.studies.models import StudyProject
 from apps.training.history import preview_legacy_training, invalidate_legacy_training
 from .doses import COUNTED_MOTION_KEYS, count_unit_for
 from .models import Prescription, PrescriptionAction, MotionPrescriptionCutover
@@ -23,12 +24,8 @@ def preview_cutover(pp):
 
 @transaction.atomic
 def cutover_patient(project_patient_id):
-    pp = (
-        ProjectPatient.objects.select_for_update()
-        .select_related("project")
-        .get(pk=project_patient_id)
-    )
-    project = StudyProject.objects.select_for_update().get(pk=pp.project_id)
+    pp = lock_project_patient(project_patient_id)
+    project = pp.project
     prescriptions = Prescription.objects.select_for_update().filter(project_patient=pp)
     active = prescriptions.filter(status="active").order_by("-version").first()
     marker, _ = MotionPrescriptionCutover.objects.get_or_create(project_patient=pp)

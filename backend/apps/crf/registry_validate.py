@@ -1,163 +1,122 @@
-"""Validate CRF payload fragments against the field registry."""
+"""Backward-compatible CRF payload validators using the shared rules engine."""
 
-from __future__ import annotations
+from apps.crf.answer_values import has_crf_answer_marker
 
-import re
 from collections.abc import Mapping
-from typing import Any
 
+from apps.crf.field_rules import validate_field_value, validate_fields
+from apps.crf.field_values import MISSING, match_crf_rows
 from apps.crf.registry_loader import load_crf_registry
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_BAD_PARENT = object()
 
-
-def validate_patient_baseline_payload(data: dict) -> dict[str, str]:
-    """Validate submitted PatientBaseline PATCH fields by registry metadata."""
+def validate_patient_baseline_payload(
+    data: dict, *, changed_paths: set[str] | None = None
+) -> dict[str, str]:
+    """Validate a candidate baseline; optional changed paths are baseline-relative."""
     if not isinstance(data, Mapping):
         return {"": "payload 必须是对象"}
-
-    errors: dict[str, str] = {}
-    reg = load_crf_registry()
-
-    for field in reg.get("fields", []):
-        storage = field.get("storage")
-        if not isinstance(storage, str) or not storage.startswith("patient_baseline."):
-            continue
-
-        path = storage.removeprefix("patient_baseline.")
-        parts = path.split(".")
-        present, value = _get_submitted_value(data, parts)
-        if not present:
-            continue
-
-        error = _validate_value(field, value)
-        if error:
-            errors[path] = error
-
-    errors.update(_validate_other_remarks(reg, data))
-    return errors
+    prefix = "patient_baseline."
+    changed = (
+        None
+        if changed_paths is None
+        else {p if p.startswith(prefix) else prefix + p for p in changed_paths}
+    )
+    errors = validate_fields(
+        load_crf_registry(),
+        {"patient_baseline": data},
+        scope="patient_baseline",
+        visit_type=None,
+        changed_paths=changed,
+    )
+    return {p.removeprefix(prefix): message for p, message in errors.items()}
 
 
-def validate_visit_form_data_patch(form_data_patch: dict, visit_type: str) -> dict[str, str]:
-    """Validate submitted visit form_data PATCH fields by registry metadata."""
+def validate_visit_form_data_patch(
+    form_data_patch: dict,
+    visit_type: str,
+    *,
+    changed_paths: set[str] | None = None,
+    baseline: dict | None = None,
+) -> dict[str, str]:
+    """Validate candidate form_data; changed paths may be relative or canonical.
+
+    Callers merging stored data must provide actual changed paths. This wrapper
+    cannot validate model visit_date; validate_fields accepts the complete visit.
+    """
     if not isinstance(form_data_patch, Mapping):
         return {"": "form_data 必须是对象"}
+    prefix = "visit.form_data."
+    changed = (
+        None
+        if changed_paths is None
+        else {
+            p if p.startswith(("visit.", "patient_baseline.")) else prefix + p
+            for p in changed_paths
+        }
+    )
+    errors = validate_fields(
+        load_crf_registry(),
+        {"visit": {"form_data": form_data_patch}},
+        scope="visit",
+        visit_type=visit_type,
+        changed_paths=changed,
+        baseline=baseline,
+    )
+    return {p.removeprefix(prefix): message for p, message in errors.items()}
 
-    errors: dict[str, str] = {}
-    reg = load_crf_registry()
 
-    for field in reg.get("fields", []):
-        storage = field.get("storage")
-        if not isinstance(storage, str) or not storage.startswith("visit.form_data."):
-            continue
+def validate_crf_structure_patch(
+    current: dict, patch: dict, *, scope: str, visit_type: str | None
+) -> dict[str, str]:
+    """Reject silent scalar-to-structure loss before merging canonical data.
 
-        visit_types = field.get("visit_types")
-        if visit_types is not None and visit_type not in visit_types:
-            continue
+    Only controlled partial-date leaves may replace a valid historical date
+    string with date components. Empty/null slots are first-entry locations;
+    explicit null clearing and complete array replacement keep their contracts.
+    """
+    dates = {}
+    answers = {"visit.form_data.crf.meta.visit_date_answer"} if scope == "visit" else set()
 
-        path = storage.removeprefix("visit.form_data.")
-        parts = path.split(".")
-        present, value = _get_submitted_value(form_data_patch, parts)
-        if not present:
-            continue
+    def collect(field, prefix=""):
+        path = prefix + field["storage"]
+        if field.get("metadata") and field.get("widget") != "table_repeat":
+            answers.add(path)
+        if field.get("widget") == "date" and field.get("allow_partial_date"):
+            dates[path] = field
+        for child in field.get("children", []):
+            collect(child, path + ".*.")
 
-        error = _validate_value(field, value)
-        if error:
-            errors[path] = error
+    for field in load_crf_registry()["fields"]:
+        if field["storage"].startswith(scope + ".") and (
+            not field.get("visit_types") or visit_type in field["visit_types"]
+        ):
+            collect(field)
+    errors = {}
 
+    def check(old, new, path):
+        normalized = ".".join("*" if part.isdecimal() else part for part in path.split("."))
+        if normalized in answers and has_crf_answer_marker(new):
+            return  # Marked answer is a controlled atomic leaf, validated by field rules.
+        if isinstance(old, Mapping) and isinstance(new, Mapping):
+            for key, value in new.items():
+                check(old.get(key, MISSING), value, f"{path}.{key}" if path else key)
+        elif isinstance(old, list) and isinstance(new, list):
+            for index, old_index in match_crf_rows(old, new).items():
+                check(old[old_index], new[index], f"{path}.{index}")
+        elif isinstance(new, (Mapping, list)) and not isinstance(old, (Mapping, list)):
+            if old is MISSING or old is None or (isinstance(old, str) and old == ""):
+                return
+            definition = dates.get(
+                ".".join("*" if part.isdecimal() else part for part in path.split("."))
+            )
+            if (
+                definition
+                and isinstance(new, Mapping)
+                and isinstance(old, str)
+                and validate_field_value(definition, old) is None
+            ):
+                return
+            errors[path] = "已有历史原文或标量，不能直接替换为结构化数据，请先核对原记录。"
+
+    check(current, patch, "")
     return errors
-
-
-def _validate_other_remarks(reg: Mapping[str, Any], data: Mapping[str, Any]) -> dict[str, str]:
-    """当主选项为「其他」且 registry 要求完整时，校验备注必填；校验备注类型为文本。"""
-    out: dict[str, str] = {}
-    for field in reg.get("fields", []):
-        storage = field.get("storage")
-        other_storage = field.get("other_remark_storage")
-        if not isinstance(storage, str) or not storage.startswith("patient_baseline."):
-            continue
-        if not isinstance(other_storage, str) or not other_storage.startswith("patient_baseline."):
-            continue
-
-        parent_parts = storage.removeprefix("patient_baseline.").split(".")
-        remark_parts = other_storage.removeprefix("patient_baseline.").split(".")
-
-        present_parent, parent_val = _get_submitted_value(data, parent_parts)
-        present_r, remark_val = _get_submitted_value(data, remark_parts)
-        remark_key = ".".join(remark_parts)
-
-        if present_parent and parent_val == "其他":
-            if field.get("required_for_complete") and (not present_r or _is_blank(remark_val)):
-                out[remark_key] = "选择「其他」时必须填写备注"
-
-        if present_r and not _is_blank(remark_val) and not isinstance(remark_val, str):
-            out[remark_key] = "必须是文本"
-
-    return out
-
-
-def _get_submitted_value(data: Mapping[str, Any], parts: list[str]) -> tuple[bool, Any]:
-    current: Any = data
-    for part in parts:
-        if not isinstance(current, Mapping):
-            return True, _BAD_PARENT
-        if part not in current:
-            return False, None
-        current = current[part]
-    return True, current
-
-
-def _validate_value(field: Mapping[str, Any], value: Any) -> str | None:
-    if value is _BAD_PARENT:
-        return "上级字段必须是对象"
-
-    widget = field.get("widget")
-    options = field.get("options")
-
-    if widget == "number":
-        if _is_blank(value):
-            return None
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return "必须是数字"
-        return None
-
-    if widget == "single_choice":
-        if _is_blank(value):
-            return None
-        if isinstance(options, list):
-            if value not in options:
-                return "不在可选项中"
-            return None
-        if not isinstance(value, str):
-            return "必须是字符串"
-        return None
-
-    if widget == "multi_choice":
-        if _is_blank(value):
-            return None
-        if not isinstance(value, list):
-            return "必须是列表"
-        if isinstance(options, list):
-            invalid = [item for item in value if item not in options]
-            if invalid:
-                return "包含无效选项"
-        return None
-
-    if widget == "date":
-        if _is_blank(value):
-            return None
-        if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
-            return "日期格式应为 YYYY-MM-DD"
-        return None
-
-    if widget in {"text", "textarea"}:
-        if value is None or isinstance(value, (str, int, float)):
-            return None
-        return "必须是文本"
-
-    return None
-
-
-def _is_blank(value: Any) -> bool:
-    return value is None or value == ""

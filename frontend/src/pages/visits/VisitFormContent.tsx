@@ -1,511 +1,176 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Alert,
-  Button,
-  Card,
-  Descriptions,
-  Form,
-  InputNumber,
-  Popconfirm,
-  Radio,
-  Space,
-  Tag,
-  message,
-} from "antd";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-
-import { apiClient } from "../../api/client";
-import {
-  buildVisitExtensionInitial,
-  deepDiffPatch,
-  deepMergeRecords,
-  groupVisitExtensionFields,
-  registryVisitExtensionFields,
-} from "../../crf/registryVisitExtensions";
-import { renderVisitRegistryField } from "../../crf/renderRegistryFields";
-
-type Assessments = {
-  sppb?: {
-    balance?: number | null;
-    gait?: number | null;
-    chair_stand?: number | null;
-    total?: number | null;
-  };
-  moca?: { total?: number | null };
-  tug_seconds?: number | null;
-  grip_strength_kg?: number | null;
-  frailty?: "robust" | "pre_frail" | "frail" | null;
-};
-
+import {useCurrentDoctorName} from '../../auth/AuthContext';
+import {buildVisitPrefill} from '../../crf/visitPrefill';
+import type {CrfVisitDateAnswer} from '../../crf/types';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Alert, Button, Card, Form, Popconfirm, Space, Tabs, Tag, Typography, message } from 'antd';
+import type { FormInstance } from 'antd';
+import type { CrfSection } from '../../crf/components/CrfSectionForm';
+import { useEffect, useMemo, useState } from 'react';
+import { apiClient } from '../../api/client';
+import { CrfSectionForm, CrfDraftProgress, CrfSaveBar } from '../../crf/components/CrfSectionForm';
+import { registryVisitExtensionFields, groupVisitExtensionFields, deepMergeRecords } from '../../crf/registryVisitExtensions';
+import { useCrfDraft } from '../../crf/useCrfDraft';
+import { focusCrfField, applyCrfServerErrors, crfServerErrorMessages, buildVisitSubmission, crfErrorSection, useCrfServerErrors } from '../../crf/visitSubmission';
+import { crfStorageToFormName, readCrfPath, readCrfStorage } from '../../crf/fieldState';
+import { isCrfRecord, normalizeCrfFormValues } from '../../crf/formValues';
+import { evaluateCrfDraft } from '../../crf/draftCompleteness';
+import type { CrfDraftItem } from '../../crf/draftCompleteness';
 type VisitDetail = {
-  id: number;
-  project_patient: number;
-  project_status?: "draft" | "active" | "archived";
-  visit_type: "T0" | "T1" | "T2";
-  status: "draft" | "completed";
-  visit_date: string | null;
-  form_data: {
-    assessments: Assessments;
-    computed_assessments: Assessments;
-    crf?: Record<string, unknown>;
-  };
+    id: number;
+    project_patient: number;
+    project_status?: string;
+    visit_type: 'T0' | 'T1' | 'T2';
+    status: 'draft' | 'completed';
+    visit_date: CrfVisitDateAnswer;
+    form_data: Record<string, unknown>;
 };
-
-type FormState = {
-  sppb_balance: number | null;
-  sppb_gait: number | null;
-  sppb_chair_stand: number | null;
-  sppb_total: number | null;
-  moca_total: number | null;
-  tug_seconds: number | null;
-  grip_strength_kg: number | null;
-  frailty: "robust" | "pre_frail" | "frail" | null;
+type Props = {
+    visitId: number;
+    patientId?: number;
+    title?: string;
+    timeDescription?: string;
+    onVisitChanged?: () => void | Promise<void>;
 };
-
-const EMPTY_FORM: FormState = {
-  sppb_balance: null,
-  sppb_gait: null,
-  sppb_chair_stand: null,
-  sppb_total: null,
-  moca_total: null,
-  tug_seconds: null,
-  grip_strength_kg: null,
-  frailty: null,
-};
-
-function pickInitial(
-  manual: number | null | undefined,
-  computed: number | null | undefined,
-): { value: number | null; fromComputed: boolean } {
-  if (manual !== undefined && manual !== null) {
-    return { value: manual, fromComputed: false };
-  }
-  if (computed !== undefined && computed !== null) {
-    return { value: computed, fromComputed: true };
-  }
-  return { value: null, fromComputed: false };
-}
-
-function pickInitialEnum(
-  manual: FormState["frailty"] | undefined,
-  computed: FormState["frailty"] | undefined,
-): { value: FormState["frailty"]; fromComputed: boolean } {
-  if (manual) return { value: manual, fromComputed: false };
-  if (computed) return { value: computed, fromComputed: true };
-  return { value: null, fromComputed: false };
-}
-
-function buildInitialForm(visit: VisitDetail): {
-  state: FormState;
-  computedFlags: Record<keyof FormState, boolean>;
-} {
-  const m = visit.form_data.assessments ?? {};
-  const c = visit.form_data.computed_assessments ?? {};
-  const flags = {} as Record<keyof FormState, boolean>;
-  const state: FormState = { ...EMPTY_FORM };
-
-  const num = (
-    key: keyof FormState,
-    manual?: number | null,
-    computed?: number | null,
-  ) => {
-    const r = pickInitial(manual ?? null, computed ?? null);
-    state[key] = r.value as never;
-    flags[key] = r.fromComputed;
-  };
-
-  num("sppb_balance", m.sppb?.balance, c.sppb?.balance);
-  num("sppb_gait", m.sppb?.gait, c.sppb?.gait);
-  num("sppb_chair_stand", m.sppb?.chair_stand, c.sppb?.chair_stand);
-  num("sppb_total", m.sppb?.total, c.sppb?.total);
-  num("moca_total", m.moca?.total, c.moca?.total);
-  num("tug_seconds", m.tug_seconds, c.tug_seconds);
-  num("grip_strength_kg", m.grip_strength_kg, c.grip_strength_kg);
-
-  const f = pickInitialEnum(m.frailty ?? null, c.frailty ?? null);
-  state.frailty = f.value;
-  flags.frailty = f.fromComputed;
-
-  return { state, computedFlags: flags };
-}
-
-function diffPatch(
-  initial: FormState,
-  current: FormState,
-): { form_data?: { assessments: Assessments } } {
-  const changed: Assessments = {};
-  let hasChange = false;
-
-  const setSppb = (
-    key: "balance" | "gait" | "chair_stand" | "total",
-    v: number | null,
-  ) => {
-    changed.sppb = { ...(changed.sppb ?? {}), [key]: v };
-    hasChange = true;
-  };
-
-  if (initial.sppb_balance !== current.sppb_balance)
-    setSppb("balance", current.sppb_balance);
-  if (initial.sppb_gait !== current.sppb_gait)
-    setSppb("gait", current.sppb_gait);
-  if (initial.sppb_chair_stand !== current.sppb_chair_stand)
-    setSppb("chair_stand", current.sppb_chair_stand);
-  if (initial.sppb_total !== current.sppb_total)
-    setSppb("total", current.sppb_total);
-
-  if (initial.moca_total !== current.moca_total) {
-    changed.moca = { total: current.moca_total };
-    hasChange = true;
-  }
-  if (initial.tug_seconds !== current.tug_seconds) {
-    changed.tug_seconds = current.tug_seconds;
-    hasChange = true;
-  }
-  if (initial.grip_strength_kg !== current.grip_strength_kg) {
-    changed.grip_strength_kg = current.grip_strength_kg;
-    hasChange = true;
-  }
-  if (initial.frailty !== current.frailty) {
-    changed.frailty = current.frailty;
-    hasChange = true;
-  }
-
-  return hasChange ? { form_data: { assessments: changed } } : {};
-}
-
-const computedHint = <Tag color="blue">系统预填值</Tag>;
-
-type VisitFormContentProps = {
-  visitId: number;
-  title?: string;
-  timeDescription?: string;
-  onVisitChanged?: () => void | Promise<void>;
-};
-
-export function VisitFormContent({
-  visitId,
-  title = "访视表单",
-  timeDescription,
-  onVisitChanged,
-}: VisitFormContentProps) {
-  const id = visitId;
-  const qc = useQueryClient();
-  const [extForm] = Form.useForm();
-  const extInitialRef = useRef<Record<string, unknown>>({});
-  const [initial, setInitial] = useState<FormState>(EMPTY_FORM);
-  const [current, setCurrent] = useState<FormState>(EMPTY_FORM);
-  const [computedFlags, setComputedFlags] = useState<
-    Record<keyof FormState, boolean>
-  >({} as Record<keyof FormState, boolean>);
-
-  const { data: visit, isLoading, isError } = useQuery({
-    queryKey: ["visit", id],
-    queryFn: async () => {
-      const r = await apiClient.get<VisitDetail>(`/visits/${id}/`);
-      return r.data;
-    },
-    enabled: !!id,
-  });
-
-  const extensionFields = useMemo(
-    () => (visit ? registryVisitExtensionFields(visit.visit_type) : []),
-    [visit],
-  );
-
-  const extensionGroups = useMemo(
-    () => groupVisitExtensionFields(extensionFields),
-    [extensionFields],
-  );
-
-  useLayoutEffect(() => {
-    if (!visit) return;
-    const { state, computedFlags: flags } = buildInitialForm(visit);
-    setInitial(state);
-    setCurrent(state);
-    setComputedFlags(flags);
-  }, [visit]);
-
-  useEffect(() => {
-    if (!visit) return;
-    if (extensionFields.length === 0) {
-      extInitialRef.current = {};
-      extForm.resetFields();
-      return;
+const EMPTY = {};
+/** Preserve the pre-existing display fallback, without creating new manual assessment keys. */
+function assessmentPrefill(manual: unknown, computed: unknown): unknown {
+    if (manual != null && !isCrfRecord(manual)) return manual;
+    const out = normalizeCrfFormValues(isCrfRecord(manual) ? manual : {});
+    const paths = [
+        ['sppb', 'balance'], ['sppb', 'gait'], ['sppb', 'chair_stand'], ['sppb', 'total'],
+        ['moca', 'total'], ['tug_seconds'], ['grip_strength_kg'], ['frailty'],
+    ];
+    for (const path of paths) {
+        if (readCrfPath(out, path) != null) continue;
+        const value = readCrfPath(computed, path);
+        if (value == null) continue;
+        if (path.length === 1) out[path[0]] = value;
+        else {
+            const parent = out[path[0]];
+            if (parent != null && !isCrfRecord(parent)) continue;
+            out[path[0]] = {...(isCrfRecord(parent) ? parent : {}), [path[1]]: value};
+        }
     }
-    const fd = visit.form_data as unknown as Record<string, unknown>;
-    const initialExt = buildVisitExtensionInitial(fd, extensionFields);
-    extInitialRef.current = JSON.parse(JSON.stringify(initialExt)) as Record<string, unknown>;
-    extForm.setFieldsValue(initialExt);
-  }, [visit, extensionFields, extForm]);
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const basePatch = diffPatch(initial, current);
-      const baseFd = basePatch.form_data as Record<string, unknown> | undefined;
-
-      const extDiffRaw =
-        extensionFields.length > 0
-          ? deepDiffPatch(extInitialRef.current, extForm.getFieldsValue(true))
-          : undefined;
-      const extDiff = extDiffRaw as Record<string, unknown> | undefined;
-
-      const form_data: Record<string, unknown> = {};
-
-      const mergedAssessments = deepMergeRecords(
-        baseFd?.assessments as Record<string, unknown> | undefined,
-        extDiff?.assessments as Record<string, unknown> | undefined,
-      );
-      if (mergedAssessments && Object.keys(mergedAssessments).length > 0) {
-        form_data.assessments = mergedAssessments;
-      }
-
-      const extCrf = extDiff?.crf as Record<string, unknown> | undefined;
-      if (extCrf && typeof extCrf === "object" && Object.keys(extCrf).length > 0) {
-        form_data.crf = extCrf;
-      }
-
-      if (Object.keys(form_data).length === 0) return null;
-      const r = await apiClient.patch(`/visits/${id}/`, { form_data });
-      return r.data;
-    },
-    onSuccess: async (data) => {
-      if (data) {
-        message.success("已暂存");
-        await qc.invalidateQueries({ queryKey: ["visit", id] });
-        await onVisitChanged?.();
-      } else {
-        message.info("没有改动");
-      }
-    },
-    onError: () => message.error("暂存失败"),
-  });
-
-  const completeMutation = useMutation({
-    mutationFn: async () => {
-      const r = await apiClient.patch(`/visits/${id}/`, { status: "completed" });
-      return r.data;
-    },
-    onSuccess: async () => {
-      message.success("已完成");
-      await qc.invalidateQueries({ queryKey: ["visit", id] });
-      await onVisitChanged?.();
-    },
-    onError: () => message.error("操作失败"),
-  });
-
-  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
-    setCurrent((prev) => ({ ...prev, [key]: value }));
-    setComputedFlags((prev) => ({ ...prev, [key]: false }));
-  };
-
-  const renderHint = (key: keyof FormState) =>
-    computedFlags[key] ? computedHint : null;
-  const isCompletedVisit = visit?.status === "completed";
-  const isArchivedProject = visit?.project_status === "archived";
-  const isVisitReadonly = Boolean(isCompletedVisit || isArchivedProject);
-
-  const headerExtra = useMemo(() => {
-    if (!visit) return null;
-    return (
-      <Space>
-        <Tag color="geekblue">{visit.visit_type}</Tag>
-        <Tag color={visit.status === "completed" ? "green" : "default"}>
-          {visit.status === "completed" ? "已完成" : "草稿"}
-        </Tag>
-      </Space>
-    );
-  }, [visit]);
-
-  return (
-    <Card title={title} loading={isLoading} extra={headerExtra}>
-      {isError ? (
-        <Alert type="error" message="访视记录不存在或无权限访问" />
-      ) : visit && (
-        <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-          <Descriptions size="small" column={2} bordered>
-            <Descriptions.Item label="访视类型">{visit.visit_type}</Descriptions.Item>
-            <Descriptions.Item label="访视日期">
-              {visit.visit_date ?? "—"}
-            </Descriptions.Item>
-            <Descriptions.Item label="状态">
-              {visit.status === "completed" ? "已完成" : "草稿"}
-            </Descriptions.Item>
-          </Descriptions>
-
-          {Object.values(computedFlags).some(Boolean) && (
-            <Alert
-              type="info"
-              showIcon
-              message="部分字段使用了“系统预填值”，确认或修改后保存即写入医生填写值。"
-            />
-          )}
-
-          {isCompletedVisit && (
-            <Alert
-              type="info"
-              showIcon
-              message="访视已完成，当前为只读查看。"
-            />
-          )}
-
-          {timeDescription && (
-            <Alert
-              type="info"
-              showIcon
-              message={timeDescription}
-            />
-          )}
-
-          {isArchivedProject && (
-            <Alert
-              type="warning"
-              showIcon
-              message="当前表单只读"
-            />
-          )}
-
-          <div>
-            <Card type="inner" title="SPPB" style={{ marginBottom: 12 }}>
-              <Space wrap size="middle" align="end">
-                <Form.Item label="平衡">
-                  <InputNumber
-                    aria-label="SPPB 平衡"
-                    disabled={isVisitReadonly}
-                    value={current.sppb_balance ?? undefined}
-                    onChange={(v) => set("sppb_balance", (v as number) ?? null)}
-                  />
-                  {renderHint("sppb_balance")}
-                </Form.Item>
-                <Form.Item label="步行">
-                  <InputNumber
-                    aria-label="SPPB 步行"
-                    disabled={isVisitReadonly}
-                    value={current.sppb_gait ?? undefined}
-                    onChange={(v) => set("sppb_gait", (v as number) ?? null)}
-                  />
-                  {renderHint("sppb_gait")}
-                </Form.Item>
-                <Form.Item label="坐立">
-                  <InputNumber
-                    aria-label="SPPB 坐立"
-                    disabled={isVisitReadonly}
-                    value={current.sppb_chair_stand ?? undefined}
-                    onChange={(v) =>
-                      set("sppb_chair_stand", (v as number) ?? null)
-                    }
-                  />
-                  {renderHint("sppb_chair_stand")}
-                </Form.Item>
-                <Form.Item label="SPPB 总分">
-                  <InputNumber
-                    aria-label="SPPB 总分"
-                    disabled={isVisitReadonly}
-                    value={current.sppb_total ?? undefined}
-                    onChange={(v) => set("sppb_total", (v as number) ?? null)}
-                  />
-                  {renderHint("sppb_total")}
-                </Form.Item>
-              </Space>
-            </Card>
-
-            <Card type="inner" title="MoCA" style={{ marginBottom: 12 }}>
-              <Form.Item label="MoCA 总分">
-                <InputNumber
-                  aria-label="MoCA 总分"
-                  disabled={isVisitReadonly}
-                  value={current.moca_total ?? undefined}
-                  onChange={(v) => set("moca_total", (v as number) ?? null)}
-                />
-                {renderHint("moca_total")}
-              </Form.Item>
-            </Card>
-
-            <Card type="inner" title="其他评估" style={{ marginBottom: 12 }}>
-              <Space wrap size="middle" align="end">
-                <Form.Item label="TUG（秒）">
-                  <InputNumber
-                    aria-label="TUG"
-                    disabled={isVisitReadonly}
-                    value={current.tug_seconds ?? undefined}
-                    onChange={(v) => set("tug_seconds", (v as number) ?? null)}
-                  />
-                  {renderHint("tug_seconds")}
-                </Form.Item>
-                <Form.Item label="握力（kg）">
-                  <InputNumber
-                    aria-label="握力"
-                    disabled={isVisitReadonly}
-                    value={current.grip_strength_kg ?? undefined}
-                    onChange={(v) =>
-                      set("grip_strength_kg", (v as number) ?? null)
-                    }
-                  />
-                  {renderHint("grip_strength_kg")}
-                </Form.Item>
-                <Form.Item label="衰弱判定">
-                  <Radio.Group
-                    disabled={isVisitReadonly}
-                    value={current.frailty ?? undefined}
-                    onChange={(e) =>
-                      set("frailty", e.target.value as FormState["frailty"])
-                    }
-                  >
-                    <Radio value="robust">非衰弱</Radio>
-                    <Radio value="pre_frail">衰弱前期</Radio>
-                    <Radio value="frail">衰弱</Radio>
-                  </Radio.Group>
-                  {renderHint("frailty")}
-                </Form.Item>
-              </Space>
-            </Card>
-
-            {extensionFields.length > 0 && (
-              <Form
-                form={extForm}
-                layout="vertical"
-                disabled={isVisitReadonly}
-              >
-                {extensionGroups.map((g) => (
-                  <Card key={g.key} type="inner" title={g.label} style={{ marginBottom: 12 }}>
-                    {g.fields.map((f) =>
-                      renderVisitRegistryField(f, {
-                        disabled: isVisitReadonly,
-                      }),
-                    )}
-                  </Card>
-                ))}
-              </Form>
-            )}
-
-            <Space>
-              <Button
-                aria-label="暂存"
-                loading={saveMutation.isPending}
-                disabled={isVisitReadonly}
-                onClick={() => saveMutation.mutate()}
-              >
-                暂存
-              </Button>
-              <Popconfirm
-                title="确认完成？"
-                description="完成后对应记录无法修改。"
-                okText="确认完成"
-                cancelText="取消"
-                onConfirm={() => completeMutation.mutate()}
-              >
-                <Button
-                  type="primary"
-                  aria-label="完成"
-                  loading={completeMutation.isPending}
-                  disabled={isVisitReadonly}
-                >
-                  完成
-                </Button>
-              </Popconfirm>
-            </Space>
-          </div>
-        </Space>
-      )}
-    </Card>
-  );
+    return out;
+}
+function VisitSection({ form, section, disabled, error, progress }: {
+    form: FormInstance;
+    section: CrfSection;
+    disabled: boolean;
+    error: unknown;
+    progress:CrfDraftItem[];
+}) { useCrfServerErrors(form, error, 'visit'); return <CrfSectionForm form={form} disabled={disabled} sections={[section]} progress={progress}/>; }
+export function VisitFormContent(props: Props) { return <VisitEditor key={props.visitId} {...props}/>; }
+function VisitEditor({ visitId: id, patientId, title = '访视表单', onVisitChanged }: Props) {
+    const qc = useQueryClient();
+    const doctorName=useCurrentDoctorName();
+    const [form] = Form.useForm();
+    const [activeSection, setActiveSection] = useState<string>();
+    const [savedAt, setSavedAt] = useState<string>();
+    const [fieldError, setFieldError] = useState<unknown>();
+    const [completing, setCompleting] = useState(false);
+    const [confirmationOpen,setConfirmationOpen]=useState(false);
+    const [location,setLocation]=useState<CrfDraftItem>();
+    useEffect(()=>{if(location){const frame=requestAnimationFrame(()=>focusCrfField(form,location.name));return ()=>cancelAnimationFrame(frame);}},[location,form,activeSection]);
+    const { data: visit, isLoading, isError } = useQuery({ queryKey: ['visit', id], queryFn: async () => (await apiClient.get<VisitDetail>(`/visits/${id}/`)).data, enabled: !!id });
+    const { data: binding } = useQuery({ queryKey: ['project-patient', visit?.project_patient], queryFn: async () => (await apiClient.get<{
+            patient: number; enrolled_at?: string;
+        }>(`/studies/project-patients/${visit!.project_patient}/`)).data, enabled: !!visit });
+    const currentPatientId = patientId ?? binding?.patient;
+    const { data: baseline } = useQuery({ queryKey: ['patient-baseline', String(currentPatientId)], queryFn: async () => (await apiClient.get<Record<string, unknown>>(`/patients/${currentPatientId}/baseline/`)).data, enabled: !!currentPatientId });
+    const {data:confirmedBindings}=useQuery({queryKey:['project-patients','patient',currentPatientId],queryFn:async()=>(await apiClient.get<unknown[]>('/studies/project-patients/',{params:{patient:currentPatientId}})).data,enabled:!!currentPatientId});
+    // Only the established computed fallback uses a display baseline: an untouched suggestion is not a manual answer.
+    const serverValues = useMemo(() => visit ? { assessments: assessmentPrefill(visit.form_data.assessments, visit.form_data.computed_assessments), crf: visit.form_data.crf ?? {}, visit_date: visit.visit_date } : undefined, [visit]);
+    const adoptableNames=useMemo(()=>visit?registryVisitExtensionFields(visit.visit_type).filter(field=>field.storage.startsWith('visit.form_data.assessments.')).map(field=>crfStorageToFormName(field.storage)).filter(name=>readCrfPath(visit.form_data,name)==null && readCrfPath(serverValues,name)!=null):[],[visit,serverValues]);
+    const recordKey = `visit:${id}`;
+    const prefillValues=useMemo(()=>serverValues&&visit?buildVisitPrefill({visitType:visit.visit_type,serverValues,enrolledAt:binding?.enrolled_at,doctorName,confirmedProjectCount:Array.isArray(confirmedBindings)?confirmedBindings.length:0,legacyCover:isCrfRecord(baseline?.demographics)?baseline.demographics.document:undefined,legacyCoverMetadata:isCrfRecord(baseline?.demographics)?baseline.demographics._crf_field_meta:undefined,readOnly:visit.status==='completed'||visit.project_status==='archived'}):serverValues,[serverValues,visit,binding,doctorName,confirmedBindings,baseline]);
+    const prefillNames=useMemo(()=>[['crf','cover','protocol_number'],['crf','cover','enrolled_on'],['crf','cover','investigator_name'],['crf','meta','assessor_name'],['crf','meta','assessed_on']],[]);
+    const draft = useCrfDraft({ form, serverValues, prefillValues, prefillNames, recordKey, adoptableNames });
+    // Canonical context is independently refreshed even while the visit draft is dirty.
+    useEffect(() => { if (JSON.stringify(form.getFieldValue(['patient_baseline'])) !== JSON.stringify(baseline ?? EMPTY))
+        form.setFieldValue(['patient_baseline'], baseline ?? EMPTY); }, [baseline, form, id, serverValues]);
+    const fields = useMemo(() => visit ? registryVisitExtensionFields(visit.visit_type) : [], [visit]);
+    const groups = useMemo(() => groupVisitExtensionFields(fields), [fields]);
+    const readonly = visit?.status === 'completed' || visit?.project_status === 'archived' || completing;
+    const mutation = useMutation({ mutationFn: async ({ values, before, complete }: {
+            values: Record<string, unknown>;
+            before: Record<string, unknown>;
+            complete: boolean;
+        }) => {
+            const payload = buildVisitSubmission(values, before, { complete });
+            if (!Object.keys(payload).length)
+                return null;
+            await qc.cancelQueries({ queryKey: ['visit', id] });
+            return (await apiClient.patch(`/visits/${id}/`, payload)).data;
+        } });
+    const submit = async (complete: boolean) => {
+        if (readonly || !draft.beginSubmit())
+            return;
+        setCompleting(complete);
+        setFieldError(undefined);
+        form.setFields(form.getFieldsError().filter(field => field.errors.length).map(field => ({ ...field, errors: [] })));
+        const values = draft.getValues();
+        const before = draft.before;
+        try {
+            const result = await mutation.mutateAsync({ values, before, complete });
+            if (draft.resetAfterSubmit(values, recordKey)) {
+                setSavedAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }));
+                message.success(complete ? '已完成' : '已暂存');
+                if (result && isCrfRecord(result) && result.id === id && result.form_data)
+                    qc.setQueryData(['visit', id], result);
+                await qc.invalidateQueries({ queryKey: ['visit', id] });
+                await onVisitChanged?.();
+            }
+        }
+        catch (error) {
+            if (!draft.isCurrentRecord(recordKey))
+                return;
+            setFieldError(error || new Error("保存失败"));
+            const name = applyCrfServerErrors(form, error, 'visit');
+            if (name) {
+                const key = crfErrorSection(fields, name);
+                if (key)
+                    setActiveSection(key);
+            }
+            message.error('保存失败，请核对字段提示；草稿已保留');
+        }
+        finally {
+            draft.endSubmit();
+            if (draft.isCurrentRecord(recordKey))
+                setCompleting(false);
+        }
+    };
+    const legacy = fields.filter(f => f.legacy && readCrfStorage(draft.getValues(), f.storage) != null && readCrfStorage(draft.getValues(), f.storage) !== '');
+    // Progress follows the exact save candidate; untouched computed suggestions remain suggestions.
+    const pending=buildVisitSubmission(draft.getValues(),draft.before,{complete:false});
+    const candidate:Record<string,unknown>={...(deepMergeRecords(visit?.form_data,pending.form_data)??{}),visit_date:'visit_date' in pending?pending.visit_date:visit?.visit_date,patient_baseline:baseline??{}};
+    if('visit_date' in pending&&isCrfRecord(candidate.crf)) {
+        const meta=isCrfRecord(candidate.crf.meta)?candidate.crf.meta:{};
+        candidate.crf={...candidate.crf,meta:{...meta,visit_date_answer:pending.visit_date}};
+    }
+    const progress=evaluateCrfDraft(fields,candidate);
+    const reminders=progress.unresolved;
+    const locate=(item:CrfDraftItem)=>{setConfirmationOpen(false);setActiveSection(item.table);setLocation(item);};
+    return <Card title={title} loading={isLoading} extra={visit ? <Space><Tag>{visit.visit_type}</Tag><Tag>{visit.status === 'completed' ? '已完成' : '草稿'}</Tag></Space> : null}>
+  {isError ? <Alert type="error" message="访视记录不存在或无权限访问"/> : null}
+  <Form form={form} layout="vertical" disabled={readonly}>
+   {draft.navigationGuard}
+   {fieldError ? <Alert type="error" showIcon message="保存失败，草稿已保留" description={<ul style={{ marginBottom: 0 }}>{crfServerErrorMessages(fieldError, 'visit').map(text => <li key={text}>{text}</li>)}</ul>} /> : null}
+   {visit ? <>
+    {visit.status === 'completed' ? <Alert type="info" showIcon message="访视已完成，当前为只读查看。"/> : null}
+    {visit.project_status === 'archived' ? <Alert type="warning" message="当前表单只读"/> : null}
+    {JSON.stringify(serverValues?.assessments) !== JSON.stringify(visit.form_data.assessments ?? {}) ? <Tag color="blue">系统预填值</Tag> : null}
+    <CrfDraftProgress items={progress.items} onLocate={locate}/>
+    <Tabs activeKey={groups.some(g => g.key === activeSection) ? activeSection : groups[0]?.key} onChange={setActiveSection} destroyOnHidden items={groups.map(g => ({ key: g.key, label: g.label, children: <VisitSection form={form} disabled={readonly} error={fieldError} progress={progress.items} section={{ key: g.key, title: g.label, fields: g.fields, scope: 'visit', visitType: visit.visit_type }}/> }))}/>
+    {legacy.length ? <Card size="small" title="旧记录，待核对">{legacy.map(f => <div key={f.field_id}><Typography.Text>{f.ui_label ?? f.label_zh}</Typography.Text><pre style={{ whiteSpace: 'pre-wrap' }}>{typeof readCrfStorage(draft.getValues(), f.storage) === 'string' ? String(readCrfStorage(draft.getValues(), f.storage)) : JSON.stringify(readCrfStorage(draft.getValues(), f.storage))}</pre></div>)}</Card> : null}
+    <CrfSaveBar>
+     <Button aria-label="暂存" loading={mutation.isPending} disabled={readonly || mutation.isPending} onClick={() => void submit(false)}>暂存</Button>
+     <Popconfirm open={confirmationOpen} onOpenChange={setConfirmationOpen} title="确认完成？" description={<><p>完成后对应记录无法修改。</p><p>{reminders.length ? `仍有 ${reminders.length} 项未处理。可保留缺失并完成。` : '当前未发现未处理的必填项。'}</p><CrfDraftProgress items={progress.items} onLocate={locate} expanded/></>} okText="确认完成" cancelText="取消" onConfirm={() => submit(true)} disabled={readonly || mutation.isPending}>
+      <Button type="primary" aria-label="完成" loading={mutation.isPending} disabled={readonly || mutation.isPending}>完成</Button>
+     </Popconfirm>
+     {savedAt ? <Typography.Text role="status">已保存于 {savedAt}</Typography.Text> : null}{draft.dirty ? <Typography.Text>有未保存的改动</Typography.Text> : null}
+    </CrfSaveBar>
+   </> : null}
+  </Form>
+ </Card>;
 }

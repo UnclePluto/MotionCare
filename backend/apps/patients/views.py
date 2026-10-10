@@ -33,9 +33,7 @@ class PatientViewSet(ModelViewSet):
         patient = self.get_object()
         if ProjectPatient.objects.filter(patient=patient).exists():
             raise ValidationError(
-                {
-                    "detail": "该患者已关联研究项目，无法删除。请先移除项目关联或停用档案。"
-                }
+                {"detail": "该患者已关联研究项目，无法删除。请先移除项目关联或停用档案。"}
             )
         return super().destroy(request, *args, **kwargs)
 
@@ -49,9 +47,7 @@ class PatientViewSet(ModelViewSet):
 
         duplicate_project_ids = sorted(
             project_id
-            for project_id, count in Counter(
-                item["project_id"] for item in enrollments
-            ).items()
+            for project_id, count in Counter(item["project_id"] for item in enrollments).items()
             if count > 1
         )
         if duplicate_project_ids:
@@ -61,8 +57,7 @@ class PatientViewSet(ModelViewSet):
         group_ids = {item["group_id"] for item in enrollments}
 
         existing_projects = {
-            project.id: project
-            for project in StudyProject.objects.filter(pk__in=project_ids)
+            project.id: project for project in StudyProject.objects.filter(pk__in=project_ids)
         }
         missing_projects = sorted(project_ids - existing_projects.keys())
         if missing_projects:
@@ -71,10 +66,7 @@ class PatientViewSet(ModelViewSet):
         for project_obj in existing_projects.values():
             ensure_project_open(project_obj)
 
-        existing_groups = {
-            group.id: group
-            for group in StudyGroup.objects.filter(pk__in=group_ids)
-        }
+        existing_groups = {group.id: group for group in StudyGroup.objects.filter(pk__in=group_ids)}
         missing_groups = sorted(group_ids - existing_groups.keys())
         if missing_groups:
             raise ValidationError({"detail": f"以下分组不存在: {missing_groups}"})
@@ -89,14 +81,12 @@ class PatientViewSet(ModelViewSet):
                 raise ValidationError({"detail": f"分组已停用: {item['group_id']}"})
 
         already_linked = list(
-            ProjectPatient.objects.filter(
-                patient=patient, project_id__in=project_ids
-            ).values_list("project_id", flat=True)
+            ProjectPatient.objects.filter(patient=patient, project_id__in=project_ids).values_list(
+                "project_id", flat=True
+            )
         )
         if already_linked:
-            raise ValidationError(
-                {"detail": f"该患者已在以下项目中: {sorted(already_linked)}"}
-            )
+            raise ValidationError({"detail": f"该患者已在以下项目中: {sorted(already_linked)}"})
 
         created = []
         for item in enrollments:
@@ -124,8 +114,11 @@ class PatientViewSet(ModelViewSet):
         )
 
     @action(detail=True, methods=["get", "put", "patch"], url_path="baseline")
+    @transaction.atomic
     def baseline(self, request, pk=None):
         patient = self.get_object()
+        # Lock the parent too: it exists even before the first baseline is created.
+        patient = Patient.objects.select_for_update().get(pk=patient.pk)
         baseline, _created = PatientBaseline.objects.get_or_create(
             patient=patient,
             defaults={"created_by": request.user, "updated_by": request.user},
@@ -133,6 +126,8 @@ class PatientViewSet(ModelViewSet):
 
         if request.method == "GET":
             return Response(PatientBaselineSerializer(baseline).data)
+
+        baseline = PatientBaseline.objects.select_for_update().get(pk=baseline.pk)
 
         # PUT 与 PATCH 一律按部分更新处理：CRF 录入是逐节累积的，
         # 避免 PUT 全量覆盖把已录入的 JSON 节段（demographics 等）误清空。

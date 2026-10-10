@@ -56,7 +56,7 @@ def analysis_job(settings, project_patient, active_prescription, prescription_ac
         prescription_action=prescription_action,
         skeleton_bucket="analysis-skeletons",
         skeleton_object_key=(
-            f"motion-analysis/{project_patient.id}/2026/09/"
+            f"motion-analysis/{project_patient.id}/{video.training_date:%Y/%m}/"
             "11111111-1111-4111-8111-111111111111/skeleton.mp4"
         ),
     )
