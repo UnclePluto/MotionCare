@@ -1,5 +1,6 @@
-from apps.crf.answer_values import has_crf_answer_marker
 """Backward-compatible CRF payload validators using the shared rules engine."""
+
+from apps.crf.answer_values import has_crf_answer_marker
 
 from collections.abc import Mapping
 
@@ -93,7 +94,7 @@ def validate_crf_structure_patch(
     errors = {}
 
     def check(old, new, path):
-        normalized=".".join("*" if part.isdecimal() else part for part in path.split("."))
+        normalized = ".".join("*" if part.isdecimal() else part for part in path.split("."))
         if normalized in answers and has_crf_answer_marker(new):
             return  # Marked answer is a controlled atomic leaf, validated by field rules.
         if isinstance(old, Mapping) and isinstance(new, Mapping):

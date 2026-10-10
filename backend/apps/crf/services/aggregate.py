@@ -49,13 +49,16 @@ def build_crf_preview(project_patient) -> dict:
     }
 
     from apps.crf.services.project_cover import project_cover
-    t0 = visit_payload['T0']
-    t0['form_data'] = project_cover(project_patient, t0.get('form_data', {}), baseline_payload)
+
+    t0 = visit_payload["T0"]
+    t0["form_data"] = project_cover(project_patient, t0.get("form_data", {}), baseline_payload)
     for payload in visit_payload.values():
-        if 'visit_date' in payload:
-            from apps.crf.field_values import lookup_path,MISSING,BAD_PARENT
-            answer=lookup_path(payload.get('form_data',{}),'crf.meta.visit_date_answer')
-            if answer is not MISSING and answer is not BAD_PARENT:payload['visit_date']=answer
+        if "visit_date" in payload:
+            from apps.crf.field_values import lookup_path, MISSING, BAD_PARENT
+
+            answer = lookup_path(payload.get("form_data", {}), "crf.meta.visit_date_answer")
+            if answer is not MISSING and answer is not BAD_PARENT:
+                payload["visit_date"] = answer
     reg = load_crf_registry()
     projection = evaluate_completeness(reg, baseline_payload, visit_payload)
     # Static study schedule is source content, not a patient answer or a count.

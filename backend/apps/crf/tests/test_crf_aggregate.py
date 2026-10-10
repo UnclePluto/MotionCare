@@ -511,12 +511,31 @@ def test_baseline_repeated_child_source_uses_full_path():
     field = projected(result, "visit.form_data.crf.medication_change.entries", "T1")
     assert field["rows"][0]["fields"][0]["source"] == {"kind": "manual", "visit_type": "T1"}
 
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("parts", "metadata", "state", "paper_date"),
     [
-        ({"year": {"state": "value", "value": 2026}, "month": {"state": "value", "value": 2}, "day": {"state": "value", "value": 28}}, None, "normal", "2026年02月28日"),
-        ({"year": {"state": "value", "value": 2026}, "month": {"state": "unknown"}, "day": {"state": "unknown"}}, {"state": "value", "reason": "月份和日期记不清"}, "unknown", "2026年99月99日"),
+        (
+            {
+                "year": {"state": "value", "value": 2026},
+                "month": {"state": "value", "value": 2},
+                "day": {"state": "value", "value": 28},
+            },
+            None,
+            "normal",
+            "2026年02月28日",
+        ),
+        (
+            {
+                "year": {"state": "value", "value": 2026},
+                "month": {"state": "unknown"},
+                "day": {"state": "unknown"},
+            },
+            {"state": "value", "reason": "月份和日期记不清"},
+            "unknown",
+            "2026年99月99日",
+        ),
         (None, None, "unresolved", None),
     ],
 )
@@ -536,7 +555,11 @@ def test_orm_missing_native_date_preserves_parts_in_preview_and_original_docx(
     field = projected(preview, "visit.visit_date", "T1")
     assert field["state"] == state
     assert field["raw_value"] is None
-    assert not [issue for issue in preview["issues"] if issue["scope"] == "T1" and issue["storage"] == "visit.visit_date"]
+    assert not [
+        issue
+        for issue in preview["issues"]
+        if issue["scope"] == "T1" and issue["storage"] == "visit.visit_date"
+    ]
     assert ("T1.访视日期" in preview["missing_fields"]) == (state == "unresolved")
     document = Document(export_preview_to_docx(preview, tmp_path / "filled.docx"))
     date_cell = document.tables[15].rows[1].cells[1].text
@@ -547,65 +570,126 @@ def test_orm_missing_native_date_preserves_parts_in_preview_and_original_docx(
 
 
 @pytest.mark.django_db
-def test_project_cover_uses_current_binding_and_preserves_old_patient_document(doctor,project_patient):
-    from datetime import datetime,timezone
+def test_project_cover_uses_current_binding_and_preserves_old_patient_document(
+    doctor, project_patient
+):
+    from datetime import datetime, timezone
     from apps.patients.models import PatientBaseline
-    from apps.studies.models import ProjectPatient,StudyProject,StudyGroup
+    from apps.studies.models import ProjectPatient, StudyProject, StudyGroup
     from apps.crf.services.aggregate import build_crf_preview
     from apps.visits.models import VisitRecord
-    baseline,_=PatientBaseline.objects.get_or_create(patient=project_patient.patient)
-    old={'protocol_number':'旧方案','revision_1_0_name':'历史确认姓名'}
-    baseline.demographics={'document':old};baseline.save()
-    ProjectPatient.objects.filter(pk=project_patient.pk).update(enrolled_at=datetime(2026,10,9,17,30,tzinfo=timezone.utc));project_patient.refresh_from_db()
-    preview=build_crf_preview(project_patient)
-    projected=[f for s in preview['sections'] for f in s['fields']]
-    cover=next(f for f in projected if f['field_id']=='doc_enrolled_on')
-    assert cover['value']=='2026-10-10' and cover['storage']=='visit.form_data.crf.cover.enrolled_on'
-    assert not any(f['field_id'].startswith('doc_revision_') for f in projected)
-    assert preview['patient_baseline']['demographics']['document']==old
-    other=StudyProject.objects.create(name='第二项目');group=StudyGroup.objects.create(project=other,name='第二组')
-    ProjectPatient.objects.create(patient=project_patient.patient,project=other,group=group)
-    preview=build_crf_preview(project_patient)
-    protocol=next(f for s in preview['sections'] for f in s['fields'] if f['field_id']=='doc_protocol_number')
-    assert protocol['value'] in (None,'')
-    visit=VisitRecord.objects.get(project_patient=project_patient,visit_type='T0')
-    visit.form_data={'crf':{'cover':{'protocol_number':'本项目','enrolled_on':None}}};visit.save()
-    preview=build_crf_preview(project_patient)
-    assert next(f for s in preview['sections'] for f in s['fields'] if f['field_id']=='doc_protocol_number')['value']=='本项目'
-    assert next(f for s in preview['sections'] for f in s['fields'] if f['field_id']=='doc_enrolled_on')['value'] is None
 
-
-@pytest.mark.django_db
-@pytest.mark.parametrize('state',['unknown','not_applicable'])
-def test_old_cover_state_and_reason_survive_readonly_projection(project_patient,state):
-    from apps.patients.models import PatientBaseline
-    baseline,_=PatientBaseline.objects.get_or_create(patient=project_patient.patient)
-    cover={'protocol_number':'旧方案','enrolled_on':None,'investigator_name':'旧医生'}
-    baseline.demographics={'document':cover,'_crf_field_meta':{f'patient_baseline.demographics.document.{key}':{'state':state,'reason':'原理由','extra':'原补充'} for key in cover}}
+    baseline, _ = PatientBaseline.objects.get_or_create(patient=project_patient.patient)
+    old = {"protocol_number": "旧方案", "revision_1_0_name": "历史确认姓名"}
+    baseline.demographics = {"document": old}
     baseline.save()
-    before=deepcopy(baseline.demographics)
-    preview=build_crf_preview(project_patient)
-    for key in cover:
-        item=projected(preview,f'visit.form_data.crf.cover.{key}','T0')
-        assert item['state']==state
-        assert item['raw_value']=={'__crf_answer__':1,'state':state,'value':cover[key],'reason':'原理由'}
-    baseline.refresh_from_db();assert baseline.demographics==before
+    ProjectPatient.objects.filter(pk=project_patient.pk).update(
+        enrolled_at=datetime(2026, 10, 9, 17, 30, tzinfo=timezone.utc)
+    )
+    project_patient.refresh_from_db()
+    preview = build_crf_preview(project_patient)
+    projected = [f for s in preview["sections"] for f in s["fields"]]
+    cover = next(f for f in projected if f["field_id"] == "doc_enrolled_on")
+    assert (
+        cover["value"] == "2026-10-10"
+        and cover["storage"] == "visit.form_data.crf.cover.enrolled_on"
+    )
+    assert not any(f["field_id"].startswith("doc_revision_") for f in projected)
+    assert preview["patient_baseline"]["demographics"]["document"] == old
+    other = StudyProject.objects.create(name="第二项目")
+    group = StudyGroup.objects.create(project=other, name="第二组")
+    ProjectPatient.objects.create(patient=project_patient.patient, project=other, group=group)
+    preview = build_crf_preview(project_patient)
+    protocol = next(
+        f
+        for s in preview["sections"]
+        for f in s["fields"]
+        if f["field_id"] == "doc_protocol_number"
+    )
+    assert protocol["value"] in (None, "")
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    visit.form_data = {"crf": {"cover": {"protocol_number": "本项目", "enrolled_on": None}}}
+    visit.save()
+    preview = build_crf_preview(project_patient)
+    assert (
+        next(
+            f
+            for s in preview["sections"]
+            for f in s["fields"]
+            if f["field_id"] == "doc_protocol_number"
+        )["value"]
+        == "本项目"
+    )
+    assert (
+        next(
+            f
+            for s in preview["sections"]
+            for f in s["fields"]
+            if f["field_id"] == "doc_enrolled_on"
+        )["value"]
+        is None
+    )
+
 
 @pytest.mark.django_db
-def test_old_client_complete_parts_roundtrip_preview_and_docx(doctor,project_patient,tmp_path):
+@pytest.mark.parametrize("state", ["unknown", "not_applicable"])
+def test_old_cover_state_and_reason_survive_readonly_projection(project_patient, state):
+    from apps.patients.models import PatientBaseline
+
+    baseline, _ = PatientBaseline.objects.get_or_create(patient=project_patient.patient)
+    cover = {"protocol_number": "旧方案", "enrolled_on": None, "investigator_name": "旧医生"}
+    baseline.demographics = {
+        "document": cover,
+        "_crf_field_meta": {
+            f"patient_baseline.demographics.document.{key}": {
+                "state": state,
+                "reason": "原理由",
+                "extra": "原补充",
+            }
+            for key in cover
+        },
+    }
+    baseline.save()
+    before = deepcopy(baseline.demographics)
+    preview = build_crf_preview(project_patient)
+    for key in cover:
+        item = projected(preview, f"visit.form_data.crf.cover.{key}", "T0")
+        assert item["state"] == state
+        assert item["raw_value"] == {
+            "__crf_answer__": 1,
+            "state": state,
+            "value": cover[key],
+            "reason": "原理由",
+        }
+    baseline.refresh_from_db()
+    assert baseline.demographics == before
+
+
+@pytest.mark.django_db
+def test_old_client_complete_parts_roundtrip_preview_and_docx(doctor, project_patient, tmp_path):
     from rest_framework.test import APIClient
     from docx import Document
     from apps.crf.services.export_docx import export_preview_to_docx
-    parts={'year':{'state':'value','value':2026},'month':{'state':'value','value':2},'day':{'state':'value','value':28}}
-    visit=VisitRecord.objects.get(project_patient=project_patient,visit_type='T1')
-    c=APIClient();c.force_authenticate(doctor)
-    url=f'/api/visits/{visit.pk}/'
-    response=c.patch(url,{'visit_date':None,'form_data':{'crf':{'meta':{'visit_date_parts':parts}}}},format='json')
-    assert response.status_code==200,response.data
-    assert c.get(url).data['visit_date']==parts
-    preview=build_crf_preview(project_patient)
-    item=projected(preview,'visit.visit_date','T1')
-    assert item['state']=='normal',item
-    assert not item['issues']
-    doc=Document(export_preview_to_docx(preview,tmp_path/'parts.docx'))
-    assert '2026年02月28日' in doc.tables[15].rows[1].cells[1].text
+
+    parts = {
+        "year": {"state": "value", "value": 2026},
+        "month": {"state": "value", "value": 2},
+        "day": {"state": "value", "value": 28},
+    }
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T1")
+    c = APIClient()
+    c.force_authenticate(doctor)
+    url = f"/api/visits/{visit.pk}/"
+    response = c.patch(
+        url,
+        {"visit_date": None, "form_data": {"crf": {"meta": {"visit_date_parts": parts}}}},
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    assert c.get(url).data["visit_date"] == parts
+    preview = build_crf_preview(project_patient)
+    item = projected(preview, "visit.visit_date", "T1")
+    assert item["state"] == "normal", item
+    assert not item["issues"]
+    doc = Document(export_preview_to_docx(preview, tmp_path / "parts.docx"))
+    assert "2026年02月28日" in doc.tables[15].rows[1].cells[1].text

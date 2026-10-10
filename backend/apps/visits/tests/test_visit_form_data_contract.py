@@ -719,58 +719,116 @@ def test_native_date_preserves_user_patch_when_autoclear_parent_is_legacy(
 
 
 @pytest.mark.django_db
-def test_visit_date_answer_round_trip_and_projection(doctor,project_patient):
+def test_visit_date_answer_round_trip_and_projection(doctor, project_patient):
     from datetime import date
-    v=VisitRecord.objects.get(project_patient=project_patient,visit_type='T0')
-    c=APIClient();c.force_authenticate(doctor);url=f'/api/visits/{v.pk}/'
-    unknown={'__crf_answer__':1,'state':'unknown','value':'2026-10-10','reason':None}
-    for answer,projection in [('2026-10-10',date(2026,10,10)),(unknown,None),('2026',None),('2026-10',None),('2026-10-10',date(2026,10,10)),(None,None)]:
-        response=c.patch(url,{'visit_date':answer},format='json')
-        assert response.status_code==200,response.data
+
+    v = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    c = APIClient()
+    c.force_authenticate(doctor)
+    url = f"/api/visits/{v.pk}/"
+    unknown = {"__crf_answer__": 1, "state": "unknown", "value": "2026-10-10", "reason": None}
+    for answer, projection in [
+        ("2026-10-10", date(2026, 10, 10)),
+        (unknown, None),
+        ("2026", None),
+        ("2026-10", None),
+        ("2026-10-10", date(2026, 10, 10)),
+        (None, None),
+    ]:
+        response = c.patch(url, {"visit_date": answer}, format="json")
+        assert response.status_code == 200, response.data
         v.refresh_from_db()
-        assert v.visit_date==projection
-        assert v.form_data['crf']['meta']['visit_date_answer']==answer
-        assert c.get(url).data['visit_date']==answer
+        assert v.visit_date == projection
+        assert v.form_data["crf"]["meta"]["visit_date_answer"] == answer
+        assert c.get(url).data["visit_date"] == answer
+
 
 @pytest.mark.django_db
-def test_visit_date_answer_conflict_rejected_and_unrelated_old_parts_retained(doctor,project_patient):
+def test_visit_date_answer_conflict_rejected_and_unrelated_old_parts_retained(
+    doctor, project_patient
+):
     from datetime import date
-    v=VisitRecord.objects.get(project_patient=project_patient,visit_type='T0')
-    old={'year':{'state':'value','value':2020},'month':{'state':'unknown'}}
-    v.visit_date=date(2020,1,2);v.form_data={'crf':{'meta':{'visit_date_parts':old}}};v.save()
-    c=APIClient();c.force_authenticate(doctor);url=f'/api/visits/{v.pk}/'
-    response=c.patch(url,{'form_data':{'crf':{'meta':{'assessor_name':'新姓名'}}}},format='json')
-    assert response.status_code==200,response.data
-    v.refresh_from_db();assert v.form_data['crf']['meta']['visit_date_parts']==old and v.visit_date==date(2020,1,2)
-    response=c.patch(url,{'visit_date':'2026-10-10','form_data':{'crf':{'meta':{'visit_date_answer':'2026-10-11'}}}},format='json')
-    assert response.status_code==400
-    v.refresh_from_db();assert v.visit_date==date(2020,1,2)
-    response=c.patch(url,{'visit_date':'2026-10'},format='json')
-    assert response.status_code==200,response.data
-    v.refresh_from_db();assert v.visit_date is None and v.form_data['crf']['meta']['visit_date_parts'] is None
+
+    v = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    old = {"year": {"state": "value", "value": 2020}, "month": {"state": "unknown"}}
+    v.visit_date = date(2020, 1, 2)
+    v.form_data = {"crf": {"meta": {"visit_date_parts": old}}}
+    v.save()
+    c = APIClient()
+    c.force_authenticate(doctor)
+    url = f"/api/visits/{v.pk}/"
+    response = c.patch(
+        url, {"form_data": {"crf": {"meta": {"assessor_name": "新姓名"}}}}, format="json"
+    )
+    assert response.status_code == 200, response.data
+    v.refresh_from_db()
+    assert v.form_data["crf"]["meta"]["visit_date_parts"] == old and v.visit_date == date(
+        2020, 1, 2
+    )
+    response = c.patch(
+        url,
+        {
+            "visit_date": "2026-10-10",
+            "form_data": {"crf": {"meta": {"visit_date_answer": "2026-10-11"}}},
+        },
+        format="json",
+    )
+    assert response.status_code == 400
+    v.refresh_from_db()
+    assert v.visit_date == date(2020, 1, 2)
+    response = c.patch(url, {"visit_date": "2026-10"}, format="json")
+    assert response.status_code == 200, response.data
+    v.refresh_from_db()
+    assert v.visit_date is None and v.form_data["crf"]["meta"]["visit_date_parts"] is None
+
 
 @pytest.mark.django_db
-@pytest.mark.parametrize('answer',['2026-02-31','2026-13','0000',{'__crf_answer__':True,'state':'unknown','value':None,'reason':None}])
-def test_visit_date_answer_rejects_invalid_calendar_or_core(doctor,project_patient,answer):
-    v=VisitRecord.objects.get(project_patient=project_patient,visit_type='T0')
-    c=APIClient();c.force_authenticate(doctor)
-    response=c.patch(f'/api/visits/{v.pk}/',{'visit_date':answer},format='json')
-    assert response.status_code==400 and 'visit_date' in response.data
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "2026-02-31",
+        "2026-13",
+        "0000",
+        {"__crf_answer__": True, "state": "unknown", "value": None, "reason": None},
+    ],
+)
+def test_visit_date_answer_rejects_invalid_calendar_or_core(doctor, project_patient, answer):
+    v = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    c = APIClient()
+    c.force_authenticate(doctor)
+    response = c.patch(f"/api/visits/{v.pk}/", {"visit_date": answer}, format="json")
+    assert response.status_code == 400 and "visit_date" in response.data
 
 
 @pytest.mark.django_db
-def test_legacy_explicit_parts_with_native_null_remain_the_logical_date(doctor,project_patient):
+def test_legacy_explicit_parts_with_native_null_remain_the_logical_date(doctor, project_patient):
     from rest_framework.test import APIClient
     from apps.visits.models import VisitRecord
     from apps.crf.services.aggregate import build_crf_preview
-    client=APIClient();client.force_authenticate(doctor)
-    visit=VisitRecord.objects.get(project_patient=project_patient,visit_type='T0')
-    parts={'year':{'state':'value','value':2020},'month':{'state':'unknown'},'day':{'state':'unknown'}}
-    response=client.patch(f'/api/visits/{visit.pk}/',{'visit_date':None,'form_data':{'crf':{'meta':{'visit_date_parts':parts}}}},format='json')
-    assert response.status_code==200,response.data
-    visit.refresh_from_db();assert visit.visit_date is None
-    assert response.data['visit_date']==parts
-    assert visit.form_data['crf']['meta']['visit_date_answer']==parts
-    preview=build_crf_preview(project_patient)
-    item=next(f for section in preview['sections'] for f in section['fields'] if f['field_id']=='vd_T0_visit_date')
-    assert item['state']=='unknown' and not item['issues']
+
+    client = APIClient()
+    client.force_authenticate(doctor)
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    parts = {
+        "year": {"state": "value", "value": 2020},
+        "month": {"state": "unknown"},
+        "day": {"state": "unknown"},
+    }
+    response = client.patch(
+        f"/api/visits/{visit.pk}/",
+        {"visit_date": None, "form_data": {"crf": {"meta": {"visit_date_parts": parts}}}},
+        format="json",
+    )
+    assert response.status_code == 200, response.data
+    visit.refresh_from_db()
+    assert visit.visit_date is None
+    assert response.data["visit_date"] == parts
+    assert visit.form_data["crf"]["meta"]["visit_date_answer"] == parts
+    preview = build_crf_preview(project_patient)
+    item = next(
+        f
+        for section in preview["sections"]
+        for f in section["fields"]
+        if f["field_id"] == "vd_T0_visit_date"
+    )
+    assert item["state"] == "unknown" and not item["issues"]

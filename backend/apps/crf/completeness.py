@@ -168,9 +168,10 @@ def evaluate_completeness(registry: dict, baseline: dict, visits: dict[str, dict
     ):
         path = prefix + field["storage"]
         raw = lookup_path(data, field["storage"])
-        if field.get('date_answer_storage'):
-            canonical=lookup_path(data,field['date_answer_storage'])
-            if canonical is not MISSING and canonical is not BAD_PARENT:raw=canonical
+        if field.get("date_answer_storage"):
+            canonical = lookup_path(data, field["date_answer_storage"])
+            if canonical is not MISSING and canonical is not BAD_PARENT:
+                raw = canonical
         meta = get_field_metadata(data, field)
         value = get_field_value(data, field)
         partial_path = field.get("partial_date_storage")
@@ -183,12 +184,13 @@ def evaluate_completeness(registry: dict, baseline: dict, visits: dict[str, dict
             and (evaluate_condition(field.get("required_when"), data, fields=local_fields))
             and applicable
         )
-        answer=decode_crf_answer(value,meta)
+        answer = decode_crf_answer(value, meta)
         reason = answer["reason"] or ""
         reason = reason if isinstance(reason, str) else ""
         own_issues = []
         paths = [path]
-        if field.get("date_answer_storage"):paths.append(field["date_answer_storage"])
+        if field.get("date_answer_storage"):
+            paths.append(field["date_answer_storage"])
         if partial_path:
             paths.append(prefix + partial_path)
         if field.get("metadata"):
@@ -221,10 +223,7 @@ def evaluate_completeness(registry: dict, baseline: dict, visits: dict[str, dict
                     value.get(n, {}).get("state") if isinstance(value.get(n), Mapping) else None
                     for n in names
                 ]
-                if (
-                    all(s in ("value", "unknown") for s in states)
-                    and "unknown" in states
-                ):
+                if all(s in ("value", "unknown") for s in states) and "unknown" in states:
                     state = "unknown"
             if _present(value) and value in field.get("legacy_options", []):
                 own_issues.append(
@@ -375,7 +374,8 @@ def evaluate_completeness(registry: dict, baseline: dict, visits: dict[str, dict
         for field in selected:
             path = field["storage"]
             consumed[scope].add(path)
-            if field.get("date_answer_storage"):consumed[scope].add(field["date_answer_storage"])
+            if field.get("date_answer_storage"):
+                consumed[scope].add(field["date_answer_storage"])
             if field.get("partial_date_storage"):
                 consumed[scope].add(field["partial_date_storage"])
             m = field.get("metadata")
@@ -410,7 +410,13 @@ def evaluate_completeness(registry: dict, baseline: dict, visits: dict[str, dict
             # remain independent evidence and must also survive paper export.
             metadata = item["metadata"]
             if metadata is not None and not isinstance(metadata, Mapping) and m:
-                supplement(scope,m['storage']+'.'+m['key'],metadata,field.get('ui_label',field['label_zh'])+'历史状态原文',field['section'])
+                supplement(
+                    scope,
+                    m["storage"] + "." + m["key"],
+                    metadata,
+                    field.get("ui_label", field["label_zh"]) + "历史状态原文",
+                    field["section"],
+                )
             if isinstance(metadata, Mapping):
                 for key, value in metadata.items():
                     if key not in ("state", "reason"):

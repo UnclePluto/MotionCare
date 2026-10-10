@@ -298,6 +298,7 @@ def test_real_api_roundtrip_original_docx_and_pdf(
     pages = [p.extract_text() for p in PdfReader(pdf_path).pages]
     assert len(pages) > 1
     import re
+
     for index, page_text in enumerate(pages, 1):
         normalized = re.sub(r"\s+", "", page_text)
         assert f"第{index}页/共{len(pages)}页" in normalized
@@ -406,9 +407,13 @@ def test_api_case_set_covers_every_current_field_and_all_561_source_positions(
             continue
         expected_fields.update(c["field_id"] for c in field.get("children", [field]))
     assert fields >= expected_fields, sorted(expected_fields - fields)
-    static={p['slot_id'] for b in load_crf_registry()['document_bindings'] for p in b['source_positions']}
-    assert static=={'T01.R01.S00','T01.R02.S00'}
-    assert slots|static == {p["slot_id"] for p in load_crf_source_slots()["slots"]}
+    static = {
+        p["slot_id"]
+        for b in load_crf_registry()["document_bindings"]
+        for p in b["source_positions"]
+    }
+    assert static == {"T01.R01.S00", "T01.R02.S00"}
+    assert slots | static == {p["slot_id"] for p in load_crf_source_slots()["slots"]}
 
 
 @pytest.mark.django_db
@@ -487,7 +492,9 @@ def test_legacy_values_unrelated_patch_null_zero_and_row_metadata_remain_exact(
     (directory / "export.json").write_text(json.dumps(exported.data, ensure_ascii=False, indent=2))
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Regression targets the deployed Linux LibreOffice pagination")
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Regression targets the deployed Linux LibreOffice pagination"
+)
 @pytest.mark.parametrize("with_events", [False, True])
 def test_linux_long_feedback_keeps_t2_event_table_after_page_break(tmp_path, with_events):
     from pypdf import PdfReader
@@ -496,31 +503,78 @@ def test_linux_long_feedback_keeps_t2_event_table_after_page_break(tmp_path, wit
     from apps.crf.services.export_docx import export_preview_to_docx
     from apps.crf.services.export_pdf import convert_docx_to_pdf
 
-    labels = ["操作简单、易学习", "内容清楚、容易理解", "提醒/反馈有助坚持训练", "不适或负担较小", "愿意继续使用或推荐"]
+    labels = [
+        "操作简单、易学习",
+        "内容清楚、容易理解",
+        "提醒/反馈有助坚持训练",
+        "不适或负担较小",
+        "愿意继续使用或推荐",
+    ]
     names = ["operation", "clarity", "reminders", "burden", "recommendation"]
     crf = {
         "meta": {"actual_week": 48, "assessor_name": "UI-T2评估者"},
-        "satisfaction": {"items": {name: {"score": 5-i, "remark": f"UI-T2独立反馈{i+1}：{label}。 第二行：研究员现场核对，尾标记T2-{i+1}"} for i, (name, label) in enumerate(zip(names, labels))}, "total": 15, "overall_score": 5},
+        "satisfaction": {
+            "items": {
+                name: {
+                    "score": 5 - i,
+                    "remark": f"UI-T2独立反馈{i + 1}：{label}。 第二行：研究员现场核对，尾标记T2-{i + 1}",
+                }
+                for i, (name, label) in enumerate(zip(names, labels))
+            },
+            "total": 15,
+            "overall_score": 5,
+        },
         "completion_record": {"status": "完成全部随访", "include_analysis": "待统计方案判定"},
-        "qc_record": {"items": {"item_1": {"judgment": "否", "remark": "UI质控：本地验收保留其他字段缺失，确认导出可见。"}}, "investigator_name": "UI研究者", "reviewer_name": "UI质控员"},
+        "qc_record": {
+            "items": {
+                "item_1": {
+                    "judgment": "否",
+                    "remark": "UI质控：本地验收保留其他字段缺失，确认导出可见。",
+                }
+            },
+            "investigator_name": "UI研究者",
+            "reviewer_name": "UI质控员",
+        },
     }
     if with_events:
         _, visits = api_case("current")
         crf["adverse_events"] = visits["T2"]["form_data"]["crf"]["adverse_events"]
         for i, row in enumerate(crf["adverse_events"]["entries"]):
-            row["event_name"] = f"分页事件{i+1}"
+            row["event_name"] = f"分页事件{i + 1}"
     baseline = {}
     if with_events:
-        baseline = {"surgery_allergy": {
-            "has_surgery": "是", "has_allergy": "是",
-            "surgery_records": [{"name": "长备注手术", "hospital_note": "研究员复核手术经过及术后恢复情况，保持多行长备注在原格。" * 10 + "手术长文尾"}],
-            "allergy_records": [{"category": "药物", "allergen": f"明确过敏原{i}", "manifestation": "皮疹", "severity_treatment": "已记录"} for i in range(1, 6)],
-        }}
-    projection = evaluate_completeness(load_crf_registry(), baseline, {"T2": {"visit_date": None, "form_data": {"crf": crf}}})
+        baseline = {
+            "surgery_allergy": {
+                "has_surgery": "是",
+                "has_allergy": "是",
+                "surgery_records": [
+                    {
+                        "name": "长备注手术",
+                        "hospital_note": "研究员复核手术经过及术后恢复情况，保持多行长备注在原格。"
+                        * 10
+                        + "手术长文尾",
+                    }
+                ],
+                "allergy_records": [
+                    {
+                        "category": "药物",
+                        "allergen": f"明确过敏原{i}",
+                        "manifestation": "皮疹",
+                        "severity_treatment": "已记录",
+                    }
+                    for i in range(1, 6)
+                ],
+            }
+        }
+    projection = evaluate_completeness(
+        load_crf_registry(), baseline, {"T2": {"visit_date": None, "form_data": {"crf": crf}}}
+    )
     source = export_preview_to_docx(projection, tmp_path / "long-feedback.docx")
     pdf = convert_docx_to_pdf(source, tmp_path / "pdf")
     text = "".join("".join(page.extract_text().split()) for page in PdfReader(pdf).pages)
-    assert text.count("事件名称/表现") >= 2, "Both T1 and T2 event-table headers must remain visible"
+    assert text.count("事件名称/表现") >= 2, (
+        "Both T1 and T2 event-table headers must remain visible"
+    )
     for i in range(1, 6):
         assert f"尾标记T2-{i}" in text
         if with_events:
@@ -532,7 +586,9 @@ def test_linux_long_feedback_keeps_t2_event_table_after_page_break(tmp_path, wit
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("state", ["unknown", "not_applicable"])
-def test_historical_invalid_date_and_extra_metadata_real_api_dual_export(doctor, project_patient, settings, tmp_path, state):
+def test_historical_invalid_date_and_extra_metadata_real_api_dual_export(
+    doctor, project_patient, settings, tmp_path, state
+):
     import os
     from docx import Document
     from pypdf import PdfReader
@@ -546,14 +602,31 @@ def test_historical_invalid_date_and_extra_metadata_real_api_dual_export(doctor,
     settings.CRF_EXPORT_DIR = directory / "exports"
     old = {"year": None, "month": {"state": "value", "value": 13}, "day": None}
     baseline, _ = PatientBaseline.objects.get_or_create(patient=project_patient.patient)
-    baseline.demographics = {"birth_date": old, "age_years": 81, "_crf_field_meta": {
-        "patient_baseline.demographics.birth_date": {"state": state, "reason": "历史日期待核对"},
-        "patient_baseline.surgery_allergy.has_surgery": {"state": "value", "legacy_feedback": "旧反馈必须保留"},
-    }}
-    baseline.surgery_allergy = {"has_surgery": "是", "surgery_records": [
-        {"_row_id": "old-a", "name": "历史手术甲", "hospital_note": "甲医院反馈"},
-        {"_row_id": "old-b", "name": "历史手术乙", "_field_meta": {"date": {"state": "unknown", "reason": "乙日期不详"}}},
-    ]}
+    baseline.demographics = {
+        "birth_date": old,
+        "age_years": 81,
+        "_crf_field_meta": {
+            "patient_baseline.demographics.birth_date": {
+                "state": state,
+                "reason": "历史日期待核对",
+            },
+            "patient_baseline.surgery_allergy.has_surgery": {
+                "state": "value",
+                "legacy_feedback": "旧反馈必须保留",
+            },
+        },
+    }
+    baseline.surgery_allergy = {
+        "has_surgery": "是",
+        "surgery_records": [
+            {"_row_id": "old-a", "name": "历史手术甲", "hospital_note": "甲医院反馈"},
+            {
+                "_row_id": "old-b",
+                "name": "历史手术乙",
+                "_field_meta": {"date": {"state": "unknown", "reason": "乙日期不详"}},
+            },
+        ],
+    }
     baseline.save()
     client = APIClient()
     client.force_authenticate(doctor)
@@ -561,11 +634,17 @@ def test_historical_invalid_date_and_extra_metadata_real_api_dual_export(doctor,
     response = client.patch(url, {"name_initials": "HISTORY"}, format="json")
     assert response.status_code == 200, response.data
     assert client.get(url).data["demographics"] == baseline.demographics
-    response = client.patch(url, {"demographics": {"birth_date": {"month": {"state": "value", "value": 14}}}}, format="json")
+    response = client.patch(
+        url,
+        {"demographics": {"birth_date": {"month": {"state": "value", "value": 14}}}},
+        format="json",
+    )
     assert response.status_code == 400
     assert client.get(url).data["demographics"] == baseline.demographics
     preview = client.get(f"/api/crf/project-patients/{project_patient.id}/preview/").data
-    birth = next(f for s in preview["sections"] for f in s["fields"] if f["field_id"] == "dm_birth_date")
+    birth = next(
+        f for s in preview["sections"] for f in s["fields"] if f["field_id"] == "dm_birth_date"
+    )
     assert birth["state"] == "unresolved" and birth["raw_value"] == old
     response = client.post(f"/api/crf/project-patients/{project_patient.id}/export/")
     assert response.status_code == 200, response.data
@@ -575,7 +654,11 @@ def test_historical_invalid_date_and_extra_metadata_real_api_dual_export(doctor,
     shutil.copyfile(docx, directory / "filled.docx")
     shutil.copyfile(pdf, directory / "filled.pdf")
     doc = Document(docx)
-    text = "\n".join(p.text for p in doc.paragraphs) + "\n" + "\n".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
+    text = (
+        "\n".join(p.text for p in doc.paragraphs)
+        + "\n"
+        + "\n".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
+    )
     assert json.dumps(birth["raw_value"], ensure_ascii=False) in text
     for marker in ["历史日期待核对", "旧反馈必须保留", "历史手术甲", "甲医院反馈", "乙日期不详"]:
         assert marker in text
@@ -584,7 +667,7 @@ def test_historical_invalid_date_and_extra_metadata_real_api_dual_export(doctor,
 
 
 @pytest.mark.django_db
-def test_single_answer_acceptance_round_trip(doctor,project_patient,settings,tmp_path):
+def test_single_answer_acceptance_round_trip(doctor, project_patient, settings, tmp_path):
     from rest_framework.test import APIClient
     from apps.visits.models import VisitRecord
     from apps.crf.services.aggregate import build_crf_preview
@@ -592,40 +675,53 @@ def test_single_answer_acceptance_round_trip(doctor,project_patient,settings,tmp
     from apps.crf.services.export_pdf import convert_docx_to_pdf
     from docx import Document
     from pypdf import PdfReader
-    client=APIClient();client.force_authenticate(doctor)
-    _save_case(client,project_patient,'current')
-    baseline_url=f'/api/patients/{project_patient.patient_id}/baseline/'
-    marked={'__crf_answer__':1,'state':'unknown','value':0,'reason':None}
-    response=client.patch(baseline_url,{'demographics':{'age_years':marked}},format='json')
-    assert response.status_code==200,response.data
-    assert client.get(baseline_url).data['demographics']['age_years']==marked
-    visit=VisitRecord.objects.get(project_patient=project_patient,visit_type='T1');url=f'/api/visits/{visit.pk}/'
-    date={'__crf_answer__':1,'state':'not_applicable','value':'2026-10-10','reason':None}
-    feedback={'items':{'operation':{'remark':'单字段验收反馈'}}}
-    response=client.patch(url,{'visit_date':date,'form_data':{'crf':{'satisfaction':feedback}}},format='json')
-    assert response.status_code==200,response.data
-    visit.refresh_from_db();assert visit.visit_date is None
-    assert visit.form_data['crf']['meta']['visit_date_answer']==date
-    assert client.get(url).data['visit_date']==date
-    preview=build_crf_preview(project_patient)
-    fields=[f for s in preview['sections'] for f in s['fields']]
-    age=next(f for f in fields if f['field_id']=='dm_age_years')
-    logical=next(f for f in fields if f['field_id']=='vd_T1_visit_date')
-    assert age['state']=='unknown' and age['value'] is None and age['raw_value']==marked
-    assert logical['state']=='not_applicable' and logical['raw_value']==date
-    docx=export_preview_to_docx(preview,tmp_path/'single-answer.docx')
-    document=Document(docx)
+
+    client = APIClient()
+    client.force_authenticate(doctor)
+    _save_case(client, project_patient, "current")
+    baseline_url = f"/api/patients/{project_patient.patient_id}/baseline/"
+    marked = {"__crf_answer__": 1, "state": "unknown", "value": 0, "reason": None}
+    response = client.patch(baseline_url, {"demographics": {"age_years": marked}}, format="json")
+    assert response.status_code == 200, response.data
+    assert client.get(baseline_url).data["demographics"]["age_years"] == marked
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T1")
+    url = f"/api/visits/{visit.pk}/"
+    date = {"__crf_answer__": 1, "state": "not_applicable", "value": "2026-10-10", "reason": None}
+    feedback = {"items": {"operation": {"remark": "单字段验收反馈"}}}
+    response = client.patch(
+        url, {"visit_date": date, "form_data": {"crf": {"satisfaction": feedback}}}, format="json"
+    )
+    assert response.status_code == 200, response.data
+    visit.refresh_from_db()
+    assert visit.visit_date is None
+    assert visit.form_data["crf"]["meta"]["visit_date_answer"] == date
+    assert client.get(url).data["visit_date"] == date
+    preview = build_crf_preview(project_patient)
+    fields = [f for s in preview["sections"] for f in s["fields"]]
+    age = next(f for f in fields if f["field_id"] == "dm_age_years")
+    logical = next(f for f in fields if f["field_id"] == "vd_T1_visit_date")
+    assert age["state"] == "unknown" and age["value"] is None and age["raw_value"] == marked
+    assert logical["state"] == "not_applicable" and logical["raw_value"] == date
+    docx = export_preview_to_docx(preview, tmp_path / "single-answer.docx")
+    document = Document(docx)
     # Document revision page remains the unchanged template content.
-    source=Document(settings.CRF_TEMPLATE_PATH)
-    assert [c.text for row in document.tables[1].rows for c in row.cells]==[c.text for row in source.tables[1].rows for c in row.cells]
-    assert '99' in document.tables[8].rows[3].cells[1].text
-    assert '88' in document.tables[15].rows[1].cells[1].text
-    pdf=convert_docx_to_pdf(docx,tmp_path/'pdf')
-    text='\n'.join(page.extract_text() or '' for page in PdfReader(pdf).pages)
-    assert '单字段验收反馈' in text and '99' in text and '88' in text
-    for answer in ['2026','2026-10','2026-10-10',None]:
-        response=client.patch(url,{'visit_date':answer},format='json');assert response.status_code==200,response.data
-        visit.refresh_from_db();assert (visit.visit_date.isoformat() if visit.visit_date else None)==('2026-10-10' if answer=='2026-10-10' else None)
-        assert client.get(url).data['visit_date']==answer
-    response=client.patch(baseline_url,{'demographics':{'age_years':0}},format='json');assert response.status_code==200
-    assert client.get(baseline_url).data['demographics']['age_years']==0
+    source = Document(settings.CRF_TEMPLATE_PATH)
+    assert [c.text for row in document.tables[1].rows for c in row.cells] == [
+        c.text for row in source.tables[1].rows for c in row.cells
+    ]
+    assert "99" in document.tables[8].rows[3].cells[1].text
+    assert "88" in document.tables[15].rows[1].cells[1].text
+    pdf = convert_docx_to_pdf(docx, tmp_path / "pdf")
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(pdf).pages)
+    assert "单字段验收反馈" in text and "99" in text and "88" in text
+    for answer in ["2026", "2026-10", "2026-10-10", None]:
+        response = client.patch(url, {"visit_date": answer}, format="json")
+        assert response.status_code == 200, response.data
+        visit.refresh_from_db()
+        assert (visit.visit_date.isoformat() if visit.visit_date else None) == (
+            "2026-10-10" if answer == "2026-10-10" else None
+        )
+        assert client.get(url).data["visit_date"] == answer
+    response = client.patch(baseline_url, {"demographics": {"age_years": 0}}, format="json")
+    assert response.status_code == 200
+    assert client.get(baseline_url).data["demographics"]["age_years"] == 0

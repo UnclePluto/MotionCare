@@ -1,4 +1,3 @@
-from apps.crf.answer_values import decode_crf_answer, has_crf_answer_marker
 """Controlled CRF validation and conditions shared by saving and inspection.
 
 validate_fields returns canonical dotted error paths (row indices included).
@@ -6,6 +5,8 @@ None changed_paths validates every present value, useful for historical review;
 a set restricts hard errors to edited fields and affected consistency rules.
 Missing answers/reasons are completeness concerns, never hard save errors.
 """
+
+from apps.crf.answer_values import decode_crf_answer, has_crf_answer_marker
 
 import calendar
 import math
@@ -75,12 +76,15 @@ def _validate_date(field, value):
     if field["storage"] == "visit.visit_date" and type(value) is date:
         return None
     precision = field.get("date_precision", "day")
-    if field.get('allow_partial_date') and isinstance(value,str):
-        if re.fullmatch(r'\d{4}',value):
-            return None if 1<=int(value)<=9999 else '年份无效'
-        if re.fullmatch(r'\d{4}-\d{2}',value):
-            try:date.fromisoformat(value+'-01');return None
-            except ValueError:return '月份无效'
+    if field.get("allow_partial_date") and isinstance(value, str):
+        if re.fullmatch(r"\d{4}", value):
+            return None if 1 <= int(value) <= 9999 else "年份无效"
+        if re.fullmatch(r"\d{4}-\d{2}", value):
+            try:
+                date.fromisoformat(value + "-01")
+                return None
+            except ValueError:
+                return "月份无效"
     if isinstance(value, Mapping) and field.get("allow_partial_date"):
         return validate_partial_date(value, precision=precision)
     if not isinstance(value, str):
@@ -103,12 +107,12 @@ def _validate_date(field, value):
 def validate_field_value(field: dict, value: object) -> str | None:
     """Validate raw values independently of metadata, visibility, or missingness."""
     if has_crf_answer_marker(value):
-        answer=decode_crf_answer(value)
+        answer = decode_crf_answer(value)
         if answer["error"]:
             return answer["error"]
-        if not field.get("metadata") or answer["state"] not in field["metadata"].get("states",[]):
+        if not field.get("metadata") or answer["state"] not in field["metadata"].get("states", []):
             return "此字段不支持该答案状态"
-        return validate_field_value(field,answer["value"])
+        return validate_field_value(field, answer["value"])
     if value is BAD_PARENT:
         return "上级字段必须是对象"
     if field.get("storage") == "visit.visit_date":
@@ -168,12 +172,21 @@ def _metadata_error(meta, field):
 def get_observed_value(data: dict, field: dict) -> object:
     """Return only valid known observations; None means unavailable to rules."""
     value = get_field_value(data, field)
-    answer = decode_crf_answer(value,get_field_metadata(data,field))
-    if answer['error'] or answer['state'] != 'value':
+    answer = decode_crf_answer(value, get_field_metadata(data, field))
+    if answer["error"] or answer["state"] != "value":
         return None
     value_definition = field
-    canonical = lookup_path(data, field['date_answer_storage']) if field.get('date_answer_storage') else MISSING
-    if field['storage'] == 'visit.visit_date' and isinstance(lookup_path(data, field['storage']), Mapping) and not has_crf_answer_marker(lookup_path(data, field['storage'])) and canonical in (MISSING, BAD_PARENT):
+    canonical = (
+        lookup_path(data, field["date_answer_storage"])
+        if field.get("date_answer_storage")
+        else MISSING
+    )
+    if (
+        field["storage"] == "visit.visit_date"
+        and isinstance(lookup_path(data, field["storage"]), Mapping)
+        and not has_crf_answer_marker(lookup_path(data, field["storage"]))
+        and canonical in (MISSING, BAD_PARENT)
+    ):
         return None
     if field.get("partial_date_storage"):
         native = lookup_path(data, field["storage"])
@@ -181,7 +194,11 @@ def get_observed_value(data: dict, field: dict) -> object:
         if validate_field_value(field, native):
             return None
         if partial is not MISSING and partial is not BAD_PARENT and partial is not None:
-            if native is not MISSING and native is not None and (canonical is MISSING or canonical is BAD_PARENT or canonical != partial):
+            if (
+                native is not MISSING
+                and native is not None
+                and (canonical is MISSING or canonical is BAD_PARENT or canonical != partial)
+            ):
                 return None
             if validate_partial_date(partial, precision=field.get("date_precision", "day")):
                 return None
@@ -291,7 +308,12 @@ def _meta_path(field):
 def _field_touched(field, changed_paths, prefix=""):
     return any(
         _touches(prefix + p, changed_paths)
-        for p in [field["storage"], field.get("date_answer_storage"), field.get("partial_date_storage"), _meta_path(field)]
+        for p in [
+            field["storage"],
+            field.get("date_answer_storage"),
+            field.get("partial_date_storage"),
+            _meta_path(field),
+        ]
         if p
     )
 
@@ -334,20 +356,39 @@ def validate_fields(
         raw = lookup_path(row_data, field["storage"])
         if _touches(path, changed_paths):
             error = validate_field_value(field, raw)
-            canonical_value = lookup_path(row_data, field['date_answer_storage']) if field.get('date_answer_storage') else MISSING
-            if field['storage'] == 'visit.visit_date' and isinstance(raw, Mapping) and not has_crf_answer_marker(raw) and canonical_value in (MISSING, BAD_PARENT):
-                error = '部分日期必须存入日期答案字段'
-            if field.get("partial_date_storage") and field["storage"] != "visit.visit_date" and raw is not MISSING and not is_blank(raw):
+            canonical_value = (
+                lookup_path(row_data, field["date_answer_storage"])
+                if field.get("date_answer_storage")
+                else MISSING
+            )
+            if (
+                field["storage"] == "visit.visit_date"
+                and isinstance(raw, Mapping)
+                and not has_crf_answer_marker(raw)
+                and canonical_value in (MISSING, BAD_PARENT)
+            ):
+                error = "部分日期必须存入日期答案字段"
+            if (
+                field.get("partial_date_storage")
+                and field["storage"] != "visit.visit_date"
+                and raw is not MISSING
+                and not is_blank(raw)
+            ):
                 error = validate_field_value({**field, "allow_partial_date": False}, raw)
             if error:
                 errors[path] = error
-        canonical_path=field.get('date_answer_storage')
-        canonical=lookup_path(row_data,canonical_path) if canonical_path else MISSING
-        if canonical_path and _touches(canonical_path,changed_paths):
-            error=validate_field_value(field,canonical)
-            if error:errors[canonical_path]=error
+        canonical_path = field.get("date_answer_storage")
+        canonical = lookup_path(row_data, canonical_path) if canonical_path else MISSING
+        if canonical_path and _touches(canonical_path, changed_paths):
+            error = validate_field_value(field, canonical)
+            if error:
+                errors[canonical_path] = error
         meta_path = _meta_path(field)
-        if meta_path and _touches(path_prefix + meta_path, changed_paths) and not has_crf_answer_marker(get_field_value(row_data,field)):
+        if (
+            meta_path
+            and _touches(path_prefix + meta_path, changed_paths)
+            and not has_crf_answer_marker(get_field_value(row_data, field))
+        ):
             error = _metadata_error(get_field_metadata(row_data, field), field)
             if error:
                 errors[path_prefix + meta_path] = error
@@ -372,8 +413,8 @@ def validate_fields(
                 and not is_blank(partial)
             ):
                 errors[partial_path] = "完整日期与部分日期不能同时填写"
-        repeated=decode_crf_answer(raw)['value']
-        repeated_path=path+'.value' if has_crf_answer_marker(raw) else path
+        repeated = decode_crf_answer(raw)["value"]
+        repeated_path = path + ".value" if has_crf_answer_marker(raw) else path
         if field.get("widget") == "table_repeat" and isinstance(repeated, list):
             row_id_key = field.get("row_id_key", "_row_id")
             row_id_counts = Counter(

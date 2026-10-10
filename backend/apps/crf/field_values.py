@@ -35,10 +35,11 @@ def get_field_value(data: dict, field: dict) -> object:
     Missing or inaccessible paths return None. Validation uses lookup_path to
     separately report malformed parents and simultaneous date representations.
     """
-    canonical = field.get('date_answer_storage')
+    canonical = field.get("date_answer_storage")
     if canonical:
         answer = lookup_path(data, canonical)
-        if answer is not MISSING and answer is not BAD_PARENT: return answer
+        if answer is not MISSING and answer is not BAD_PARENT:
+            return answer
     partial = field.get("partial_date_storage")
     if partial:
         value = lookup_path(data, partial)
@@ -63,24 +64,33 @@ def get_field_metadata(data: dict, field: dict) -> object:
 
 def prepare_visit_date_patch(patch: dict) -> dict:
     """Explicit logical edits alone coordinate the native projection and old parts."""
-    result=deepcopy(patch)
-    answer=lookup_path(result,'form_data.crf.meta.visit_date_answer')
-    parts=lookup_path(result,'form_data.crf.meta.visit_date_parts')
-    if 'visit_date' in result or (answer is not MISSING and answer is not BAD_PARENT):
-        logical=result['visit_date'] if 'visit_date' in result else answer
-        if logical is None and answer is MISSING and parts is not MISSING and parts is not BAD_PARENT and parts is not None:logical=deepcopy(parts)
-        current=result
-        for key in ('form_data','crf','meta'):
-            if key in current and not isinstance(current[key],Mapping):return result
-            current=current.setdefault(key,{})
-        current['visit_date_answer']=deepcopy(logical)
+    result = deepcopy(patch)
+    answer = lookup_path(result, "form_data.crf.meta.visit_date_answer")
+    parts = lookup_path(result, "form_data.crf.meta.visit_date_parts")
+    if "visit_date" in result or (answer is not MISSING and answer is not BAD_PARENT):
+        logical = result["visit_date"] if "visit_date" in result else answer
+        if (
+            logical is None
+            and answer is MISSING
+            and parts is not MISSING
+            and parts is not BAD_PARENT
+            and parts is not None
+        ):
+            logical = deepcopy(parts)
+        current = result
+        for key in ("form_data", "crf", "meta"):
+            if key in current and not isinstance(current[key], Mapping):
+                return result
+            current = current.setdefault(key, {})
+        current["visit_date_answer"] = deepcopy(logical)
         # Explicitly submitted non-null old parts remain for conflict validation.
-        if parts is MISSING:current['visit_date_parts']=None
-        result['visit_date']=deepcopy(logical)
+        if parts is MISSING:
+            current["visit_date_parts"] = None
+        result["visit_date"] = deepcopy(logical)
     elif parts is not MISSING and parts is not BAD_PARENT:
-        result['visit_date']=deepcopy(parts)
-        if isinstance(result.get('form_data',{}).get('crf',{}).get('meta'),dict):
-            result['form_data']['crf']['meta']['visit_date_answer']=deepcopy(parts)
+        result["visit_date"] = deepcopy(parts)
+        if isinstance(result.get("form_data", {}).get("crf", {}).get("meta"), dict):
+            result["form_data"]["crf"]["meta"]["visit_date_answer"] = deepcopy(parts)
     return result
 
 
@@ -93,7 +103,12 @@ def merge_crf_patch(current: dict, patch: dict) -> dict:
     """
     result = deepcopy(current)
     for key, value in patch.items():
-        if isinstance(result.get(key), dict) and isinstance(value, dict) and not has_crf_answer_marker(result[key]) and not has_crf_answer_marker(value):
+        if (
+            isinstance(result.get(key), dict)
+            and isinstance(value, dict)
+            and not has_crf_answer_marker(result[key])
+            and not has_crf_answer_marker(value)
+        ):
             result[key] = merge_crf_patch(result[key], value)
         else:
             result[key] = deepcopy(value)
@@ -157,7 +172,7 @@ def changed_crf_paths(current, candidate, *, prefix="") -> set[str]:
     clinical value migration is performed. New duplicate IDs are always touched.
     """
     if has_crf_answer_marker(current) or has_crf_answer_marker(candidate):
-        return set() if _same_crf_value(current,candidate) else {prefix}
+        return set() if _same_crf_value(current, candidate) else {prefix}
     if isinstance(current, dict) and isinstance(candidate, dict):
         changed = set()
         for key in current.keys() | candidate.keys():
