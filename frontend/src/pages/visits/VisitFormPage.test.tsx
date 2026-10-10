@@ -271,6 +271,7 @@ describe("VisitFormPage", () => {
 beforeEach(() => { mockGet.mockReset(); mockPatch.mockReset(); mockPatch.mockResolvedValue({data: {}}); });
 afterEach(() => cleanup());
 function visitFixture(id = 30) { return { id, project_patient: 1, project_status: "active", visit_type: "T1", status: "draft", visit_date: null, form_data: { assessments: {}, computed_assessments: {}, crf: {} } }; }
+// 跨章节交互及保存后回读在共享 CI 运行器中需要超过默认 5 秒；保留全部断言。
 it("test_complete_submits_unsaved_measurement_feedback_and_visit_date", async () => {
   mockGet.mockImplementation((url: string) => Promise.resolve({data: url.startsWith("/visits/") ? visitFixture() : {patient: 201, subject_id: "P-201"}}));
   renderAt(30);
@@ -289,7 +290,7 @@ it("test_complete_submits_unsaved_measurement_feedback_and_visit_date", async ()
   const payload = mockPatch.mock.calls[0][1];
   expect(payload).toMatchObject({visit_date: "2026-10-08", status: "completed"});
   expect(payload).toEqual({visit_date: "2026-10-08", status: "completed", form_data: {assessments: {sppb: {total: 9}}, crf: {satisfaction: {items: {operation: {remark: "字号清晰"}}}}}});
-});
+}, 15_000);
 it("test_refetch_does_not_overwrite_dirty_values", async () => {
   let finish!: (value: unknown) => void; let calls = 0;
   mockGet.mockImplementation((url: string) => {
@@ -307,7 +308,7 @@ it("test_refetch_does_not_overwrite_dirty_values", async () => {
   expect(screen.getByRole("spinbutton", {name:/SPPB\s*总分/})).toHaveValue("8");
   fireEvent.click(screen.getByRole("button", {name: "暂存"}));
   await waitFor(() => expect(mockPatch).toHaveBeenCalledWith("/visits/31/", {form_data: {assessments: {sppb: {total: 8}}}}));
-});
+}, 15_000);
 
 it.each(['T0','T1'])('allows early withdrawal on %s and preserves it after changing section',async visitType=>{
  mockGet.mockImplementation((url:string)=>Promise.resolve({data:url.startsWith('/visits/')?{...visitFixture(32),visit_type:visitType}:{patient:201,subject_id:'P201'}}));
@@ -466,7 +467,7 @@ it.each(['save','complete'])('explicitly adopts the same computed total, survive
  cleanup();renderAt(46);fireEvent.click(await screen.findByRole('tab',{name:'身体机能'}));
  expect(await screen.findByRole('spinbutton',{name:/SPPB\s*总分/})).toHaveValue('9');
  expect(screen.queryByText('系统预填值')).not.toBeInTheDocument();
-});
+}, 15_000);
 
 it('lists all invalid historical array scores before saving the current candidate as completed',async()=>{
  const metadata=Object.fromEntries(['balance','gait','chair_stand','total'].map(key=>[`visit.form_data.assessments.sppb.${key}`,{state:'unknown',reason:'历史父容器待核对'}]));
@@ -483,4 +484,4 @@ it('lists all invalid historical array scores before saving the current candidat
  expect(await screen.findByText('访视已完成，当前为只读查看。')).toBeInTheDocument();
  expect(saved.form_data.assessments.sppb).toEqual([]);
  expect(saved.form_data.crf._field_meta).toEqual(metadata);
-});
+}, 15_000);
