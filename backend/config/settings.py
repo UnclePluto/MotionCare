@@ -76,7 +76,7 @@ INSTALLED_APPS = [
     "apps.wearables",
     "apps.health",
     "apps.patient_app",
-    "apps.crf",
+    "apps.crf.apps.CrfConfig",
 ]
 
 MIDDLEWARE = [
@@ -339,8 +339,12 @@ MIWITRACKER_BASE_URL = os.getenv(
 )
 MIWITRACKER_APP_ID = os.getenv("MIWITRACKER_APP_ID", "")
 MIWITRACKER_KEY = os.getenv("MIWITRACKER_KEY", "")
+CRF_REGISTRY_PATH = ROOT_DIR / os.getenv(
+    "CRF_REGISTRY_PATH", "specs/patient-rehab-system/crf/registry.v1.json"
+)
 CRF_TEMPLATE_PATH = ROOT_DIR / os.getenv(
     "CRF_TEMPLATE_PATH",
     "docs/other/认知衰弱数字疗法研究_CRF表_修订稿.docx",
 )
 CRF_EXPORT_DIR = ROOT_DIR / os.getenv("CRF_EXPORT_DIR", "media/crf_exports")
+CRF_LIBREOFFICE_BINARY = os.getenv("CRF_LIBREOFFICE_BINARY", "soffice")

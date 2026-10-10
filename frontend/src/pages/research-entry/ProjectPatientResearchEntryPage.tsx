@@ -32,12 +32,6 @@ type ProjectPatientDetail = {
 
 const VISIT_TYPES: VisitType[] = ["T0", "T1", "T2"];
 
-const TIME_DESCRIPTIONS: Record<VisitType, string> = {
-  T0: "筛选/入组节点；填写访视信息、知情同意、纳排、筛选结论，以及 T0 基线评估类字段。",
-  T1: "干预 12 周节点；填写依从性、身体机能、MoCA、满意度、合并用药变化、不良事件等。",
-  T2: "干预后 36 周节点；填写依从性、身体机能、MoCA、满意度、合并用药变化、不良事件、完成/退出与质控核查字段。",
-};
-
 function isVisitType(v: string | null): v is VisitType {
   return v === "T0" || v === "T1" || v === "T2";
 }
@@ -104,9 +98,10 @@ export function ProjectPatientResearchEntryPage() {
       ),
       children: visitId ? (
         <VisitFormContent
+          key={visitId}
           visitId={visitId}
+          patientId={data?.patient}
           title={`${vt} 访视录入`}
-          timeDescription={TIME_DESCRIPTIONS[vt]}
           onVisitChanged={refreshProjectPatient}
         />
       ) : (
@@ -138,6 +133,7 @@ export function ProjectPatientResearchEntryPage() {
           </Descriptions>
           <ProjectPatientBindingCard projectPatientId={data.id} />
           <Tabs
+            destroyOnHidden
             activeKey={activeVisit}
             onChange={(key) => navigate(`/research-entry/project-patients/${id}?visit=${key}`)}
             items={items}

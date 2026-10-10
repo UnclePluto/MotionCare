@@ -4,7 +4,8 @@ from django.db.models import Max
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DrfValidationError
 
-from apps.studies.models import ProjectPatient, StudyProject
+from apps.studies.locking import lock_project_patient
+from apps.studies.models import ProjectPatient
 from apps.studies.project_status import ensure_project_open
 
 from .models import Prescription, MotionPrescriptionCutover
@@ -16,18 +17,10 @@ PROJECT_COMPLETED_PRESCRIPTION_DETAIL = "项目已完结，不能调整处方。
 
 def lock_open_project_patient_for_prescription(project_patient_id) -> ProjectPatient:
     try:
-        project_patient = (
-            ProjectPatient.objects.select_for_update(of=("self",))
-            .select_related("project")
-            .get(pk=project_patient_id)
-        )
+        project_patient = lock_project_patient(project_patient_id)
     except ProjectPatient.DoesNotExist as exc:
         raise DrfValidationError({"detail": "入组关系已不存在，请刷新后重试。"}) from exc
-    project = StudyProject.objects.select_for_update(of=("self",)).get(
-        pk=project_patient.project_id
-    )
-    ensure_project_open(project, PROJECT_COMPLETED_PRESCRIPTION_DETAIL)
-    project_patient.project = project
+    ensure_project_open(project_patient.project, PROJECT_COMPLETED_PRESCRIPTION_DETAIL)
     return project_patient
 
 

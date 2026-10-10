@@ -25,8 +25,8 @@ export function AdminLayout() {
   const mustChangePassword = me?.must_change_password === true;
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider width={220}>
+    <Layout className="motioncare-admin" style={{ minHeight: "100vh" }}>
+      <Sider width={220} breakpoint="lg" collapsedWidth={0}>
         <div style={{ color: "#fff", padding: 16, fontWeight: 600 }}>
           MotionCare
         </div>
@@ -47,7 +47,7 @@ export function AdminLayout() {
           ]}
         />
       </Sider>
-      <Layout>
+      <Layout style={{ minWidth: 0 }}>
         <Header
           style={{
             background: "#fff",

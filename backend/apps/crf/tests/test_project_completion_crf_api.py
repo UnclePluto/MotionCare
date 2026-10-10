@@ -1,4 +1,7 @@
 from django.test import override_settings
+from pathlib import Path
+import subprocess
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -26,7 +29,18 @@ def test_crf_preview_allowed_for_completed_project(doctor, project_patient):
 
 
 @pytest.mark.django_db
-def test_crf_export_allowed_for_completed_project(doctor, project_patient, tmp_path):
+def test_crf_export_allowed_for_completed_project(doctor, project_patient, tmp_path, monkeypatch):
+    class ConverterProcessStub:
+        def __init__(self, command, **kwargs):
+            self.command = command
+
+        def wait(self, timeout=None):
+            command = self.command
+            folder = Path(command[command.index("--outdir") + 1])
+            (folder / Path(command[-1]).with_suffix(".pdf").name).write_bytes(b"%PDF-1.7\nfixture")
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", ConverterProcessStub)
     project = project_patient.project
     project.status = StudyProject.Status.ARCHIVED
     project.save(update_fields=["status"])
@@ -41,3 +55,8 @@ def test_crf_export_allowed_for_completed_project(doctor, project_patient, tmp_p
     assert response.status_code == 200, response.content
     assert CrfExport.objects.filter(project_patient=project_patient).exists()
     assert response.data["docx_file"]
+
+    assert response.data["pdf_file"]
+    export = CrfExport.objects.get(project_patient=project_patient)
+    assert (media_root / export.docx_file.name).is_file()
+    assert (media_root / export.pdf_file.name).read_bytes().startswith(b"%PDF-")

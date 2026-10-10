@@ -112,6 +112,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+/** Embedded editors may have no session provider; never fabricate a doctor name. */
+export function useCurrentDoctorName(): string | undefined {
+  return useContext(AuthContext)?.me?.name;
+}
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) {

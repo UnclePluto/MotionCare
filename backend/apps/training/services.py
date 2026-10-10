@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from apps.prescriptions.models import ActionLibraryItem, Prescription
+from apps.studies.locking import lock_project_patient
 from apps.studies.project_status import ensure_project_open
 
 from .game_question_legacy import parse_legacy_rounds
@@ -19,14 +20,9 @@ TRAINING_RECORD_FIELD_NAMES = {
 
 @transaction.atomic
 def create_training_record(*, project_patient, training_date, prescription_action=None, **fields):
-    from apps.studies.models import ProjectPatient
     from .history import legacy_invalidation_defaults
 
-    project_patient = (
-        ProjectPatient.objects.select_for_update()
-        .select_related("project")
-        .get(pk=project_patient.pk)
-    )
+    project_patient = lock_project_patient(project_patient.pk)
     ensure_project_open(project_patient.project)
     active = (
         Prescription.objects.filter(

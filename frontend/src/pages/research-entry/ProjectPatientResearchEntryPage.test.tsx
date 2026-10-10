@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectPatientResearchEntryPage } from "./ProjectPatientResearchEntryPage";
@@ -59,6 +59,7 @@ describe("ProjectPatientResearchEntryPage", () => {
     mockPatch.mockResolvedValue({ data: {} });
     mockPost.mockResolvedValue({ data: {} });
     mockGet.mockImplementation((url: string) => {
+      if (url === "/patients/201/baseline/") return Promise.resolve({data:{subject_id:"CANON-201"}});
       if (url === "/studies/project-patients/9001/") return Promise.resolve({ data: projectPatient });
       if (url === "/studies/project-patients/9001/binding-status/") {
         return Promise.resolve({
@@ -114,7 +115,7 @@ describe("ProjectPatientResearchEntryPage", () => {
     });
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => {cleanup();vi.restoreAllMocks();});
 
   it("defaults to first unfinished visit when no query visit is provided", async () => {
     renderAt("/research-entry/project-patients/9001");
@@ -125,14 +126,14 @@ describe("ProjectPatientResearchEntryPage", () => {
     expect(screen.queryByText("进行中")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /T0 已完成 2026-05-12/ })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /T1 草稿 未填写日期/ })).toBeInTheDocument();
-    expect(await screen.findByText(/干预 12 周节点/)).toBeInTheDocument();
+    expect(await screen.findByText("T1 访视录入")).toBeInTheDocument();
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/visits/12/"));
   });
 
   it("opens the query-selected tab", async () => {
     renderAt("/research-entry/project-patients/9001?visit=T0");
 
-    expect(await screen.findByText(/筛选\/入组节点/)).toBeInTheDocument();
+    expect(await screen.findByText("T0 访视录入")).toBeInTheDocument();
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/visits/11/"));
     expect(await screen.findByText("访视已完成，当前为只读查看。")).toBeInTheDocument();
   });
@@ -166,6 +167,7 @@ describe("ProjectPatientResearchEntryPage", () => {
 
   it("shows an error when the visit detail cannot be loaded", async () => {
     mockGet.mockImplementation((url: string) => {
+      if (url === "/patients/201/baseline/") return Promise.resolve({data:{subject_id:"CANON-201"}});
       if (url === "/studies/project-patients/9001/") return Promise.resolve({ data: projectPatient });
       if (url === "/studies/project-patients/9001/binding-status/") {
         return Promise.resolve({
@@ -186,4 +188,25 @@ describe("ProjectPatientResearchEntryPage", () => {
 
     expect(await screen.findByText("访视记录不存在或无权限访问")).toBeInTheDocument();
   });
+  it("guards actual record tab navigation while retaining local section changes and canonical baseline",async()=>{
+    const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);
+    const qc=new QueryClient({defaultOptions:{queries:{retry:false}}});
+    const router=createMemoryRouter([{path:'/research-entry/project-patients/:projectPatientId',element:<ProjectPatientResearchEntryPage/>}],{initialEntries:['/research-entry/project-patients/9001?visit=T1']});
+    render(<QueryClientProvider client={qc}><RouterProvider router={router}/></QueryClientProvider>);
+    const subject=await screen.findByDisplayValue('CANON-201');expect(subject).toBeDisabled();
+    fireEvent.click(screen.getByRole('tab',{name:'平台满意度'}));
+    fireEvent.change(await screen.findByLabelText('操作简单、易学习备注'),{target:{value:'还未保存'}});
+    fireEvent.click(screen.getByRole('tab',{name:'访视信息'}));
+    expect(confirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab',{name:/T2 草稿/}));
+    await waitFor(()=>expect(confirm).toHaveBeenCalledTimes(1));
+    expect(router.state.location.search).toBe('?visit=T1');
+    fireEvent.click(screen.getByRole('tab',{name:'平台满意度'}));
+    expect(await screen.findByLabelText('操作简单、易学习备注')).toHaveValue('还未保存');
+    confirm.mockReturnValue(true);fireEvent.click(screen.getByRole('tab',{name:/T2 草稿/}));
+    expect(await screen.findByText('T2 访视录入')).toBeInTheDocument();
+    expect(await screen.findByDisplayValue('CANON-201')).toBeDisabled();
+    expect(mockPatch).not.toHaveBeenCalled();
+  });
+
 });

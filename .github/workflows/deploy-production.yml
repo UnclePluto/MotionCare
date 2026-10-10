@@ -46,14 +46,18 @@ jobs:
       - name: 安装 worker 媒体测试依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg libreoffice-writer fonts-noto-cjk
       - name: 安装并验证动作分析协议与 worker 非推理能力
         run: |
           pip install -e './packages/motion_analysis_contract'
           pip install -e './services/pp_mcare[dev]'
           pytest -q packages/motion_analysis_contract/tests services/pp_mcare/tests
       - name: 安装后端依赖
-        run: pip install -e './backend[dev]'
+        run: |
+          python -m venv .venv-backend
+          .venv-backend/bin/python -m pip install -r backend/requirements-dev.lock.txt
+          .venv-backend/bin/python -m pip install --no-deps --no-build-isolation -e ./packages/motion_analysis_contract -e ./backend
+          echo "$GITHUB_WORKSPACE/.venv-backend/bin" >> "$GITHUB_PATH"
       - name: 验证后端
         working-directory: backend
         env:
@@ -63,6 +67,7 @@ jobs:
           pytest -q
           ruff check .
           python manage.py makemigrations --check
+          python ../scripts/verify_crf_release.py
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -110,6 +115,10 @@ jobs:
           tags: ${{ env.ACR_IMAGE }}:backend-${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
+      - name: 核验实际后端镜像运行期 CRF 资源
+        run: |
+          docker run --rm --platform linux/amd64 "${ACR_IMAGE}:backend-${{ github.sha }}" python /app/scripts/verify_crf_release.py
+          docker run --rm --platform linux/amd64 "${ACR_IMAGE}:backend-${{ github.sha }}" python manage.py check_crf_assets
       - name: 构建并推送管理端镜像
         uses: docker/build-push-action@v6
         with:

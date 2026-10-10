@@ -243,7 +243,7 @@ def test_tracking_recent_record_includes_video_analysis_summary(
     )
     job.skeleton_bucket = "motioncare-training"
     job.skeleton_object_key = (
-        f"motion-analysis/{project_patient.id}/2026/09/"
+        f"motion-analysis/{project_patient.id}/{video.training_date:%Y/%m}/"
         "11111111-1111-4111-8111-111111111111/skeleton.mp4"
     )
     job.skeleton_object_hash = QINIU_ETAG
@@ -355,7 +355,7 @@ def test_tracking_marks_out_of_scope_skeleton_metadata_unavailable(
         status=MotionAnalysisJob.Status.SUCCEEDED,
         skeleton_bucket="motioncare-training",
         skeleton_object_key=(
-            f"motion-analysis/{project_patient.id + 1}/2026/09/"
+            f"motion-analysis/{project_patient.id + 1}/{video.training_date:%Y/%m}/"
             "11111111-1111-4111-8111-111111111111/skeleton.mp4"
         ),
         skeleton_object_hash=QINIU_ETAG,

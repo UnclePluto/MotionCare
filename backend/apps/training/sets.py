@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.prescriptions.models import Prescription, PrescriptionAction
-from apps.studies.models import ProjectPatient
+from apps.studies.locking import lock_project_patient
 from apps.studies.project_status import ensure_project_open
 from .set_models import MotionTrainingSession, MotionTrainingSet, MotionSetAttempt
 
@@ -78,7 +78,7 @@ def serialize_session(session):
 
 @transaction.atomic
 def open_session(pp, *, client_session_id, prescription_action, started_at):
-    pp = ProjectPatient.objects.select_for_update().select_related("project").get(pk=pp.pk)
+    pp = lock_project_patient(pp.pk)
     existing = MotionTrainingSession.objects.filter(client_session_id=client_session_id).first()
     if existing:
         if existing.project_patient_id != pp.pk:
@@ -124,7 +124,7 @@ def owned_session(pp, session_id, *, lock=False):
 
 @transaction.atomic
 def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None, ended_at=None, completion_reason="manual"):
-    pp = ProjectPatient.objects.select_for_update().select_related("project").get(pk=pp.pk)
+    pp = lock_project_patient(pp.pk)
     session = owned_session(pp, session_id, lock=True)
     if not 1 <= index <= session.planned_sets:
         raise ValidationError("组序号无效")
@@ -218,7 +218,7 @@ def attach_set_video(video):
 @transaction.atomic
 def recover_session(pp, *, client_session_id, prescription_action, started_at, completed_sets):
     """接收用户已安全保存的完成声明；可补传旧方，不能用来开始新组。"""
-    pp = ProjectPatient.objects.select_for_update().select_related("project").get(pk=pp.pk)
+    pp = lock_project_patient(pp.pk)
     action = (
         PrescriptionAction.objects.select_related("prescription")
         .filter(

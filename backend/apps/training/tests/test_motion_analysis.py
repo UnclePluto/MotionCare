@@ -78,7 +78,7 @@ def test_doctor_cannot_create_or_recreate_analysis_job(
 def _set_complete_skeleton_metadata(job):
     job.skeleton_bucket = "motioncare-training"
     job.skeleton_object_key = (
-        f"motion-analysis/{job.project_patient_id}/2026/09/"
+        f"motion-analysis/{job.project_patient_id}/{job.training_video.training_date:%Y/%m}/"
         "11111111-1111-4111-8111-111111111111/skeleton.mp4"
     )
     job.skeleton_object_hash = QINIU_ETAG
@@ -197,7 +197,10 @@ def test_skeleton_url_rejects_nonempty_but_untrusted_database_metadata(
             1,
         )
     elif corruption == "wrong_month":
-        job.skeleton_object_key = job.skeleton_object_key.replace("/2026/09/", "/2026/08/")
+        job.skeleton_object_key = job.skeleton_object_key.replace(
+            f"/{job.training_video.training_date:%Y/%m}/",
+            f"/{job.training_video.training_date.year - 1:04d}/01/",
+        )
     elif corruption == "non_v4_uuid":
         job.skeleton_object_key = job.skeleton_object_key.replace(
             "11111111-1111-4111-8111-111111111111",

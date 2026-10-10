@@ -100,7 +100,7 @@ def analysis_job_factory(
             "subject_tracker_version": "primary-subject-v1",
             "skeleton_bucket": "analysis-skeletons",
             "skeleton_object_key": (
-                f"motion-analysis/{project_patient.id}/2026/09/"
+                f"motion-analysis/{project_patient.id}/{video.training_date:%Y/%m}/"
                 f"11111111-1111-4111-8111-{record.id:012d}/skeleton.mp4"
             ),
         }
