@@ -124,6 +124,7 @@ it('keeps ancestor rejection visible, opens its clinical section and clears it o
 });
 
 
+// 跨章节交互及保存后回读在共享 CI 运行器中需要超过默认 5 秒；保留全部断言。
 it('retains independent age when changing the same birth date representation and then a part to unknown',async()=>{
  let baseline={subject_id:'AGE',demographics:{birth_date:'1960-01-01',age_years:81},surgery_allergy:{},comorbidities:{},lifestyle:{},baseline_medications:{}};
  mockGet.mockImplementation((url:string)=>Promise.resolve({data:url.endsWith('/baseline/')?baseline:{name:'年龄回归'}}));
@@ -143,7 +144,7 @@ it('retains independent age when changing the same birth date representation and
  expect(baseline.demographics.age_years).toBe(81);
  cleanup();renderPage();await screen.findByDisplayValue('AGE');fireEvent.click(screen.getByRole('tab',{name:'人口学信息'}));
  expect(await screen.findByDisplayValue('81')).toBeInTheDocument();
-});
+}, 15_000);
 it('has no unsaved reminder after marked answer save and database-order readback',async()=>{
  let baseline:Record<string,unknown>={subject_id:'P201',name_initials:'HC',demographics:{age_years:66,gender:'男',birth_date:'1960-01-01'},surgery_allergy:{},comorbidities:{},lifestyle:{},baseline_medications:{}};
  const ordered=(v:unknown):unknown=>Array.isArray(v)?v.map(ordered):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>[k,ordered(x)])):v;
