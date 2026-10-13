@@ -88,7 +88,8 @@ REST_ASSET_SPECS = {
     ]
 }
 ALL_ASSET_SPECS = {**CANONICAL_ASSET_SPECS, **REST_ASSET_SPECS}
-REST_ASSET_VERSION = "v-e3d7d741b44f"
+REST_ASSET_VERSION = "v-991c78972b26"
+REST_ASSET_VERSIONS = frozenset({REST_ASSET_VERSION, "v-e3d7d741b44f"})
 REQUIRED_ENTRY_FIELDS = frozenset(
     {"kind", "key", "contentType", "sizeBytes", "sha256", "relativePath"}
 )
@@ -184,7 +185,7 @@ def validate_miniapp_static_assets(source_root: Path) -> list[PreparedStaticAsse
     entries = manifest.get("entries")
     expected_keys = (
         frozenset(ALL_ASSET_SPECS)
-        if source_root.name == REST_ASSET_VERSION
+        if source_root.name in REST_ASSET_VERSIONS
         else EXPECTED_ASSET_KEYS
     )
     if not isinstance(entries, list) or len(entries) != len(expected_keys):

@@ -31,6 +31,61 @@ def test_patch_status_only(auth_client, project_patient):
 
 
 @pytest.mark.django_db
+def test_reopen_preserves_report_and_allows_save_and_complete(auth_client, project_patient, doctor):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T1")
+    visit.status = VisitRecord.Status.COMPLETED
+    visit.visit_date = "2026-10-12"
+    original = {"assessments": {"sppb": {"total": 8}}, "legacy": {"note": "保留"}}
+    visit.form_data = original
+    visit.save()
+    path = f"/api/visits/{visit.id}/"
+
+    reopened = auth_client.post(f"{path}reopen/", {}, format="json")
+    assert reopened.status_code == 200, reopened.data
+    visit.refresh_from_db()
+    assert visit.status == VisitRecord.Status.DRAFT
+    assert visit.form_data == original
+    assert visit.visit_date.isoformat() == "2026-10-12"
+    assert visit.updated_by_id == doctor.id
+    assert auth_client.post(f"{path}reopen/", {}, format="json").status_code == 200
+
+    saved = auth_client.patch(
+        path, {"form_data": {"assessments": {"sppb": {"total": 9}}}}, format="json"
+    )
+    assert saved.status_code == 200, saved.data
+    completed = auth_client.patch(path, {"status": "completed"}, format="json")
+    assert completed.status_code == 200, completed.data
+    visit.refresh_from_db()
+    assert visit.status == VisitRecord.Status.COMPLETED
+    assert visit.form_data["assessments"]["sppb"]["total"] == 9
+    assert visit.form_data["legacy"] == original["legacy"]
+
+
+@pytest.mark.django_db
+def test_archived_project_cannot_reopen_visit(auth_client, project_patient):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    visit.status = VisitRecord.Status.COMPLETED
+    visit.save()
+    project_patient.project.status = "archived"
+    project_patient.project.save()
+    response = auth_client.post(f"/api/visits/{visit.id}/reopen/", {}, format="json")
+    assert response.status_code == 400, response.data
+    visit.refresh_from_db()
+    assert visit.status == VisitRecord.Status.COMPLETED
+
+
+@pytest.mark.django_db
+def test_reopen_requires_staff_permission(project_patient):
+    visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
+    visit.status = VisitRecord.Status.COMPLETED
+    visit.save()
+    client = APIClient()
+    assert client.post(f"/api/visits/{visit.id}/reopen/").status_code == 403
+    visit.refresh_from_db()
+    assert visit.status == VisitRecord.Status.COMPLETED
+
+
+@pytest.mark.django_db
 def test_completed_visit_rejects_form_data_patch(auth_client, project_patient):
     visit = VisitRecord.objects.get(project_patient=project_patient, visit_type="T0")
     visit.status = VisitRecord.Status.COMPLETED

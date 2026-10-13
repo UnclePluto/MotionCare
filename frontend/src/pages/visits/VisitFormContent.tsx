@@ -69,6 +69,7 @@ function VisitEditor({ visitId: id, patientId, title = '访视表单', onVisitCh
     const [savedAt, setSavedAt] = useState<string>();
     const [fieldError, setFieldError] = useState<unknown>();
     const [completing, setCompleting] = useState(false);
+    const [reopening, setReopening] = useState(false);
     const [confirmationOpen,setConfirmationOpen]=useState(false);
     const [location,setLocation]=useState<CrfDraftItem>();
     useEffect(()=>{if(location){const frame=requestAnimationFrame(()=>focusCrfField(form,location.name));return ()=>cancelAnimationFrame(frame);}},[location,form,activeSection]);
@@ -91,7 +92,9 @@ function VisitEditor({ visitId: id, patientId, title = '访视表单', onVisitCh
         form.setFieldValue(['patient_baseline'], baseline ?? EMPTY); }, [baseline, form, id, serverValues]);
     const fields = useMemo(() => visit ? registryVisitExtensionFields(visit.visit_type) : [], [visit]);
     const groups = useMemo(() => groupVisitExtensionFields(fields), [fields]);
-    const readonly = visit?.status === 'completed' || visit?.project_status === 'archived' || completing;
+    const reopenMutation = useMutation({ mutationFn: async () =>
+        (await apiClient.post<VisitDetail>(`/visits/${id}/reopen/`, {})).data });
+    const readonly = visit?.status === 'completed' || visit?.project_status === 'archived' || completing || reopening;
     const mutation = useMutation({ mutationFn: async ({ values, before, complete }: {
             values: Record<string, unknown>;
             before: Record<string, unknown>;
@@ -103,6 +106,28 @@ function VisitEditor({ visitId: id, patientId, title = '访视表单', onVisitCh
             await qc.cancelQueries({ queryKey: ['visit', id] });
             return (await apiClient.patch(`/visits/${id}/`, payload)).data;
         } });
+    const reopen = async () => {
+        if (visit?.status !== 'completed' || visit.project_status === 'archived' || mutation.isPending || !draft.beginSubmit())
+            return;
+        setReopening(true);
+        try {
+            await qc.cancelQueries({ queryKey: ['visit', id] });
+            const result = await reopenMutation.mutateAsync();
+            if (!draft.isCurrentRecord(recordKey)) return;
+            draft.reloadFromServer(recordKey);
+            qc.setQueryData(['visit', id], result);
+            setSavedAt(undefined);
+            setFieldError(undefined);
+            message.success('已恢复编辑，可暂存或重新完成');
+            await qc.invalidateQueries({ queryKey: ['visit', id] });
+            await onVisitChanged?.();
+        } catch {
+            if (draft.isCurrentRecord(recordKey)) message.error('恢复编辑失败，请重试');
+        } finally {
+            draft.endSubmit();
+            setReopening(false);
+        }
+    };
     const submit = async (complete: boolean) => {
         if (readonly || !draft.beginSubmit())
             return;
@@ -165,9 +190,10 @@ function VisitEditor({ visitId: id, patientId, title = '访视表单', onVisitCh
     {legacy.length ? <Card size="small" title="旧记录，待核对">{legacy.map(f => <div key={f.field_id}><Typography.Text>{f.ui_label ?? f.label_zh}</Typography.Text><pre style={{ whiteSpace: 'pre-wrap' }}>{typeof readCrfStorage(draft.getValues(), f.storage) === 'string' ? String(readCrfStorage(draft.getValues(), f.storage)) : JSON.stringify(readCrfStorage(draft.getValues(), f.storage))}</pre></div>)}</Card> : null}
     <CrfSaveBar>
      <Button aria-label="暂存" loading={mutation.isPending} disabled={readonly || mutation.isPending} onClick={() => void submit(false)}>暂存</Button>
-     <Popconfirm open={confirmationOpen} onOpenChange={setConfirmationOpen} title="确认完成？" description={<><p>完成后对应记录无法修改。</p><p>{reminders.length ? `仍有 ${reminders.length} 项未处理。可保留缺失并完成。` : '当前未发现未处理的必填项。'}</p><CrfDraftProgress items={progress.items} onLocate={locate} expanded/></>} okText="确认完成" cancelText="取消" onConfirm={() => submit(true)} disabled={readonly || mutation.isPending}>
+     <Popconfirm open={confirmationOpen} onOpenChange={setConfirmationOpen} title="确认完成？" description={<><p>请确认报告填写无误。若仅希望保存填写进度，请点击取消后选择暂存按钮。</p><p>{reminders.length ? `仍有 ${reminders.length} 项未处理。可保留缺失并完成。` : '当前未发现未处理的必填项。'}</p><CrfDraftProgress items={progress.items} onLocate={locate} expanded/></>} okText="确认完成" cancelText="取消" onConfirm={() => submit(true)} disabled={readonly || mutation.isPending}>
       <Button type="primary" aria-label="完成" loading={mutation.isPending} disabled={readonly || mutation.isPending}>完成</Button>
      </Popconfirm>
+     {visit.status === 'completed' ? <Button type="primary" aria-label="编辑" loading={reopening} disabled={visit.project_status === 'archived' || mutation.isPending || reopening} onClick={() => void reopen()}>编辑</Button> : null}
      {savedAt ? <Typography.Text role="status">已保存于 {savedAt}</Typography.Text> : null}{draft.dirty ? <Typography.Text>有未保存的改动</Typography.Text> : null}
     </CrfSaveBar>
    </> : null}

@@ -5,15 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VisitFormPage } from "./VisitFormPage";
 
-const { mockGet, mockPatch } = vi.hoisted(() => ({
+const { mockGet, mockPatch, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPatch: vi.fn(),
+  mockPost: vi.fn(),
 }));
 
 vi.mock("../../api/client", () => ({
   apiClient: {
     get: (...args: unknown[]) => mockGet(...args),
     patch: (...args: unknown[]) => mockPatch(...args),
+    post: (...args: unknown[]) => mockPost(...args),
   },
 }));
 
@@ -155,7 +157,7 @@ describe("VisitFormPage", () => {
     expect(completeBtn).toHaveClass("ant-btn-primary");
     fireEvent.click(completeBtn as Element);
 
-    expect(await screen.findByText("完成后对应记录无法修改。")).toBeInTheDocument();
+    expect(await screen.findByText("请确认报告填写无误。若仅希望保存填写进度，请点击取消后选择暂存按钮。")).toBeInTheDocument();
     expect(mockPatch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认完成" }));
 
@@ -268,9 +270,102 @@ describe("VisitFormPage", () => {
   });
 });
 
-beforeEach(() => { mockGet.mockReset(); mockPatch.mockReset(); mockPatch.mockResolvedValue({data: {}}); });
+beforeEach(() => { mockGet.mockReset(); mockPatch.mockReset(); mockPost.mockReset(); mockPatch.mockResolvedValue({data: {}}); });
 afterEach(() => cleanup());
 function visitFixture(id = 30) { return { id, project_patient: 1, project_status: "active", visit_type: "T1", status: "draft", visit_date: null, form_data: { assessments: {}, computed_assessments: {}, crf: {} } }; }
+
+it('已完成报告点击编辑后保留答案，可重新暂存和完成', async () => {
+ let visit = {...visitFixture(60), status:'completed', form_data:{assessments:{sppb:{total:8}},computed_assessments:{},crf:{meta:{assessor_name:'原评估者'}}}};
+ mockGet.mockImplementation(async (url:string)=>({data:url.startsWith('/visits/')?visit:{patient:201}}));
+ mockPost.mockImplementation(async()=>{visit={...visit,status:'draft'};return {data:visit};});
+ mockPatch.mockImplementation(async(_url:string,payload:Record<string,unknown>)=>{visit={...visit,...payload} as typeof visit;return {data:visit};});
+ renderAt(60);
+ const edit = await screen.findByRole('button',{name:'编辑'});
+ expect(edit).toBeEnabled();
+ expect(screen.getByRole('button',{name:'完成'})).toBeDisabled();
+ fireEvent.click(edit);
+ await waitFor(()=>expect(screen.getByRole('button',{name:'暂存'})).toBeEnabled());
+ expect(mockPost).toHaveBeenCalledWith('/visits/60/reopen/',{});
+ fireEvent.click(screen.getByRole('tab',{name:'访视信息'}));
+ const input=await screen.findByLabelText('评估者姓名');
+ expect(input).toHaveValue('原评估者');
+ fireEvent.change(input,{target:{value:'复核者'}});
+ fireEvent.click(screen.getByRole('button',{name:'暂存'}));
+ await waitFor(()=>expect(mockPatch).toHaveBeenCalledWith('/visits/60/',{form_data:{crf:{meta:{assessor_name:'复核者'}}}}));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'完成'})).toBeEnabled());
+ fireEvent.click(screen.getByRole('button',{name:'完成'}));
+ fireEvent.click(await screen.findByRole('button',{name:'确认完成'}));
+ await waitFor(()=>expect(mockPatch).toHaveBeenLastCalledWith('/visits/60/',{status:'completed'}));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'编辑'})).toBeEnabled());
+});
+
+it('取消完成后保留输入，选择暂存只保存进度', async()=>{
+ const visit=visitFixture(61);
+ mockGet.mockImplementation(async(url:string)=>({data:url.startsWith('/visits/')?visit:{patient:201}}));
+ renderAt(61);
+ fireEvent.click(await screen.findByRole('tab',{name:'访视信息'}));
+ fireEvent.change(await screen.findByLabelText('评估者姓名'),{target:{value:'进度'}});
+ fireEvent.click(screen.getByRole('button',{name:'完成'}));
+ expect(await screen.findByText('请确认报告填写无误。若仅希望保存填写进度，请点击取消后选择暂存按钮。')).toBeInTheDocument();
+ expect(mockPatch).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:/取\s*消/}));
+ expect(screen.getByLabelText('评估者姓名')).toHaveValue('进度');
+ fireEvent.click(screen.getByRole('button',{name:'暂存'}));
+ await waitFor(()=>expect(mockPatch).toHaveBeenCalledWith('/visits/61/',{form_data:{crf:{meta:{assessor_name:'进度'}}}}));
+});
+
+it('恢复编辑失败仍保持只读，允许重试',async()=>{
+ mockGet.mockImplementation(async(url:string)=>({data:url.startsWith('/visits/')?{...visitFixture(62),status:'completed'}:{patient:201}}));
+ mockPost.mockRejectedValue(new Error('网络失败'));
+ renderAt(62);
+ fireEvent.click(await screen.findByRole('button',{name:'编辑'}));
+ await waitFor(()=>expect(mockPost).toHaveBeenCalledTimes(1));
+ await waitFor(()=>expect(screen.getByRole('button',{name:'编辑'})).toBeEnabled());
+ expect(screen.getByRole('button',{name:'暂存'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'完成'})).toBeDisabled();
+});
+
+it('恢复编辑等待回读期间保持按钮禁用，回读完成后可操作',async()=>{
+ let visit={...visitFixture(65),status:'completed'};
+ let visitReads=0;
+ let finishRead!:()=>void;
+ const readback=new Promise<{data:typeof visit}>(resolve=>{finishRead=()=>resolve({data:visit});});
+ mockGet.mockImplementation(async(url:string)=>{
+  if(!url.startsWith('/visits/')) return {data:{patient:201}};
+  visitReads+=1;
+  return visitReads===1?{data:visit}:readback;
+ });
+ mockPost.mockImplementation(async()=>{visit={...visit,status:'draft'};return {data:visit};});
+ renderAt(65);
+ fireEvent.click(await screen.findByRole('button',{name:'编辑'}));
+ await waitFor(()=>expect(visitReads).toBe(2));
+ expect(screen.getByRole('button',{name:'暂存'})).toBeDisabled();
+ expect(screen.getByRole('button',{name:'完成'})).toBeDisabled();
+ finishRead();
+ await waitFor(()=>expect(screen.getByRole('button',{name:'暂存'})).toBeEnabled());
+ expect(screen.getByRole('button',{name:'完成'})).toBeEnabled();
+});
+
+it('已归档项目的完成报告不能恢复编辑',async()=>{
+ mockGet.mockImplementation(async(url:string)=>({data:url.startsWith('/visits/')?{...visitFixture(63),status:'completed',project_status:'archived'}:{patient:201}}));
+ renderAt(63);
+ expect(await screen.findByRole('button',{name:'编辑'})).toBeDisabled();
+ expect(mockPost).not.toHaveBeenCalled();
+});
+
+it('恢复编辑采用服务端最新答案，不把旧缓存重新提交',async()=>{
+ let visit={...visitFixture(64),status:'completed',form_data:{assessments:{},computed_assessments:{},crf:{meta:{assessor_name:'旧缓存'}}}};
+ mockGet.mockImplementation(async(url:string)=>({data:url.startsWith('/visits/')?visit:{patient:201}}));
+ mockPost.mockImplementation(async()=>{visit={...visit,status:'draft',form_data:{...visit.form_data,crf:{meta:{assessor_name:'服务端最新'}}}};return {data:visit};});
+ renderAt(64);
+ fireEvent.click(await screen.findByRole('tab',{name:'访视信息'}));
+ expect(await screen.findByLabelText('评估者姓名')).toHaveValue('旧缓存');
+ fireEvent.click(screen.getByRole('button',{name:'编辑'}));
+ await waitFor(()=>expect(screen.getByLabelText('评估者姓名')).toHaveValue('服务端最新'));
+ fireEvent.click(screen.getByRole('button',{name:'完成'}));
+ fireEvent.click(await screen.findByRole('button',{name:'确认完成'}));
+ await waitFor(()=>expect(mockPatch).toHaveBeenCalledWith('/visits/64/',{status:'completed'}));
+});
 // 跨章节交互及保存后回读在共享 CI 运行器中需要超过默认 5 秒；保留全部断言。
 it("test_complete_submits_unsaved_measurement_feedback_and_visit_date", async () => {
   mockGet.mockImplementation((url: string) => Promise.resolve({data: url.startsWith("/visits/") ? visitFixture() : {patient: 201, subject_id: "P-201"}}));

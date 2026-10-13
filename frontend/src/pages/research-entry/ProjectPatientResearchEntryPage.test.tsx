@@ -151,7 +151,7 @@ describe("ProjectPatientResearchEntryPage", () => {
 
     await waitFor(() => expect(mockGet).toHaveBeenCalledWith("/visits/12/"));
     fireEvent.click(await screen.findByRole("button", { name: "完成" }));
-    expect(await screen.findByText("完成后对应记录无法修改。")).toBeInTheDocument();
+    expect(await screen.findByText("请确认报告填写无误。若仅希望保存填写进度，请点击取消后选择暂存按钮。")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "确认完成" }));
 
     await waitFor(() => {

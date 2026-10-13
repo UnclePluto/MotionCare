@@ -62,7 +62,7 @@ describe('签名清单校验', () => {
     const fixture = signedAssetFixture()
     const manifest = parseSignedAssetManifest(fixture)
     expect(Object.keys(manifest.urls)).toHaveLength(43)
-    expect(manifest).toEqual({ assetVersion: 'v-e3d7d741b44f', issuedAt: 1_800_000_000,
+    expect(manifest).toEqual({ assetVersion: fixture.asset_version, issuedAt: 1_800_000_000,
       expiresAt: 1_800_000_600, urls: Object.fromEntries(fixture.assets.map((asset) => [asset.key, asset.url])) })
   })
   it.each(mutations)('拒绝%s，错误不含签名 URL', async (_, mutate) => {
@@ -88,7 +88,7 @@ describe('内存签名缓存', () => {
     const { fetchSignedAssetManifest } = await import('./signedAssetManifest')
     await Promise.all([fetchSignedAssetManifest(), fetchSignedAssetManifest()])
     expect(api.publicRequest).toHaveBeenCalledTimes(1)
-    expect(api.publicRequest).toHaveBeenCalledWith('/patient-app/static-assets/?version=v-e3d7d741b44f')
+    expect(api.publicRequest).toHaveBeenCalledWith(`/patient-app/static-assets/?version=${signedAssetFixture().asset_version}`)
     vi.setSystemTime(539_000)
     await fetchSignedAssetManifest()
     expect(api.publicRequest).toHaveBeenCalledTimes(1)

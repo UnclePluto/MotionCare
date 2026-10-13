@@ -121,8 +121,15 @@ export function useCrfDraft({ form, serverValues, recordKey, prefillValues, pref
         refresh(n => n + 1);
         return true;
     };
+    const reloadFromServer = (key: string) => {
+        if (!isCurrentRecord(key)) return;
+        snapshot.current = null;
+        lastServer.current = undefined;
+        initializedPrefills.current.clear();
+        refresh(n => n + 1);
+    };
     // A separate component keeps hooks unconditional and supports legacy MemoryRouter consumers.
     const dataRouter = useContext(UNSAFE_DataRouterContext);
     void watched;
-    return { initialValues: snapshot.current?.initial ?? {}, before: getBefore(), dirty: isDirty(), patch: getPatch(), getValues, getPatch, isDirty, isCurrentRecord, beginSubmit, endSubmit, resetAfterSubmit, navigationGuard: dataRouter ? createElement(DraftNavigationGuard, { isDirty }) : null };
+    return { initialValues: snapshot.current?.initial ?? {}, before: getBefore(), dirty: isDirty(), patch: getPatch(), getValues, getPatch, isDirty, isCurrentRecord, beginSubmit, endSubmit, resetAfterSubmit, reloadFromServer, navigationGuard: dataRouter ? createElement(DraftNavigationGuard, { isDirty }) : null };
 }

@@ -31,6 +31,34 @@ def test_current_manifest_contains_only_product_assets():
     }
 
 
+@pytest.mark.parametrize("version", ["v-e3d7d741b44f", "v-991c78972b26"])
+def test_rest_manifests_support_old_and_two_minute_clients(version):
+    result = load_registered_static_assets(version)
+    assert result["assetVersion"] == version
+    assert len(result["entries"]) == 43
+    assert len({entry["key"] for entry in result["entries"]}) == 43
+    assert "motion-rest-start" in {entry["key"] for entry in result["entries"]}
+
+
+@pytest.mark.parametrize("version", ["v-e3d7d741b44f", "v-991c78972b26"])
+def test_rest_manifests_can_be_prepared_for_publication(version, tmp_path):
+    import hashlib
+    from apps.common.miniapp_static_assets import ALL_ASSET_SPECS, validate_miniapp_static_assets
+
+    root = tmp_path / version
+    root.mkdir()
+    entries = []
+    for key, (kind, content_type, extension) in ALL_ASSET_SPECS.items():
+        body = key.encode()
+        sha = hashlib.sha256(body).hexdigest()
+        filename = f"{key}.{sha[:12]}.{extension}"
+        (root / filename).write_bytes(body)
+        entries.append({"key": key, "kind": kind, "contentType": content_type,
+                        "sizeBytes": len(body), "sha256": sha, "relativePath": f"{version}/{filename}"})
+    (root / "manifest.json").write_text(json.dumps({"assetVersion": version, "entries": entries}))
+    assert len(validate_miniapp_static_assets(root)) == 43
+
+
 @pytest.mark.parametrize("invalid_key", [["pattern_sun"], {"key": "pattern_sun"}])
 def test_registered_manifest_with_non_string_key_is_invalid(
     invalid_key, tmp_path, monkeypatch

@@ -11,6 +11,9 @@ from apps.studies.project_status import ensure_project_open
 from .set_models import MotionTrainingSession, MotionTrainingSet, MotionSetAttempt
 
 
+SET_REST_DURATION = timedelta(seconds=120)
+
+
 def current_action(pp, action_id):
     ensure_project_open(pp.project, "项目已结束，不能开始新运动")
     action = (
@@ -65,7 +68,7 @@ def serialize_session(session):
                 "completion_reason": g.completion_reason,
                 "started_at": g.started_at.isoformat() if g.started_at else None,
                 "ended_at": g.ended_at.isoformat() if g.ended_at else None,
-                "rest_until": (g.ended_at + timedelta(seconds=180)).isoformat()
+                "rest_until": (g.ended_at + SET_REST_DURATION).isoformat()
                 if g.completed
                 else None,
                 "video_id": g.video_id,
@@ -148,8 +151,8 @@ def update_set(pp, session_id, index, *, operation, attempt_id, started_at=None,
             raise ValidationError("本组开始时间无效")
         if index > 1:
             previous = session.groups.filter(index=index - 1, completed=True).first()
-            if not previous or started_at < previous.ended_at + timedelta(seconds=180):
-                raise ValidationError("请完成上一组并休息三分钟")
+            if not previous or started_at < previous.ended_at + SET_REST_DURATION:
+                raise ValidationError("请完成上一组并休息两分钟")
         if group.attempt_id:
             raise ValidationError("请先放弃被中断的录像尝试")
         MotionSetAttempt.objects.create(id=attempt_id, group=group)
@@ -269,8 +272,8 @@ def recover_session(pp, *, client_session_id, prescription_action, started_at, c
             raise ValidationError("不能按已失效计划开始新组")
         if index > 1:
             previous = session.groups.filter(index=index - 1, completed=True).first()
-            if not previous or start < previous.ended_at + timedelta(seconds=180):
-                raise ValidationError("已完成组缺少上一组或三分钟休息")
+            if not previous or start < previous.ended_at + SET_REST_DURATION:
+                raise ValidationError("已完成组缺少上一组或两分钟休息")
         group, _ = MotionTrainingSet.objects.get_or_create(session=session, index=index)
         if group.completed:
             if (group.attempt_id, group.started_at, group.ended_at, group.completion_reason) != (attempt_id, start, end, completion_reason):

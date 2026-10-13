@@ -16,6 +16,9 @@ import {
   type CountedAttempt, type CountedSession
 } from './countedSession'
 
+const REST_DURATION_SECONDS = 120
+const REST_DURATION_MS = REST_DURATION_SECONDS * 1000
+
 export default function CountedCamera({ action, demo }: { action: MotionTrainingAction; demo: boolean }) {
   const [session, setSession] = useState<CountedSession | null>(null)
   const current = useRef<CountedSession | null>(null)
@@ -93,7 +96,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
           if (!mounted.current) return
           publish(recovered)
           const done = completedAttempts(recovered)
-          if (done.length && done.length < total) audio.current?.restore(Date.parse(done[done.length - 1].endedAt!) + 180000)
+          if (done.length && done.length < total) audio.current?.restore(Date.parse(done[done.length - 1].endedAt!) + REST_DURATION_MS)
           if (old.attempts.some(a => !a.completed && !a.abandoned)) setError('上次录像已中断，请重做本组。已完成组已保留。')
         }
         setReady(true); void retry()
@@ -150,7 +153,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
     const startingCameraEpoch = cameraEpoch.current
     const latest = current.current
     const done = latest ? completedAttempts(latest) : []
-    if (done.length >= total || (done.length && Date.now() < Date.parse(done[done.length - 1].endedAt!) + 180000)) return
+    if (done.length >= total || (done.length && Date.now() < Date.parse(done[done.length - 1].endedAt!) + REST_DURATION_MS)) return
     const ownOperation = ++operation.current
     busy.current = true; setProcessing(true); setError(''); setNeedsRedo(false); audio.current?.stop()
     try {
@@ -277,7 +280,7 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
       else publish(updateCountedSession(owner.current, current.current!.id, complete))
       trace.mark('group_saved')
       const completed = completedAttempts(current.current!).length
-      if (completed < total) audio.current?.begin(Date.parse(pendingEnd.current!) + 180000, total - completed)
+      if (completed < total) audio.current?.begin(Date.parse(pendingEnd.current!) + REST_DURATION_MS, total - completed)
       else audio.current?.stop()
       active.current = null; pendingEnd.current = null; recorder.current = null
       // The file is durable before replacing the native camera. Do not carry
@@ -323,9 +326,9 @@ export default function CountedCamera({ action, demo }: { action: MotionTraining
   const recordingClock = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`
   const done = session ? completedAttempts(session) : []
   const finished = done.length === total
-  const restUntil = ending ? (ending.index < total ? ending.endedAt + 180000 : 0)
-    : done.length && !finished ? Date.parse(done[done.length - 1].endedAt!) + 180000 : 0
-  const left = Math.min(180, Math.max(0, Math.ceil((restUntil - now) / 1000)))
+  const restUntil = ending ? (ending.index < total ? ending.endedAt + REST_DURATION_MS : 0)
+    : done.length && !finished ? Date.parse(done[done.length - 1].endedAt!) + REST_DURATION_MS : 0
+  const left = Math.min(REST_DURATION_SECONDS, Math.max(0, Math.ceil((restUntil - now) / 1000)))
   return <View className='counted-training-page'>
     <View className='counted-heading'>
     <Text className='title'>{action.action_name}</Text>

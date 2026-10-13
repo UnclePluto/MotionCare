@@ -4,13 +4,13 @@ from pathlib import Path
 from apps.common.miniapp_static_assets import (
     CANONICAL_ASSET_SPECS,
     ALL_ASSET_SPECS,
-    REST_ASSET_VERSION,
+    REST_ASSET_VERSIONS,
 )
 
 
 MANIFEST_ROOT = Path(__file__).with_name("miniapp_static_asset_manifests")
 REGISTERED_STATIC_ASSET_MANIFESTS: dict[str, Path] = {
-    REST_ASSET_VERSION: MANIFEST_ROOT / f"{REST_ASSET_VERSION}.json",
+    **{version: MANIFEST_ROOT / f"{version}.json" for version in REST_ASSET_VERSIONS},
     "v-3aafe09211fd": MANIFEST_ROOT / "v-3aafe09211fd.json",
 }
 
@@ -20,7 +20,7 @@ def _validate_registered_manifest(payload: object, version: str) -> dict:
         raise ValueError("已登记固定素材清单版本无效")
 
     entries = payload.get("entries")
-    specs = ALL_ASSET_SPECS if version == REST_ASSET_VERSION else CANONICAL_ASSET_SPECS
+    specs = ALL_ASSET_SPECS if version in REST_ASSET_VERSIONS else CANONICAL_ASSET_SPECS
     if not isinstance(entries, list) or len(entries) != len(specs):
         raise ValueError("已登记固定素材清单项目数无效")
     if any(not isinstance(entry, dict) for entry in entries):

@@ -2,9 +2,11 @@ from collections.abc import Mapping
 
 from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from apps.common.permissions import IsAdminOrDoctor
@@ -66,11 +68,11 @@ class VisitRecordViewSet(ModelViewSet):
 
     def get_object(self):
         instance = super().get_object()
-        if self.action not in {"update", "partial_update", "destroy"}:
+        if self.action not in {"update", "partial_update", "destroy", "reopen"}:
             return instance
         target = (
             self._target_binding(instance.project_patient)
-            if self.action != "destroy"
+            if self.action in {"update", "partial_update"}
             else instance.project_patient
         )
         # Across shared entry points the order is P -> PP -> V. Discovery reads
@@ -83,8 +85,19 @@ class VisitRecordViewSet(ModelViewSet):
         if locked.project_patient_id != instance.project_patient_id:
             raise ValidationError({"project_patient": "访视所属入组关系已变化，请刷新后重试。"})
         self.check_object_permissions(self.request, locked)
-        self._ensure_current_visit_writable(locked)
+        if self.action != "reopen":
+            self._ensure_current_visit_writable(locked)
         return locked
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def reopen(self, request, *args, **kwargs):
+        visit = self.get_object()
+        if visit.status == VisitRecord.Status.COMPLETED:
+            visit.status = VisitRecord.Status.DRAFT
+            visit.updated_by = request.user
+            visit.save(update_fields=["status", "updated_by", "updated_at"])
+        return Response(self.get_serializer(visit).data)
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):

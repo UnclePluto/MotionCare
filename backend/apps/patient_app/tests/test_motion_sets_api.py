@@ -68,6 +68,37 @@ def test_user_confirms_one_group_without_waiting_for_upload(project_patient, act
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("rest_seconds,expected", [(119, 400), (120, 200)])
+@pytest.mark.parametrize("recover", [False, True])
+def test_two_minute_rest_boundary(project_patient, active_prescription, rest_seconds, expected, recover):
+    from django.utils.dateparse import parse_datetime
+
+    client, action = counted_client(project_patient, active_prescription, sets=2)
+    start = timezone.now() - timezone.timedelta(minutes=10)
+    active_prescription.effective_at = start - timezone.timedelta(minutes=1)
+    active_prescription.save()
+    end = start + timezone.timedelta(seconds=40)
+    second_start = end + timezone.timedelta(seconds=rest_seconds)
+    session_id, first_attempt = str(uuid.uuid4()), str(uuid.uuid4())
+    payload = {"client_session_id": session_id, "prescription_action": action.id, "started_at": start.isoformat()}
+    if recover:
+        payload["completed_sets"] = [
+            {"index": 1, "attempt_id": first_attempt, "started_at": start.isoformat(), "ended_at": end.isoformat()},
+            {"index": 2, "attempt_id": str(uuid.uuid4()), "started_at": second_start.isoformat(), "ended_at": (second_start + timezone.timedelta(seconds=40)).isoformat()},
+        ]
+        response = client.post("/api/patient-app/motion-sessions/recover/", payload, format="json")
+    else:
+        opened = client.post("/api/patient-app/motion-sessions/", payload, format="json")
+        path = f"/api/patient-app/motion-sessions/{opened.data['id']}/sets/"
+        assert client.post(path + "1/", {"operation": "start", "attempt_id": first_attempt, "started_at": start.isoformat()}, format="json").status_code == 200
+        completed = client.post(path + "1/", {"operation": "complete", "attempt_id": first_attempt, "ended_at": end.isoformat()}, format="json")
+        assert completed.status_code == 200, completed.data
+        assert parse_datetime(completed.data["sets"][0]["rest_until"]) == end + timezone.timedelta(seconds=120)
+        response = client.post(path + "2/", {"operation": "start", "attempt_id": str(uuid.uuid4()), "started_at": second_start.isoformat()}, format="json")
+    assert response.status_code == expected, response.data
+
+
+@pytest.mark.django_db
 def test_three_uploaded_groups_count_as_one_weekly_completion(
     project_patient, active_prescription, settings, doctor
 ):
