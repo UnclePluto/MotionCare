@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VisitFormPage } from "./VisitFormPage";
 
+// 完整 CRF 表单的渲染、切换和保存回读在共享 CI 中会超过默认 5 秒。
+vi.setConfig({ testTimeout: 15_000 });
+
 const { mockGet, mockPatch, mockPost } = vi.hoisted(() => ({
   mockGet: vi.fn(),
   mockPatch: vi.fn(),
