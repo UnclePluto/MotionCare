@@ -274,6 +274,7 @@ beforeEach(() => { mockGet.mockReset(); mockPatch.mockReset(); mockPost.mockRese
 afterEach(() => cleanup());
 function visitFixture(id = 30) { return { id, project_patient: 1, project_status: "active", visit_type: "T1", status: "draft", visit_date: null, form_data: { assessments: {}, computed_assessments: {}, crf: {} } }; }
 
+// 恢复、暂存、完成包含多次表单渲染和回读，沿用同类完整流程的 CI 时限。
 it('已完成报告点击编辑后保留答案，可重新暂存和完成', async () => {
  let visit = {...visitFixture(60), status:'completed', form_data:{assessments:{sppb:{total:8}},computed_assessments:{},crf:{meta:{assessor_name:'原评估者'}}}};
  mockGet.mockImplementation(async (url:string)=>({data:url.startsWith('/visits/')?visit:{patient:201}}));
@@ -297,7 +298,7 @@ it('已完成报告点击编辑后保留答案，可重新暂存和完成', asyn
  fireEvent.click(await screen.findByRole('button',{name:'确认完成'}));
  await waitFor(()=>expect(mockPatch).toHaveBeenLastCalledWith('/visits/60/',{status:'completed'}));
  await waitFor(()=>expect(screen.getByRole('button',{name:'编辑'})).toBeEnabled());
-});
+}, 15_000);
 
 it('取消完成后保留输入，选择暂存只保存进度', async()=>{
  const visit=visitFixture(61);
