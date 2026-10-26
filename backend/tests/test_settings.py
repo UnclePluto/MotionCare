@@ -141,14 +141,12 @@ def test_training_video_limits_support_raw_five_second_thirty_minute_sessions():
     assert settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES == 80 * 1024 * 1024
     assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 1800
     assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 360
-    assert settings.TRAINING_VIDEO_MAX_SIZE_BYTES == 536_870_912
     assert settings.MOTION_ANALYSIS_DOWNLOAD_DEADLINE_SECONDS == 900
     assert settings.MOTION_ANALYSIS_STALE_TIMEOUT_SECONDS == 7200
 
 
 def test_training_video_limit_templates_match_runtime_contract():
     expected = {
-        "TRAINING_VIDEO_MAX_SIZE_BYTES": "536870912",
         "TRAINING_VIDEO_MAX_DURATION_SECONDS": "1800",
         "TRAINING_VIDEO_MAX_SEGMENTS": "360",
     }

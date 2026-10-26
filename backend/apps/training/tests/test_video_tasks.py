@@ -607,17 +607,20 @@ def test_process_job_assembles_360_ordered_segments_once(
 
 
 @pytest.mark.django_db
-def test_oversized_assembly_result_enters_existing_failure_flow_without_upload(
+def test_assembly_result_above_legacy_size_limit_is_published_and_attached(
     project_patient,
     active_prescription,
     tmp_path,
     settings,
     monkeypatch,
+    django_capture_on_commit_callbacks,
 ):
     settings.TRAINING_VIDEO_STAGING_ROOT = tmp_path
-    settings.TRAINING_VIDEO_MAX_SIZE_BYTES = 536_870_912
+    settings.QINIU_BUCKET = "motioncare-training"
     video, job = _pending_job(project_patient, active_prescription, tmp_path, duration=60)
     result = _assembly_result(video, duration=60.0)
+    with result.output_path.open("r+b") as output:
+        output.truncate(536_870_913)
     result = AssemblyResult(
         output_path=result.output_path,
         probe=result.probe,
@@ -626,25 +629,23 @@ def test_oversized_assembly_result_enters_existing_failure_flow_without_upload(
     )
     module = _video_tasks()
     assemble = Mock(return_value=result)
-    upload = Mock()
-    retry = Mock(side_effect=Retry())
+    upload = Mock(return_value=_remote_metadata(result))
     monkeypatch.setattr(module, "assemble_video", assemble)
     monkeypatch.setattr(module, "upload_and_publish_local_video", upload)
-    monkeypatch.setattr(module.run_video_assembly_job, "retry", retry)
+    monkeypatch.setattr(module.cleanup_training_video_files, "delay", Mock())
+    monkeypatch.setattr(module.cleanup_qiniu_tombstone, "delay", Mock())
 
-    with pytest.raises(Retry):
-        module.run_video_assembly_job.run(job.id)
-    with pytest.raises(Retry):
-        module.run_video_assembly_job.run(job.id)
-    final = module.run_video_assembly_job.run(job.id)
+    with django_capture_on_commit_callbacks(execute=True):
+        module.process_video_assembly_job(job.id)
 
     job.refresh_from_db()
     video.refresh_from_db()
-    assert final == {"job_id": job.id, "status": VideoAssemblyJob.Status.FAILED}
-    assert job.status == VideoAssemblyJob.Status.FAILED
-    assert video.status == TrainingVideo.Status.FAILED
-    assert video.size_bytes == 0
-    assert upload.call_count == 0
+    assert job.status == VideoAssemblyJob.Status.SUCCEEDED
+    assert video.status == TrainingVideo.Status.ATTACHED
+    assert video.size_bytes == 536_870_913
+    assert video.training_record == TrainingRecord.objects.get()
+    assert video.training_record.status == TrainingRecord.Status.COMPLETED
+    upload.assert_called_once()
 
 
 @pytest.mark.django_db

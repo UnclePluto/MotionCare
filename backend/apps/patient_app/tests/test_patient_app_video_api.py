@@ -170,7 +170,6 @@ def _assert_no_partial_files(root: Path):
 def test_default_training_video_limits_support_thirty_minute_sessions(settings):
     assert settings.TRAINING_VIDEO_MAX_DURATION_SECONDS == 1_800
     assert settings.TRAINING_VIDEO_MAX_SEGMENTS == 360
-    assert settings.TRAINING_VIDEO_MAX_SIZE_BYTES == 536_870_912
 
 
 @pytest.mark.parametrize("source_key", sorted(OFFICIAL_MOTION_ACTION_SOURCE_KEYS))
@@ -674,8 +673,9 @@ def test_upload_segment_size_limit_leaves_no_partial_file(
 
 
 @pytest.mark.django_db
-def test_upload_segment_enforces_total_size_limit(
-    project_patient, doctor, active_prescription, settings, tmp_path
+@pytest.mark.parametrize("existing_size_bytes", [536_870_911, 1_073_741_824])
+def test_upload_segment_allows_total_size_above_legacy_limit(
+    project_patient, doctor, active_prescription, settings, tmp_path, existing_size_bytes
 ):
     settings.TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES = 10
     action = _shoulder_press_action(active_prescription)
@@ -686,7 +686,7 @@ def test_upload_segment_enforces_total_size_limit(
         training_video=video,
         index=10,
         duration_ms=1_000,
-        size_bytes=536_870_911,
+        size_bytes=existing_size_bytes,
         sha256="existing",
         relative_path="existing.mp4",
         status=TrainingVideoSegment.Status.UPLOADED,
@@ -703,11 +703,10 @@ def test_upload_segment_enforces_total_size_limit(
     )
 
     assert exact.status_code == 201, exact.data
-    assert over.status_code == 400, over.data
-    assert "大小" in str(over.data)
-    assert TrainingVideoSegment.objects.count() == 2
+    assert over.status_code == 201, over.data
+    assert TrainingVideoSegment.objects.count() == 3
     assert _staged_segment_path(tmp_path, video.id, 0).read_bytes() == b"x"
-    assert not _staged_segment_path(tmp_path, video.id, 1).exists()
+    assert _staged_segment_path(tmp_path, video.id, 1).read_bytes() == b"y"
     _assert_no_partial_files(tmp_path)
 
 
@@ -1091,11 +1090,8 @@ def test_finalize_missing_end_time_is_idempotent_and_cannot_be_backfilled(
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize(
-    ("total_size_bytes", "expected_status"),
-    [(536_870_912, 202), (536_870_913, 400)],
-)
-def test_finalize_enforces_total_size_limit(
+@pytest.mark.parametrize("total_size_bytes", [536_870_912, 536_870_913, 1_073_741_824])
+def test_finalize_allows_total_size_above_legacy_limit(
     project_patient,
     doctor,
     active_prescription,
@@ -1103,7 +1099,6 @@ def test_finalize_enforces_total_size_limit(
     monkeypatch,
     django_capture_on_commit_callbacks,
     total_size_bytes,
-    expected_status,
 ):
     action = _shoulder_press_action(active_prescription)
     client = _auth_client(project_patient, doctor)
@@ -1132,11 +1127,11 @@ def test_finalize_enforces_total_size_limit(
             format="json",
         )
 
-    assert response.status_code == expected_status, response.data
-    assert delay.call_count == (1 if expected_status == 202 else 0)
-    assert VideoAssemblyJob.objects.filter(training_video=video).count() == (
-        1 if expected_status == 202 else 0
-    )
+    assert response.status_code == 202, response.data
+    video.refresh_from_db()
+    assert video.status == TrainingVideo.Status.QUEUED
+    assert VideoAssemblyJob.objects.filter(training_video=video).count() == 1
+    delay.assert_called_once()
 
 
 @pytest.mark.django_db

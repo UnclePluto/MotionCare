@@ -1,4 +1,5 @@
 > 状态：implemented
+> 修订（2026-10-26, codex）：按用户要求取消单次训练分片累计及合并结果的总大小上限；保留时长、单段大小、分段数量及磁盘余量保护。
 > 日期：2026-08-20
 > 范围：五个正式运动动作的教学视频上传、私有动态签名、小程序统一预览与全量录像跟练。
 > 关联：`docs/superpowers/specs/2026-05-14-prescription-motion-training-design.md`、`docs/superpowers/specs/2026-07-14-segmented-training-video-pipeline-design.md`、`docs/superpowers/specs/2026-08-09-wechat-shoulder-press-preview-pip-design.md`、`docs/superpowers/specs/2026-08-12-wechat-miniapp-demo-mode-design.md`
@@ -200,10 +201,9 @@ GET /api/patient-app/demo-motion-videos/
 ```text
 TRAINING_VIDEO_MAX_DURATION_SECONDS=1800
 TRAINING_VIDEO_MAX_SEGMENTS=360
-TRAINING_VIDEO_MAX_SIZE_BYTES=536870912
 ```
 
-医生开具正式运动动作时，`duration_minutes` 必须为 1–30。后端在创建会话、接收分片和完成会话时校验计划时长、实际时长、分片连续性和累计字节数。单次会话累计原始分片与合并结果均不得超过 512 MiB；达到上限后拒绝新分片并保留已接收内容供安全恢复或清理。
+医生开具正式运动动作时，`duration_minutes` 必须为 1–30。后端在创建会话、接收分片和完成会话时校验计划时长、实际时长与分片连续性。按 2026-10-26 用户要求，取消原 512 MiB 的累计原始分片及合并结果总大小上限，不再因累计字节数拒绝新分片、完成会话或发布合并结果；单段大小、分段数量及磁盘余量保护继续生效。
 
 小程序继续采用约 65 MB 未上传缓冲高水位和约 10 MB 恢复低水位。30 分钟上限不意味着本地同时保存完整 30 分钟录像；已上传分片仍按既有安全所有权规则清理。
 

@@ -3,6 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > 状态：implemented
+> 修订（2026-10-26, codex）：按用户要求取消累计分片及合并结果的 512 MiB 总大小上限；下文相关历史实施步骤保留，以同主题设计稿 §8.3 的最新容量边界为准。
 > 日期：2026-08-20
 > 范围：上传五个正式教学视频，将肩部推举录像链路泛化到全部正式运动动作，并保留审核演示隔离与旧会话兼容。
 >

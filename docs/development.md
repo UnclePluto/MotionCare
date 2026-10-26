@@ -70,7 +70,6 @@ Segmented training video environment variables:
 ```bash
 TRAINING_VIDEO_STAGING_ROOT=/var/lib/motioncare/training-video-staging
 TRAINING_VIDEO_SEGMENT_MAX_SIZE_BYTES=33554432
-TRAINING_VIDEO_MAX_SIZE_BYTES=536870912
 TRAINING_VIDEO_MAX_DURATION_SECONDS=1800
 TRAINING_VIDEO_MAX_SEGMENTS=360
 TRAINING_VIDEO_STAGING_TTL_SECONDS=86400
@@ -103,7 +102,7 @@ example:
 client_max_body_size 40m;
 ```
 
-Do not raise this to the full 512 MiB training-video limit. The staging directory
+Keep this request limit scoped to one segment rather than a complete training video. The staging directory
 must not be exposed by Django, Nginx, or static file serving, and it must be
 excluded from server backups.
 

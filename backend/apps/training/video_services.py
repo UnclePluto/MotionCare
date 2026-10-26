@@ -327,21 +327,14 @@ def store_training_video_segment(
                     ).aggregate(
                         segment_count=Count("id"),
                         total_duration_ms=Sum("duration_ms"),
-                        total_size_bytes=Sum("size_bytes"),
                     )
                     segment_count = totals["segment_count"] or 0
                     total_duration_ms = totals["total_duration_ms"] or 0
-                    total_size_bytes = totals["total_size_bytes"] or 0
                     max_duration_seconds, max_segments = _session_upload_limits(video)
                     if segment_count + 1 > max_segments:
                         raise ValidationError("训练视频分段数量超过限制")
                     if total_duration_ms + duration_ms > max_duration_seconds * 1000:
                         raise ValidationError("训练视频总时长超过限制")
-                    if (
-                        total_size_bytes + actual_size_bytes
-                        > settings.TRAINING_VIDEO_MAX_SIZE_BYTES
-                    ):
-                        raise ValidationError("训练视频总大小超过限制")
 
                     destination = install_uploaded_segment(video, index, temporary)
                     destination_was_installed = True
@@ -385,10 +378,6 @@ def _validate_uploaded_segments_for_finalize(video, segment_count, actual_durati
     total_duration_ms = sum(segment.duration_ms for segment in segments)
     if total_duration_ms > max_duration_seconds * 1000:
         raise ValidationError("训练视频总时长超过限制")
-
-    total_size_bytes = sum(segment.size_bytes for segment in segments)
-    if total_size_bytes > settings.TRAINING_VIDEO_MAX_SIZE_BYTES:
-        raise ValidationError("训练视频总大小超过限制")
 
     actual_segment_duration_seconds = total_duration_ms / 1000
     if (
